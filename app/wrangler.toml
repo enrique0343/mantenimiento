@@ -6,7 +6,7 @@ pages_build_output_dir = "./dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "mantenimiento-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "a4a8b34e-6b56-42b5-a393-ca5a43fcb38a"
 migrations_dir = "drizzle"
 
 [[r2_buckets]]
