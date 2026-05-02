@@ -1,13 +1,10 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
+import * as kpi from '../controllers/kpi.controller';
 
 const router = Router();
 
-const stub = (_req: any, res: any) =>
-  res.status(501).json({ message: 'KPIs: implementar en Fase 6' });
-
-router.get('/dashboard', authenticate, stub);
-router.get('/equipment/:id', authenticate, stub);
-router.get('/technician/:id', authenticate, stub);
+router.get('/dashboard', authenticate, kpi.dashboard);
+router.get('/equipment/:id', authenticate, kpi.equipmentKpis);
 
 export default router;

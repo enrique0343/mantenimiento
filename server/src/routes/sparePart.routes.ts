@@ -1,15 +1,17 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireRoles } from '../middleware/auth';
+import * as sp from '../controllers/sparePart.controller';
 
 const router = Router();
 
-const stub = (_req: any, res: any) =>
-  res.status(501).json({ message: 'Inventario: implementar en Fase 6' });
-
-router.get('/', authenticate, stub);
-router.post('/', authenticate, stub);
-router.get('/alerts', authenticate, stub);
-router.patch('/:id/stock', authenticate, stub);
-router.get('/:id/movements', authenticate, stub);
+router.get('/', authenticate, sp.list);
+router.get('/alerts', authenticate, sp.alerts);
+router.get('/:id', authenticate, sp.getById);
+router.get('/:id/movements', authenticate, sp.movements);
+router.post('/', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), sp.create);
+router.put('/:id', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), sp.update);
+router.patch('/:id/stock', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), sp.adjustStock);
+router.patch('/:id/min-stock', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), sp.setMinStock);
+router.delete('/:id', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), sp.deactivate);
 
 export default router;
