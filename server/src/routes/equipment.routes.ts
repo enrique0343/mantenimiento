@@ -1,35 +1,19 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireRoles } from '../middleware/auth';
+import {
+  list, getById, getByCode, create, update, getQR, history, report,
+} from '../controllers/equipment.controller';
 
 const router = Router();
 
-// Implementación completa en Fase 2
-router.get('/', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
+router.get('/', authenticate, list);
+router.get('/code/:code', authenticate, getByCode);
+router.get('/:id', authenticate, getById);
+router.get('/:id/qr', authenticate, getQR);
+router.get('/:id/history', authenticate, history);
+router.get('/:id/report', authenticate, report);
 
-router.get('/:id', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
-
-router.post('/', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
-
-router.put('/:id', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
-
-router.get('/:id/qr', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
-
-router.get('/:id/history', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
-
-router.get('/:id/report', authenticate, (_req, res) => {
-  res.status(501).json({ message: 'Módulo de equipos: implementar en Fase 2' });
-});
+router.post('/', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), create);
+router.put('/:id', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), update);
 
 export default router;

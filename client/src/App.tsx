@@ -3,9 +3,18 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth.store';
 import Layout from '@/components/layout/Layout';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
+
+// Auth
 import Login from '@/pages/Login';
-import Dashboard from '@/pages/Dashboard';
+
+// Equipment
 import EquipmentList from '@/pages/Equipment/EquipmentList';
+import EquipmentForm from '@/pages/Equipment/EquipmentForm';
+import EquipmentDetail from '@/pages/Equipment/EquipmentDetail';
+import EquipmentAccess from '@/pages/Equipment/EquipmentAccess';
+
+// Other modules
+import Dashboard from '@/pages/Dashboard';
 import MaintenanceList from '@/pages/Maintenance/MaintenanceList';
 import HelpdeskList from '@/pages/Helpdesk/HelpdeskList';
 import HelpdeskPublicForm from '@/pages/Helpdesk/HelpdeskPublicForm';
@@ -30,11 +39,23 @@ export default function App() {
       <Route path="/helpdesk/nuevo" element={<HelpdeskPublicForm />} />
       <Route path="/helpdesk/ticket/:token" element={<HelpdeskPublicTrack />} />
 
-      {/* Rutas protegidas */}
+      {/* Acceso QR — requiere login, pero fuera del layout principal */}
+      <Route element={<ProtectedRoute />}>
+        <Route path="/equipo/:code/acceso" element={<EquipmentAccess />} />
+      </Route>
+
+      {/* Rutas protegidas con layout */}
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
+
+          {/* Equipos */}
           <Route path="/equipos" element={<EquipmentList />} />
+          <Route path="/equipos/nuevo" element={<EquipmentForm />} />
+          <Route path="/equipos/:id" element={<EquipmentDetail />} />
+          <Route path="/equipos/:id/editar" element={<EquipmentForm />} />
+
+          {/* Otros módulos */}
           <Route path="/mantenimiento" element={<MaintenanceList />} />
           <Route path="/helpdesk" element={<HelpdeskList />} />
           <Route path="/planificador" element={<Planner />} />
