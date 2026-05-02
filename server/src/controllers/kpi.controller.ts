@@ -111,8 +111,8 @@ export async function dashboard(req: AuthRequest, res: Response) {
     }));
 
     res.json({
-      equipmentTotal,
-      equipmentActive,
+      equipmentTotal: equipTotal,
+      equipmentActive: equipActive,
       availabilityPct: equipTotal > 0 ? Math.round((equipActive / equipTotal) * 100) : 0,
       openWOs,
       inProgressWOs,
