@@ -16,6 +16,8 @@ import EquipmentAccess from '@/pages/Equipment/EquipmentAccess';
 // Maintenance
 import WorkOrderForm from '@/pages/Maintenance/WorkOrderForm';
 import WorkOrderDetail from '@/pages/Maintenance/WorkOrderDetail';
+import MaintenancePlanList from '@/pages/MaintenancePlans/MaintenancePlanList';
+import MaintenancePlanForm from '@/pages/MaintenancePlans/MaintenancePlanForm';
 
 // Other modules
 import Dashboard from '@/pages/Dashboard';
@@ -64,6 +66,11 @@ export default function App() {
           <Route path="/mantenimiento" element={<MaintenanceList />} />
           <Route path="/mantenimiento/nuevo" element={<WorkOrderForm />} />
           <Route path="/mantenimiento/:id" element={<WorkOrderDetail />} />
+
+          {/* Planes de mantenimiento */}
+          <Route path="/planes" element={<MaintenancePlanList />} />
+          <Route path="/planes/nuevo" element={<MaintenancePlanForm />} />
+          <Route path="/planes/:id/editar" element={<MaintenancePlanForm />} />
 
           {/* Otros módulos */}
           <Route path="/helpdesk" element={<HelpdeskList />} />

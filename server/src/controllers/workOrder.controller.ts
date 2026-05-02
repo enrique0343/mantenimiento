@@ -4,6 +4,7 @@ import prisma from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { uploadFile } from '../services/storage.service';
 import { sendWOAssigned } from '../services/email.service';
+import { advancePlanAfterCompletion } from './maintenancePlan.controller';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -329,8 +330,13 @@ export async function closeWO(req: AuthRequest, res: Response): Promise<void> {
       completedAt,
       laborHours: laborHours ? Math.round(laborHours * 100) / 100 : null,
     },
-    include,
+    include: { ...include, equipment: true },
   });
+
+  // If linked to a maintenance plan, advance its next due date
+  if ((updated as any).maintenancePlanId) {
+    await advancePlanAfterCompletion((updated as any).maintenancePlanId, completedAt);
+  }
 
   res.json(updated);
 }

@@ -1,14 +1,14 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireRoles } from '../middleware/auth';
+import * as mp from '../controllers/maintenancePlan.controller';
 
 const router = Router();
 
-const stub = (_req: any, res: any) =>
-  res.status(501).json({ message: 'Planes de mantenimiento: implementar en Fase 5' });
-
-router.get('/', authenticate, stub);
-router.post('/', authenticate, stub);
-router.put('/:id', authenticate, stub);
-router.get('/upcoming', authenticate, stub);
+router.get('/', authenticate, mp.list);
+router.get('/upcoming', authenticate, mp.upcoming);
+router.get('/:id', authenticate, mp.getById);
+router.post('/', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), mp.create);
+router.put('/:id', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), mp.update);
+router.delete('/:id', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), mp.deactivate);
 
 export default router;

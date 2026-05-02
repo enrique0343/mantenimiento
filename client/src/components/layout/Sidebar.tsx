@@ -1,21 +1,22 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Wrench, ClipboardList, HeadphonesIcon,
-  Calendar, Package, Users, Truck, Settings, X,
+  Calendar, ClipboardCheck, Package, Users, Truck, Settings, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
 
 const nav = [
-  { to: '/',             label: 'Dashboard',       icon: LayoutDashboard },
-  { to: '/equipos',      label: 'Equipos',          icon: Wrench },
-  { to: '/mantenimiento',label: 'Mantenimiento',    icon: ClipboardList },
-  { to: '/helpdesk',     label: 'Helpdesk',         icon: HeadphonesIcon },
-  { to: '/planificador', label: 'Planificador',     icon: Calendar },
-  { to: '/inventario',   label: 'Inventario',       icon: Package },
-  { to: '/usuarios',     label: 'Usuarios',         icon: Users,  roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
-  { to: '/proveedores',  label: 'Proveedores',      icon: Truck },
-  { to: '/configuracion',label: 'Configuración',    icon: Settings, roles: ['ADMIN'] },
+  { to: '/',             label: 'Dashboard',           icon: LayoutDashboard },
+  { to: '/equipos',      label: 'Equipos',              icon: Wrench },
+  { to: '/mantenimiento',label: 'Mantenimiento',        icon: ClipboardList },
+  { to: '/helpdesk',     label: 'Helpdesk',             icon: HeadphonesIcon },
+  { to: '/planificador', label: 'Planificador',         icon: Calendar },
+  { to: '/planes',       label: 'Planes preventivos',   icon: ClipboardCheck, roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
+  { to: '/inventario',   label: 'Inventario',           icon: Package },
+  { to: '/usuarios',     label: 'Usuarios',             icon: Users,  roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
+  { to: '/proveedores',  label: 'Proveedores',          icon: Truck },
+  { to: '/configuracion',label: 'Configuración',        icon: Settings, roles: ['ADMIN'] },
 ];
 
 interface Props {
