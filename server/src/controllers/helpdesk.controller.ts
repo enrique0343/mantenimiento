@@ -7,8 +7,8 @@ import * as emailService from '../services/email.service';
 const prisma = new PrismaClient();
 
 const SLA_HOURS: Record<string, number> = {
-  CRITICAL: 4,
-  HIGH: 8,
+  CRITICAL: 1,
+  HIGH: 4,
   MEDIUM: 24,
   LOW: 72,
 };
@@ -321,6 +321,47 @@ export async function addComment(req: AuthRequest, res: Response) {
   }
 }
 
+// PATCH /helpdesk/tickets/:id/equipment (internal — technician assigns equipment on-site)
+export async function assignEquipment(req: AuthRequest, res: Response) {
+  try {
+    const { id } = req.params;
+    const { equipmentId } = req.body;
+
+    const ticket = await prisma.helpdeskTicket.findUnique({ where: { id } });
+    if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
+    if (ticket.status === 'CLOSED') {
+      return res.status(400).json({ message: 'No se puede modificar un ticket cerrado' });
+    }
+
+    if (equipmentId) {
+      const eq = await prisma.equipment.findUnique({ where: { id: equipmentId } });
+      if (!eq) return res.status(404).json({ message: 'Equipo no encontrado' });
+    }
+
+    const updated = await prisma.helpdeskTicket.update({
+      where: { id },
+      data: { equipmentId: equipmentId || null },
+      include: { equipment: { include: { location: { include: { branch: true } } } } },
+    });
+
+    await prisma.ticketComment.create({
+      data: {
+        ticketId: id,
+        authorName: 'Sistema',
+        content: equipmentId
+          ? `Equipo asignado: ${updated.equipment?.name} (${updated.equipment?.code})`
+          : 'Equipo desvinculado del ticket.',
+        isInternal: true,
+      },
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al asignar equipo' });
+  }
+}
+
 // POST /helpdesk/tickets/:id/convert (internal)
 export async function convertToWO(req: AuthRequest, res: Response) {
   try {
@@ -329,12 +370,12 @@ export async function convertToWO(req: AuthRequest, res: Response) {
 
     const ticket = await prisma.helpdeskTicket.findUnique({
       where: { id },
-      include: { workOrders: { take: 1 } },
+      include: {
+        workOrders: { take: 1 },
+        branch: { select: { name: true } },
+      },
     });
     if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
-    if (!ticket.equipmentId) {
-      return res.status(400).json({ message: 'El ticket debe tener un equipo asociado para crear una OT' });
-    }
     if (ticket.workOrders.length > 0) {
       return res.status(400).json({ message: 'Este ticket ya tiene una orden de trabajo asociada' });
     }
@@ -345,13 +386,19 @@ export async function convertToWO(req: AuthRequest, res: Response) {
     });
     const woCode = `OT-${year}-${String(count + 1).padStart(4, '0')}`;
 
+    // Use equipment if assigned; otherwise create general WO with location from ticket
+    const locationDescription = ticket.equipmentId
+      ? null
+      : `${ticket.code} — ${ticket.area}${ticket.branch ? ` · ${(ticket.branch as any).name}` : ''}`;
+
     const wo = await prisma.workOrder.create({
       data: {
         code: woCode,
         type: 'CORRECTIVE',
         priority: priority || ticket.priority,
         status: 'OPEN',
-        equipmentId: ticket.equipmentId,
+        equipmentId: ticket.equipmentId || null,
+        locationDescription,
         technicianId: technicianId || null,
         providerId: providerId || null,
         helpdeskTicketId: id,

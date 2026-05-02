@@ -13,6 +13,7 @@ router.get('/tickets', authenticate, hd.listTickets);
 router.get('/tickets/:id', authenticate, hd.getTicket);
 router.patch('/tickets/:id/status', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), hd.updateStatus);
 router.post('/tickets/:id/assign', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), hd.assignTicket);
+router.patch('/tickets/:id/equipment', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), hd.assignEquipment);
 router.post('/tickets/:id/comments', authenticate, hd.addComment);
 router.post('/tickets/:id/convert', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), hd.convertToWO);
 

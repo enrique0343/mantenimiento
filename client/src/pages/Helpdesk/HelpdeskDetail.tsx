@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ChevronLeft, User, MapPin, Tag, Clock, CheckCircle2,
-  MessageSquare, UserCheck, Wrench, AlertTriangle, Send, Lock,
+  MessageSquare, UserCheck, Wrench, AlertTriangle, Send, Lock, Search, X,
 } from 'lucide-react';
+import type { Equipment } from '@/types';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import type { HelpdeskTicket, AuthUser } from '@/types';
@@ -33,28 +34,47 @@ const NEXT_STATUSES: Record<string, { value: string; label: string }[]> = {
   CLOSED: [],
 };
 
-function SlaBar({ deadline, status }: { deadline?: string; status: string }) {
+const SLA_LABEL: Record<string, string> = {
+  CRITICAL: 'Crítico — 1h',
+  HIGH: 'Alto — 4h',
+  MEDIUM: 'Medio — 24h',
+  LOW: 'Bajo — 72h',
+};
+
+function SlaBar({ deadline, slaHours, priority, status }: { deadline?: string; slaHours?: number; priority: string; status: string }) {
   if (!deadline || status === 'RESOLVED' || status === 'CLOSED') return null;
-  const total = 24 * 60 * 60 * 1000;
+  const totalMs = (slaHours ?? 24) * 60 * 60 * 1000;
   const msLeft = new Date(deadline).getTime() - Date.now();
-  const pct = Math.max(0, Math.min(100, (msLeft / total) * 100));
+  const pct = Math.max(0, Math.min(100, (msLeft / totalMs) * 100));
   const expired = msLeft < 0;
-  const urgent = !expired && msLeft < 4 * 60 * 60 * 1000;
+  // Urgent when < 25% of SLA window remains
+  const urgent = !expired && pct < 25;
+
+  const hoursLeft = Math.abs(Math.round(msLeft / 3600000));
+  const minutesLeft = Math.abs(Math.round((msLeft % 3600000) / 60000));
+  const timeLabel = hoursLeft >= 1
+    ? `${hoursLeft}h ${minutesLeft}m`
+    : `${minutesLeft}m`;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-500">SLA — vence {formatDateTime(deadline)}</span>
+        <span className="text-slate-500 flex items-center gap-1.5">
+          <span className={cn('rounded-full px-1.5 py-0.5 font-medium text-xs', PRIORITY_COLOR[priority])}>
+            SLA {SLA_LABEL[priority] ?? `${slaHours}h`}
+          </span>
+          vence {formatDateTime(deadline)}
+        </span>
         {expired
-          ? <span className="font-medium text-red-600 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Vencido</span>
+          ? <span className="font-semibold text-red-600 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Vencido hace {timeLabel}</span>
           : urgent
-          ? <span className="font-medium text-amber-600">⚠ {Math.round(msLeft / 3600000)}h restantes</span>
-          : <span className="text-slate-400">{Math.round(msLeft / 3600000)}h restantes</span>
+          ? <span className="font-medium text-amber-600">⚠ {timeLabel} restantes</span>
+          : <span className="text-slate-400">{timeLabel} restantes</span>
         }
       </div>
-      <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden">
+      <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
         <div
-          className={cn('h-full rounded-full transition-all', expired ? 'bg-red-500 w-full' : urgent ? 'bg-amber-400' : 'bg-green-500')}
+          className={cn('h-full rounded-full transition-all', expired ? 'bg-red-500' : urgent ? 'bg-amber-400' : 'bg-green-500')}
           style={{ width: expired ? '100%' : `${pct}%` }}
         />
       </div>
@@ -89,6 +109,12 @@ export default function HelpdeskDetail() {
   const [showConvertDialog, setShowConvertDialog] = useState(false);
   const [convertTechId, setConvertTechId] = useState('');
   const [converting, setConverting] = useState(false);
+
+  // Equipment assignment
+  const [equipSearch, setEquipSearch] = useState('');
+  const [equipResults, setEquipResults] = useState<Equipment[]>([]);
+  const [equipSearchTimeout, setEquipSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [assigningEquip, setAssigningEquip] = useState(false);
 
   useEffect(() => {
     load();
@@ -173,6 +199,35 @@ export default function HelpdeskDetail() {
     }
   }
 
+  async function handleEquipSearch(val: string) {
+    setEquipSearch(val);
+    if (equipSearchTimeout) clearTimeout(equipSearchTimeout);
+    if (!val || val.length < 2) { setEquipResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await api.get(`/equipments?search=${encodeURIComponent(val)}&limit=6`);
+        setEquipResults(data.data ?? []);
+      } catch { /* non-critical */ }
+    }, 300);
+    setEquipSearchTimeout(t);
+  }
+
+  async function submitAssignEquipment(equipmentId: string | null) {
+    if (!id) return;
+    setAssigningEquip(true);
+    try {
+      await api.patch(`/helpdesk/tickets/${id}/equipment`, { equipmentId });
+      setEquipSearch('');
+      setEquipResults([]);
+      await load();
+      toast.success(equipmentId ? 'Equipo asignado al ticket' : 'Equipo desvinculado');
+    } catch (err: any) {
+      toast.error(err.response?.data?.message ?? 'Error al asignar equipo');
+    } finally {
+      setAssigningEquip(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -220,7 +275,7 @@ export default function HelpdeskDetail() {
               Asignar
             </Button>
           )}
-          {ticket.equipmentId && !relatedWO && ticket.status !== 'CLOSED' && ticket.status !== 'RESOLVED' && (
+          {!relatedWO && ticket.status !== 'CLOSED' && ticket.status !== 'RESOLVED' && (
             <Button size="sm" variant="outline" onClick={() => setShowConvertDialog(true)}>
               <Wrench className="h-4 w-4" />
               Crear OT
@@ -241,7 +296,12 @@ export default function HelpdeskDetail() {
       {ticket.slaDeadline && (
         <Card>
           <CardContent className="pt-4 pb-3">
-            <SlaBar deadline={ticket.slaDeadline} status={ticket.status} />
+            <SlaBar
+              deadline={ticket.slaDeadline}
+              slaHours={(ticket as any).slaHours}
+              priority={ticket.priority}
+              status={ticket.status}
+            />
           </CardContent>
         </Card>
       )}
@@ -367,11 +427,84 @@ export default function HelpdeskDetail() {
             <CardContent className="text-sm space-y-1">
               <p className="font-medium text-slate-800">{(ticket as any).branch?.name ?? '—'}</p>
               <p className="text-slate-500">{ticket.area}</p>
-              {ticket.equipment && (
-                <div className="mt-2 pt-2 border-t">
-                  <p className="text-xs text-slate-400 mb-0.5">Equipo</p>
-                  <p className="font-medium text-slate-700">{ticket.equipment.name}</p>
-                  <p className="font-mono text-xs text-slate-400">{ticket.equipment.code}</p>
+            </CardContent>
+          </Card>
+
+          {/* Equipment assignment — technician assigns on-site */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center justify-between">
+                <span className="flex items-center gap-2"><Wrench className="h-4 w-4" />Equipo</span>
+                {ticket.equipment && ticket.status !== 'CLOSED' && (
+                  <button
+                    onClick={() => submitAssignEquipment(null)}
+                    className="text-xs text-slate-400 hover:text-red-500"
+                    disabled={assigningEquip}
+                  >
+                    Quitar
+                  </button>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm space-y-2">
+              {ticket.equipment ? (
+                <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2">
+                  <p className="font-semibold text-blue-800 text-sm">{ticket.equipment.name}</p>
+                  <p className="font-mono text-xs text-blue-500">{ticket.equipment.code}</p>
+                  {(ticket.equipment as any).location && (
+                    <p className="text-xs text-blue-600 mt-0.5">
+                      {(ticket.equipment as any).location?.branch?.name} · {(ticket.equipment as any).location?.area}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-400">Sin equipo asignado. El técnico puede asignarlo al atender la solicitud.</p>
+                  {ticket.status !== 'CLOSED' && ticket.status !== 'RESOLVED' && (
+                    <>
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                        <input
+                          type="text"
+                          value={equipSearch}
+                          onChange={(e) => handleEquipSearch(e.target.value)}
+                          placeholder="Buscar equipo..."
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          autoComplete="off"
+                        />
+                        {equipSearch && (
+                          <button
+                            type="button"
+                            onClick={() => { setEquipSearch(''); setEquipResults([]); }}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-400"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {equipResults.length > 0 && (
+                        <div className="border rounded-md divide-y bg-white shadow-sm max-h-48 overflow-y-auto">
+                          {equipResults.map((eq) => (
+                            <button
+                              key={eq.id}
+                              type="button"
+                              disabled={assigningEquip}
+                              onClick={() => submitAssignEquipment(eq.id)}
+                              className="w-full px-3 py-2 text-left hover:bg-blue-50 disabled:opacity-50"
+                            >
+                              <p className="text-xs font-semibold text-slate-800">{eq.name}</p>
+                              <p className="text-xs text-slate-400 font-mono">{eq.code}</p>
+                              {eq.location && (
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                  {(eq.location as any).branch?.name} · {eq.location.area}
+                                </p>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -505,9 +638,30 @@ export default function HelpdeskDetail() {
         open={showConvertDialog}
         onClose={() => setShowConvertDialog(false)}
         title="Crear orden de trabajo correctiva"
-        description={`Se creará una OT correctiva vinculada al ticket ${ticket.code} para el equipo ${ticket.equipment?.name ?? ''}.`}
       >
         <div className="space-y-4">
+          {ticket.equipment ? (
+            <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
+              <p className="text-xs text-blue-500 font-medium mb-0.5">Equipo asignado</p>
+              <p className="font-semibold text-blue-800">{ticket.equipment.name}</p>
+              <p className="font-mono text-xs text-blue-500">{ticket.equipment.code}</p>
+              {(ticket.equipment as any).location && (
+                <p className="text-xs text-blue-600">
+                  {(ticket.equipment as any).location?.branch?.name} · {(ticket.equipment as any).location?.area}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm">
+              <p className="text-xs text-amber-600 font-medium mb-0.5 flex items-center gap-1">
+                <AlertTriangle className="h-3.5 w-3.5" /> Sin equipo asignado
+              </p>
+              <p className="text-amber-700 text-xs">
+                La OT se creará como trabajo general vinculada al área <strong>{ticket.area}</strong>.
+                Puede asignar el equipo desde la ficha del ticket antes de crear la OT para mayor trazabilidad.
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Técnico asignado (opcional)</Label>
             <Select

@@ -224,7 +224,12 @@ export default function HelpdeskPublicForm() {
 
               {/* Equipment search (optional) */}
               <div className="space-y-1.5">
-                <Label>Equipo relacionado (opcional)</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Equipo relacionado <span className="text-slate-400 font-normal">(opcional)</span></Label>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Si no está seguro del equipo, déjelo en blanco. El técnico lo identificará al atender la solicitud.
+                </p>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <Input
@@ -245,24 +250,39 @@ export default function HelpdeskPublicForm() {
                   )}
                 </div>
                 {equipmentResults.length > 0 && !selectedEquipment && (
-                  <div className="border rounded-md divide-y max-h-40 overflow-y-auto bg-white shadow-sm">
+                  <div className="border rounded-md divide-y max-h-48 overflow-y-auto bg-white shadow-sm">
                     {equipmentResults.map((eq) => (
                       <button
                         key={eq.id}
                         type="button"
                         onClick={() => selectEquipment(eq)}
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center justify-between"
+                        className="w-full px-3 py-2.5 text-left hover:bg-slate-50"
                       >
-                        <span className="font-medium">{eq.name}</span>
-                        <span className="text-xs text-slate-400 font-mono">{eq.code}</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium text-slate-800">{eq.name}</span>
+                          <span className="text-xs text-slate-400 font-mono shrink-0">{eq.code}</span>
+                        </div>
+                        {eq.location && (
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {(eq.location as any).branch?.name} · {eq.location.area}
+                          </p>
+                        )}
                       </button>
                     ))}
                   </div>
                 )}
                 {selectedEquipment && (
-                  <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
-                    <span className="font-medium">{selectedEquipment.name}</span>
-                    <span className="ml-2 font-mono text-blue-400">{selectedEquipment.code}</span>
+                  <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-blue-800">{selectedEquipment.name}</p>
+                      <span className="font-mono text-xs text-blue-500">{selectedEquipment.code}</span>
+                    </div>
+                    {selectedEquipment.location && (
+                      <p className="text-xs text-blue-600 mt-0.5">
+                        {(selectedEquipment.location as any).branch?.name} · {selectedEquipment.location.area}
+                      </p>
+                    )}
+                    <p className="text-xs text-blue-400 mt-1">Confirme que este es el equipo con falla antes de continuar.</p>
                   </div>
                 )}
               </div>

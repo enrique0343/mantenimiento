@@ -155,6 +155,7 @@ export interface HelpdeskTicket {
   assignedTo?: AuthUser;
   equipmentId?: string;
   equipment?: Equipment;
+  slaHours?: number;
   slaDeadline?: string;
   resolvedAt?: string;
   closedAt?: string;
