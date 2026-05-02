@@ -4,11 +4,9 @@ import prisma from '../lib/prisma';
 
 const router = Router();
 
-router.get('/', authenticate, async (_req, res) => {
-  const providers = await prisma.provider.findMany({
-    where: { active: true },
-    orderBy: { name: 'asc' },
-  });
+router.get('/', authenticate, async (req, res) => {
+  const where = req.query.active === 'all' ? {} : { active: true };
+  const providers = await prisma.provider.findMany({ where, orderBy: { name: 'asc' } });
   res.json(providers);
 });
 

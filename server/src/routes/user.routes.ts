@@ -43,4 +43,18 @@ router.patch('/:id/role', authenticate, requireRoles('ADMIN'), async (req, res) 
   res.json(user);
 });
 
+router.patch('/:id/password', authenticate, requireRoles('ADMIN'), async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 8) {
+    res.status(400).json({ message: 'La contraseña debe tener al menos 8 caracteres' });
+    return;
+  }
+  const hashed = await bcrypt.hash(password, 12);
+  await prisma.user.update({
+    where: { id: req.params.id },
+    data: { password: hashed },
+  });
+  res.json({ message: 'Contraseña actualizada' });
+});
+
 export default router;
