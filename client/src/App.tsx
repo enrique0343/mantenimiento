@@ -31,6 +31,7 @@ import Inventory from '@/pages/Inventory';
 import Users from '@/pages/Users';
 import Providers from '@/pages/Providers';
 import Settings from '@/pages/Settings';
+import Predictive from '@/pages/Predictive';
 
 export default function App() {
   const { token, fetchMe } = useAuthStore();
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/helpdesk/:id" element={<HelpdeskDetail />} />
           <Route path="/planificador" element={<Planner />} />
           <Route path="/inventario" element={<Inventory />} />
+          <Route path="/predictivo" element={<Predictive />} />
           <Route path="/usuarios" element={<Users />} />
           <Route path="/proveedores" element={<Providers />} />
           <Route path="/configuracion" element={<Settings />} />

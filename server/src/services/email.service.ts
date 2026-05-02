@@ -206,3 +206,35 @@ export async function sendLowStockAlert(opts: {
     )
   );
 }
+
+export async function sendPredictiveAlert(opts: {
+  to: string;
+  equipmentName: string;
+  equipmentCode: string;
+  variable: string;
+  unit: string;
+  value: number;
+  minThreshold?: number;
+  maxThreshold?: number;
+  recordedBy: string;
+}): Promise<void> {
+  const direction = opts.maxThreshold !== undefined && opts.value > opts.maxThreshold ? 'por encima del máximo' : 'por debajo del mínimo';
+  const threshold = opts.maxThreshold !== undefined && opts.value > opts.maxThreshold
+    ? `Máximo: ${opts.maxThreshold} ${opts.unit}`
+    : `Mínimo: ${opts.minThreshold} ${opts.unit}`;
+  await send(
+    opts.to,
+    `🚨 Alerta predictiva — ${opts.equipmentName} (${opts.variable})`,
+    baseTemplate(
+      `Alerta predictiva — umbral superado`,
+      `<p>El equipo <strong>${opts.equipmentName}</strong> (${opts.equipmentCode}) registró un valor <strong>${direction}</strong> del umbral configurado.</p>
+       <table style="border-collapse:collapse;margin:12px 0">
+         <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Variable</td><td><strong>${opts.variable}</strong></td></tr>
+         <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Valor registrado</td><td><strong style="color:#dc2626">${opts.value} ${opts.unit}</strong></td></tr>
+         <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Umbral</td><td>${threshold}</td></tr>
+         <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Registrado por</td><td>${opts.recordedBy}</td></tr>
+       </table>
+       <p><a href="${CLIENT_URL}/predictivo" style="color:#1e40af">Ver módulo predictivo</a></p>`
+    )
+  );
+}

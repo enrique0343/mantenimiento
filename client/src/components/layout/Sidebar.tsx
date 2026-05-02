@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Wrench, ClipboardList, HeadphonesIcon,
-  Calendar, ClipboardCheck, Package, Users, Truck, Settings, X,
+  Calendar, ClipboardCheck, Package, Users, Truck, Settings, X, Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -13,6 +13,7 @@ const nav = [
   { to: '/helpdesk',     label: 'Helpdesk',             icon: HeadphonesIcon },
   { to: '/planificador', label: 'Planificador',         icon: Calendar },
   { to: '/planes',       label: 'Planes preventivos',   icon: ClipboardCheck, roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
+  { to: '/predictivo',   label: 'Predictivo',            icon: Activity },
   { to: '/inventario',   label: 'Inventario',           icon: Package },
   { to: '/usuarios',     label: 'Usuarios',             icon: Users,  roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
   { to: '/proveedores',  label: 'Proveedores',          icon: Truck },
