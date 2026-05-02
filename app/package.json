@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "wrangler dev",
-    "deploy": "astro build && wrangler deploy",
+    "preview": "wrangler pages dev ./dist",
+    "deploy": "astro build && wrangler pages deploy ./dist",
     "astro": "astro",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply mantenimiento-db --local",
