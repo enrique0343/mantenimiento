@@ -1,21 +1,18 @@
 name = "mantenimiento"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
-pages_build_output_dir = "./dist"
+main = "./dist/_worker.js/index.js"
+assets = { directory = "./dist/client" }
 
 [[d1_databases]]
 binding = "DB"
 database_name = "mantenimiento-db"
 database_id = "a4a8b34e-6b56-42b5-a393-ca5a43fcb38a"
-migrations_dir = "drizzle"
 
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "mantenimiento-files"
 
 [vars]
-JWT_SECRET = "REPLACE_WITH_STRONG_SECRET_AT_LEAST_32_CHARS"
-BASE_URL = "https://REPLACE_WITH_YOUR_DOMAIN.pages.dev"
-
-# SMTP para emails (agregar en el dashboard de Cloudflare Pages → Settings → Environment variables)
-# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME
+JWT_SECRET = "db9f323a6eb27c41b23eee4fa81077ab7a3cf826367bcb5ab19e99d9c61a8954"
+BASE_URL = "https://mantenimiento.enrique0343.workers.dev"
