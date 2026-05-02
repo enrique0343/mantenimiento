@@ -67,7 +67,7 @@ cp .dev.vars.example .dev.vars
 
 ```bash
 npx wrangler d1 migrations apply mantenimiento-db --local
-npx wrangler d1 execute mantenimiento-db --local --file=./migrations/seed.sql
+npx wrangler d1 execute mantenimiento-db --local --file=./scripts/seed.sql
 ```
 
 ### 4. Levantar dev server
@@ -98,7 +98,7 @@ npx wrangler r2 bucket create mantenimiento-adjuntos
 ```bash
 npx wrangler d1 migrations apply mantenimiento-db --remote
 # (opcional) datos de ejemplo:
-npx wrangler d1 execute mantenimiento-db --remote --file=./migrations/seed.sql
+npx wrangler d1 execute mantenimiento-db --remote --file=./scripts/seed.sql
 ```
 
 ### 3. Configurar secret JWT

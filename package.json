@@ -11,8 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply mantenimiento-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply mantenimiento-db --remote",
-    "db:seed:local": "wrangler d1 execute mantenimiento-db --local --file=./migrations/seed.sql",
-    "db:seed:remote": "wrangler d1 execute mantenimiento-db --remote --file=./migrations/seed.sql",
+    "db:seed:local": "wrangler d1 execute mantenimiento-db --local --file=./scripts/seed.sql",
+    "db:seed:remote": "wrangler d1 execute mantenimiento-db --remote --file=./scripts/seed.sql",
     "typecheck": "astro check"
   },
   "dependencies": {
