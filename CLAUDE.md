@@ -270,6 +270,43 @@ El escáner QR (html5-qrcode) lee el código QR del equipo desde la cámara del 
 
 ---
 
+## Exportación a PDF
+
+### Reporte Individual de Orden de Trabajo
+
+Cada OT cerrada puede exportarse como un reporte PDF independiente. Si un equipo tuvo 5 mantenimientos en el año, cada uno genera su propio PDF descargable de forma individual.
+
+**Contenido del PDF por OT:**
+
+| Sección | Detalle |
+|---|---|
+| Encabezado | Logo empresa, nombre del sistema, número de OT, fecha de emisión |
+| Ficha del equipo | Código, nombre, marca, modelo, serie, ubicación, tipo |
+| Datos de la OT | Tipo (preventivo/correctivo/predictivo), prioridad, estado, técnico, proveedor |
+| Tiempos | Fecha programada, inicio real, fin real, horas de trabajo |
+| Checklist ejecutado | Ítems con estado (cumplido / no cumplido / N/A) y observaciones |
+| Repuestos utilizados | Código, descripción, cantidad, unidad |
+| Imágenes | 2 fotos ANTES + 2 fotos DESPUÉS embebidas en el PDF |
+| Observaciones | Notas libres del técnico |
+| Firmas | Imagen de firma digital del técnico + imagen de firma del receptor, nombre y cargo |
+| Pie de página | Número de página, fecha/hora de generación, usuario que exportó |
+
+**Tipos de exportación disponibles:**
+
+- **OT individual** → PDF de una sola orden de trabajo (desde el detalle de la OT)
+- **Bitácora de equipo** → PDF con todas las OTs de un equipo en un rango de fechas (tabla resumen + detalle de cada OT)
+- **Reporte de periodo** → PDF consolidado por técnico, área o tipo de mantenimiento
+
+**Implementación:** `@react-pdf/renderer` en el cliente para generación en el navegador sin depender del servidor. El PDF se genera en el frontend a partir de los datos ya cargados y se descarga directamente.
+
+**Endpoint adicional:**
+```
+GET /api/work-orders/:id/pdf        # Metadata estructurada para generación del PDF
+GET /api/equipments/:id/report      # Bitácora completa del equipo (rango de fechas)
+```
+
+---
+
 ## Firma Digital
 
 - Componente `signature_pad` integrado en canvas HTML5
@@ -292,6 +329,7 @@ GET    /api/equipments/:id               # Ficha equipo
 PUT    /api/equipments/:id               # Actualizar
 GET    /api/equipments/:id/qr            # Generar/obtener QR
 GET    /api/equipments/:id/history       # Bitácora histórica
+GET    /api/equipments/:id/report        # PDF bitácora completa (parámetros: ?from=&to=)
 
 # Órdenes de Trabajo
 GET    /api/work-orders                  # Listar con filtros
@@ -301,6 +339,7 @@ PATCH  /api/work-orders/:id/status       # Cambiar estado
 POST   /api/work-orders/:id/images       # Subir imágenes (antes/después)
 POST   /api/work-orders/:id/signatures   # Guardar firmas
 POST   /api/work-orders/:id/close        # Cerrar OT
+GET    /api/work-orders/:id/pdf          # Metadata para generación PDF individual
 
 # Planes de Mantenimiento
 GET    /api/maintenance-plans            # Listar planes
