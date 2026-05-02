@@ -373,6 +373,26 @@ export async function assignProvider(req: AuthRequest, res: Response): Promise<v
   res.json(updated);
 }
 
+export async function reschedule(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const { scheduledDate } = req.body;
+  if (!scheduledDate) { res.status(400).json({ message: 'scheduledDate requerida' }); return; }
+
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { id: true, status: true } });
+  if (!wo) { res.status(404).json({ message: 'OT no encontrada' }); return; }
+  if (!['OPEN', 'IN_PROGRESS'].includes(wo.status)) {
+    res.status(400).json({ message: 'Solo se pueden reprogramar OTs abiertas o en progreso' });
+    return;
+  }
+
+  const updated = await prisma.workOrder.update({
+    where: { id },
+    data: { scheduledDate: new Date(scheduledDate) },
+    include,
+  });
+  res.json(updated);
+}
+
 export async function getPDF(req: AuthRequest, res: Response): Promise<void> {
   const wo = await prisma.workOrder.findUnique({
     where: { id: req.params.id },

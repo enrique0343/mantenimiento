@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth.store';
 import { Button } from '@/components/ui/button';
 import { ROLE_LABEL } from '@/lib/utils';
+import QrScannerButton from '@/components/qr/QrScannerButton';
 
 interface Props {
   onMenuClick: () => void;
@@ -33,6 +34,8 @@ export default function Header({ onMenuClick }: Props) {
           <p className="text-sm font-medium text-slate-800">{user?.name}</p>
           <p className="text-xs text-slate-500">{ROLE_LABEL[user?.role ?? ''] ?? user?.role}</p>
         </div>
+
+        <QrScannerButton />
 
         <Button variant="ghost" size="icon" title="Notificaciones">
           <Bell className="h-5 w-5 text-slate-500" />

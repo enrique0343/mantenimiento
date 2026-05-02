@@ -34,12 +34,21 @@ async function getTransport(): Promise<{ transport: nodemailer.Transporter; from
 }
 
 async function send(to: string, subject: string, html: string): Promise<void> {
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`📧 Email → ${to} | ${subject}`);
-    return;
+  try {
+    const { transport, from } = await getTransport();
+    // In development without SMTP config, just log
+    const config = transport.options as any;
+    if (process.env.NODE_ENV === 'development' && !config?.auth?.user) {
+      console.log(`📧 [dev-no-smtp] Email → ${to} | ${subject}`);
+      return;
+    }
+    await transport.sendMail({ from, to, subject, html });
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`📧 [sent] Email → ${to} | ${subject}`);
+    }
+  } catch (err) {
+    console.error(`📧 [error] Email → ${to} | ${subject}`, err);
   }
-  const { transport, from } = await getTransport();
-  await transport.sendMail({ from, to, subject, html });
 }
 
 function baseTemplate(title: string, body: string): string {

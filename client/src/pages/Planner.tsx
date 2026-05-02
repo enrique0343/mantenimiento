@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Calendar, dateFnsLocalizer, Views, type View } from 'react-big-calendar';
+import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -12,6 +13,9 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent } from '@/components/ui/card';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
+
+const DnDCalendar = withDragAndDrop(Calendar);
 
 const localizer = dateFnsLocalizer({
   format,
@@ -140,6 +144,42 @@ export default function Planner() {
     navigate('/mantenimiento/nuevo', { state: { scheduledDate: dateStr } });
   }
 
+  async function handleEventDrop({ event, start }: { event: CalEvent; start: Date | string }) {
+    const newStart = new Date(start);
+    const oldStart = event.start;
+    // Optimistic update
+    setEvents(prev =>
+      prev.map(e =>
+        e.id === event.id
+          ? { ...e, start: newStart, end: new Date(newStart.getTime() + (e.end.getTime() - e.start.getTime())) }
+          : e
+      )
+    );
+    try {
+      await api.patch(`/work-orders/${event.id}/reschedule`, {
+        scheduledDate: newStart.toISOString(),
+      });
+      toast.success(`OT reprogramada a ${format(newStart, 'dd/MM/yyyy', { locale: es })}`);
+    } catch (err: any) {
+      // Revert on error
+      setEvents(prev =>
+        prev.map(e => e.id === event.id ? { ...e, start: oldStart, end: event.end } : e)
+      );
+      toast.error(err.response?.data?.message ?? 'No se pudo reprogramar la OT');
+    }
+  }
+
+  async function handleEventResize({ event, start, end }: { event: CalEvent; start: Date | string; end: Date | string }) {
+    const newStart = new Date(start);
+    const newEnd = new Date(end);
+    setEvents(prev => prev.map(e => e.id === event.id ? { ...e, start: newStart, end: newEnd } : e));
+    try {
+      await api.patch(`/work-orders/${event.id}/reschedule`, { scheduledDate: newStart.toISOString() });
+    } catch {
+      setEvents(prev => prev.map(e => e.id === event.id ? { ...e, start: event.start, end: event.end } : e));
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -236,17 +276,21 @@ export default function Planner() {
                 <span className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               </div>
             )}
-            <Calendar
+            <DnDCalendar
               localizer={localizer}
               events={events}
               view={view}
               date={date}
               onView={setView}
               onNavigate={setDate}
-              onSelectEvent={(event) => navigate(`/mantenimiento/${event.id}`)}
+              onSelectEvent={(event) => navigate(`/mantenimiento/${(event as CalEvent).id}`)}
               onSelectSlot={handleSelectSlot}
+              onEventDrop={handleEventDrop as any}
+              onEventResize={handleEventResize as any}
+              resizable
               selectable
-              eventPropGetter={eventStyleGetter}
+              draggableAccessor={() => true}
+              eventPropGetter={eventStyleGetter as any}
               messages={MESSAGES}
               toolbar={false}
               popup
@@ -254,7 +298,7 @@ export default function Planner() {
             />
           </div>
           <p className="text-xs text-slate-400 text-right">
-            Clic en una OT para ver detalle · Clic en día vacío para crear nueva OT
+            Clic para ver detalle · Arrastrar para reprogramar · Clic en día vacío para crear OT
           </p>
         </div>
       )}
