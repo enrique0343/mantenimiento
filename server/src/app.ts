@@ -6,9 +6,10 @@ import routes from './routes';
 
 const app = express();
 
-const allowedOrigins = process.env.CLIENT_URL
-  ? [process.env.CLIENT_URL]
-  : [/^http:\/\/localhost:\d+$/];
+const isDev = process.env.NODE_ENV !== 'production';
+const allowedOrigins = isDev
+  ? /^http:\/\/localhost:\d+$/
+  : (process.env.CLIENT_URL || 'http://localhost:5173');
 
 app.use(cors({
   origin: allowedOrigins,
