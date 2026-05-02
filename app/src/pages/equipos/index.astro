@@ -1,0 +1,103 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Equipos">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Equipos</h2>
+    <a href="/equipos/nuevo" class="btn-primary">+ Nuevo equipo</a>
+  </div>
+
+  <!-- Filters -->
+  <div class="flex flex-wrap gap-3 mb-4">
+    <input id="search" type="text" placeholder="Buscar por código o nombre…" class="input w-56" />
+    <select id="filter-type" class="input w-36">
+      <option value="">Tipo: todos</option>
+      <option value="GENERAL">General</option>
+      <option value="BIOMEDICAL">Biomédico</option>
+    </select>
+    <select id="filter-status" class="input w-44">
+      <option value="">Estado: todos</option>
+      <option value="ACTIVE">Activo</option>
+      <option value="MAINTENANCE">En mantenimiento</option>
+      <option value="OUT_OF_SERVICE">Fuera de servicio</option>
+      <option value="DECOMMISSIONED">Dado de baja</option>
+    </select>
+    <select id="filter-branch" class="input w-44">
+      <option value="">Sucursal: todas</option>
+    </select>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr>
+        <th>Código</th><th>Nombre</th><th>Marca/Modelo</th><th>Tipo</th><th>Estado</th><th>Área</th><th></th>
+      </tr></thead>
+      <tbody id="eq-table"><tr><td colspan="7" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <script>
+    const STATUS_LABELS: Record<string,string> = {
+      ACTIVE:'Activo', MAINTENANCE:'En mantenimiento',
+      OUT_OF_SERVICE:'Fuera de servicio', DECOMMISSIONED:'Dado de baja',
+    };
+    const STATUS_COLORS: Record<string,string> = {
+      ACTIVE:'bg-green-100 text-green-800', MAINTENANCE:'bg-yellow-100 text-yellow-800',
+      OUT_OF_SERVICE:'bg-red-100 text-red-800', DECOMMISSIONED:'bg-gray-100 text-gray-500',
+    };
+    let allRows: any[] = [];
+
+    async function load() {
+      const type   = (document.getElementById('filter-type') as HTMLSelectElement).value;
+      const status = (document.getElementById('filter-status') as HTMLSelectElement).value;
+      const branch = (document.getElementById('filter-branch') as HTMLSelectElement).value;
+      const q      = (document.getElementById('search') as HTMLInputElement).value;
+      const qs     = new URLSearchParams();
+      if (type)   qs.set('type', type);
+      if (status) qs.set('status', status);
+      if (branch) qs.set('branch', branch);
+      if (q)      qs.set('q', q);
+      allRows = await fetch(`/api/equipment?${qs}`).then(r => r.json());
+      render();
+    }
+
+    function render() {
+      const tbody = document.getElementById('eq-table')!;
+      if (!allRows.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400">Sin resultados</td></tr>';
+        return;
+      }
+      tbody.innerHTML = allRows.map((e: any) => `
+        <tr>
+          <td class="font-mono text-xs">${e.code}</td>
+          <td><a href="/equipos/${e.id}" class="text-primary-600 hover:underline font-medium">${e.name}</a></td>
+          <td class="text-gray-500 text-xs">${[e.brand, e.model].filter(Boolean).join(' / ') || '—'}</td>
+          <td>${e.type === 'BIOMEDICAL' ? 'Biomédico' : 'General'}</td>
+          <td><span class="badge ${STATUS_COLORS[e.status] ?? ''}">${STATUS_LABELS[e.status] ?? e.status}</span></td>
+          <td class="text-gray-500 text-xs">${[e.area, e.branchName].filter(Boolean).join(' · ') || '—'}</td>
+          <td><a href="/equipos/${e.id}" class="text-primary-500 text-xs hover:underline">Ver →</a></td>
+        </tr>`).join('');
+    }
+
+    async function loadBranches() {
+      const rows = await fetch('/api/branches').then(r => r.json());
+      const sel  = document.getElementById('filter-branch') as HTMLSelectElement;
+      rows.forEach((b: any) => {
+        const opt = document.createElement('option');
+        opt.value = b.id; opt.textContent = b.name;
+        sel.appendChild(opt);
+      });
+    }
+
+    ['filter-type','filter-status','filter-branch'].forEach(id =>
+      document.getElementById(id)!.addEventListener('change', load)
+    );
+    let debounce: ReturnType<typeof setTimeout>;
+    document.getElementById('search')!.addEventListener('input', () => {
+      clearTimeout(debounce); debounce = setTimeout(load, 300);
+    });
+
+    loadBranches();
+    load();
+  </script>
+</Layout>

@@ -1,0 +1,125 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Nuevo equipo">
+  <div class="max-w-2xl">
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/equipos" class="text-gray-500 hover:text-gray-700">← Volver</a>
+      <h2 class="text-xl font-bold">Nuevo equipo</h2>
+    </div>
+    <div id="err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3 mb-4"></div>
+    <form id="form" class="card space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="label">Código interno *</label>
+          <input class="input" name="code" required />
+        </div>
+        <div>
+          <label class="label">Nombre *</label>
+          <input class="input" name="name" required />
+        </div>
+        <div>
+          <label class="label">Categoría *</label>
+          <input class="input" name="category" required />
+        </div>
+        <div>
+          <label class="label">Subcategoría</label>
+          <input class="input" name="subcategory" />
+        </div>
+        <div>
+          <label class="label">Tipo *</label>
+          <select class="input" name="type">
+            <option value="GENERAL">General</option>
+            <option value="BIOMEDICAL">Biomédico</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Estado</label>
+          <select class="input" name="status">
+            <option value="ACTIVE">Activo</option>
+            <option value="MAINTENANCE">En mantenimiento</option>
+            <option value="OUT_OF_SERVICE">Fuera de servicio</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Marca</label>
+          <input class="input" name="brand" />
+        </div>
+        <div>
+          <label class="label">Modelo</label>
+          <input class="input" name="model" />
+        </div>
+        <div>
+          <label class="label">Número de serie</label>
+          <input class="input" name="serialNumber" />
+        </div>
+        <div>
+          <label class="label">Año de fabricación</label>
+          <input class="input" type="number" name="year" min="1900" max="2099" />
+        </div>
+        <div>
+          <label class="label">Número de activo</label>
+          <input class="input" name="assetNumber" />
+        </div>
+        <div>
+          <label class="label">Valor de adquisición</label>
+          <input class="input" type="number" name="purchaseValue" min="0" step="0.01" />
+        </div>
+        <div>
+          <label class="label">Fecha de compra</label>
+          <input class="input" type="date" name="purchaseDate" />
+        </div>
+        <div>
+          <label class="label">Sucursal / Ubicación</label>
+          <select class="input" name="locationId" id="loc-select">
+            <option value="">— Seleccionar —</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="label">Observaciones</label>
+        <textarea class="input" name="notes" rows="2"></textarea>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary">Guardar equipo</button>
+        <a href="/equipos" class="btn-secondary">Cancelar</a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    async function loadLocations() {
+      const branches = await fetch('/api/branches').then(r => r.json());
+      const sel = document.getElementById('loc-select') as HTMLSelectElement;
+      for (const b of branches) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = `── ${b.name} ──`; opt.disabled = true;
+        sel.appendChild(opt);
+        // For simplicity, add branch as pseudo-location; in production use /api/locations
+        const bopt = document.createElement('option');
+        bopt.value = b.id; bopt.textContent = `${b.name} (general)`;
+        sel.appendChild(bopt);
+      }
+    }
+
+    const form = document.getElementById('form') as HTMLFormElement;
+    const err  = document.getElementById('err')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      err.classList.add('hidden');
+      const fd   = new FormData(form);
+      const body = Object.fromEntries([...fd.entries()].filter(([,v]) => v !== ''));
+      if (body.year)          body.year          = Number(body.year) as any;
+      if (body.purchaseValue) body.purchaseValue = Number(body.purchaseValue) as any;
+      const res = await fetch('/api/equipment', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) window.location.href = `/equipos/${json.id}`;
+      else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+
+    loadLocations();
+  </script>
+</Layout>

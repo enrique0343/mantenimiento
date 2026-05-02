@@ -1,0 +1,53 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// Guard: if users already exist → go to login
+const env = (Astro.locals.runtime as any)?.env as Env | undefined;
+if (env?.DB) {
+  const { getDb } = await import('../lib/db');
+  const { users } = await import('../lib/schema');
+  const db = getDb(env.DB);
+  const rows = await db.select({ id: users.id }).from(users).limit(1);
+  if (rows.length > 0) return Astro.redirect('/login');
+}
+---
+<Layout title="Configuración inicial">
+  <div class="w-full max-w-sm mx-auto">
+    <div class="card mt-8">
+      <h2 class="text-xl font-bold text-center mb-2">Primer acceso</h2>
+      <p class="text-sm text-gray-500 text-center mb-6">Crea la cuenta de administrador del sistema.</p>
+      <div id="error-msg" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3 mb-4"></div>
+      <form id="setup-form" class="space-y-4">
+        <div>
+          <label class="label" for="name">Nombre completo</label>
+          <input class="input" type="text" id="name" name="name" required />
+        </div>
+        <div>
+          <label class="label" for="email">Correo electrónico</label>
+          <input class="input" type="email" id="email" name="email" required />
+        </div>
+        <div>
+          <label class="label" for="password">Contraseña (mín. 8 caracteres)</label>
+          <input class="input" type="password" id="password" name="password" required minlength="8" />
+        </div>
+        <button type="submit" class="btn-primary w-full justify-center">Crear administrador</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('setup-form') as HTMLFormElement;
+    const errDiv = document.getElementById('error-msg')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      errDiv.classList.add('hidden');
+      const data = Object.fromEntries(new FormData(form));
+      const res = await fetch('/api/auth/register-admin', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const body = await res.json();
+      if (res.ok) window.location.href = '/dashboard';
+      else { errDiv.textContent = body.error; errDiv.classList.remove('hidden'); }
+    });
+  </script>
+</Layout>

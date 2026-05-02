@@ -1,0 +1,87 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Inventario">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Inventario de Repuestos</h2>
+    <button id="new-btn" class="btn-primary">+ Nuevo repuesto</button>
+  </div>
+
+  <!-- Alerts -->
+  <div id="alerts-section" class="mb-4"></div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Código</th><th>Nombre</th><th>Unidad</th><th>Categoría</th></tr></thead>
+      <tbody id="sp-table"><tr><td colspan="4" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- New part modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-6 w-full max-w-md">
+      <h3 class="font-bold mb-4">Nuevo repuesto</h3>
+      <div id="modal-err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2 mb-3"></div>
+      <form id="modal-form" class="space-y-3">
+        <div><label class="label">Código *</label><input class="input" name="code" required /></div>
+        <div><label class="label">Nombre *</label><input class="input" name="name" required /></div>
+        <div><label class="label">Unidad</label><input class="input" name="unit" placeholder="UND" /></div>
+        <div><label class="label">Categoría</label><input class="input" name="category" /></div>
+        <div><label class="label">Descripción</label><textarea class="input" name="description" rows="2"></textarea></div>
+        <div class="flex gap-3 pt-1">
+          <button type="submit" class="btn-primary">Guardar</button>
+          <button type="button" id="modal-cancel" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    async function load() {
+      const [parts, alerts] = await Promise.all([
+        fetch('/api/spare-parts').then(r => r.json()),
+        fetch('/api/spare-parts?alerts=1').then(r => r.json()),
+      ]);
+
+      // Show stock alerts
+      const alertSec = document.getElementById('alerts-section')!;
+      if (alerts.length) {
+        alertSec.innerHTML = `
+          <div class="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-2">
+            <p class="font-semibold text-orange-800 text-sm mb-2">⚠ Alertas de stock mínimo (${alerts.length})</p>
+            <div class="flex flex-wrap gap-2">
+              ${alerts.map((a: any) => `<span class="bg-orange-100 text-orange-700 text-xs px-2 py-1 rounded">${a.code} — ${a.name}: ${a.quantity}/${a.minStock}</span>`).join('')}
+            </div>
+          </div>`;
+      }
+
+      const tbody = document.getElementById('sp-table')!;
+      if (!parts.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center py-8 text-gray-400">Sin repuestos</td></tr>'; return; }
+      tbody.innerHTML = parts.map((p: any) => `
+        <tr>
+          <td class="font-mono text-xs">${p.code}</td>
+          <td>${p.name}</td>
+          <td>${p.unit}</td>
+          <td>${p.category ?? '—'}</td>
+        </tr>`).join('');
+    }
+
+    document.getElementById('new-btn')!.addEventListener('click', () => document.getElementById('modal')!.classList.remove('hidden'));
+    document.getElementById('modal-cancel')!.addEventListener('click', () => document.getElementById('modal')!.classList.add('hidden'));
+
+    const modalForm = document.getElementById('modal-form') as HTMLFormElement;
+    const modalErr  = document.getElementById('modal-err')!;
+    modalForm.addEventListener('submit', async e => {
+      e.preventDefault(); modalErr.classList.add('hidden');
+      const body = Object.fromEntries([...new FormData(modalForm).entries()].filter(([,v]) => v !== ''));
+      const res  = await fetch('/api/spare-parts', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) { document.getElementById('modal')!.classList.add('hidden'); modalForm.reset(); load(); }
+      else { modalErr.textContent = json.error; modalErr.classList.remove('hidden'); }
+    });
+
+    load();
+  </script>
+</Layout>

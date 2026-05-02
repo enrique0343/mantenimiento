@@ -1,0 +1,155 @@
+---
+import Layout from '../../layouts/Layout.astro';
+const { id } = Astro.params;
+---
+<Layout title="Orden de Trabajo">
+  <div class="max-w-3xl">
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/ordenes" class="text-gray-500 hover:text-gray-700">← Órdenes</a>
+      <h2 class="text-xl font-bold" id="wo-title">Cargando…</h2>
+      <span id="status-badge" class="badge"></span>
+    </div>
+
+    <div id="detail-card" class="card mb-4"></div>
+
+    <!-- Actions -->
+    <div id="actions" class="flex flex-wrap gap-3 mb-6"></div>
+
+    <!-- Checklist -->
+    <div id="checklist-section" class="hidden card mb-4">
+      <h3 class="font-semibold mb-3">Checklist</h3>
+      <div id="checklist-items"></div>
+    </div>
+
+    <!-- Spare parts used -->
+    <div class="card mb-4">
+      <h3 class="font-semibold mb-3">Repuestos utilizados</h3>
+      <div id="spare-parts-list" class="text-sm text-gray-500">—</div>
+    </div>
+
+    <!-- Close form (shown when status is IN_PROGRESS) -->
+    <div id="close-form" class="hidden card">
+      <h3 class="font-semibold mb-4">Cerrar Orden de Trabajo</h3>
+      <div class="space-y-4">
+        <div>
+          <label class="label">Nombre de quien recibe</label>
+          <input class="input" id="signer-name" type="text" />
+        </div>
+        <div>
+          <label class="label">Cargo de quien recibe</label>
+          <input class="input" id="signer-role" type="text" />
+        </div>
+        <div>
+          <label class="label">Horas trabajadas</label>
+          <input class="input" id="labor-hours" type="number" min="0" step="0.5" />
+        </div>
+        <div>
+          <label class="label">Observaciones finales</label>
+          <textarea class="input" id="close-notes" rows="2"></textarea>
+        </div>
+        <p class="text-xs text-gray-500">Las firmas digitales y fotos se registran desde la app móvil (escáner QR).</p>
+        <div class="flex gap-3">
+          <button id="close-btn" class="btn-primary">Marcar como Completada</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ woId: id }}>
+    const P_CLR = { CRITICAL:'bg-red-100 text-red-800', HIGH:'bg-orange-100 text-orange-800', MEDIUM:'bg-yellow-100 text-yellow-800', LOW:'bg-green-100 text-green-800' };
+    const S_CLR = { OPEN:'bg-blue-100 text-blue-800', IN_PROGRESS:'bg-yellow-100 text-yellow-800', COMPLETED:'bg-green-100 text-green-800', VERIFIED:'bg-teal-100 text-teal-800', CLOSED:'bg-gray-100 text-gray-500' };
+    const S_LBL = { OPEN:'Abierta', IN_PROGRESS:'En progreso', COMPLETED:'Completada', VERIFIED:'Verificada', CLOSED:'Cerrada' };
+    const T_LBL = { PREVENTIVE:'Preventivo', CORRECTIVE:'Correctivo', PREDICTIVE:'Predictivo' };
+    const fmtDate = d => d ? new Date(d).toLocaleDateString('es-CO', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+
+    let wo;
+    async function load() {
+      wo = await fetch(`/api/work-orders/${woId}`).then(r => r.json());
+      if (wo.error) { document.getElementById('wo-title').textContent = 'No encontrado'; return; }
+
+      document.getElementById('wo-title').textContent = wo.code;
+      const sb = document.getElementById('status-badge');
+      sb.textContent = S_LBL[wo.status] ?? wo.status;
+      sb.className = `badge ${S_CLR[wo.status] ?? ''}`;
+
+      document.getElementById('detail-card').innerHTML = `
+        <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div><dt class="font-medium text-gray-500">Tipo</dt><dd>${T_LBL[wo.type]??wo.type}</dd></div>
+          <div><dt class="font-medium text-gray-500">Prioridad</dt><dd><span class="badge ${P_CLR[wo.priority]??''}">${wo.priority}</span></dd></div>
+          <div><dt class="font-medium text-gray-500">Programada</dt><dd>${fmtDate(wo.scheduledDate)}</dd></div>
+          <div><dt class="font-medium text-gray-500">Inicio real</dt><dd>${fmtDate(wo.startedAt)}</dd></div>
+          <div><dt class="font-medium text-gray-500">Fin real</dt><dd>${fmtDate(wo.completedAt)}</dd></div>
+          <div><dt class="font-medium text-gray-500">Horas trabajo</dt><dd>${wo.laborHours ?? '—'}</dd></div>
+          ${wo.signerName ? `<div><dt class="font-medium text-gray-500">Recibió</dt><dd>${wo.signerName}${wo.signerRole ? ` (${wo.signerRole})` : ''}</dd></div>` : ''}
+          ${wo.notes ? `<div class="col-span-2"><dt class="font-medium text-gray-500">Notas</dt><dd>${wo.notes}</dd></div>` : ''}
+        </dl>`;
+
+      // Actions
+      const actions = document.getElementById('actions');
+      if (wo.status === 'OPEN') {
+        actions.innerHTML = `<button onclick="changeStatus('IN_PROGRESS')" class="btn-primary">▶ Iniciar trabajo</button>`;
+      } else if (wo.status === 'IN_PROGRESS') {
+        document.getElementById('close-form').classList.remove('hidden');
+        actions.innerHTML = '';
+      } else if (wo.status === 'COMPLETED') {
+        actions.innerHTML = `<button onclick="changeStatus('VERIFIED')" class="btn-secondary">✓ Verificar</button>
+          <button onclick="changeStatus('CLOSED')" class="btn-secondary">🔒 Cerrar</button>`;
+      }
+
+      // Checklist
+      if (wo.checklist) {
+        try {
+          const cl = typeof wo.checklist === 'string' ? JSON.parse(wo.checklist) : wo.checklist;
+          const sec = document.getElementById('checklist-section');
+          const items = document.getElementById('checklist-items');
+          if (Array.isArray(cl) && cl.length) {
+            sec.classList.remove('hidden');
+            items.innerHTML = cl.map(item => `
+              <label class="flex items-center gap-2 py-1 text-sm">
+                <input type="checkbox" ${item.done ? 'checked' : ''} disabled class="rounded" />
+                <span>${item.label ?? item}</span>
+              </label>`).join('');
+          }
+        } catch {}
+      }
+
+      loadSpareParts();
+    }
+
+    async function loadSpareParts() {
+      const rows = await fetch(`/api/work-orders/${woId}?sub=spare-parts`).then(r => r.json());
+      const el   = document.getElementById('spare-parts-list');
+      if (!rows.length) { el.textContent = 'Sin repuestos registrados'; return; }
+      el.innerHTML = rows.map(r => `<div class="flex justify-between border-b py-1"><span>${r.code} — ${r.name}</span><span>${r.qty} ${r.unit}</span></div>`).join('');
+    }
+
+    async function changeStatus(status) {
+      await fetch(`/api/work-orders/${woId}?sub=status`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      load();
+    }
+
+    document.getElementById('close-btn')?.addEventListener('click', async () => {
+      const signerName = document.getElementById('signer-name').value.trim();
+      if (!signerName) { alert('El nombre de quien recibe es requerido'); return; }
+      const body = {
+        signerName,
+        signerRole:       document.getElementById('signer-role').value.trim(),
+        laborHours:       Number(document.getElementById('labor-hours').value) || null,
+        notes:            document.getElementById('close-notes').value.trim(),
+        techSignatureKey: 'pending', // set via mobile flow
+        clientSignatureKey: 'pending',
+      };
+      const res = await fetch(`/api/work-orders/${woId}?sub=close`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) load();
+      else alert('Error al cerrar la OT');
+    });
+
+    load();
+  </script>
+</Layout>

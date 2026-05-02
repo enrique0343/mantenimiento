@@ -1,0 +1,128 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Planes de Mantenimiento">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Planes de Mantenimiento Preventivo</h2>
+    <button id="new-btn" class="btn-primary">+ Nuevo plan</button>
+  </div>
+
+  <!-- Upcoming alert -->
+  <div id="upcoming-section" class="mb-4"></div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Equipo</th><th>Frecuencia</th><th>Próx. vencimiento</th><th>H. estimadas</th><th>Activo</th></tr></thead>
+      <tbody id="plan-table"><tr><td colspan="5" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- New plan modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-6 w-full max-w-md">
+      <h3 class="font-bold mb-4">Nuevo plan preventivo</h3>
+      <div id="modal-err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2 mb-3"></div>
+      <form id="modal-form" class="space-y-3">
+        <div>
+          <label class="label">Equipo *</label>
+          <select class="input" name="equipmentId" id="eq-sel" required>
+            <option value="">— Seleccionar —</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Frecuencia *</label>
+            <select class="input" name="frequency" required>
+              <option value="DAILY">Diaria</option>
+              <option value="WEEKLY">Semanal</option>
+              <option value="MONTHLY" selected>Mensual</option>
+              <option value="QUARTERLY">Trimestral</option>
+              <option value="BIANNUAL">Semestral</option>
+              <option value="ANNUAL">Anual</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Próx. fecha *</label>
+            <input class="input" type="date" name="nextDueDate" required />
+          </div>
+          <div>
+            <label class="label">H. estimadas</label>
+            <input class="input" type="number" name="estimatedHours" min="0" step="0.5" />
+          </div>
+          <div>
+            <label class="label">Alertar (días antes)</label>
+            <input class="input" type="number" name="alertDaysBefore" value="7" min="1" />
+          </div>
+        </div>
+        <div class="flex gap-3 pt-1">
+          <button type="submit" class="btn-primary">Guardar</button>
+          <button type="button" id="modal-cancel" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const FREQ_LBL: Record<string,string> = { DAILY:'Diaria', WEEKLY:'Semanal', MONTHLY:'Mensual', QUARTERLY:'Trimestral', BIANNUAL:'Semestral', ANNUAL:'Anual' };
+    const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('es-CO') : '—';
+
+    async function load() {
+      const [rows, upcoming] = await Promise.all([
+        fetch('/api/maintenance-plans').then(r => r.json()),
+        fetch('/api/maintenance-plans?upcoming=14').then(r => r.json()),
+      ]);
+
+      const upcomingSec = document.getElementById('upcoming-section')!;
+      if (upcoming.length) {
+        upcomingSec.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-2">
+          <p class="text-blue-800 font-semibold text-sm">📅 ${upcoming.length} plan(es) vencen en los próximos 14 días</p>
+          <ul class="mt-1 space-y-0.5">
+            ${upcoming.map((p: any) => `<li class="text-xs text-blue-700">• ${p.equipmentCode} ${p.equipmentName} — ${fmtDate(p.nextDueDate)}</li>`).join('')}
+          </ul>
+        </div>`;
+      }
+
+      const tbody = document.getElementById('plan-table')!;
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">Sin planes</td></tr>'; return; }
+      tbody.innerHTML = rows.map((p: any) => `
+        <tr>
+          <td>${p.equipmentName ?? '—'}</td>
+          <td>${FREQ_LBL[p.frequency]??p.frequency}</td>
+          <td>${fmtDate(p.nextDueDate)}</td>
+          <td>${p.estimatedHours ?? '—'}</td>
+          <td>${p.active ? '✅' : '❌'}</td>
+        </tr>`).join('');
+    }
+
+    async function loadEquipment() {
+      const rows = await fetch('/api/equipment').then(r => r.json());
+      const sel  = document.getElementById('eq-sel') as HTMLSelectElement;
+      rows.forEach((e: any) => {
+        const opt = document.createElement('option');
+        opt.value = e.id; opt.textContent = `${e.code} — ${e.name}`;
+        sel.appendChild(opt);
+      });
+    }
+
+    document.getElementById('new-btn')!.addEventListener('click', () => document.getElementById('modal')!.classList.remove('hidden'));
+    document.getElementById('modal-cancel')!.addEventListener('click', () => document.getElementById('modal')!.classList.add('hidden'));
+
+    const form = document.getElementById('modal-form') as HTMLFormElement;
+    const err  = document.getElementById('modal-err')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err.classList.add('hidden');
+      const fd   = new FormData(form);
+      const body = Object.fromEntries([...fd.entries()].filter(([,v]) => v !== '')) as any;
+      if (body.estimatedHours)  body.estimatedHours  = Number(body.estimatedHours);
+      if (body.alertDaysBefore) body.alertDaysBefore = Number(body.alertDaysBefore);
+      const res  = await fetch('/api/maintenance-plans', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) { document.getElementById('modal')!.classList.add('hidden'); form.reset(); load(); }
+      else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+
+    loadEquipment(); load();
+  </script>
+</Layout>

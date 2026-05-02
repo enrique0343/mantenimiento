@@ -1,0 +1,100 @@
+---
+import Layout from '../../layouts/Layout.astro';
+const equipmentId = Astro.url.searchParams.get('equipment') ?? '';
+---
+<Layout title="Nueva OT">
+  <div class="max-w-2xl">
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/ordenes" class="text-gray-500 hover:text-gray-700">← Volver</a>
+      <h2 class="text-xl font-bold">Nueva Orden de Trabajo</h2>
+    </div>
+    <div id="err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3 mb-4"></div>
+    <form id="form" class="card space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="label">Tipo *</label>
+          <select class="input" name="type" required>
+            <option value="CORRECTIVE">Correctivo</option>
+            <option value="PREVENTIVE">Preventivo</option>
+            <option value="PREDICTIVE">Predictivo</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Prioridad *</label>
+          <select class="input" name="priority">
+            <option value="MEDIUM">Media</option>
+            <option value="CRITICAL">Crítica</option>
+            <option value="HIGH">Alta</option>
+            <option value="LOW">Baja</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Equipo *</label>
+          <select class="input" name="equipmentId" id="eq-select" required>
+            <option value="">— Seleccionar equipo —</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Técnico asignado</label>
+          <select class="input" name="technicianId" id="tech-select">
+            <option value="">— Sin asignar —</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Fecha programada</label>
+          <input class="input" type="date" name="scheduledDate" />
+        </div>
+        <div>
+          <label class="label">Horas estimadas</label>
+          <input class="input" type="number" name="estimatedHours" min="0" step="0.5" />
+        </div>
+      </div>
+      <div>
+        <label class="label">Observaciones / descripción</label>
+        <textarea class="input" name="notes" rows="3"></textarea>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary">Crear OT</button>
+        <a href="/ordenes" class="btn-secondary">Cancelar</a>
+      </div>
+    </form>
+  </div>
+
+  <script define:vars={{ preselectedEquipmentId: equipmentId }}>
+    async function loadEquipment() {
+      const rows = await fetch('/api/equipment').then(r => r.json());
+      const sel  = document.getElementById('eq-select');
+      rows.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.id; opt.textContent = `${e.code} — ${e.name}`;
+        if (e.id === preselectedEquipmentId) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    async function loadTechnicians() {
+      const rows = await fetch('/api/users').then(r => r.json()).catch(() => []);
+      const sel  = document.getElementById('tech-select');
+      rows.filter(u => ['TECHNICIAN','CHIEF','ADMIN'].includes(u.role)).forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.id; opt.textContent = u.name;
+        sel.appendChild(opt);
+      });
+    }
+    const form = document.getElementById('form');
+    const err  = document.getElementById('err');
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err.classList.add('hidden');
+      const fd   = new FormData(form);
+      const body = Object.fromEntries([...fd.entries()].filter(([,v]) => v !== ''));
+      if (body.estimatedHours) body.estimatedHours = Number(body.estimatedHours);
+      const res  = await fetch('/api/work-orders', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) window.location.href = `/ordenes/${json.id}`;
+      else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+    loadEquipment(); loadTechnicians();
+  </script>
+</Layout>

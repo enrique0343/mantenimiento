@@ -1,0 +1,92 @@
+---
+import Layout from '../../layouts/Layout.astro';
+const user = Astro.locals.user!;
+if (!['ADMIN','CHIEF'].includes(user.role)) return Astro.redirect('/dashboard');
+---
+<Layout title="Usuarios">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Usuarios del sistema</h2>
+    {user.role === 'ADMIN' && <button id="new-btn" class="btn-primary">+ Nuevo usuario</button>}
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Sucursal</th><th>Estado</th></tr></thead>
+      <tbody id="usr-table"><tr><td colspan="5" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- New user modal (ADMIN only) -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-6 w-full max-w-md">
+      <h3 class="font-bold mb-4">Nuevo usuario</h3>
+      <div id="modal-err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2 mb-3"></div>
+      <form id="modal-form" class="space-y-3">
+        <div><label class="label">Nombre *</label><input class="input" name="name" required /></div>
+        <div><label class="label">Correo *</label><input class="input" type="email" name="email" required /></div>
+        <div><label class="label">Contraseña *</label><input class="input" type="password" name="password" required minlength="8" /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Rol *</label>
+            <select class="input" name="role" required>
+              <option value="TECHNICIAN">Técnico</option>
+              <option value="CHIEF">Jefe de Mantenimiento</option>
+              <option value="VIEWER">Visualizador</option>
+              <option value="PROVIDER">Proveedor</option>
+              <option value="ADMIN">Administrador</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Sucursal</label>
+            <select class="input" name="branchId" id="branch-sel">
+              <option value="">— Todas —</option>
+            </select>
+          </div>
+        </div>
+        <div class="flex gap-3 pt-1">
+          <button type="submit" class="btn-primary">Crear usuario</button>
+          <button type="button" id="modal-cancel" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const ROLE_LBL: Record<string,string> = { ADMIN:'Administrador', CHIEF:'Jefe Mant.', TECHNICIAN:'Técnico', PROVIDER:'Proveedor', VIEWER:'Visualizador' };
+
+    async function load() {
+      const rows = await fetch('/api/users').then(r => r.json());
+      const tbody = document.getElementById('usr-table')!;
+      tbody.innerHTML = rows.map((u: any) => `
+        <tr>
+          <td class="font-medium">${u.name}</td>
+          <td class="text-sm">${u.email}</td>
+          <td><span class="badge bg-blue-100 text-blue-800">${ROLE_LBL[u.role]??u.role}</span></td>
+          <td class="text-xs text-gray-500">${u.branchId ?? '—'}</td>
+          <td>${u.active ? '<span class="badge bg-green-100 text-green-700">Activo</span>' : '<span class="badge bg-gray-100 text-gray-500">Inactivo</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="text-center py-8 text-gray-400">Sin usuarios</td></tr>';
+    }
+
+    async function loadBranches() {
+      const rows = await fetch('/api/branches').then(r => r.json());
+      const sel  = document.getElementById('branch-sel') as HTMLSelectElement;
+      rows.forEach((b: any) => { const o = document.createElement('option'); o.value = b.id; o.textContent = b.name; sel.appendChild(o); });
+    }
+
+    document.getElementById('new-btn')?.addEventListener('click', () => document.getElementById('modal')!.classList.remove('hidden'));
+    document.getElementById('modal-cancel')?.addEventListener('click', () => document.getElementById('modal')!.classList.add('hidden'));
+
+    const form = document.getElementById('modal-form') as HTMLFormElement | null;
+    const err  = document.getElementById('modal-err')!;
+    form?.addEventListener('submit', async e => {
+      e.preventDefault(); err.classList.add('hidden');
+      const body = Object.fromEntries([...new FormData(form!).entries()].filter(([,v]) => v !== ''));
+      const res  = await fetch('/api/users', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+      const json = await res.json();
+      if (res.ok) { document.getElementById('modal')!.classList.add('hidden'); form!.reset(); load(); }
+      else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+
+    loadBranches(); load();
+  </script>
+</Layout>

@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1777742970307,
+      "tag": "0000_safe_lady_ursula",
+      "breakpoints": true
+    }
+  ]
+}

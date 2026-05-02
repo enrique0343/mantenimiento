@@ -1,0 +1,21 @@
+name = "mantenimiento-app"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "./dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mantenimiento-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "drizzle"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "mantenimiento-files"
+
+[vars]
+JWT_SECRET = "REPLACE_WITH_STRONG_SECRET_AT_LEAST_32_CHARS"
+BASE_URL = "https://REPLACE_WITH_YOUR_DOMAIN.pages.dev"
+
+# SMTP para emails (agregar en el dashboard de Cloudflare Pages → Settings → Environment variables)
+# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME

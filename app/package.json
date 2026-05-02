@@ -1,0 +1,27 @@
+{
+  "name": "mantenimiento-app",
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "wrangler pages dev ./dist",
+    "deploy": "astro build && wrangler pages deploy ./dist",
+    "astro": "astro",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply mantenimiento-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply mantenimiento-db --remote"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^12.5.0",
+    "@astrojs/tailwind": "^5.1.0",
+    "astro": "^5.7.0",
+    "drizzle-orm": "^0.41.0",
+    "tailwindcss": "^3.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250430.0",
+    "drizzle-kit": "^0.30.0",
+    "wrangler": "^4.14.0"
+  }
+}

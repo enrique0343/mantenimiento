@@ -1,0 +1,122 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Predictivo">
+  <h2 class="text-xl font-bold mb-6">Mantenimiento Predictivo</h2>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold mb-4">Registrar medición</h3>
+    <div id="rec-err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2 mb-3"></div>
+    <form id="rec-form" class="grid grid-cols-2 gap-4">
+      <div class="col-span-2">
+        <label class="label">Equipo *</label>
+        <select class="input" name="equipmentId" id="eq-sel" required>
+          <option value="">— Seleccionar —</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Variable *</label>
+        <input class="input" name="variable" placeholder="temperatura, vibración…" required />
+      </div>
+      <div>
+        <label class="label">Unidad *</label>
+        <input class="input" name="unit" placeholder="°C, mm/s…" required />
+      </div>
+      <div>
+        <label class="label">Valor *</label>
+        <input class="input" type="number" name="value" step="any" required />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="label">Mín. alerta</label>
+          <input class="input" type="number" name="minThreshold" step="any" />
+        </div>
+        <div>
+          <label class="label">Máx. alerta</label>
+          <input class="input" type="number" name="maxThreshold" step="any" />
+        </div>
+      </div>
+      <div class="col-span-2 flex gap-3">
+        <button type="submit" class="btn-primary">Registrar</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold">Lecturas recientes</h3>
+      <select class="input w-48" id="eq-filter">
+        <option value="">Todos los equipos</option>
+      </select>
+    </div>
+    <div class="table-container">
+      <table>
+        <thead><tr><th>Equipo</th><th>Variable</th><th>Valor</th><th>Unidad</th><th>Rango</th><th>Fecha</th><th>Estado</th></tr></thead>
+        <tbody id="meas-table"><tr><td colspan="7" class="text-center py-6 text-gray-400">Seleccione un equipo</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let equipments: any[] = [];
+    async function loadEquipment() {
+      equipments = await fetch('/api/equipment').then(r => r.json());
+      const sels = ['eq-sel', 'eq-filter'];
+      sels.forEach(selId => {
+        const sel = document.getElementById(selId) as HTMLSelectElement;
+        equipments.forEach(e => {
+          const opt = document.createElement('option');
+          opt.value = e.id; opt.textContent = `${e.code} — ${e.name}`;
+          sel.appendChild(opt);
+        });
+      });
+    }
+
+    async function loadMeasurements(equipmentId: string) {
+      if (!equipmentId) { document.getElementById('meas-table')!.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400">Seleccione un equipo</td></tr>'; return; }
+      const rows = await fetch(`/api/measurements?equipment=${equipmentId}`).then(r => r.json());
+      const tbody = document.getElementById('meas-table')!;
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400">Sin mediciones</td></tr>'; return; }
+      const eqName = equipments.find(e => e.id === equipmentId)?.name ?? '—';
+      tbody.innerHTML = rows.map((m: any) => {
+        const alert = (m.minThreshold !== null && m.value < m.minThreshold) || (m.maxThreshold !== null && m.value > m.maxThreshold);
+        const range = [m.minThreshold, m.maxThreshold].every(v => v === null) ? '—' : `${m.minThreshold ?? '?'} – ${m.maxThreshold ?? '?'}`;
+        return `<tr>
+          <td class="text-xs">${eqName}</td>
+          <td>${m.variable}</td>
+          <td class="${alert ? 'font-bold text-red-600' : ''}">${m.value}</td>
+          <td>${m.unit}</td>
+          <td class="text-xs text-gray-500">${range}</td>
+          <td class="text-xs">${new Date(m.recordedAt).toLocaleString('es-CO')}</td>
+          <td>${alert ? '<span class="badge bg-red-100 text-red-700">⚠ Fuera de rango</span>' : '<span class="badge bg-green-100 text-green-700">OK</span>'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    document.getElementById('eq-filter')!.addEventListener('change', e =>
+      loadMeasurements((e.target as HTMLSelectElement).value)
+    );
+
+    const form = document.getElementById('rec-form') as HTMLFormElement;
+    const err  = document.getElementById('rec-err')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err.classList.add('hidden');
+      const fd   = new FormData(form);
+      const body = Object.fromEntries([...fd.entries()].filter(([,v]) => v !== ''));
+      body.value = Number(body.value) as any;
+      if (body.minThreshold) body.minThreshold = Number(body.minThreshold) as any;
+      if (body.maxThreshold) body.maxThreshold = Number(body.maxThreshold) as any;
+      const res  = await fetch('/api/measurements', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        form.reset();
+        const eqId = (document.getElementById('eq-filter') as HTMLSelectElement).value;
+        if (eqId) loadMeasurements(eqId);
+      } else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+
+    loadEquipment();
+  </script>
+</Layout>

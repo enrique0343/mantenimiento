@@ -1,0 +1,66 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Órdenes de Trabajo">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Órdenes de Trabajo</h2>
+    <a href="/ordenes/nueva" class="btn-primary">+ Nueva OT</a>
+  </div>
+
+  <div class="flex flex-wrap gap-3 mb-4">
+    <select id="f-type" class="input w-40">
+      <option value="">Tipo: todos</option>
+      <option value="PREVENTIVE">Preventivo</option>
+      <option value="CORRECTIVE">Correctivo</option>
+      <option value="PREDICTIVE">Predictivo</option>
+    </select>
+    <select id="f-status" class="input w-44">
+      <option value="">Estado: todos</option>
+      <option value="OPEN">Abierta</option>
+      <option value="IN_PROGRESS">En progreso</option>
+      <option value="COMPLETED">Completada</option>
+      <option value="CLOSED">Cerrada</option>
+    </select>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr>
+        <th>Código</th><th>Tipo</th><th>Prioridad</th><th>Estado</th><th>Equipo</th><th>Programada</th><th></th>
+      </tr></thead>
+      <tbody id="wo-table"><tr><td colspan="7" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <script>
+    const P_CLR = { CRITICAL:'bg-red-100 text-red-800', HIGH:'bg-orange-100 text-orange-800', MEDIUM:'bg-yellow-100 text-yellow-800', LOW:'bg-green-100 text-green-800' };
+    const S_CLR = { OPEN:'bg-blue-100 text-blue-800', IN_PROGRESS:'bg-yellow-100 text-yellow-800', COMPLETED:'bg-green-100 text-green-800', VERIFIED:'bg-teal-100 text-teal-800', CLOSED:'bg-gray-100 text-gray-500' };
+    const T_LBL = { PREVENTIVE:'Preventivo', CORRECTIVE:'Correctivo', PREDICTIVE:'Predictivo' };
+    const S_LBL = { OPEN:'Abierta', IN_PROGRESS:'En progreso', COMPLETED:'Completada', VERIFIED:'Verificada', CLOSED:'Cerrada' };
+    const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString('es-CO') : '—';
+
+    async function load() {
+      const type   = (document.getElementById('f-type') as HTMLSelectElement).value;
+      const status = (document.getElementById('f-status') as HTMLSelectElement).value;
+      const qs     = new URLSearchParams();
+      if (type)   qs.set('type', type);
+      if (status) qs.set('status', status);
+      const rows = await fetch(`/api/work-orders?${qs}`).then(r => r.json());
+      const tbody = document.getElementById('wo-table')!;
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400">Sin resultados</td></tr>'; return; }
+      tbody.innerHTML = rows.map((w: any) => `
+        <tr>
+          <td class="font-mono text-xs">${w.code}</td>
+          <td>${T_LBL[w.type]??w.type}</td>
+          <td><span class="badge ${P_CLR[w.priority]??''}">${w.priority}</span></td>
+          <td><span class="badge ${S_CLR[w.status]??''}">${S_LBL[w.status]??w.status}</span></td>
+          <td>${w.equipmentName ?? '—'}</td>
+          <td>${fmtDate(w.scheduledDate)}</td>
+          <td><a href="/ordenes/${w.id}" class="text-primary-500 text-xs hover:underline">Ver →</a></td>
+        </tr>`).join('');
+    }
+
+    ['f-type','f-status'].forEach(id => document.getElementById(id)!.addEventListener('change', load));
+    load();
+  </script>
+</Layout>

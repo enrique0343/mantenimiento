@@ -1,0 +1,58 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// If already logged in → redirect
+if (Astro.locals.user) return Astro.redirect('/dashboard');
+
+// Check if first-time setup needed
+const env = (Astro.locals.runtime as any)?.env as Env | undefined;
+let needsSetup = false;
+if (env?.DB) {
+  const { getDb } = await import('../lib/db');
+  const { users }  = await import('../lib/schema');
+  const db = getDb(env.DB);
+  const rows = await db.select({ id: users.id }).from(users).limit(1);
+  needsSetup = rows.length === 0;
+}
+if (needsSetup) return Astro.redirect('/setup');
+---
+<Layout title="Iniciar sesión">
+  <div class="w-full max-w-sm mx-auto">
+    <div class="card mt-8">
+      <h2 class="text-xl font-bold text-center mb-6">Iniciar sesión</h2>
+      <div id="error-msg" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3 mb-4"></div>
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="label" for="email">Correo electrónico</label>
+          <input class="input" type="email" id="email" name="email" required autocomplete="email" />
+        </div>
+        <div>
+          <label class="label" for="password">Contraseña</label>
+          <input class="input" type="password" id="password" name="password" required autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn-primary w-full justify-center">Ingresar</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('login-form') as HTMLFormElement;
+    const errDiv = document.getElementById('error-msg')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      errDiv.classList.add('hidden');
+      const data = Object.fromEntries(new FormData(form));
+      const res = await fetch('/api/auth/login', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        const next = new URLSearchParams(location.search).get('next') ?? '/dashboard';
+        window.location.href = next;
+      } else {
+        errDiv.textContent = body.error ?? 'Error al iniciar sesión';
+        errDiv.classList.remove('hidden');
+      }
+    });
+  </script>
+</Layout>

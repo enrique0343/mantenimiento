@@ -1,0 +1,106 @@
+---
+import Layout from '../../layouts/Layout.astro';
+const { id } = Astro.params;
+---
+<Layout title="Detalle de equipo">
+  <div id="content" class="max-w-3xl">
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/equipos" class="text-gray-500 hover:text-gray-700">← Equipos</a>
+      <h2 class="text-xl font-bold" id="eq-title">Cargando…</h2>
+    </div>
+    <div id="detail-card" class="card mb-6"></div>
+
+    <div class="flex gap-3 mb-6">
+      <a id="new-wo-btn" href="#" class="btn-primary">+ Nueva OT</a>
+      <button id="qr-btn" class="btn-secondary">Ver QR</button>
+      <a id="edit-btn" href="#" class="btn-secondary">Editar</a>
+    </div>
+
+    <div class="card">
+      <h3 class="font-semibold mb-3">Historial de órdenes de trabajo</h3>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>Código</th><th>Tipo</th><th>Estado</th><th>Técnico</th><th>Fecha</th></tr></thead>
+          <tbody id="history-table"><tr><td colspan="5" class="text-center py-6 text-gray-400">Cargando…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR modal -->
+  <div id="qr-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-6 max-w-xs w-full text-center">
+      <h3 class="font-bold mb-4">Código QR del equipo</h3>
+      <div id="qr-img" class="mb-4"></div>
+      <p id="qr-url" class="text-xs text-gray-500 break-all mb-4"></p>
+      <button id="qr-close" class="btn-secondary w-full">Cerrar</button>
+    </div>
+  </div>
+
+  <script define:vars={{ equipmentId: id }}>
+    const STATUS_LABELS = { ACTIVE:'Activo', MAINTENANCE:'En mantenimiento', OUT_OF_SERVICE:'Fuera de servicio', DECOMMISSIONED:'Dado de baja' };
+    const STATUS_COLORS = { ACTIVE:'bg-green-100 text-green-800', MAINTENANCE:'bg-yellow-100 text-yellow-800', OUT_OF_SERVICE:'bg-red-100 text-red-800', DECOMMISSIONED:'bg-gray-100 text-gray-500' };
+    const TYPE_LABELS = { PREVENTIVE:'Preventivo', CORRECTIVE:'Correctivo', PREDICTIVE:'Predictivo' };
+    const WO_STATUS_LABELS = { OPEN:'Abierta', IN_PROGRESS:'En progreso', COMPLETED:'Completada', VERIFIED:'Verificada', CLOSED:'Cerrada' };
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO') : '—'; }
+    function money(v) { return v ? `$${Number(v).toLocaleString('es-CO')}` : '—'; }
+
+    async function load() {
+      const eq = await fetch(`/api/equipment/${equipmentId}`).then(r => r.json());
+      if (eq.error) { document.getElementById('eq-title').textContent = 'No encontrado'; return; }
+
+      document.getElementById('eq-title').textContent = eq.name;
+      document.getElementById('new-wo-btn').href = `/ordenes/nueva?equipment=${equipmentId}`;
+      document.getElementById('edit-btn').href = `/equipos/${equipmentId}/editar`;
+
+      document.getElementById('detail-card').innerHTML = `
+        <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div><dt class="font-medium text-gray-500">Código</dt><dd class="font-mono">${eq.code}</dd></div>
+          <div><dt class="font-medium text-gray-500">Estado</dt><dd><span class="badge ${STATUS_COLORS[eq.status]??''}">${STATUS_LABELS[eq.status]??eq.status}</span></dd></div>
+          <div><dt class="font-medium text-gray-500">Tipo</dt><dd>${eq.type === 'BIOMEDICAL' ? 'Biomédico' : 'General'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Categoría</dt><dd>${eq.category ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Marca</dt><dd>${eq.brand ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Modelo</dt><dd>${eq.model ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Serie</dt><dd>${eq.serialNumber ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Año</dt><dd>${eq.year ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Activo fijo</dt><dd>${eq.assetNumber ?? '—'}</dd></div>
+          <div><dt class="font-medium text-gray-500">Valor</dt><dd>${money(eq.purchaseValue)}</dd></div>
+          <div><dt class="font-medium text-gray-500">Fecha compra</dt><dd>${fmtDate(eq.purchaseDate)}</dd></div>
+          ${eq.notes ? `<div class="col-span-2"><dt class="font-medium text-gray-500">Notas</dt><dd>${eq.notes}</dd></div>` : ''}
+        </dl>
+      `;
+
+      // QR button
+      document.getElementById('qr-btn').addEventListener('click', async () => {
+        const modal = document.getElementById('qr-modal');
+        document.getElementById('qr-url').textContent = eq.qrCode;
+        // Generate QR via a public API (offline fallback)
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(eq.qrCode)}&size=200x200`;
+        document.getElementById('qr-img').innerHTML = `<img src="${qrUrl}" class="mx-auto rounded" alt="QR" />`;
+        modal.classList.remove('hidden');
+      });
+    }
+
+    async function loadHistory() {
+      const rows = await fetch(`/api/equipment/${equipmentId}?sub=history`).then(r => r.json());
+      const tbody = document.getElementById('history-table');
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-6 text-gray-400">Sin historial</td></tr>'; return; }
+      tbody.innerHTML = rows.map(w => `
+        <tr>
+          <td><a href="/ordenes/${w.id}" class="text-primary-600 hover:underline">${w.code}</a></td>
+          <td>${TYPE_LABELS[w.type]??w.type}</td>
+          <td>${WO_STATUS_LABELS[w.status]??w.status}</td>
+          <td>${w.technicianId ? '👤' : '—'}</td>
+          <td>${fmtDate(w.createdAt)}</td>
+        </tr>`).join('');
+    }
+
+    document.getElementById('qr-close').addEventListener('click', () =>
+      document.getElementById('qr-modal').classList.add('hidden')
+    );
+
+    load();
+    loadHistory();
+  </script>
+</Layout>

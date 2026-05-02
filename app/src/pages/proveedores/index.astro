@@ -1,0 +1,74 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="Proveedores">
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold">Proveedores</h2>
+    <button id="new-btn" class="btn-primary">+ Nuevo proveedor</button>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Nombre</th><th>NIT</th><th>Especialidad</th><th>Ciudad</th><th>Contacto</th><th>Estado</th></tr></thead>
+      <tbody id="prov-table"><tr><td colspan="6" class="text-center py-8 text-gray-400">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-6 w-full max-w-md">
+      <h3 class="font-bold mb-4">Nuevo proveedor</h3>
+      <div id="modal-err" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2 mb-3"></div>
+      <form id="modal-form" class="space-y-3">
+        <div><label class="label">Razón social *</label><input class="input" name="name" required /></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">NIT</label><input class="input" name="nit" /></div>
+          <div><label class="label">Ciudad</label><input class="input" name="city" /></div>
+          <div><label class="label">Correo</label><input class="input" type="email" name="email" /></div>
+          <div><label class="label">Teléfono</label><input class="input" name="phone" /></div>
+          <div class="col-span-2"><label class="label">Especialidad</label><input class="input" name="specialty" /></div>
+          <div class="col-span-2"><label class="label">Contacto</label><input class="input" name="contact" /></div>
+        </div>
+        <div class="flex gap-3 pt-1">
+          <button type="submit" class="btn-primary">Guardar</button>
+          <button type="button" id="modal-cancel" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    async function load() {
+      const rows = await fetch('/api/providers').then(r => r.json());
+      const tbody = document.getElementById('prov-table')!;
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-gray-400">Sin proveedores</td></tr>'; return; }
+      tbody.innerHTML = rows.map((p: any) => `
+        <tr>
+          <td class="font-medium">${p.name}</td>
+          <td class="text-xs font-mono">${p.nit ?? '—'}</td>
+          <td>${p.specialty ?? '—'}</td>
+          <td>${p.city ?? '—'}</td>
+          <td class="text-xs">${p.contact ?? p.email ?? '—'}</td>
+          <td>${p.active ? '<span class="badge bg-green-100 text-green-700">Activo</span>' : '<span class="badge bg-gray-100 text-gray-500">Inactivo</span>'}</td>
+        </tr>`).join('');
+    }
+
+    document.getElementById('new-btn')!.addEventListener('click', () => document.getElementById('modal')!.classList.remove('hidden'));
+    document.getElementById('modal-cancel')!.addEventListener('click', () => document.getElementById('modal')!.classList.add('hidden'));
+
+    const form = document.getElementById('modal-form') as HTMLFormElement;
+    const err  = document.getElementById('modal-err')!;
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err.classList.add('hidden');
+      const body = Object.fromEntries([...new FormData(form).entries()].filter(([,v]) => v !== ''));
+      const res  = await fetch('/api/providers', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (res.ok) { document.getElementById('modal')!.classList.add('hidden'); form.reset(); load(); }
+      else { err.textContent = json.error; err.classList.remove('hidden'); }
+    });
+
+    load();
+  </script>
+</Layout>

@@ -1,0 +1,73 @@
+---
+import Layout from '../../layouts/Layout.astro';
+const user = Astro.locals.user!;
+if (user.role !== 'ADMIN') return Astro.redirect('/dashboard');
+---
+<Layout title="Configuración">
+  <h2 class="text-xl font-bold mb-6">Configuración del sistema</h2>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Branches -->
+    <div class="card">
+      <h3 class="font-semibold mb-4">Sucursales</h3>
+      <div id="branch-list" class="space-y-2 mb-4 text-sm"></div>
+      <form id="branch-form" class="flex gap-2">
+        <input class="input flex-1" name="name" placeholder="Nombre de sucursal" required />
+        <button type="submit" class="btn-primary whitespace-nowrap">Agregar</button>
+      </form>
+    </div>
+
+    <!-- SMTP (informational) -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">Email (SMTP)</h3>
+      <p class="text-sm text-gray-500 mb-3">Las variables de SMTP se configuran en el dashboard de Cloudflare Pages → Settings → Environment variables.</p>
+      <dl class="text-xs space-y-1 text-gray-600">
+        <div><dt class="inline font-medium">SMTP_HOST</dt> — servidor SMTP</div>
+        <div><dt class="inline font-medium">SMTP_PORT</dt> — puerto (587 / 465)</div>
+        <div><dt class="inline font-medium">SMTP_USER</dt> — usuario</div>
+        <div><dt class="inline font-medium">SMTP_PASS</dt> — contraseña</div>
+        <div><dt class="inline font-medium">SMTP_FROM_NAME</dt> — nombre remitente</div>
+      </dl>
+    </div>
+
+    <!-- JWT info -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">Seguridad</h3>
+      <p class="text-sm text-gray-500">El secreto JWT se configura en <code class="bg-gray-100 px-1 rounded">wrangler.toml</code> → variable <code class="bg-gray-100 px-1 rounded">JWT_SECRET</code>, o en el dashboard de Cloudflare Pages como variable de entorno.</p>
+    </div>
+
+    <!-- Migration commands -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">Base de datos (D1)</h3>
+      <p class="text-sm text-gray-500 mb-2">Para aplicar las migraciones:</p>
+      <pre class="bg-gray-900 text-green-400 text-xs p-3 rounded overflow-x-auto"># Local
+npm run db:migrate:local
+
+# Remoto (producción)
+npm run db:migrate:remote</pre>
+    </div>
+  </div>
+
+  <script>
+    async function loadBranches() {
+      const rows = await fetch('/api/branches').then(r => r.json());
+      const el   = document.getElementById('branch-list')!;
+      el.innerHTML = rows.map((b: any) => `
+        <div class="flex items-center justify-between border rounded px-3 py-2">
+          <span>${b.name}</span>
+          <span class="text-xs text-gray-400">${b.city ?? ''}</span>
+        </div>`).join('') || '<p class="text-gray-400">Sin sucursales aún.</p>';
+    }
+
+    const form = document.getElementById('branch-form') as HTMLFormElement;
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const fd   = new FormData(form);
+      const body = Object.fromEntries(fd.entries());
+      await fetch('/api/branches', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+      form.reset(); loadBranches();
+    });
+
+    loadBranches();
+  </script>
+</Layout>
