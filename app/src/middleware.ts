@@ -3,6 +3,7 @@ import { verifyJwt, getTokenFromRequest } from './lib/auth';
 
 const PUBLIC_PATHS = [
   '/login',
+  '/setup',
   '/api/auth/login',
   '/api/auth/register-admin',
   '/helpdesk/nuevo',
