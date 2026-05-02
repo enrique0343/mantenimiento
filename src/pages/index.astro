@@ -1,0 +1,88 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos } from "@/lib/schema";
+import { sql } from "drizzle-orm";
+export const prerender = false;
+
+const db = getDb(Astro);
+
+const ordenesPorEstado = await db
+  .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
+  .from(ordenes)
+  .groupBy(ordenes.estado);
+
+const activosPorEstado = await db
+  .select({ estado: activos.estado, n: sql<number>`count(*)` })
+  .from(activos)
+  .groupBy(activos.estado);
+
+const vencidas = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(
+    sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso')`
+  );
+
+const total = (rows: { estado: string; n: number }[]) => rows.reduce((s, r) => s + Number(r.n), 0);
+const get = (rows: { estado: string; n: number }[], k: string) =>
+  Number(rows.find((r) => r.estado === k)?.n ?? 0);
+---
+
+<Layout title="Dashboard">
+  <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
+  <p class="mt-1 text-sm text-slate-500">Resumen del estado del sistema</p>
+
+  <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="card p-4">
+      <div class="text-xs font-medium uppercase text-slate-500">Ordenes abiertas</div>
+      <div class="mt-2 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-medium uppercase text-slate-500">En proceso</div>
+      <div class="mt-2 text-3xl font-bold text-amber-600">{get(ordenesPorEstado, "en_proceso")}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-medium uppercase text-slate-500">Completadas</div>
+      <div class="mt-2 text-3xl font-bold text-emerald-600">{get(ordenesPorEstado, "completada")}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-medium uppercase text-slate-500">Vencidas</div>
+      <div class="mt-2 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
+    </div>
+  </div>
+
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Ordenes por estado</h2>
+      <ul class="mt-3 space-y-2 text-sm">
+        {ordenesPorEstado.length === 0 && <li class="text-slate-500">Sin ordenes aun.</li>}
+        {ordenesPorEstado.map((r) => (
+          <li class="flex justify-between">
+            <span class="capitalize">{r.estado.replace("_", " ")}</span>
+            <span class="font-semibold">{r.n}</span>
+          </li>
+        ))}
+      </ul>
+      <div class="mt-4">
+        <a class="btn-primary" href="/ordenes/nueva">Nueva orden</a>
+      </div>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Activos ({total(activosPorEstado)})</h2>
+      <ul class="mt-3 space-y-2 text-sm">
+        {activosPorEstado.length === 0 && <li class="text-slate-500">Sin activos aun.</li>}
+        {activosPorEstado.map((r) => (
+          <li class="flex justify-between">
+            <span class="capitalize">{r.estado}</span>
+            <span class="font-semibold">{r.n}</span>
+          </li>
+        ))}
+      </ul>
+      <div class="mt-4">
+        <a class="btn-secondary" href="/activos">Ver activos</a>
+      </div>
+    </div>
+  </div>
+</Layout>

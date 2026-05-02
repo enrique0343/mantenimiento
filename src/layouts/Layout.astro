@@ -1,0 +1,71 @@
+---
+import "@/styles/globals.css";
+
+interface Props {
+  title?: string;
+  hideNav?: boolean;
+}
+const { title = "Mantenimiento", hideNav = false } = Astro.props;
+const user = Astro.locals.user;
+const path = Astro.url.pathname;
+
+const links = [
+  { href: "/", label: "Dashboard" },
+  { href: "/ordenes", label: "Ordenes" },
+  { href: "/activos", label: "Activos" },
+  { href: "/usuarios", label: "Usuarios", adminOnly: true },
+];
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+  </head>
+  <body class="min-h-screen">
+    {
+      !hideNav && user && (
+        <header class="border-b border-slate-200 bg-white">
+          <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+            <a href="/" class="text-lg font-bold text-brand-600">Mantenimiento</a>
+            <nav class="flex items-center gap-1">
+              {links
+                .filter((l) => !l.adminOnly || user.rol === "admin")
+                .map((l) => (
+                  <a
+                    href={l.href}
+                    class:list={[
+                      "rounded-md px-3 py-1.5 text-sm font-medium",
+                      path === l.href || (l.href !== "/" && path.startsWith(l.href))
+                        ? "bg-brand-50 text-brand-700"
+                        : "text-slate-700 hover:bg-slate-100",
+                    ]}
+                  >
+                    {l.label}
+                  </a>
+                ))}
+            </nav>
+            <div class="flex items-center gap-3">
+              <span class="text-sm text-slate-600">
+                {user.nombre} <span class="text-xs text-slate-400">({user.rol})</span>
+              </span>
+              <button id="logoutBtn" class="btn-secondary">Salir</button>
+            </div>
+          </div>
+        </header>
+      )
+    }
+    <main class="mx-auto max-w-6xl px-4 py-6">
+      <slot />
+    </main>
+    <script>
+      const btn = document.getElementById("logoutBtn");
+      btn?.addEventListener("click", async () => {
+        await fetch("/api/auth/logout", { method: "POST" });
+        location.href = "/login";
+      });
+    </script>
+  </body>
+</html>

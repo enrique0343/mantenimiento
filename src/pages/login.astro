@@ -1,0 +1,67 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+if (Astro.locals.user) return Astro.redirect("/");
+---
+
+<Layout title="Iniciar sesion" hideNav>
+  <div class="mx-auto mt-10 max-w-md">
+    <div class="card p-6">
+      <h1 class="text-xl font-bold text-slate-900">Iniciar sesion</h1>
+      <p id="bootstrapMsg" class="mt-1 hidden text-sm text-amber-700"></p>
+      <p id="errMsg" class="mt-1 hidden text-sm text-red-600"></p>
+
+      <form id="loginForm" class="mt-4 space-y-3">
+        <div id="nombreField" class="hidden">
+          <label class="label" for="nombre">Nombre</label>
+          <input class="input" id="nombre" name="nombre" type="text" autocomplete="name" />
+        </div>
+        <div>
+          <label class="label" for="email">Email</label>
+          <input class="input" id="email" name="email" type="email" required autocomplete="email" />
+        </div>
+        <div>
+          <label class="label" for="password">Contrasena</label>
+          <input class="input" id="password" name="password" type="password" required minlength="6" autocomplete="current-password" />
+        </div>
+        <button class="btn-primary w-full justify-center" type="submit">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("loginForm") as HTMLFormElement;
+    const errMsg = document.getElementById("errMsg") as HTMLElement;
+    const bootMsg = document.getElementById("bootstrapMsg") as HTMLElement;
+    const nombreField = document.getElementById("nombreField") as HTMLElement;
+
+    fetch("/api/auth/needs-bootstrap").then(async (r) => {
+      const j = await r.json();
+      if (j.needsBootstrap) {
+        bootMsg.textContent = "No hay usuarios. Crea el primer admin con este formulario.";
+        bootMsg.classList.remove("hidden");
+        nombreField.classList.remove("hidden");
+        (document.getElementById("nombre") as HTMLInputElement).required = true;
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errMsg.classList.add("hidden");
+      const data = Object.fromEntries(new FormData(form));
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        errMsg.textContent = j.error || "Error al iniciar sesion";
+        errMsg.classList.remove("hidden");
+        return;
+      }
+      const url = new URL(location.href);
+      location.href = url.searchParams.get("next") || "/";
+    });
+  </script>
+</Layout>

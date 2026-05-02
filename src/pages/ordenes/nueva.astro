@@ -1,0 +1,106 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, usuarios } from "@/lib/schema";
+import { asc, eq } from "drizzle-orm";
+export const prerender = false;
+
+const db = getDb(Astro);
+const activosList = await db.select().from(activos).orderBy(asc(activos.codigo));
+const tecnicos = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre })
+  .from(usuarios)
+  .where(eq(usuarios.activo, true));
+---
+
+<Layout title="Nueva orden">
+  <a href="/ordenes" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nueva orden de trabajo</h1>
+
+  <form id="form" class="card mt-4 space-y-4 p-5">
+    <div>
+      <label class="label">Titulo *</label>
+      <input class="input" id="titulo" required />
+    </div>
+    <div>
+      <label class="label">Descripcion</label>
+      <textarea class="input" id="descripcion" rows="3"></textarea>
+    </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Tipo</label>
+        <select class="input" id="tipo">
+          <option value="correctivo">Correctivo</option>
+          <option value="preventivo">Preventivo</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Prioridad</label>
+        <select class="input" id="prioridad">
+          <option value="baja">Baja</option>
+          <option value="media" selected>Media</option>
+          <option value="alta">Alta</option>
+          <option value="urgente">Urgente</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Activo</label>
+        <select class="input" id="activoId">
+          <option value="">- Sin activo -</option>
+          {activosList.map((a) => <option value={a.id}>{a.codigo} - {a.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label">Asignar a</label>
+        <select class="input" id="asignadoA">
+          <option value="">- Sin asignar -</option>
+          {tecnicos.map((t) => <option value={t.id}>{t.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label">Vencimiento</label>
+        <input class="input" id="vencimiento" type="datetime-local" />
+      </div>
+    </div>
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Crear orden</button>
+      <a class="btn-secondary" href="/ordenes">Cancelar</a>
+    </div>
+  </form>
+
+  <script>
+    const form = document.getElementById("form") as HTMLFormElement;
+    const err = document.getElementById("err") as HTMLElement;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.add("hidden");
+      const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
+      const venc = v("vencimiento");
+      const activoId = v("activoId");
+      const asignadoA = v("asignadoA");
+      const payload: any = {
+        titulo: v("titulo"),
+        descripcion: v("descripcion") || null,
+        tipo: v("tipo"),
+        prioridad: v("prioridad"),
+        activoId: activoId ? Number(activoId) : null,
+        asignadoA: asignadoA ? Number(asignadoA) : null,
+        vencimiento: venc ? new Date(venc).toISOString() : null,
+      };
+      const res = await fetch("/api/ordenes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await res.json();
+      location.href = `/ordenes/${j.orden.id}`;
+    });
+  </script>
+</Layout>
