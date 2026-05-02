@@ -187,33 +187,34 @@ model Equipment {
 }
 
 model WorkOrder {
-  id               String    @id @default(cuid())
-  code             String    @unique
-  type             WOType
-  priority         Priority  @default(MEDIUM)
-  status           WOStatus  @default(OPEN)
-  equipmentId      String
-  technicianId     String?
-  providerId       String?
-  helpdeskTicketId String?
-  maintenancePlanId String?
-  scheduledDate    DateTime?
-  startedAt        DateTime?
-  completedAt      DateTime?
-  estimatedHours   Decimal?  @db.Decimal(5, 2)
-  laborHours       Decimal?  @db.Decimal(5, 2)
-  beforeImages     String[]
-  afterImages      String[]
-  techSignature    String?
-  clientSignature  String?
-  signerName       String?
-  signerRole       String?
-  checklist        Json?
-  notes            String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  code                String    @unique
+  type                WOType
+  priority            Priority  @default(MEDIUM)
+  status              WOStatus  @default(OPEN)
+  equipmentId         String?
+  locationDescription String?
+  technicianId        String?
+  providerId          String?
+  helpdeskTicketId    String?
+  maintenancePlanId   String?
+  scheduledDate       DateTime?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  estimatedHours      Decimal?  @db.Decimal(5, 2)
+  laborHours          Decimal?  @db.Decimal(5, 2)
+  beforeImages        String[]
+  afterImages         String[]
+  techSignature       String?
+  clientSignature     String?
+  signerName          String?
+  signerRole          String?
+  checklist           Json?
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  equipment      Equipment       @relation(fields: [equipmentId], references: [id])
+  equipment      Equipment?      @relation(fields: [equipmentId], references: [id])
   technician     User?           @relation("TechnicianWO", fields: [technicianId], references: [id])
   provider       Provider?       @relation(fields: [providerId], references: [id])
   helpdeskTicket HelpdeskTicket? @relation(fields: [helpdeskTicketId], references: [id])

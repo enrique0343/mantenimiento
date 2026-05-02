@@ -87,10 +87,15 @@ export async function getById(req: AuthRequest, res: Response): Promise<void> {
 
 export async function create(req: AuthRequest, res: Response): Promise<void> {
   const {
-    type, priority, equipmentId, technicianId, providerId,
+    type, priority, equipmentId, locationDescription, technicianId, providerId,
     helpdeskTicketId, scheduledDate, estimatedHours, notes,
     checklistTemplate, maintenancePlanId,
   } = req.body;
+
+  if (!equipmentId && !locationDescription) {
+    res.status(400).json({ message: 'Se requiere equipo o descripción de ubicación para trabajos generales' });
+    return;
+  }
 
   const code = await generateCode();
 
@@ -110,7 +115,8 @@ export async function create(req: AuthRequest, res: Response): Promise<void> {
       type,
       priority: priority ?? 'MEDIUM',
       status: 'OPEN',
-      equipmentId,
+      equipmentId: equipmentId ?? null,
+      locationDescription: locationDescription ?? null,
       technicianId: technicianId ?? null,
       providerId: providerId ?? null,
       helpdeskTicketId: helpdeskTicketId ?? null,
@@ -130,7 +136,7 @@ export async function create(req: AuthRequest, res: Response): Promise<void> {
         to: tech.email,
         technicianName: tech.name,
         woCode: code,
-        equipmentName: wo.equipment.name,
+        equipmentName: wo.equipment?.name ?? locationDescription ?? 'Trabajo general',
         scheduledDate: scheduledDate,
       }).catch(() => {});
     }
@@ -333,9 +339,13 @@ export async function closeWO(req: AuthRequest, res: Response): Promise<void> {
     include: { ...include, equipment: true },
   });
 
-  // If linked to a maintenance plan, advance its next due date
+  // If linked to a maintenance plan, advance its next due date (with delay cascade)
   if ((updated as any).maintenancePlanId) {
-    await advancePlanAfterCompletion((updated as any).maintenancePlanId, completedAt);
+    await advancePlanAfterCompletion(
+      (updated as any).maintenancePlanId,
+      completedAt,
+      (updated as any).scheduledDate ?? null,
+    );
   }
 
   res.json(updated);
@@ -367,6 +377,69 @@ export async function assignProvider(req: AuthRequest, res: Response): Promise<v
     data: {
       providerId: providerId || null,
       ...(notes !== undefined && { notes }),
+    },
+    include,
+  });
+  res.json(updated);
+}
+
+export async function getProgram(req: AuthRequest, res: Response): Promise<void> {
+  const { branchId, from, to, technicianId } = req.query as Record<string, string>;
+
+  const startDate = from ? new Date(from) : (() => { const d = new Date(); d.setDate(d.getDate() - 7); return d; })();
+  const endDate   = to   ? new Date(to)   : (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d; })();
+
+  const where: any = {
+    type: 'PREVENTIVE',
+    scheduledDate: { gte: startDate, lte: endDate },
+  };
+  if (branchId) where.equipment = { location: { branchId } };
+  if (technicianId) where.technicianId = technicianId;
+
+  const wos = await prisma.workOrder.findMany({
+    where,
+    include: {
+      equipment: { include: { location: { include: { branch: true } } } },
+      technician: { select: { id: true, name: true } },
+      provider:   { select: { id: true, name: true } },
+    },
+    orderBy: { scheduledDate: 'asc' },
+  });
+
+  const now = new Date();
+
+  const result = wos.map(wo => {
+    const scheduled = wo.scheduledDate!;
+    const delayDays = wo.status === 'COMPLETED'
+      ? (wo.completedAt ? Math.round((wo.completedAt.getTime() - scheduled.getTime()) / 86400000) : 0)
+      : wo.status !== 'OPEN' && wo.status !== 'IN_PROGRESS' ? 0
+      : scheduled < now ? Math.round((now.getTime() - scheduled.getTime()) / 86400000)
+      : 0;
+
+    const programStatus =
+      wo.status === 'COMPLETED' || wo.status === 'VERIFIED' || wo.status === 'CLOSED' ? 'DONE'
+      : wo.status === 'IN_PROGRESS' ? 'IN_PROGRESS'
+      : scheduled < now ? 'OVERDUE'
+      : 'PENDING';
+
+    return { ...wo, delayDays, programStatus };
+  });
+
+  res.json(result);
+}
+
+export async function quickAssign(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const { technicianId, providerId } = req.body;
+
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { id: true } });
+  if (!wo) { res.status(404).json({ message: 'OT no encontrada' }); return; }
+
+  const updated = await prisma.workOrder.update({
+    where: { id },
+    data: {
+      technicianId: technicianId || null,
+      providerId:   providerId   || null,
     },
     include,
   });

@@ -193,16 +193,43 @@ export async function deactivate(req: AuthRequest, res: Response) {
 }
 
 // Called internally when a preventive WO is closed to advance the plan's dates
-export async function advancePlanAfterCompletion(planId: string, completedAt: Date): Promise<void> {
+export async function advancePlanAfterCompletion(planId: string, completedAt: Date, scheduledDate?: Date | null): Promise<void> {
   try {
     const plan = await prisma.maintenancePlan.findUnique({ where: { id: planId } });
     if (!plan) return;
 
+    // Calculate delay: if completed late, shift future WOs by the same amount
+    const delayMs = scheduledDate && completedAt > scheduledDate
+      ? completedAt.getTime() - scheduledDate.getTime()
+      : 0;
+
     const nextDueDate = calcNextDueDate(completedAt, plan.frequency);
+
     await prisma.maintenancePlan.update({
       where: { id: planId },
       data: { nextDueDate, lastExecutedDate: completedAt },
     });
+
+    // Cascade delay to future OPEN/IN_PROGRESS WOs from this plan
+    if (delayMs > 0) {
+      const futureWOs = await prisma.workOrder.findMany({
+        where: {
+          maintenancePlanId: planId,
+          status: { in: ['OPEN', 'IN_PROGRESS'] },
+          scheduledDate: { gt: scheduledDate! },
+        },
+        select: { id: true, scheduledDate: true },
+      });
+
+      for (const wo of futureWOs) {
+        if (wo.scheduledDate) {
+          await prisma.workOrder.update({
+            where: { id: wo.id },
+            data: { scheduledDate: new Date(wo.scheduledDate.getTime() + delayMs) },
+          });
+        }
+      }
+    }
   } catch (err) {
     console.error('Error advancing maintenance plan:', err);
   }

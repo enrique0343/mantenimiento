@@ -1,17 +1,19 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Wrench, ClipboardList, HeadphonesIcon,
-  Calendar, ClipboardCheck, Package, Users, Truck, Settings, X, Activity,
+  Calendar, CalendarCheck, ClipboardCheck, Package, Users, Truck, Settings, X, Activity, Star,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
 
 const nav = [
-  { to: '/',             label: 'Dashboard',           icon: LayoutDashboard },
+  { to: '/',             label: 'Dashboard',           icon: LayoutDashboard, roles: ['ADMIN', 'MAINTENANCE_CHIEF', 'VIEWER'] },
+  { to: '/mi-panel',    label: 'Mi Panel',             icon: Star,           roles: ['TECHNICIAN'] },
   { to: '/equipos',      label: 'Equipos',              icon: Wrench },
   { to: '/mantenimiento',label: 'Mantenimiento',        icon: ClipboardList },
   { to: '/helpdesk',     label: 'Helpdesk',             icon: HeadphonesIcon },
   { to: '/planificador', label: 'Planificador',         icon: Calendar },
+  { to: '/programa',     label: 'Programa de mant.',    icon: CalendarCheck,  roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
   { to: '/planes',       label: 'Planes preventivos',   icon: ClipboardCheck, roles: ['ADMIN', 'MAINTENANCE_CHIEF'] },
   { to: '/predictivo',   label: 'Predictivo',            icon: Activity },
   { to: '/inventario',   label: 'Inventario',           icon: Package },

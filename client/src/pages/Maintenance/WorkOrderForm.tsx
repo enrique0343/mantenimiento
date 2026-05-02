@@ -17,8 +17,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 const schema = z.object({
   type: z.enum(['PREVENTIVE', 'CORRECTIVE', 'PREDICTIVE']),
   priority: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']),
-  equipmentSearch: z.string().min(1, 'Busque y seleccione un equipo'),
-  equipmentId: z.string().min(1, 'Seleccione un equipo'),
+  isGeneral: z.boolean().default(false),
+  equipmentSearch: z.string().optional(),
+  equipmentId: z.string().optional(),
+  locationDescription: z.string().optional(),
   technicianId: z.string().optional(),
   providerId: z.string().optional(),
   maintenancePlanId: z.string().optional(),
@@ -49,12 +51,16 @@ export default function WorkOrderForm() {
     defaultValues: {
       type: (presetType as any) ?? 'CORRECTIVE',
       priority: 'MEDIUM',
+      isGeneral: false,
       equipmentId: presetEquipmentId ?? '',
       equipmentSearch: '',
+      locationDescription: '',
       notes: presetNotes ?? '',
       scheduledDate: presetScheduledDate ?? '',
     },
   });
+
+  const isGeneral = watch('isGeneral');
 
   const woType = watch('type');
   const equipmentSearch = watch('equipmentSearch');
@@ -115,12 +121,21 @@ export default function WorkOrderForm() {
   }
 
   async function onSubmit(data: FormData) {
+    if (!data.isGeneral && !data.equipmentId) {
+      toast.error('Seleccione un equipo o marque como trabajo general');
+      return;
+    }
+    if (data.isGeneral && !data.locationDescription?.trim()) {
+      toast.error('Ingrese una descripción de ubicación para el trabajo general');
+      return;
+    }
     setLoading(true);
     try {
       const payload = {
         type: data.type,
         priority: data.priority,
-        equipmentId: data.equipmentId,
+        equipmentId: data.isGeneral ? null : (data.equipmentId || null),
+        locationDescription: data.isGeneral ? data.locationDescription : null,
         technicianId: data.technicianId || null,
         providerId: data.providerId || null,
         maintenancePlanId: data.maintenancePlanId || null,
@@ -176,58 +191,75 @@ export default function WorkOrderForm() {
           </CardContent>
         </Card>
 
-        {/* Equipo */}
+        {/* Tipo de trabajo: equipo o general */}
         <Card>
-          <CardHeader><CardTitle className="text-base">Equipo *</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <div className="relative">
-              <Input
-                {...register('equipmentSearch')}
-                placeholder="Buscar equipo por nombre o código..."
-                disabled={!!selectedEquipment}
-                autoComplete="off"
-              />
-              {selectedEquipment && (
-                <button
-                  type="button"
-                  onClick={clearEquipment}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-red-500 px-2 py-1"
-                >
-                  Cambiar
-                </button>
-              )}
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">{isGeneral ? 'Trabajo general' : 'Equipo *'}</CardTitle>
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={isGeneral}
+                  onChange={e => {
+                    setValue('isGeneral', e.target.checked);
+                    if (e.target.checked) { clearEquipment(); }
+                    else { setValue('locationDescription', ''); }
+                  }}
+                />
+                Trabajo sin equipo (gotera, luminaria, etc.)
+              </label>
             </div>
-            {errors.equipmentId && (
-              <p className="text-xs text-destructive">{errors.equipmentId.message}</p>
-            )}
-            {/* Resultados de búsqueda */}
-            {equipmentResults.length > 0 && !selectedEquipment && (
-              <div className="border rounded-md divide-y max-h-48 overflow-y-auto bg-white shadow-sm">
-                {equipmentResults.map((eq) => (
-                  <button
-                    key={eq.id}
-                    type="button"
-                    onClick={() => selectEquipment(eq)}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center justify-between"
-                  >
-                    <span className="font-medium">{eq.name}</span>
-                    <span className="text-xs text-slate-400 font-mono">{eq.code}</span>
-                  </button>
-                ))}
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {isGeneral ? (
+              <div className="space-y-1.5">
+                <Label>Ubicación / descripción del trabajo *</Label>
+                <Input
+                  {...register('locationDescription')}
+                  placeholder="Ej: Baño 3er piso, Pasillo norte, Oficina 201..."
+                />
+                <p className="text-xs text-slate-400">Describa dónde se realizará el trabajo</p>
               </div>
-            )}
-            {/* Info equipo seleccionado */}
-            {selectedEquipment && (
-              <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
-                <p className="font-medium text-blue-800">{selectedEquipment.name}</p>
-                <p className="text-xs text-blue-500 font-mono">{selectedEquipment.code}</p>
-                {selectedEquipment.location && (
-                  <p className="text-xs text-blue-600 mt-0.5">
-                    {(selectedEquipment.location as any).branch?.name} ·{' '}
-                    {selectedEquipment.location.area}
-                  </p>
+            ) : (
+              <>
+                <div className="relative">
+                  <Input
+                    {...register('equipmentSearch')}
+                    placeholder="Buscar equipo por nombre o código..."
+                    disabled={!!selectedEquipment}
+                    autoComplete="off"
+                  />
+                  {selectedEquipment && (
+                    <button type="button" onClick={clearEquipment}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-red-500 px-2 py-1">
+                      Cambiar
+                    </button>
+                  )}
+                </div>
+                {equipmentResults.length > 0 && !selectedEquipment && (
+                  <div className="border rounded-md divide-y max-h-48 overflow-y-auto bg-white shadow-sm">
+                    {equipmentResults.map((eq) => (
+                      <button key={eq.id} type="button" onClick={() => selectEquipment(eq)}
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center justify-between">
+                        <span className="font-medium">{eq.name}</span>
+                        <span className="text-xs text-slate-400 font-mono">{eq.code}</span>
+                      </button>
+                    ))}
+                  </div>
                 )}
-              </div>
+                {selectedEquipment && (
+                  <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
+                    <p className="font-medium text-blue-800">{selectedEquipment.name}</p>
+                    <p className="text-xs text-blue-500 font-mono">{selectedEquipment.code}</p>
+                    {selectedEquipment.location && (
+                      <p className="text-xs text-blue-600 mt-0.5">
+                        {(selectedEquipment.location as any).branch?.name} · {selectedEquipment.location.area}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

@@ -27,11 +27,19 @@ import HelpdeskDetail from '@/pages/Helpdesk/HelpdeskDetail';
 import HelpdeskPublicForm from '@/pages/Helpdesk/HelpdeskPublicForm';
 import HelpdeskPublicTrack from '@/pages/Helpdesk/HelpdeskPublicTrack';
 import Planner from '@/pages/Planner';
+import MaintenanceProgram from '@/pages/MaintenanceProgram';
 import Inventory from '@/pages/Inventory';
 import Users from '@/pages/Users';
 import Providers from '@/pages/Providers';
 import Settings from '@/pages/Settings';
 import Predictive from '@/pages/Predictive';
+import TechnicianDashboard from '@/pages/TechnicianDashboard';
+
+function RoleBasedHome() {
+  const { user } = useAuthStore();
+  if (user?.role === 'TECHNICIAN') return <Navigate to="/mi-panel" replace />;
+  return <Dashboard />;
+}
 
 export default function App() {
   const { token, fetchMe } = useAuthStore();
@@ -55,7 +63,7 @@ export default function App() {
       {/* Rutas protegidas con layout */}
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<RoleBasedHome />} />
 
           {/* Equipos */}
           <Route path="/equipos" element={<EquipmentList />} />
@@ -77,11 +85,13 @@ export default function App() {
           <Route path="/helpdesk" element={<HelpdeskList />} />
           <Route path="/helpdesk/:id" element={<HelpdeskDetail />} />
           <Route path="/planificador" element={<Planner />} />
+          <Route path="/programa" element={<MaintenanceProgram />} />
           <Route path="/inventario" element={<Inventory />} />
           <Route path="/predictivo" element={<Predictive />} />
           <Route path="/usuarios" element={<Users />} />
           <Route path="/proveedores" element={<Providers />} />
           <Route path="/configuracion" element={<Settings />} />
+          <Route path="/mi-panel" element={<TechnicianDashboard />} />
         </Route>
       </Route>
 

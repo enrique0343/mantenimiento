@@ -4,17 +4,20 @@ import { upload } from '../middleware/upload';
 import {
   list, getById, create, updateStatus, updateChecklist,
   uploadImages, saveSignatures, addSpareParts, removeSparePart,
-  closeWO, getPDF, startWO, assignProvider, reschedule,
+  closeWO, getPDF, startWO, assignProvider, reschedule, getProgram,
+  quickAssign,
 } from '../controllers/workOrder.controller';
 
 const router = Router();
 
 router.get('/', authenticate, list);
+router.get('/program', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), getProgram);
 router.get('/:id', authenticate, getById);
 router.get('/:id/pdf', authenticate, getPDF);
 
 router.post('/', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), create);
 router.post('/:id/start', authenticate, startWO);
+router.patch('/:id/quick-assign', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), quickAssign);
 router.patch('/:id/reschedule', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), reschedule);
 router.post('/:id/assign-provider', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), assignProvider);
 router.patch('/:id/status', authenticate, updateStatus);

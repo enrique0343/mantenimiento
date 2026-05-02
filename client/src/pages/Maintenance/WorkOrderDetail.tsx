@@ -246,7 +246,9 @@ export default function WorkOrderDetail() {
                 {WO_STATUS_LABEL[wo.status]}
               </span>
             </div>
-            <p className="text-sm text-slate-500 mt-0.5">{(wo as any).equipment?.name}</p>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {(wo as any).equipment?.name ?? (wo as any).locationDescription ?? 'Trabajo general'}
+            </p>
           </div>
         </div>
         <div className="flex gap-2 shrink-0 flex-wrap">
@@ -281,9 +283,9 @@ export default function WorkOrderDetail() {
       <Card>
         <CardContent className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
           <div>
-            <p className="text-slate-400 text-xs">Equipo</p>
-            <p className="font-medium">{(wo as any).equipment?.name}</p>
-            <p className="text-xs font-mono text-slate-400">{(wo as any).equipment?.code}</p>
+            <p className="text-slate-400 text-xs">{(wo as any).equipment ? 'Equipo' : 'Ubicación'}</p>
+            <p className="font-medium">{(wo as any).equipment?.name ?? (wo as any).locationDescription ?? '—'}</p>
+            {(wo as any).equipment?.code && <p className="text-xs font-mono text-slate-400">{(wo as any).equipment.code}</p>}
           </div>
           <div>
             <p className="text-slate-400 text-xs">Técnico</p>
