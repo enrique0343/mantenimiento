@@ -21,6 +21,7 @@ import WorkOrderDetail from '@/pages/Maintenance/WorkOrderDetail';
 import Dashboard from '@/pages/Dashboard';
 import MaintenanceList from '@/pages/Maintenance/MaintenanceList';
 import HelpdeskList from '@/pages/Helpdesk/HelpdeskList';
+import HelpdeskDetail from '@/pages/Helpdesk/HelpdeskDetail';
 import HelpdeskPublicForm from '@/pages/Helpdesk/HelpdeskPublicForm';
 import HelpdeskPublicTrack from '@/pages/Helpdesk/HelpdeskPublicTrack';
 import Planner from '@/pages/Planner';
@@ -66,6 +67,7 @@ export default function App() {
 
           {/* Otros módulos */}
           <Route path="/helpdesk" element={<HelpdeskList />} />
+          <Route path="/helpdesk/:id" element={<HelpdeskDetail />} />
           <Route path="/planificador" element={<Planner />} />
           <Route path="/inventario" element={<Inventory />} />
           <Route path="/usuarios" element={<Users />} />

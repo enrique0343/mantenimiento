@@ -118,6 +118,30 @@ export async function sendNewTicketNotification(opts: {
   );
 }
 
+export async function sendTicketComment(opts: {
+  to: string;
+  requesterName: string;
+  ticketCode: string;
+  trackingToken: string;
+  authorName: string;
+  comment: string;
+}): Promise<void> {
+  const trackingUrl = `${CLIENT_URL}/helpdesk/ticket/${opts.trackingToken}`;
+  await send(
+    opts.to,
+    `[${opts.ticketCode}] Respuesta a su solicitud`,
+    baseTemplate(
+      `Nueva respuesta — ${opts.ticketCode}`,
+      `<p>Estimado/a <strong>${opts.requesterName}</strong>,</p>
+       <p><strong>${opts.authorName}</strong> respondió a su solicitud:</p>
+       <blockquote style="border-left:3px solid #1e40af;margin:8px 0;padding:8px 12px;background:#f0f4ff">
+         ${opts.comment}
+       </blockquote>
+       <p><a href="${trackingUrl}" style="color:#1e40af">Ver el hilo completo</a></p>`
+    )
+  );
+}
+
 // ── Órdenes de Trabajo ────────────────────────────────────────────────────────
 
 export async function sendWOAssigned(opts: {

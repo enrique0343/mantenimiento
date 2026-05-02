@@ -1,24 +1,19 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireRoles } from '../middleware/auth';
+import * as hd from '../controllers/helpdesk.controller';
 
 const router = Router();
 
-// Implementación completa en Fase 4
-const stub = (_req: any, res: any) =>
-  res.status(501).json({ message: 'Helpdesk: implementar en Fase 4' });
+// Public routes (no auth required)
+router.post('/tickets', hd.createTicket);
+router.get('/track/:token', hd.trackByToken);
 
-// Ruta pública (sin auth) — seguimiento por token
-router.get('/track/:token', stub);
-
-// Ruta pública (sin auth) — crear ticket
-router.post('/tickets', stub);
-
-// Rutas internas (con auth)
-router.get('/tickets', authenticate, stub);
-router.get('/tickets/:id', authenticate, stub);
-router.patch('/tickets/:id/status', authenticate, stub);
-router.post('/tickets/:id/assign', authenticate, stub);
-router.post('/tickets/:id/comments', authenticate, stub);
-router.post('/tickets/:id/convert', authenticate, stub);
+// Internal routes (authenticated)
+router.get('/tickets', authenticate, hd.listTickets);
+router.get('/tickets/:id', authenticate, hd.getTicket);
+router.patch('/tickets/:id/status', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), hd.updateStatus);
+router.post('/tickets/:id/assign', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), hd.assignTicket);
+router.post('/tickets/:id/comments', authenticate, hd.addComment);
+router.post('/tickets/:id/convert', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), hd.convertToWO);
 
 export default router;
