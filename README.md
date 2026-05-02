@@ -168,7 +168,7 @@ echo "JWT_SECRET = $JWT"
 echo "CRON_SECRET = $CRON"
 
 # 3. Configurar el secret CRON en el sitio Pages
-echo "$CRON" | npx wrangler pages secret put CRON_SECRET --project-name=mantenimiento-49c
+echo "$CRON" | npx wrangler pages secret put CRON_SECRET --project-name=mantenimiento
 
 # 4. Deploy del sitio
 npm run deploy
