@@ -177,5 +177,10 @@ export async function report(req: Request, res: Response): Promise<void> {
   ]);
 
   if (!equipment) { res.status(404).json({ message: 'Equipo no encontrado' }); return; }
-  res.json({ equipment, workOrders });
+
+  const company = await prisma.company.findFirst({
+    select: { name: true, logoUrl: true, nit: true },
+  });
+
+  res.json({ equipment, workOrders, company });
 }

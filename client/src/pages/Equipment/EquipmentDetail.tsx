@@ -3,11 +3,12 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ChevronLeft, Pencil, QrCode, Download, ClipboardList,
-  MapPin, Tag, Calendar, DollarSign, AlertTriangle,
+  MapPin, Tag, DollarSign, AlertTriangle, FileText,
 } from 'lucide-react';
 import QRCodeLib from 'qrcode';
 import api from '@/lib/api';
 import type { Equipment, WorkOrder } from '@/types';
+import { EquipmentReportPDF } from '@/components/pdf/EquipmentReportPDF';
 import {
   EQUIPMENT_STATUS_LABEL, WO_STATUS_LABEL, WO_TYPE_LABEL, PRIORITY_LABEL,
   PRIORITY_COLOR, WO_STATUS_COLOR, formatDate, formatCurrency, cn,
@@ -32,6 +33,7 @@ export default function EquipmentDetail() {
   const [loading, setLoading] = useState(true);
   const [qrOpen, setQrOpen] = useState(searchParams.get('tab') === 'qr');
   const [qrDataUrl, setQrDataUrl] = useState('');
+  const [pdfLoading, setPdfLoading] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -71,6 +73,32 @@ export default function EquipmentDetail() {
     a.href = qrDataUrl;
     a.download = `QR-${equipment.code}.png`;
     a.click();
+  }
+
+  async function downloadBitacora() {
+    if (!equipment) return;
+    setPdfLoading(true);
+    try {
+      const { data } = await api.get(`/equipments/${id}/report`);
+      const { pdf } = await import('@react-pdf/renderer');
+      const blob = await pdf(
+        <EquipmentReportPDF
+          equipment={data.equipment}
+          workOrders={data.workOrders}
+          company={data.company}
+        />
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Bitacora-${equipment.code}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Error al generar la bitácora PDF');
+    } finally {
+      setPdfLoading(false);
+    }
   }
 
   if (loading) {
@@ -120,6 +148,10 @@ export default function EquipmentDetail() {
           <Button variant="outline" size="sm" onClick={openQR}>
             <QrCode className="h-4 w-4" />
             Ver QR
+          </Button>
+          <Button variant="outline" size="sm" onClick={downloadBitacora} loading={pdfLoading}>
+            <FileText className="h-4 w-4" />
+            Bitácora PDF
           </Button>
           <Button variant="outline" size="sm" onClick={() => navigate(`/equipos/${id}/editar`)}>
             <Pencil className="h-4 w-4" />

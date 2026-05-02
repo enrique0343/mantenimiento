@@ -19,6 +19,7 @@ import { Select } from '@/components/ui/select';
 import { Dialog } from '@/components/ui/dialog';
 import ImageUploadGrid from '@/components/images/ImageUploadGrid';
 import SignaturePad from '@/components/signature/SignaturePad';
+import { WorkOrderPDF } from '@/components/pdf/WorkOrderPDF';
 
 const TYPE_COLOR: Record<string, string> = {
   PREVENTIVE: 'bg-green-100 text-green-800',
@@ -94,6 +95,23 @@ export default function WorkOrderDetail() {
       toast.success('OT cerrada correctamente');
     } catch (err: any) {
       toast.error(err.response?.data?.message ?? 'Error al cerrar la OT');
+    } finally { setActionLoading(''); }
+  }
+
+  async function downloadPDF() {
+    setActionLoading('pdf');
+    try {
+      const { data } = await api.get(`/work-orders/${id}/pdf`);
+      const { pdf: genPdf } = await import('@react-pdf/renderer');
+      const blob = await genPdf(<WorkOrderPDF workOrder={data.workOrder} company={data.company} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${data.workOrder.code}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Error al generar el PDF');
     } finally { setActionLoading(''); }
   }
 
@@ -221,7 +239,7 @@ export default function WorkOrderDetail() {
             </Button>
           )}
           {isClosed && (
-            <Button size="sm" variant="outline" onClick={() => navigate(`/mantenimiento/${id}/pdf`)}>
+            <Button size="sm" variant="outline" onClick={downloadPDF} loading={actionLoading === 'pdf'}>
               <FileText className="h-4 w-4" />
               PDF
             </Button>
