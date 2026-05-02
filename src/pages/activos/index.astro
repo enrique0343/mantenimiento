@@ -1,14 +1,21 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos } from "@/lib/schema";
-import { desc } from "drizzle-orm";
+import { activos, planesMantenimiento } from "@/lib/schema";
+import { desc, sql } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
 const rows = await db.select().from(activos).orderBy(desc(activos.id));
 const user = Astro.locals.user!;
 const canEdit = user.rol === "admin" || user.rol === "tecnico";
+
+const planesCount = await db
+  .select({ activoId: planesMantenimiento.activoId, n: sql<number>`count(*)` })
+  .from(planesMantenimiento)
+  .where(sql`${planesMantenimiento.activo} = 1`)
+  .groupBy(planesMantenimiento.activoId);
+const planesByActivo = new Map(planesCount.map((r) => [r.activoId, Number(r.n)]));
 
 const estadoColor: Record<string, string> = {
   operativo: "bg-emerald-100 text-emerald-700",
@@ -18,33 +25,13 @@ const estadoColor: Record<string, string> = {
 };
 ---
 
-<Layout title="Activos">
+<Layout title="Equipos">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold">Activos</h1>
+      <h1 class="text-2xl font-bold">Equipos / Activos</h1>
       <p class="text-sm text-slate-500">{rows.length} equipos registrados</p>
     </div>
-    {canEdit && <button id="newBtn" class="btn-primary">+ Nuevo activo</button>}
-  </div>
-
-  <div id="newForm" class="card mt-4 hidden p-4">
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div><label class="label">Codigo</label><input class="input" id="f_codigo" /></div>
-      <div><label class="label">Nombre</label><input class="input" id="f_nombre" /></div>
-      <div class="sm:col-span-2"><label class="label">Descripcion</label><input class="input" id="f_descripcion" /></div>
-      <div><label class="label">Ubicacion</label><input class="input" id="f_ubicacion" /></div>
-      <div>
-        <label class="label">Estado</label>
-        <select class="input" id="f_estado">
-          <option value="operativo">Operativo</option>
-          <option value="averiado">Averiado</option>
-          <option value="mantenimiento">En mantenimiento</option>
-          <option value="baja">Dado de baja</option>
-        </select>
-      </div>
-    </div>
-    <div class="mt-3 flex gap-2"><button id="saveBtn" class="btn-primary">Guardar</button><button id="cancelBtn" class="btn-secondary">Cancelar</button></div>
-    <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
+    {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}
   </div>
 
   <div class="card mt-4 overflow-hidden">
@@ -53,64 +40,43 @@ const estadoColor: Record<string, string> = {
         <tr>
           <th class="px-4 py-2">Codigo</th>
           <th class="px-4 py-2">Nombre</th>
+          <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2">Marca / Modelo</th>
           <th class="px-4 py-2">Ubicacion</th>
           <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Cronograma</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && (
-          <tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">Aun no hay activos.</td></tr>
+          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Aun no hay equipos.</td></tr>
         )}
         {rows.map((a) => (
-          <tr>
+          <tr class="hover:bg-slate-50">
             <td class="px-4 py-2 font-mono text-xs">{a.codigo}</td>
-            <td class="px-4 py-2">{a.nombre}</td>
-            <td class="px-4 py-2 text-slate-600">{a.ubicacion ?? "-"}</td>
             <td class="px-4 py-2">
-              <span class={`badge ${estadoColor[a.estado]}`}>{a.estado}</span>
+              <a href={`/activos/${a.id}`} class="font-medium text-brand-700 hover:underline">{a.nombre}</a>
+            </td>
+            <td class="px-4 py-2">
+              {a.tipo === "biomedico" ? (
+                <span class="badge bg-purple-100 text-purple-700">Biomedico</span>
+              ) : (
+                <span class="badge bg-slate-100 text-slate-600">General</span>
+              )}
+            </td>
+            <td class="px-4 py-2 text-slate-600">{[a.marca, a.modelo].filter(Boolean).join(" / ") || "-"}</td>
+            <td class="px-4 py-2 text-slate-600">{a.ubicacion ?? "-"}</td>
+            <td class="px-4 py-2"><span class={`badge ${estadoColor[a.estado]}`}>{a.estado}</span></td>
+            <td class="px-4 py-2">
+              {planesByActivo.get(a.id) ? (
+                <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(a.id)} plan(es)</span>
+              ) : (
+                <span class="text-xs text-slate-400">sin cronograma</span>
+              )}
             </td>
           </tr>
         ))}
       </tbody>
     </table>
   </div>
-
-  <script>
-    const newBtn = document.getElementById("newBtn");
-    const newForm = document.getElementById("newForm");
-    const cancelBtn = document.getElementById("cancelBtn");
-    const saveBtn = document.getElementById("saveBtn");
-    const formErr = document.getElementById("formErr") as HTMLElement | null;
-
-    newBtn?.addEventListener("click", () => newForm?.classList.remove("hidden"));
-    cancelBtn?.addEventListener("click", () => newForm?.classList.add("hidden"));
-
-    saveBtn?.addEventListener("click", async () => {
-      const get = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
-      const payload = {
-        codigo: get("f_codigo"),
-        nombre: get("f_nombre"),
-        descripcion: get("f_descripcion") || null,
-        ubicacion: get("f_ubicacion") || null,
-        estado: (document.getElementById("f_estado") as HTMLSelectElement).value,
-      };
-      if (!payload.codigo || !payload.nombre) {
-        formErr!.textContent = "Codigo y nombre son obligatorios";
-        formErr!.classList.remove("hidden");
-        return;
-      }
-      const res = await fetch("/api/activos", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        formErr!.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
-        formErr!.classList.remove("hidden");
-        return;
-      }
-      location.reload();
-    });
-  </script>
 </Layout>

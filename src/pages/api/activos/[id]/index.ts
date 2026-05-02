@@ -13,6 +13,17 @@ const updateSchema = z.object({
   descripcion: z.string().nullable().optional(),
   ubicacion: z.string().nullable().optional(),
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
+  tipo: z.enum(["general", "biomedico"]).optional(),
+  categoria: z.string().nullable().optional(),
+  numeroActivo: z.string().nullable().optional(),
+  marca: z.string().nullable().optional(),
+  modelo: z.string().nullable().optional(),
+  serial: z.string().nullable().optional(),
+  anio: z.number().int().nullable().optional(),
+  registroSanitario: z.string().nullable().optional(),
+  claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
+  ultimaCalibracion: z.string().nullable().optional(),
+  proximaCalibracion: z.string().nullable().optional(),
 });
 
 export const GET: APIRoute = async (ctx) => {

@@ -1,1 +1,2 @@
 JWT_SECRET=cambia-este-secreto-por-uno-largo-y-aleatorio
+CRON_SECRET=cambia-este-tambien-por-uno-largo-y-aleatorio

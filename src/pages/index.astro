@@ -1,8 +1,8 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos } from "@/lib/schema";
-import { sql } from "drizzle-orm";
+import { ordenes, activos, planesMantenimiento } from "@/lib/schema";
+import { sql, eq, and, lte, gte, asc } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
@@ -24,9 +24,26 @@ const vencidas = await db
     sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso')`
   );
 
+const hoy = new Date().toISOString().slice(0, 10);
+const en14 = new Date(); en14.setDate(en14.getDate() + 14);
+const en14Str = en14.toISOString().slice(0, 10);
+
+const proximos = await db
+  .select({
+    p: planesMantenimiento,
+    a: activos,
+  })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en14Str)))
+  .orderBy(asc(planesMantenimiento.proximaFecha))
+  .limit(10);
+
 const total = (rows: { estado: string; n: number }[]) => rows.reduce((s, r) => s + Number(r.n), 0);
 const get = (rows: { estado: string; n: number }[], k: string) =>
   Number(rows.find((r) => r.estado === k)?.n ?? 0);
+
+const fmt = (s: string) => new Date(s).toLocaleDateString("es");
 ---
 
 <Layout title="Dashboard">
@@ -54,25 +71,32 @@ const get = (rows: { estado: string; n: number }[], k: string) =>
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Ordenes por estado</h2>
+      <h2 class="font-semibold text-slate-900">Proximos mantenimientos preventivos</h2>
+      <p class="text-xs text-slate-500">Planes con vencimiento en los proximos 14 dias</p>
       <ul class="mt-3 space-y-2 text-sm">
-        {ordenesPorEstado.length === 0 && <li class="text-slate-500">Sin ordenes aun.</li>}
-        {ordenesPorEstado.map((r) => (
-          <li class="flex justify-between">
-            <span class="capitalize">{r.estado.replace("_", " ")}</span>
-            <span class="font-semibold">{r.n}</span>
-          </li>
-        ))}
+        {proximos.length === 0 && <li class="text-slate-500">Sin planes proximos a vencer.</li>}
+        {proximos.map((r) => {
+          const venc = r.p.proximaFecha <= hoy;
+          return (
+            <li class="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2">
+              <div>
+                <a href={`/activos/${r.a?.id}`} class="font-medium text-brand-700 hover:underline">{r.p.titulo}</a>
+                <div class="text-xs text-slate-500">{r.a?.codigo} - {r.a?.nombre}</div>
+              </div>
+              <span class={`badge ${venc ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{fmt(r.p.proximaFecha)}</span>
+            </li>
+          );
+        })}
       </ul>
       <div class="mt-4">
-        <a class="btn-primary" href="/ordenes/nueva">Nueva orden</a>
+        <a class="btn-secondary" href="/cronograma">Ver cronograma completo</a>
       </div>
     </div>
 
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Activos ({total(activosPorEstado)})</h2>
+      <h2 class="font-semibold text-slate-900">Equipos ({total(activosPorEstado)})</h2>
       <ul class="mt-3 space-y-2 text-sm">
-        {activosPorEstado.length === 0 && <li class="text-slate-500">Sin activos aun.</li>}
+        {activosPorEstado.length === 0 && <li class="text-slate-500">Sin equipos aun.</li>}
         {activosPorEstado.map((r) => (
           <li class="flex justify-between">
             <span class="capitalize">{r.estado}</span>
@@ -80,8 +104,9 @@ const get = (rows: { estado: string; n: number }[], k: string) =>
           </li>
         ))}
       </ul>
-      <div class="mt-4">
-        <a class="btn-secondary" href="/activos">Ver activos</a>
+      <div class="mt-4 flex gap-2">
+        <a class="btn-primary" href="/ordenes/nueva">Nueva orden</a>
+        <a class="btn-secondary" href="/activos">Ver equipos</a>
       </div>
     </div>
   </div>

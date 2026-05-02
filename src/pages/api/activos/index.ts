@@ -15,13 +15,26 @@ export const GET: APIRoute = async (ctx) => {
   return Response.json({ activos: rows });
 };
 
-const createSchema = z.object({
+const baseSchema = {
   codigo: z.string().min(1),
   nombre: z.string().min(1),
-  descripcion: z.string().optional().nullable(),
-  ubicacion: z.string().optional().nullable(),
+  descripcion: z.string().nullable().optional(),
+  ubicacion: z.string().nullable().optional(),
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
-});
+  tipo: z.enum(["general", "biomedico"]).optional(),
+  categoria: z.string().nullable().optional(),
+  numeroActivo: z.string().nullable().optional(),
+  marca: z.string().nullable().optional(),
+  modelo: z.string().nullable().optional(),
+  serial: z.string().nullable().optional(),
+  anio: z.number().int().nullable().optional(),
+  registroSanitario: z.string().nullable().optional(),
+  claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
+  ultimaCalibracion: z.string().nullable().optional(),
+  proximaCalibracion: z.string().nullable().optional(),
+};
+
+const createSchema = z.object(baseSchema);
 
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
@@ -30,12 +43,13 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
+  const data = { ...parsed.data, qrCode: `QR-${parsed.data.codigo}` };
   try {
-    const [row] = await db.insert(activos).values(parsed.data).returning();
+    const [row] = await db.insert(activos).values(data).returning();
     return Response.json({ activo: row }, { status: 201 });
   } catch (e: any) {
     if (String(e?.message ?? "").includes("UNIQUE")) {
-      return Response.json({ error: "Codigo ya existe" }, { status: 409 });
+      return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
     }
     throw e;
   }

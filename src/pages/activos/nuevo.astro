@@ -1,0 +1,158 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol === "solicitante") return Astro.redirect("/activos");
+---
+
+<Layout title="Nuevo equipo">
+  <a href="/activos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nuevo equipo</h1>
+
+  <form id="form" class="card mt-4 space-y-5 p-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Tipo de equipo *</label>
+        <select class="input" id="tipo">
+          <option value="general">General / Industrial</option>
+          <option value="biomedico">Biomedico</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Categoria</label>
+        <input class="input" id="categoria" placeholder="Ej: Refrigeracion, Quirofano..." />
+      </div>
+      <div>
+        <label class="label">Codigo interno *</label>
+        <input class="input" id="codigo" required placeholder="EQ-001" />
+      </div>
+      <div>
+        <label class="label">Numero de activo</label>
+        <input class="input" id="numeroActivo" placeholder="Ej: AC-2024-001" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Nombre *</label>
+        <input class="input" id="nombre" required />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Descripcion</label>
+        <textarea class="input" id="descripcion" rows="2"></textarea>
+      </div>
+      <div>
+        <label class="label">Marca</label>
+        <input class="input" id="marca" />
+      </div>
+      <div>
+        <label class="label">Modelo</label>
+        <input class="input" id="modelo" />
+      </div>
+      <div>
+        <label class="label">Numero de serie</label>
+        <input class="input" id="serial" />
+      </div>
+      <div>
+        <label class="label">Año</label>
+        <input class="input" id="anio" type="number" min="1900" max="2100" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Ubicacion</label>
+        <input class="input" id="ubicacion" placeholder="Ej: Sala 3 - Quirofano A" />
+      </div>
+      <div>
+        <label class="label">Estado</label>
+        <select class="input" id="estado">
+          <option value="operativo">Operativo</option>
+          <option value="averiado">Averiado</option>
+          <option value="mantenimiento">En mantenimiento</option>
+          <option value="baja">Dado de baja</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="bioFields" class="hidden border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-purple-700">Datos biomedicos</h2>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Registro sanitario (DNM)</label>
+          <input class="input" id="registroSanitario" placeholder="DNM-XXXX" />
+        </div>
+        <div>
+          <label class="label">Clase de riesgo</label>
+          <select class="input" id="claseRiesgo">
+            <option value="">- Sin clasificar -</option>
+            <option value="I">Clase I (riesgo bajo)</option>
+            <option value="IIa">Clase IIa (riesgo moderado)</option>
+            <option value="IIb">Clase IIb (riesgo moderado-alto)</option>
+            <option value="III">Clase III (riesgo alto)</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Ultima calibracion</label>
+          <input class="input" id="ultimaCalibracion" type="date" />
+        </div>
+        <div>
+          <label class="label">Proxima calibracion</label>
+          <input class="input" id="proximaCalibracion" type="date" />
+        </div>
+      </div>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Crear equipo</button>
+      <a class="btn-secondary" href="/activos">Cancelar</a>
+    </div>
+  </form>
+
+  <script>
+    const tipoSel = document.getElementById("tipo") as HTMLSelectElement;
+    const bioFields = document.getElementById("bioFields") as HTMLElement;
+    const toggleBio = () => bioFields.classList.toggle("hidden", tipoSel.value !== "biomedico");
+    tipoSel.addEventListener("change", toggleBio);
+    toggleBio();
+
+    const form = document.getElementById("form") as HTMLFormElement;
+    const err = document.getElementById("err") as HTMLElement;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.add("hidden");
+      const v = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+      const sv = (id: string) => (document.getElementById(id) as HTMLSelectElement).value;
+      const isBio = sv("tipo") === "biomedico";
+      const payload: any = {
+        codigo: v("codigo"),
+        nombre: v("nombre"),
+        descripcion: v("descripcion") || null,
+        ubicacion: v("ubicacion") || null,
+        estado: sv("estado"),
+        tipo: sv("tipo"),
+        categoria: v("categoria") || null,
+        numeroActivo: v("numeroActivo") || null,
+        marca: v("marca") || null,
+        modelo: v("modelo") || null,
+        serial: v("serial") || null,
+        anio: v("anio") ? Number(v("anio")) : null,
+      };
+      if (isBio) {
+        payload.registroSanitario = v("registroSanitario") || null;
+        payload.claseRiesgo = sv("claseRiesgo") || null;
+        payload.ultimaCalibracion = v("ultimaCalibracion") || null;
+        payload.proximaCalibracion = v("proximaCalibracion") || null;
+      }
+      const res = await fetch("/api/activos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await res.json();
+      location.href = `/activos/${j.activo.id}`;
+    });
+  </script>
+</Layout>

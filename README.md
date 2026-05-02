@@ -151,6 +151,58 @@ Vuelve a desplegar (`npm run deploy`) para que los bindings tomen efecto.
 - **tecnico**: crea/edita activos, gestiona órdenes y adjuntos
 - **solicitante**: lee, crea órdenes, comenta
 
+## Fase 1 — Mantenimiento preventivo (instalación)
+
+Esta fase agrega: campos extendidos en equipos (marca, modelo, serial, año, biomédico con DNM/calibración), tabla de **planes de mantenimiento** y un **cron diario** que crea órdenes preventivas automáticamente cuando vence un plan.
+
+### Pasos de instalación
+
+```bash
+# 1. Aplicar migración a D1 producción
+npx wrangler d1 migrations apply mantenimiento-db --remote
+
+# 2. Generar dos secretos
+JWT=$(openssl rand -base64 48)
+CRON=$(openssl rand -base64 48)
+echo "JWT_SECRET = $JWT"
+echo "CRON_SECRET = $CRON"
+
+# 3. Configurar el secret CRON en el sitio Pages
+echo "$CRON" | npx wrangler pages secret put CRON_SECRET --project-name=mantenimiento-49c
+
+# 4. Deploy del sitio
+npm run deploy
+
+# 5. Setup del cron worker (carpeta cron-worker/)
+cd cron-worker
+npm install
+echo "$CRON" | npx wrangler secret put CRON_SECRET
+npx wrangler deploy
+cd ..
+```
+
+### Probar el cron manualmente
+
+```bash
+curl -X POST https://mantenimiento-cron.<tu-subdominio>.workers.dev/run \
+  -H "x-cron-secret: <tu CRON_SECRET>"
+```
+
+Respuesta esperada: `{ ok: true, fecha: "2026-05-02", creadas: N, detalles: [...] }`.
+
+El cron real corre cada día a las **06:00 hora El Salvador** (12:00 UTC).
+
+### Cómo funciona
+
+1. Creas un equipo desde `/activos/nuevo`. Si es **biomédico** se habilitan los campos DNM, clase de riesgo y calibraciones.
+2. En el detalle del equipo (`/activos/[id]`) agregas planes al **cronograma** (frecuencia, próxima fecha, asignado, prioridad).
+3. Cada día a las 6am, el cron worker llama al endpoint `/api/cron/generar-preventivos`. Para cada plan con `proxima_fecha <= hoy`:
+   - Crea una orden tipo `preventivo` con el título y prioridad del plan
+   - La asigna **sin técnico** (rol admin decide quien la toma — opción que elegiste)
+   - Avanza `proxima_fecha` al siguiente ciclo según la frecuencia
+4. La vista `/cronograma` muestra los planes agrupados por urgencia (vencidos / 7 días / 30 días / futuros).
+5. El dashboard tiene un widget con los próximos 14 días.
+
 ## Notas técnicas
 
 - El hash de contraseñas usa **PBKDF2-SHA256** con 100k iteraciones (compatible con Workers; bcrypt no funciona ahí).

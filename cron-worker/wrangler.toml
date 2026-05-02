@@ -1,0 +1,11 @@
+name = "mantenimiento-cron"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# 12:00 UTC = 06:00 hora de El Salvador (UTC-6, sin DST)
+[triggers]
+crons = ["0 12 * * *"]
+
+[vars]
+APP_URL = "https://mantenimiento-49c.pages.dev"
+# CRON_SECRET se configura como secret con: wrangler secret put CRON_SECRET
