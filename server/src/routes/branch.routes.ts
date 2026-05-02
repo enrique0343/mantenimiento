@@ -4,9 +4,10 @@ import prisma from '../lib/prisma';
 
 const router = Router();
 
-router.get('/', authenticate, async (_req, res) => {
+router.get('/', authenticate, async (req, res) => {
+  const where = req.query.active === 'all' ? {} : { active: true };
   const branches = await prisma.branch.findMany({
-    where: { active: true },
+    where,
     include: { locations: true },
     orderBy: { name: 'asc' },
   });

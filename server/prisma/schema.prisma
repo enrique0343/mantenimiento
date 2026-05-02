@@ -83,15 +83,21 @@ enum MovementType {
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model Company {
-  id        String   @id @default(cuid())
-  name      String
-  nit       String?
-  address   String?
-  phone     String?
-  email     String?
-  logoUrl   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String
+  nit          String?
+  address      String?
+  phone        String?
+  email        String?
+  logoUrl      String?
+  smtpHost     String?
+  smtpPort     Int?
+  smtpUser     String?
+  smtpPass     String?
+  smtpFromName String?
+  smtpSecure   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   branches Branch[]
 }
