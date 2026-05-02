@@ -16,7 +16,7 @@ const C = {
 };
 
 const s = StyleSheet.create({
-  page: { padding: 36, fontSize: 9, fontFamily: 'Helvetica', color: C.text, backgroundColor: C.white },
+  page: { padding: 36, paddingBottom: 52, fontSize: 9, fontFamily: 'Helvetica', color: C.text, backgroundColor: C.white },
   // ── Header ────────────────────────────────────────────────────────────────
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, paddingBottom: 10, borderBottom: 1, borderColor: C.primary },
   headerLogo: { width: 60, height: 30, objectFit: 'contain' },
@@ -206,33 +206,32 @@ export function WorkOrderPDF({ workOrder: wo, company }: Props) {
           </View>
         )}
 
-        {/* Images */}
-        {(wo.beforeImages.length > 0 || wo.afterImages.length > 0) && (
+        {/* Images — BEFORE */}
+        {wo.beforeImages.length > 0 && (
           <View style={s.section}>
-            <Text style={s.sectionTitle}>Registro Fotográfico</Text>
-            <View style={s.row2}>
-              <View style={s.col}>
-                <Text style={{ ...s.label, marginBottom: 4 }}>ANTES</Text>
-                <View style={s.imageGrid}>
-                  {wo.beforeImages.map((url, i) => (
-                    <View key={i} style={s.imageBox}>
-                      <Image src={url} style={s.imageItem} />
-                      <Text style={s.imageCaption}>Antes {i + 1}</Text>
-                    </View>
-                  ))}
+            <Text style={s.sectionTitle}>Registro Fotográfico — Antes</Text>
+            <View style={s.imageGrid}>
+              {wo.beforeImages.map((url, i) => (
+                <View key={i} style={s.imageBox} wrap={false}>
+                  <Image src={url} style={s.imageItem} />
+                  <Text style={s.imageCaption}>Antes {i + 1}</Text>
                 </View>
-              </View>
-              <View style={s.col}>
-                <Text style={{ ...s.label, marginBottom: 4 }}>DESPUÉS</Text>
-                <View style={s.imageGrid}>
-                  {wo.afterImages.map((url, i) => (
-                    <View key={i} style={s.imageBox}>
-                      <Image src={url} style={s.imageItem} />
-                      <Text style={s.imageCaption}>Después {i + 1}</Text>
-                    </View>
-                  ))}
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* Images — AFTER */}
+        {wo.afterImages.length > 0 && (
+          <View style={s.section}>
+            <Text style={s.sectionTitle}>Registro Fotográfico — Después</Text>
+            <View style={s.imageGrid}>
+              {wo.afterImages.map((url, i) => (
+                <View key={i} style={s.imageBox} wrap={false}>
+                  <Image src={url} style={s.imageItem} />
+                  <Text style={s.imageCaption}>Después {i + 1}</Text>
                 </View>
-              </View>
+              ))}
             </View>
           </View>
         )}

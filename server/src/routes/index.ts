@@ -11,6 +11,9 @@ import sparePartRoutes from './sparePart.routes';
 import kpiRoutes from './kpi.routes';
 import userRoutes from './user.routes';
 import providerRoutes from './provider.routes';
+import checklistTemplateRoutes from './checklistTemplate.routes';
+import inventoryReceptionRoutes from './inventoryReception.routes';
+import purchaseRequisitionRoutes from './purchaseRequisition.routes';
 
 const router = Router();
 
@@ -26,5 +29,8 @@ router.use('/spare-parts', sparePartRoutes);
 router.use('/kpis', kpiRoutes);
 router.use('/users', userRoutes);
 router.use('/providers', providerRoutes);
+router.use('/checklist-templates', checklistTemplateRoutes);
+router.use('/inventory/receptions', inventoryReceptionRoutes);
+router.use('/inventory/requisitions', purchaseRequisitionRoutes);
 
 export default router;

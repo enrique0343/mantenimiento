@@ -186,8 +186,8 @@ export async function uploadImages(req: AuthRequest, res: Response): Promise<voi
   if (!wo) { res.status(404).json({ message: 'OT no encontrada' }); return; }
 
   const images = type === 'before' ? wo.beforeImages : wo.afterImages;
-  if (images.length >= 2) {
-    res.status(400).json({ message: `Ya hay 2 imágenes del ${type === 'before' ? 'antes' : 'después'}` });
+  if (images.length >= 5) {
+    res.status(400).json({ message: `Ya hay 5 imágenes del ${type === 'before' ? 'antes' : 'después'}` });
     return;
   }
 
@@ -338,6 +338,38 @@ export async function closeWO(req: AuthRequest, res: Response): Promise<void> {
     await advancePlanAfterCompletion((updated as any).maintenancePlanId, completedAt);
   }
 
+  res.json(updated);
+}
+
+export async function startWO(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { status: true, startedAt: true } });
+  if (!wo) { res.status(404).json({ message: 'OT no encontrada' }); return; }
+  if (wo.status !== 'OPEN') { res.status(400).json({ message: 'La OT ya fue iniciada' }); return; }
+
+  const updated = await prisma.workOrder.update({
+    where: { id },
+    data: { status: 'IN_PROGRESS', startedAt: new Date() },
+    include,
+  });
+  res.json(updated);
+}
+
+export async function assignProvider(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const { providerId, notes } = req.body;
+
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { id: true } });
+  if (!wo) { res.status(404).json({ message: 'OT no encontrada' }); return; }
+
+  const updated = await prisma.workOrder.update({
+    where: { id },
+    data: {
+      providerId: providerId || null,
+      ...(notes !== undefined && { notes }),
+    },
+    include,
+  });
   res.json(updated);
 }
 

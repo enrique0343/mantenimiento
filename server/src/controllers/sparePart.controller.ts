@@ -278,6 +278,85 @@ export async function setMinStock(req: AuthRequest, res: Response) {
   }
 }
 
+// GET /spare-parts/consumption-report
+export async function consumptionReport(req: AuthRequest, res: Response) {
+  try {
+    const { branchId, from, to } = req.query as Record<string, string>;
+
+    const where: any = { type: 'OUT' };
+    if (branchId) where.branchId = branchId;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
+
+    const movements = await prisma.sparePartMovement.findMany({
+      where,
+      include: {
+        sparePart: { select: { code: true, name: true, unit: true, category: true } },
+        createdBy: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Enrich with WO and area info
+    const enriched = await Promise.all(
+      movements.map(async (m) => {
+        if (!m.workOrderId) return { ...m, workOrder: null, area: null };
+        const wo = await prisma.workOrder.findUnique({
+          where: { id: m.workOrderId },
+          select: {
+            code: true,
+            type: true,
+            equipment: { select: { name: true, location: { select: { area: true, branch: { select: { name: true } } } } } },
+          },
+        });
+        return {
+          ...m,
+          workOrder: wo,
+          area: wo?.equipment?.location?.area ?? null,
+          branchName: wo?.equipment?.location?.branch?.name ?? null,
+        };
+      })
+    );
+
+    res.json(enriched);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al generar reporte de consumo' });
+  }
+}
+
+// PATCH /spare-parts/:id/safety-stock — update reorder point and safety stock
+export async function setSafetyStock(req: AuthRequest, res: Response) {
+  try {
+    const { branchId, reorderPoint, safetyStock, minStock } = req.body;
+    if (!branchId) return res.status(400).json({ message: 'branchId requerido' });
+
+    const stock = await prisma.sparePartStock.upsert({
+      where: { sparePartId_branchId: { sparePartId: req.params.id, branchId } },
+      create: {
+        sparePartId: req.params.id,
+        branchId,
+        quantity: 0,
+        minStock: minStock !== undefined ? parseInt(minStock) : 0,
+        reorderPoint: reorderPoint !== undefined ? parseInt(reorderPoint) : 0,
+        safetyStock: safetyStock !== undefined ? parseInt(safetyStock) : 0,
+      },
+      update: {
+        ...(minStock !== undefined && { minStock: parseInt(minStock) }),
+        ...(reorderPoint !== undefined && { reorderPoint: parseInt(reorderPoint) }),
+        ...(safetyStock !== undefined && { safetyStock: parseInt(safetyStock) }),
+      },
+    });
+    res.json(stock);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al actualizar stock de seguridad' });
+  }
+}
+
 // DELETE /spare-parts/:id (soft delete)
 export async function deactivate(req: AuthRequest, res: Response) {
   try {

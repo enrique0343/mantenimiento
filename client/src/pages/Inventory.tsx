@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, Package, AlertTriangle, History, X, Save } from 'lucide-react';
+import { Plus, Search, Package, AlertTriangle, History, X, Save, Truck, FileText, ShoppingCart, BarChart3 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -17,16 +17,18 @@ import { Dialog } from '@/components/ui/dialog';
 import { useAuthStore } from '@/store/auth.store';
 
 const MOVEMENT_LABEL: Record<string, string> = {
-  IN: 'Entrada',
-  OUT: 'Salida',
-  ADJUSTMENT: 'Ajuste',
-  RETURN: 'Devolución',
+  IN: 'Entrada', OUT: 'Salida', ADJUSTMENT: 'Ajuste', RETURN: 'Devolución', RECEPTION: 'Recepción',
 };
 const MOVEMENT_COLOR: Record<string, string> = {
-  IN: 'text-green-600',
-  OUT: 'text-red-500',
-  ADJUSTMENT: 'text-blue-600',
-  RETURN: 'text-purple-600',
+  IN: 'text-green-600', OUT: 'text-red-500', ADJUSTMENT: 'text-blue-600',
+  RETURN: 'text-purple-600', RECEPTION: 'text-teal-600',
+};
+const REQ_STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'Borrador', SENT: 'Enviada', APPROVED: 'Aprobada', REJECTED: 'Rechazada',
+};
+const REQ_STATUS_COLOR: Record<string, string> = {
+  DRAFT: 'bg-slate-100 text-slate-600', SENT: 'bg-blue-100 text-blue-700',
+  APPROVED: 'bg-green-100 text-green-700', REJECTED: 'bg-red-100 text-red-700',
 };
 
 const partSchema = z.object({
@@ -38,7 +40,7 @@ const partSchema = z.object({
 });
 type PartForm = z.infer<typeof partSchema>;
 
-interface StockAlert extends SparePartStock {
+interface StockAlert extends Omit<SparePartStock, 'branch'> {
   sparePart: { id: string; name: string; code: string; unit: string };
   branch: { name: string };
 }
@@ -48,7 +50,7 @@ export default function Inventory() {
   const canEdit = ['ADMIN', 'MAINTENANCE_CHIEF'].includes(user?.role ?? '');
   const canAdjust = ['ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'].includes(user?.role ?? '');
 
-  const [tab, setTab] = useState<'catalog' | 'alerts'>('catalog');
+  const [tab, setTab] = useState<'catalog' | 'alerts' | 'reception' | 'requisitions' | 'report'>('catalog');
   const [parts, setParts] = useState<SparePart[]>([]);
   const [alertItems, setAlertItems] = useState<StockAlert[]>([]);
   const [total, setTotal] = useState(0);
@@ -79,12 +81,38 @@ export default function Inventory() {
   const [movements, setMovements] = useState<any[]>([]);
   const [loadingMovs, setLoadingMovs] = useState(false);
 
-  // Min stock dialog
+  // Min/safety stock dialog
   const [showMinDialog, setShowMinDialog] = useState(false);
   const [minPart, setMinPart] = useState<SparePart | null>(null);
   const [minBranchId, setMinBranchId] = useState('');
   const [minQty, setMinQty] = useState('');
+  const [reorderQty, setReorderQty] = useState('');
+  const [safetyQty, setSafetyQty] = useState('');
   const [savingMin, setSavingMin] = useState(false);
+
+  // Requisitions
+  const [requisitions, setRequisitions] = useState<any[]>([]);
+  const [loadingReqs, setLoadingReqs] = useState(false);
+  const [generatingReq, setGeneratingReq] = useState(false);
+
+  // Reception
+  const [receptions, setReceptions] = useState<any[]>([]);
+  const [loadingReceptions, setLoadingReceptions] = useState(false);
+  const [showReceptionDialog, setShowReceptionDialog] = useState(false);
+  const [receptionBranchId, setReceptionBranchId] = useState('');
+  const [receptionSupplierId, setReceptionSupplierId] = useState('');
+  const [receptionInvoice, setReceptionInvoice] = useState('');
+  const [receptionItems, setReceptionItems] = useState<{ sparePartId: string; name: string; quantity: number; unitCostUsd: string }[]>([]);
+  const [receptionPartSearch, setReceptionPartSearch] = useState('');
+  const [receptionPartResults, setReceptionPartResults] = useState<SparePart[]>([]);
+  const [savingReception, setSavingReception] = useState(false);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
+
+  // Consumption report
+  const [consumptionData, setConsumptionData] = useState<any[]>([]);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [reportFrom, setReportFrom] = useState('');
+  const [reportTo, setReportTo] = useState('');
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<PartForm>({
     resolver: zodResolver(partSchema),
@@ -92,6 +120,7 @@ export default function Inventory() {
 
   useEffect(() => {
     api.get('/branches').then(({ data }) => setBranches(data)).catch(() => {});
+    api.get('/providers').then(({ data }) => setProviders(Array.isArray(data) ? data : data.data ?? [])).catch(() => {});
   }, []);
 
   const fetchParts = useCallback(async () => {
@@ -203,9 +232,12 @@ export default function Inventory() {
 
   function openMinStock(part: SparePart) {
     setMinPart(part);
-    setMinBranchId(filterBranch || branches[0]?.id || '');
-    const currentMin = part.stocks?.find(s => s.branchId === (filterBranch || branches[0]?.id))?.minStock ?? 0;
-    setMinQty(String(currentMin));
+    const bId = filterBranch || branches[0]?.id || '';
+    setMinBranchId(bId);
+    const stock = part.stocks?.find(s => s.branchId === bId);
+    setMinQty(String(stock?.minStock ?? 0));
+    setReorderQty(String((stock as any)?.reorderPoint ?? 0));
+    setSafetyQty(String((stock as any)?.safetyStock ?? 0));
     setShowMinDialog(true);
   }
 
@@ -213,8 +245,13 @@ export default function Inventory() {
     if (!minPart || !minBranchId) return;
     setSavingMin(true);
     try {
-      await api.patch(`/spare-parts/${minPart.id}/min-stock`, { branchId: minBranchId, minStock: parseInt(minQty) || 0 });
-      toast.success('Stock mínimo actualizado');
+      await api.patch(`/spare-parts/${minPart.id}/safety-stock`, {
+        branchId: minBranchId,
+        minStock: parseInt(minQty) || 0,
+        reorderPoint: parseInt(reorderQty) || 0,
+        safetyStock: parseInt(safetyQty) || 0,
+      });
+      toast.success('Configuración de stock actualizada');
       setShowMinDialog(false);
       fetchParts();
       fetchAlerts();
@@ -224,6 +261,95 @@ export default function Inventory() {
       setSavingMin(false);
     }
   }
+
+  async function loadReceptions() {
+    setLoadingReceptions(true);
+    try {
+      const params = filterBranch ? `?branchId=${filterBranch}` : '';
+      const { data } = await api.get(`/inventory/receptions${params}`);
+      setReceptions(data.data);
+    } catch { toast.error('Error al cargar recepciones'); }
+    finally { setLoadingReceptions(false); }
+  }
+
+  async function loadRequisitions() {
+    setLoadingReqs(true);
+    try {
+      const params = filterBranch ? `?branchId=${filterBranch}` : '';
+      const { data } = await api.get(`/inventory/requisitions${params}`);
+      setRequisitions(data.data);
+    } catch { toast.error('Error al cargar requisiciones'); }
+    finally { setLoadingReqs(false); }
+  }
+
+  async function loadConsumptionReport() {
+    setLoadingReport(true);
+    try {
+      const params = new URLSearchParams();
+      if (filterBranch) params.set('branchId', filterBranch);
+      if (reportFrom) params.set('from', reportFrom);
+      if (reportTo) params.set('to', reportTo);
+      const { data } = await api.get(`/spare-parts/consumption-report?${params}`);
+      setConsumptionData(data);
+    } catch { toast.error('Error al generar reporte'); }
+    finally { setLoadingReport(false); }
+  }
+
+  async function generateRequisition() {
+    if (!filterBranch && branches.length === 0) { toast.error('Seleccione una sucursal'); return; }
+    setGeneratingReq(true);
+    try {
+      const branchId = filterBranch || branches[0]?.id;
+      const { data } = await api.post('/inventory/requisitions/generate', { branchId });
+      setRequisitions(prev => [data, ...prev]);
+      toast.success(`Requisición ${data.code} generada`);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message ?? 'Error al generar requisición');
+    } finally { setGeneratingReq(false); }
+  }
+
+  async function saveReception() {
+    if (!receptionBranchId || receptionItems.length === 0) {
+      toast.error('Sucursal e ítems son requeridos'); return;
+    }
+    setSavingReception(true);
+    try {
+      await api.post('/inventory/receptions', {
+        branchId: receptionBranchId,
+        supplierId: receptionSupplierId || undefined,
+        invoiceRef: receptionInvoice || undefined,
+        items: receptionItems.map(i => ({
+          sparePartId: i.sparePartId,
+          quantity: i.quantity,
+          unitCostUsd: i.unitCostUsd ? parseFloat(i.unitCostUsd) : undefined,
+        })),
+      });
+      toast.success('Recepción registrada — stock actualizado');
+      setShowReceptionDialog(false);
+      setReceptionItems([]);
+      setReceptionBranchId('');
+      setReceptionInvoice('');
+      loadReceptions();
+      fetchParts();
+    } catch (err: any) {
+      toast.error(err.response?.data?.message ?? 'Error al registrar recepción');
+    } finally { setSavingReception(false); }
+  }
+
+  useEffect(() => {
+    if (tab === 'reception') loadReceptions();
+    if (tab === 'requisitions') loadRequisitions();
+    if (tab === 'report') loadConsumptionReport();
+  }, [tab, filterBranch]);
+
+  useEffect(() => {
+    if (!receptionPartSearch || receptionPartSearch.length < 2) { setReceptionPartResults([]); return; }
+    const t = setTimeout(async () => {
+      const { data } = await api.get(`/spare-parts?search=${encodeURIComponent(receptionPartSearch)}&limit=6`);
+      setReceptionPartResults(Array.isArray(data) ? data : data.data ?? []);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [receptionPartSearch]);
 
   function getStockForBranch(part: SparePart): SparePartStock | undefined {
     if (!part.stocks) return undefined;
@@ -250,19 +376,23 @@ export default function Inventory() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b">
+      <div className="flex gap-1 border-b overflow-x-auto">
         {[
-          { value: 'catalog', label: 'Catálogo' },
-          { value: 'alerts', label: 'Stock bajo', badge: alertItems.length },
-        ].map(({ value, label, badge }) => (
+          { value: 'catalog', label: 'Catálogo', icon: Package },
+          { value: 'alerts', label: 'Stock bajo', badge: alertItems.length, icon: AlertTriangle },
+          { value: 'reception', label: 'Recepción', icon: Truck },
+          { value: 'requisitions', label: 'Requisiciones', icon: ShoppingCart },
+          { value: 'report', label: 'Consumo', icon: BarChart3 },
+        ].map(({ value, label, badge, icon: Icon }) => (
           <button
             key={value}
             onClick={() => setTab(value as any)}
             className={cn(
-              'flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
               tab === value ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
             )}
           >
+            <Icon className="h-3.5 w-3.5" />
             {label}
             {badge != null && badge > 0 && (
               <span className="rounded-full bg-red-100 text-red-700 px-1.5 py-0.5 text-xs font-bold">{badge}</span>
@@ -423,6 +553,168 @@ export default function Inventory() {
         </div>
       )}
 
+      {/* Reception tab */}
+      {tab === 'reception' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-slate-500">Registro de entradas de productos al inventario</p>
+            <Button size="sm" onClick={() => { setReceptionBranchId(filterBranch || branches[0]?.id || ''); setShowReceptionDialog(true); }}>
+              <Plus className="h-4 w-4" /> Nueva recepción
+            </Button>
+          </div>
+          {loadingReceptions ? (
+            <div className="flex justify-center py-12"><span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
+          ) : receptions.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 border rounded-lg text-sm">No hay recepciones registradas</div>
+          ) : (
+            <div className="rounded-lg border bg-white overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-slate-50 text-left text-xs font-medium text-slate-500 uppercase">
+                    <th className="px-4 py-3">Código</th>
+                    <th className="px-4 py-3">Fecha</th>
+                    <th className="px-4 py-3">Sucursal</th>
+                    <th className="px-4 py-3">Proveedor</th>
+                    <th className="px-4 py-3">Ítems</th>
+                    <th className="px-4 py-3">Factura</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {receptions.map((r: any) => (
+                    <tr key={r.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-mono text-xs font-bold">{r.code}</td>
+                      <td className="px-4 py-3 text-xs">{new Date(r.receivedAt).toLocaleDateString('es-CO')}</td>
+                      <td className="px-4 py-3 text-xs">{r.branch?.name ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs">{r.supplier?.name ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs">{r.items?.length ?? 0} ítem(s)</td>
+                      <td className="px-4 py-3 text-xs font-mono">{r.invoiceRef ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Requisitions tab */}
+      {tab === 'requisitions' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-slate-500">Requisiciones de compra generadas por punto de reorden</p>
+            {canEdit && (
+              <Button size="sm" onClick={generateRequisition} loading={generatingReq}>
+                <ShoppingCart className="h-4 w-4" /> Generar automática
+              </Button>
+            )}
+          </div>
+          {loadingReqs ? (
+            <div className="flex justify-center py-12"><span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
+          ) : requisitions.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 border rounded-lg text-sm">No hay requisiciones. Configure puntos de reorden y genere una.</div>
+          ) : (
+            <div className="space-y-3">
+              {requisitions.map((r: any) => (
+                <Card key={r.id}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono text-sm font-bold">{r.code}</p>
+                          <span className={cn('text-xs px-2 py-0.5 rounded-full', REQ_STATUS_COLOR[r.status])}>
+                            {REQ_STATUS_LABEL[r.status]}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">{r.branch?.name} · {new Date(r.createdAt).toLocaleDateString('es-CO')}</p>
+                      </div>
+                      {canEdit && r.status === 'DRAFT' && (
+                        <Button size="sm" variant="outline" onClick={async () => {
+                          await api.patch(`/inventory/requisitions/${r.id}/status`, { status: 'SENT' });
+                          loadRequisitions();
+                          toast.success('Requisición enviada');
+                        }}>Enviar</Button>
+                      )}
+                    </div>
+                    <div className="border rounded divide-y text-sm">
+                      {r.items?.map((item: any) => (
+                        <div key={item.id} className="flex justify-between items-center px-3 py-2">
+                          <div>
+                            <p className="font-medium">{item.sparePart?.name}</p>
+                            <p className="text-xs text-slate-400">{item.sparePart?.code} · Stock: {item.currentStock} / Reorden: {item.reorderPoint}</p>
+                          </div>
+                          <span className="font-bold text-blue-700">{item.quantityNeeded} {item.sparePart?.unit}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {r.notes && <p className="text-xs text-slate-500 mt-2">{r.notes}</p>}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Consumption report tab */}
+      {tab === 'report' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Desde</label>
+              <Input type="date" value={reportFrom} onChange={e => setReportFrom(e.target.value)} className="w-40" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Hasta</label>
+              <Input type="date" value={reportTo} onChange={e => setReportTo(e.target.value)} className="w-40" />
+            </div>
+            <Button size="sm" onClick={loadConsumptionReport} loading={loadingReport}>
+              <BarChart3 className="h-4 w-4" /> Generar reporte
+            </Button>
+          </div>
+          {loadingReport ? (
+            <div className="flex justify-center py-12"><span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
+          ) : consumptionData.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 border rounded-lg text-sm">Seleccione un período y genere el reporte</div>
+          ) : (
+            <div className="rounded-lg border bg-white overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-slate-50 text-left text-xs font-medium text-slate-500 uppercase">
+                      <th className="px-3 py-3">Fecha</th>
+                      <th className="px-3 py-3">Repuesto</th>
+                      <th className="px-3 py-3">Categoría</th>
+                      <th className="px-3 py-3">Cantidad</th>
+                      <th className="px-3 py-3">OT</th>
+                      <th className="px-3 py-3">Área</th>
+                      <th className="px-3 py-3">Sucursal</th>
+                      <th className="px-3 py-3">Técnico</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {consumptionData.map((m: any) => (
+                      <tr key={m.id} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 text-xs text-slate-500">{new Date(m.createdAt).toLocaleDateString('es-CO')}</td>
+                        <td className="px-3 py-2">
+                          <p className="font-medium">{m.sparePart?.name}</p>
+                          <p className="text-xs font-mono text-slate-400">{m.sparePart?.code}</p>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{m.sparePart?.category ?? '—'}</td>
+                        <td className="px-3 py-2 font-bold text-red-600">-{m.quantity} {m.sparePart?.unit}</td>
+                        <td className="px-3 py-2 text-xs font-mono">{m.workOrder?.code ?? '—'}</td>
+                        <td className="px-3 py-2 text-xs">{m.area ?? '—'}</td>
+                        <td className="px-3 py-2 text-xs">{m.branchName ?? '—'}</td>
+                        <td className="px-3 py-2 text-xs">{m.createdBy?.name ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Create/Edit part dialog */}
       <Dialog
         open={showPartDialog}
@@ -520,25 +812,41 @@ export default function Inventory() {
         </div>
       </Dialog>
 
-      {/* Min stock dialog */}
+      {/* Min / safety stock dialog */}
       <Dialog
         open={showMinDialog}
         onClose={() => setShowMinDialog(false)}
-        title={`Stock mínimo — ${minPart?.name}`}
+        title={`Niveles de stock — ${minPart?.name}`}
       >
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label>Sucursal</Label>
             <Select
               value={minBranchId}
-              onChange={(e) => setMinBranchId(e.target.value)}
+              onChange={(e) => {
+                setMinBranchId(e.target.value);
+                const s = minPart?.stocks?.find(st => st.branchId === e.target.value);
+                setMinQty(String(s?.minStock ?? 0));
+                setReorderQty(String((s as any)?.reorderPoint ?? 0));
+                setSafetyQty(String((s as any)?.safetyStock ?? 0));
+              }}
               options={branches.map((b) => ({ value: b.id, label: b.name }))}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Cantidad mínima</Label>
+            <Label>Cantidad mínima (alerta)</Label>
             <Input type="number" min={0} value={minQty} onChange={(e) => setMinQty(e.target.value)} placeholder="5" />
-            <p className="text-xs text-slate-400">Se enviará alerta cuando el stock llegue a este nivel</p>
+            <p className="text-xs text-slate-400">Se enviará alerta por email cuando el stock llegue a este nivel</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Punto de reorden</Label>
+            <Input type="number" min={0} value={reorderQty} onChange={(e) => setReorderQty(e.target.value)} placeholder="10" />
+            <p className="text-xs text-slate-400">Nivel en que se genera una requisición de compra automática</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Stock de seguridad</Label>
+            <Input type="number" min={0} value={safetyQty} onChange={(e) => setSafetyQty(e.target.value)} placeholder="15" />
+            <p className="text-xs text-slate-400">Cantidad de reserva mínima ante imprevistos de suministro</p>
           </div>
           <div className="flex gap-2 justify-end">
             <Button variant="outline" onClick={() => setShowMinDialog(false)}>Cancelar</Button>
@@ -546,6 +854,124 @@ export default function Inventory() {
               <Save className="h-4 w-4" /> Guardar
             </Button>
           </div>
+        </div>
+      </Dialog>
+
+      {/* Reception creation dialog */}
+      <Dialog
+        open={showReceptionDialog}
+        onClose={() => { setShowReceptionDialog(false); setReceptionItems([]); setReceptionPartSearch(''); setReceptionPartResults([]); }}
+        title="Nueva recepción de inventario"
+      >
+        <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Sucursal *</Label>
+              <Select
+                value={receptionBranchId}
+                onChange={(e) => setReceptionBranchId(e.target.value)}
+                options={branches.map((b) => ({ value: b.id, label: b.name }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Proveedor</Label>
+              <Select
+                value={receptionSupplierId}
+                onChange={(e) => setReceptionSupplierId(e.target.value)}
+                placeholder="Sin proveedor"
+                options={providers.map((p) => ({ value: p.id, label: p.name }))}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Referencia de factura / remisión</Label>
+            <Input value={receptionInvoice} onChange={(e) => setReceptionInvoice(e.target.value)} placeholder="FAC-0001" />
+          </div>
+
+          {/* Part search */}
+          <div className="space-y-1.5">
+            <Label>Buscar y agregar repuestos</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Input
+                className="pl-9"
+                placeholder="Código o nombre del repuesto..."
+                value={receptionPartSearch}
+                onChange={(e) => setReceptionPartSearch(e.target.value)}
+              />
+              {receptionPartResults.length > 0 && (
+                <div className="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                  {receptionPartResults.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b last:border-0"
+                      onClick={() => {
+                        if (!receptionItems.find((i) => i.sparePartId === p.id)) {
+                          setReceptionItems((prev) => [...prev, { sparePartId: p.id, name: `${p.code} · ${p.name}`, quantity: 1, unitCostUsd: '' }]);
+                        }
+                        setReceptionPartSearch('');
+                        setReceptionPartResults([]);
+                      }}
+                    >
+                      <span className="font-mono text-xs text-slate-400 mr-2">{p.code}</span>
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Items list */}
+          {receptionItems.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Ítems a recibir ({receptionItems.length})</Label>
+              <div className="border rounded-lg divide-y text-sm">
+                <div className="flex gap-2 px-3 py-1.5 bg-slate-50 text-xs font-medium text-slate-500">
+                  <span className="flex-1">Repuesto</span>
+                  <span className="w-20 text-center">Cantidad</span>
+                  <span className="w-24 text-center">Costo USD</span>
+                  <span className="w-8" />
+                </div>
+                {receptionItems.map((item, idx) => (
+                  <div key={item.sparePartId} className="flex items-center gap-2 px-3 py-2">
+                    <p className="flex-1 text-sm truncate">{item.name}</p>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={item.quantity}
+                      onChange={(e) => setReceptionItems((prev) => prev.map((x, i) => i === idx ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
+                      className="w-20 text-center"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={item.unitCostUsd}
+                      onChange={(e) => setReceptionItems((prev) => prev.map((x, i) => i === idx ? { ...x, unitCostUsd: e.target.value } : x))}
+                      className="w-24"
+                      placeholder="0.00"
+                    />
+                    <Button variant="ghost" size="sm" onClick={() => setReceptionItems((prev) => prev.filter((_, i) => i !== idx))}>
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {receptionItems.length === 0 && (
+            <p className="text-xs text-slate-400 text-center py-2 border border-dashed rounded-lg">
+              Busque y agregue repuestos para esta recepción
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2 justify-end mt-4 pt-3 border-t">
+          <Button variant="outline" onClick={() => { setShowReceptionDialog(false); setReceptionItems([]); }}>Cancelar</Button>
+          <Button onClick={saveReception} loading={savingReception} disabled={!receptionBranchId || receptionItems.length === 0}>
+            <Save className="h-4 w-4" /> Registrar recepción
+          </Button>
         </div>
       </Dialog>
 

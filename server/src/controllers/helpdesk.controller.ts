@@ -196,8 +196,16 @@ export async function updateStatus(req: AuthRequest, res: Response) {
 
     if (!status) return res.status(400).json({ message: 'Estado requerido' });
 
-    const ticket = await prisma.helpdeskTicket.findUnique({ where: { id } });
+    const ticket = await prisma.helpdeskTicket.findUnique({
+      where: { id },
+      include: { workOrders: { select: { id: true }, take: 1 } },
+    });
     if (!ticket) return res.status(404).json({ message: 'Ticket no encontrado' });
+
+    // Require at least one WO to resolve or close
+    if (['RESOLVED', 'CLOSED'].includes(status) && ticket.workOrders.length === 0) {
+      return res.status(400).json({ message: 'Debe crear una Orden de Trabajo antes de cerrar el ticket' });
+    }
 
     const updateData: any = { status };
     if (status === 'RESOLVED') updateData.resolvedAt = new Date();
@@ -347,6 +355,7 @@ export async function convertToWO(req: AuthRequest, res: Response) {
         technicianId: technicianId || null,
         providerId: providerId || null,
         helpdeskTicketId: id,
+        scheduledDate: new Date(),
         notes: notes || ticket.description,
       },
     });

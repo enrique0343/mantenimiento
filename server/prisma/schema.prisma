@@ -78,6 +78,14 @@ enum MovementType {
   OUT
   ADJUSTMENT
   RETURN
+  RECEPTION
+}
+
+enum RequisitionStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
 }
 
 // ─── Models ───────────────────────────────────────────────────────────────────
@@ -114,11 +122,13 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company   Company          @relation(fields: [companyId], references: [id])
-  locations Location[]
-  users     User[]
-  stocks    SparePartStock[]
-  tickets   HelpdeskTicket[]
+  company    Company               @relation(fields: [companyId], references: [id])
+  locations  Location[]
+  users      User[]
+  stocks     SparePartStock[]
+  tickets    HelpdeskTicket[]
+  receptions InventoryReception[]
+  requisitions PurchaseRequisition[]
 }
 
 model Location {
@@ -132,26 +142,41 @@ model Location {
   equipments Equipment[]
 }
 
+model ChecklistTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String?
+  items       Json     @default("[]")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  maintenancePlans MaintenancePlan[]
+}
+
 model Equipment {
-  id            String          @id @default(cuid())
-  code          String          @unique
-  qrCode        String          @unique
-  name          String
-  serialNumber  String?
-  model         String?
-  brand         String?
-  year          Int?
-  type          EquipmentType   @default(GENERAL)
-  category      String
-  subcategory   String?
-  status        EquipmentStatus @default(ACTIVE)
-  locationId    String
-  assetNumber   String?
-  purchaseDate  DateTime?
-  purchaseValue Decimal?        @db.Decimal(12, 2)
-  notes         String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id                 String          @id @default(cuid())
+  code               String          @unique
+  qrCode             String          @unique
+  name               String
+  serialNumber       String?
+  model              String?
+  brand              String?
+  year               Int?
+  type               EquipmentType   @default(GENERAL)
+  category           String
+  subcategory        String?
+  status             EquipmentStatus @default(ACTIVE)
+  locationId         String
+  assetNumber        String?         @unique
+  purchaseDate       DateTime?
+  purchaseValueUsd   Decimal?        @db.Decimal(12, 2)
+  slaResponseHours   Int?
+  slaResolutionHours Int?
+  notes              String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   location         Location                @relation(fields: [locationId], references: [id])
   workOrders       WorkOrder[]
@@ -171,6 +196,7 @@ model WorkOrder {
   technicianId     String?
   providerId       String?
   helpdeskTicketId String?
+  maintenancePlanId String?
   scheduledDate    DateTime?
   startedAt        DateTime?
   completedAt      DateTime?
@@ -216,15 +242,17 @@ model MaintenancePlan {
   alertDaysBefore      Int       @default(7)
   estimatedHours       Decimal?  @db.Decimal(5, 2)
   checklistTemplate    Json      @default("[]")
+  checklistTemplateId  String?
   assignedToUserId     String?
   assignedToProviderId String?
   active               Boolean   @default(true)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  equipment        Equipment @relation(fields: [equipmentId], references: [id])
-  assignedUser     User?     @relation("TechnicianPlans", fields: [assignedToUserId], references: [id])
-  assignedProvider Provider? @relation(fields: [assignedToProviderId], references: [id])
+  equipment         Equipment          @relation(fields: [equipmentId], references: [id])
+  assignedUser      User?              @relation("TechnicianPlans", fields: [assignedToUserId], references: [id])
+  assignedProvider  Provider?          @relation(fields: [assignedToProviderId], references: [id])
+  checklistTpl      ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id])
 }
 
 model PredictiveMeasurement {
@@ -240,8 +268,8 @@ model PredictiveMeasurement {
   recordedById  String
   notes         String?
 
-  equipment    Equipment @relation(fields: [equipmentId], references: [id])
-  recordedBy   User      @relation(fields: [recordedById], references: [id])
+  equipment  Equipment @relation(fields: [equipmentId], references: [id])
+  recordedBy User      @relation(fields: [recordedById], references: [id])
 }
 
 model HelpdeskTicket {
@@ -300,19 +328,23 @@ model SparePart {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  provider   Provider?           @relation(fields: [providerId], references: [id])
-  stocks     SparePartStock[]
-  movements  SparePartMovement[]
-  equipments EquipmentSparePart[]
-  workOrders WOSparePart[]
+  provider        Provider?                @relation(fields: [providerId], references: [id])
+  stocks          SparePartStock[]
+  movements       SparePartMovement[]
+  equipments      EquipmentSparePart[]
+  workOrders      WOSparePart[]
+  receptionItems  InventoryReceptionItem[]
+  requisitionItems PurchaseRequisitionItem[]
 }
 
 model SparePartStock {
-  id          String @id @default(cuid())
-  sparePartId String
-  branchId    String
-  quantity    Int    @default(0)
-  minStock    Int    @default(0)
+  id           String @id @default(cuid())
+  sparePartId  String
+  branchId     String
+  quantity     Int    @default(0)
+  minStock     Int    @default(0)
+  reorderPoint Int    @default(0)
+  safetyStock  Int    @default(0)
 
   sparePart SparePart @relation(fields: [sparePartId], references: [id])
   branch    Branch    @relation(fields: [branchId], references: [id])
@@ -327,12 +359,71 @@ model SparePartMovement {
   type        MovementType
   quantity    Int
   workOrderId String?
+  receptionId String?
   notes       String?
   createdById String
   createdAt   DateTime     @default(now())
 
-  sparePart SparePart @relation(fields: [sparePartId], references: [id])
-  createdBy User      @relation(fields: [createdById], references: [id])
+  sparePart  SparePart           @relation(fields: [sparePartId], references: [id])
+  createdBy  User                @relation(fields: [createdById], references: [id])
+  reception  InventoryReception? @relation(fields: [receptionId], references: [id])
+}
+
+model InventoryReception {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  branchId     String
+  supplierId   String?
+  invoiceRef   String?
+  notes        String?
+  receivedById String
+  receivedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  branch     Branch                   @relation(fields: [branchId], references: [id])
+  supplier   Provider?                @relation(fields: [supplierId], references: [id])
+  receivedBy User                     @relation("ReceptionUser", fields: [receivedById], references: [id])
+  items      InventoryReceptionItem[]
+  movements  SparePartMovement[]
+}
+
+model InventoryReceptionItem {
+  id           String   @id @default(cuid())
+  receptionId  String
+  sparePartId  String
+  quantity     Int
+  unitCostUsd  Decimal? @db.Decimal(10, 2)
+
+  reception InventoryReception @relation(fields: [receptionId], references: [id])
+  sparePart SparePart          @relation(fields: [sparePartId], references: [id])
+}
+
+model PurchaseRequisition {
+  id          String            @id @default(cuid())
+  code        String            @unique
+  branchId    String
+  status      RequisitionStatus @default(DRAFT)
+  notes       String?
+  createdById String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  branch    Branch                    @relation(fields: [branchId], references: [id])
+  createdBy User                      @relation("RequisitionUser", fields: [createdById], references: [id])
+  items     PurchaseRequisitionItem[]
+}
+
+model PurchaseRequisitionItem {
+  id             String  @id @default(cuid())
+  requisitionId  String
+  sparePartId    String
+  quantityNeeded Int
+  currentStock   Int
+  reorderPoint   Int
+  notes          String?
+
+  requisition PurchaseRequisition @relation(fields: [requisitionId], references: [id])
+  sparePart   SparePart           @relation(fields: [sparePartId], references: [id])
 }
 
 model EquipmentSparePart {
@@ -364,6 +455,8 @@ model User {
   tickets          HelpdeskTicket[]        @relation("TechnicianTickets")
   ticketComments   TicketComment[]
   movements        SparePartMovement[]
+  receptions       InventoryReception[]    @relation("ReceptionUser")
+  requisitions     PurchaseRequisition[]   @relation("RequisitionUser")
 }
 
 model Provider {
@@ -383,4 +476,5 @@ model Provider {
   workOrders       WorkOrder[]
   maintenancePlans MaintenancePlan[]
   spareParts       SparePart[]
+  receptions       InventoryReception[]
 }

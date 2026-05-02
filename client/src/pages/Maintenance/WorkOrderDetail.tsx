@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ChevronLeft, Play, CheckCircle2, Circle, AlertTriangle,
-  ClipboardList, Image, Pen, Package, X, Plus, FileText,
+  ClipboardList, Image, Pen, Package, X, Plus, FileText, Truck,
 } from 'lucide-react';
 import api from '@/lib/api';
 import type { WorkOrder, SparePart, ChecklistItem } from '@/types';
@@ -47,6 +47,12 @@ export default function WorkOrderDetail() {
   const [signerName, setSignerName] = useState('');
   const [signerRole, setSignerRole] = useState('');
 
+  // Proveedor por fuerza mayor
+  const [providerDialog, setProviderDialog] = useState(false);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [providerNotes, setProviderNotes] = useState('');
+
   // Imágenes uploading state
   const [uploadingBefore, setUploadingBefore] = useState(false);
   const [uploadingAfter, setUploadingAfter] = useState(false);
@@ -65,6 +71,10 @@ export default function WorkOrderDetail() {
 
   useEffect(() => { fetchWO(); }, [fetchWO]);
 
+  useEffect(() => {
+    api.get('/providers').then(({ data }) => setProviders(Array.isArray(data) ? data : data.data ?? [])).catch(() => {});
+  }, []);
+
   // Buscar repuestos
   useEffect(() => {
     if (!spareSearch || spareSearch.length < 2 || selectedPart) { setSpareResults([]); return; }
@@ -80,10 +90,24 @@ export default function WorkOrderDetail() {
   async function startWO() {
     setActionLoading('start');
     try {
-      const { data } = await api.patch(`/work-orders/${id}/status`, { status: 'IN_PROGRESS' });
+      const { data } = await api.post(`/work-orders/${id}/start`);
       setWo(data);
-      toast.success('OT iniciada');
-    } catch { toast.error('Error al iniciar la OT'); }
+      toast.success('OT iniciada — ahora puede subir fotos y registrar el trabajo');
+    } catch (err: any) { toast.error(err.response?.data?.message ?? 'Error al iniciar la OT'); }
+    finally { setActionLoading(''); }
+  }
+
+  async function assignProvider() {
+    setActionLoading('provider');
+    try {
+      const { data } = await api.post(`/work-orders/${id}/assign-provider`, {
+        providerId: selectedProviderId || null,
+        notes: providerNotes || undefined,
+      });
+      setWo(data);
+      setProviderDialog(false);
+      toast.success('Proveedor asignado');
+    } catch { toast.error('Error al asignar proveedor'); }
     finally { setActionLoading(''); }
   }
 
@@ -196,8 +220,8 @@ export default function WorkOrderDetail() {
   const isClosed = ['COMPLETED', 'VERIFIED', 'CLOSED'].includes(wo.status);
 
   const canClose = inProgress
-    && wo.beforeImages.length >= 2
-    && wo.afterImages.length >= 2
+    && wo.beforeImages.length >= 1
+    && wo.afterImages.length >= 1
     && !!wo.techSignature
     && !!wo.clientSignature;
 
@@ -225,11 +249,17 @@ export default function WorkOrderDetail() {
             <p className="text-sm text-slate-500 mt-0.5">{(wo as any).equipment?.name}</p>
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex gap-2 shrink-0 flex-wrap">
+          {isActive && (
+            <Button size="sm" variant="outline" onClick={() => setProviderDialog(true)}>
+              <Truck className="h-4 w-4" />
+              {(wo as any).provider ? 'Cambiar proveedor' : 'Asignar proveedor'}
+            </Button>
+          )}
           {wo.status === 'OPEN' && (
             <Button size="sm" onClick={startWO} loading={actionLoading === 'start'}>
               <Play className="h-4 w-4" />
-              Iniciar
+              Iniciar OT
             </Button>
           )}
           {inProgress && (
@@ -270,6 +300,33 @@ export default function WorkOrderDetail() {
         </CardContent>
       </Card>
 
+      {/* INICIAR banner */}
+      {wo.status === 'OPEN' && (
+        <div className="rounded-lg border-2 border-blue-200 bg-blue-50 p-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="font-medium text-blue-800">Esta OT aún no ha sido iniciada</p>
+            <p className="text-sm text-blue-600">Presione <strong>Iniciar OT</strong> para registrar la hora de inicio y habilitar el registro de fotos, checklist y firmas.</p>
+          </div>
+          <Button onClick={startWO} loading={actionLoading === 'start'}>
+            <Play className="h-4 w-4" />
+            Iniciar OT
+          </Button>
+        </div>
+      )}
+
+      {/* Proveedor asignado */}
+      {(wo as any).provider && (
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Truck className="h-4 w-4 text-orange-500 shrink-0" />
+            <div>
+              <p className="text-xs text-slate-400">Proveedor externo asignado (fuerza mayor)</p>
+              <p className="text-sm font-medium">{(wo as any).provider.name}</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {wo.notes && (
         <Card>
           <CardContent className="p-4">
@@ -308,16 +365,19 @@ export default function WorkOrderDetail() {
       <SectionCard
         icon={<Image className="h-4 w-4" />}
         title="Imágenes ANTES"
-        complete={wo.beforeImages.length >= 2}
-        summary={`${wo.beforeImages.length}/2`}
+        complete={wo.beforeImages.length >= 1}
+        summary={`${wo.beforeImages.length}/5`}
       >
+        {wo.status === 'OPEN' && (
+          <p className="text-xs text-amber-600 mb-2">Inicie la OT primero para subir fotos</p>
+        )}
         <ImageUploadGrid
           images={wo.beforeImages}
-          maxImages={2}
+          maxImages={5}
           onUpload={(file) => uploadImage(file, 'before')}
-          label="Fotografías antes de intervenir"
+          label="Fotografías antes de intervenir (mín. 1)"
           required
-          disabled={isClosed}
+          disabled={isClosed || wo.status === 'OPEN'}
           uploading={uploadingBefore}
         />
       </SectionCard>
@@ -475,16 +535,16 @@ export default function WorkOrderDetail() {
       <SectionCard
         icon={<Image className="h-4 w-4" />}
         title="Imágenes DESPUÉS"
-        complete={wo.afterImages.length >= 2}
-        summary={`${wo.afterImages.length}/2`}
+        complete={wo.afterImages.length >= 1}
+        summary={`${wo.afterImages.length}/5`}
       >
         <ImageUploadGrid
           images={wo.afterImages}
-          maxImages={2}
+          maxImages={5}
           onUpload={(file) => uploadImage(file, 'after')}
-          label="Fotografías después de intervenir"
+          label="Fotografías después de intervenir (mín. 1)"
           required
-          disabled={isClosed}
+          disabled={isClosed || wo.status === 'OPEN'}
           uploading={uploadingAfter}
         />
       </SectionCard>
@@ -549,8 +609,8 @@ export default function WorkOrderDetail() {
             ) : (
               <div className="space-y-1 text-slate-500">
                 <p className="font-medium">Requisitos pendientes:</p>
-                {wo.beforeImages.length < 2 && <p className="text-xs">• 2 fotos del antes ({wo.beforeImages.length}/2)</p>}
-                {wo.afterImages.length < 2 && <p className="text-xs">• 2 fotos del después ({wo.afterImages.length}/2)</p>}
+                {wo.beforeImages.length < 1 && <p className="text-xs">• Al menos 1 foto del antes</p>}
+                {wo.afterImages.length < 1 && <p className="text-xs">• Al menos 1 foto del después</p>}
                 {!wo.techSignature && <p className="text-xs">• Firma del técnico</p>}
                 {!wo.clientSignature && <p className="text-xs">• Firma del receptor</p>}
               </div>
@@ -566,6 +626,40 @@ export default function WorkOrderDetail() {
           </Button>
         </div>
       )}
+
+      {/* Dialog asignar proveedor */}
+      <Dialog
+        open={providerDialog}
+        onClose={() => setProviderDialog(false)}
+        title="Asignar proveedor externo"
+        description="Por fuerza mayor — quedará registrado en la trazabilidad de la OT"
+      >
+        <div className="space-y-4 p-1">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Proveedor</label>
+            <select
+              value={selectedProviderId}
+              onChange={e => setSelectedProviderId(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">Sin proveedor</option>
+              {providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Motivo</label>
+            <Input
+              value={providerNotes}
+              onChange={e => setProviderNotes(e.target.value)}
+              placeholder="Razón de derivación a proveedor externo..."
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setProviderDialog(false)}>Cancelar</Button>
+            <Button onClick={assignProvider} loading={actionLoading === 'provider'}>Asignar</Button>
+          </div>
+        </div>
+      </Dialog>
 
       {/* Dialog firma receptor */}
       <Dialog

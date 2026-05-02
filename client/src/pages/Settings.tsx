@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import {
   Settings as SettingsIcon, Building2, Image, MapPin, Mail,
   Upload, X, Plus, Pencil, Power, Loader2, SendHorizonal, ChevronDown, ChevronRight,
+  ClipboardList, Trash2,
 } from 'lucide-react';
 import api from '@/lib/api';
 import type { Branch } from '@/types';
@@ -14,7 +15,7 @@ import { Select } from '@/components/ui/select';
 import { Dialog } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-type Tab = 'empresa' | 'logo' | 'sucursales' | 'smtp';
+type Tab = 'empresa' | 'logo' | 'sucursales' | 'smtp' | 'checklists';
 
 interface Company {
   id?: string; name: string; nit?: string; address?: string; phone?: string;
@@ -38,6 +39,7 @@ const TABS = [
   { id: 'logo' as Tab, label: 'Logo', icon: Image },
   { id: 'sucursales' as Tab, label: 'Sucursales', icon: MapPin },
   { id: 'smtp' as Tab, label: 'SMTP / Email', icon: Mail },
+  { id: 'checklists' as Tab, label: 'Checklists', icon: ClipboardList },
 ];
 
 export default function Settings() {
@@ -98,6 +100,7 @@ export default function Settings() {
       {tab === 'smtp' && (
         <SmtpTab company={company} onSave={setCompany} />
       )}
+      {tab === 'checklists' && <ChecklistsTab />}
     </div>
   );
 }
@@ -649,5 +652,194 @@ function SmtpTab({ company, onSave }: { company: Company | null; onSave: (c: Com
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Checklist Templates ──────────────────────────────────────────────────────
+
+interface ChecklistItem { id: string; item: string; required: boolean; }
+interface ChecklistTemplate { id: string; name: string; description?: string; category?: string; items: ChecklistItem[]; active: boolean; }
+
+function ChecklistsTab() {
+  const [templates, setTemplates] = useState<ChecklistTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<ChecklistTemplate | null>(null);
+
+  useEffect(() => {
+    api.get('/checklist-templates/all')
+      .then(({ data }) => setTemplates(data))
+      .catch(() => toast.error('Error al cargar plantillas'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  function openNew() { setEditing(null); setDialogOpen(true); }
+  function openEdit(t: ChecklistTemplate) { setEditing(t); setDialogOpen(true); }
+
+  async function toggleActive(t: ChecklistTemplate) {
+    await api.put(`/checklist-templates/${t.id}`, { active: !t.active });
+    setTemplates(ts => ts.map(x => x.id === t.id ? { ...x, active: !x.active } : x));
+  }
+
+  function onSaved(t: ChecklistTemplate) {
+    setTemplates(ts => editing ? ts.map(x => x.id === t.id ? t : x) : [t, ...ts]);
+    setDialogOpen(false);
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-700">Plantillas de Checklist</p>
+          <p className="text-xs text-slate-500">Defina listas estándar reutilizables por tipo de equipo</p>
+        </div>
+        <Button size="sm" onClick={openNew}><Plus className="h-4 w-4 mr-1" />Nueva plantilla</Button>
+      </div>
+
+      {templates.length === 0 ? (
+        <div className="text-center py-12 text-slate-400 text-sm border rounded-lg">
+          No hay plantillas. Cree la primera.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {templates.map(t => (
+            <Card key={t.id} className={cn('border', !t.active && 'opacity-60')}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-slate-800">{t.name}</p>
+                      {t.category && (
+                        <span className="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">{t.category}</span>
+                      )}
+                      {!t.active && <span className="text-xs text-slate-400">(inactiva)</span>}
+                    </div>
+                    {t.description && <p className="text-sm text-slate-500 mt-0.5">{t.description}</p>}
+                    <p className="text-xs text-slate-400 mt-1">{(t.items as ChecklistItem[]).length} ítems</p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button variant="ghost" size="sm" onClick={() => openEdit(t)}><Pencil className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => toggleActive(t)}>
+                      <Power className={cn('h-3.5 w-3.5', t.active ? 'text-green-500' : 'text-slate-400')} />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title={editing ? 'Editar plantilla' : 'Nueva plantilla de checklist'}>
+        <ChecklistTemplateForm template={editing} onSaved={onSaved} onClose={() => setDialogOpen(false)} />
+      </Dialog>
+    </div>
+  );
+}
+
+function ChecklistTemplateForm({ template, onSaved, onClose }: {
+  template: ChecklistTemplate | null;
+  onSaved: (t: ChecklistTemplate) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(template?.name ?? '');
+  const [description, setDescription] = useState(template?.description ?? '');
+  const [category, setCategory] = useState(template?.category ?? '');
+  const [items, setItems] = useState<ChecklistItem[]>(
+    template?.items ?? []
+  );
+  const [newItem, setNewItem] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function addItem() {
+    const text = newItem.trim();
+    if (!text) return;
+    setItems(prev => [...prev, { id: Date.now().toString(), item: text, required: true }]);
+    setNewItem('');
+  }
+
+  function removeItem(id: string) { setItems(prev => prev.filter(i => i.id !== id)); }
+  function toggleRequired(id: string) {
+    setItems(prev => prev.map(i => i.id === id ? { ...i, required: !i.required } : i));
+  }
+
+  async function save() {
+    if (!name.trim()) { toast.error('El nombre es requerido'); return; }
+    if (items.length === 0) { toast.error('Agrega al menos un ítem'); return; }
+    setSaving(true);
+    try {
+      const payload = { name: name.trim(), description: description.trim() || undefined, category: category.trim() || undefined, items };
+      const { data } = template
+        ? await api.put(`/checklist-templates/${template.id}`, payload)
+        : await api.post('/checklist-templates', payload);
+      onSaved(data);
+      toast.success(template ? 'Plantilla actualizada' : 'Plantilla creada');
+    } catch {
+      toast.error('Error al guardar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="p-6 space-y-4 max-w-lg w-full">
+      <p className="font-semibold text-slate-800">{template ? 'Editar plantilla' : 'Nueva plantilla'}</p>
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Nombre *</label>
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="Aire Acondicionado" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Categoría</label>
+            <Input value={category} onChange={e => setCategory(e.target.value)} placeholder="HVAC, Eléctrico..." />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Descripción</label>
+            <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Breve descripción" />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Ítems del checklist</label>
+          <div className="flex gap-2">
+            <Input
+              value={newItem}
+              onChange={e => setNewItem(e.target.value)}
+              placeholder="Nuevo ítem..."
+              onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addItem())}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={addItem}><Plus className="h-4 w-4" /></Button>
+          </div>
+          {items.length > 0 && (
+            <div className="border rounded-md divide-y max-h-56 overflow-y-auto">
+              {items.map((item, idx) => (
+                <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                  <span className="text-xs text-slate-400 w-5">{idx + 1}.</span>
+                  <span className="flex-1 text-sm text-slate-700">{item.item}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleRequired(item.id)}
+                    className={cn('text-xs px-1.5 py-0.5 rounded', item.required ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500')}
+                  >
+                    {item.required ? 'Req.' : 'Opc.'}
+                  </button>
+                  <button type="button" onClick={() => removeItem(item.id)} className="text-slate-400 hover:text-red-500">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t">
+        <Button variant="outline" onClick={onClose}>Cancelar</Button>
+        <Button onClick={save} loading={saving}>Guardar</Button>
+      </div>
+    </div>
   );
 }

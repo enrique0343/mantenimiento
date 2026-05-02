@@ -4,7 +4,7 @@ import { upload } from '../middleware/upload';
 import {
   list, getById, create, updateStatus, updateChecklist,
   uploadImages, saveSignatures, addSpareParts, removeSparePart,
-  closeWO, getPDF,
+  closeWO, getPDF, startWO, assignProvider,
 } from '../controllers/workOrder.controller';
 
 const router = Router();
@@ -14,6 +14,8 @@ router.get('/:id', authenticate, getById);
 router.get('/:id/pdf', authenticate, getPDF);
 
 router.post('/', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF', 'TECHNICIAN'), create);
+router.post('/:id/start', authenticate, startWO);
+router.post('/:id/assign-provider', authenticate, requireRoles('ADMIN', 'MAINTENANCE_CHIEF'), assignProvider);
 router.patch('/:id/status', authenticate, updateStatus);
 router.patch('/:id/checklist', authenticate, updateChecklist);
 router.post('/:id/images', authenticate, upload.single('image'), uploadImages);
