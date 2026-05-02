@@ -12,6 +12,5 @@ database_id = "a4a8b34e-6b56-42b5-a393-ca5a43fcb38a"
 binding = "R2"
 bucket_name = "mantenimiento-files"
 
-[vars]
-JWT_SECRET = "db9f323a6eb27c41b23eee4fa81077ab7a3cf826367bcb5ab19e99d9c61a8954"
-BASE_URL = "https://mantenimiento-49c.pages.dev"
+# Variables de entorno: configuradas como secrets en el proyecto Pages
+# JWT_SECRET y BASE_URL se agregan via: wrangler pages secret put
