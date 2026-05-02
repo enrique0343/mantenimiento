@@ -1,0 +1,380 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum EquipmentType {
+  GENERAL
+  BIOMEDICAL
+}
+
+enum EquipmentStatus {
+  ACTIVE
+  MAINTENANCE
+  OUT_OF_SERVICE
+  DECOMMISSIONED
+}
+
+enum WOType {
+  PREVENTIVE
+  CORRECTIVE
+  PREDICTIVE
+}
+
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum WOStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  VERIFIED
+  CLOSED
+}
+
+enum Frequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  BIANNUAL
+  ANNUAL
+}
+
+enum Role {
+  ADMIN
+  MAINTENANCE_CHIEF
+  TECHNICIAN
+  PROVIDER
+  VIEWER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+enum RequestType {
+  EQUIPMENT_FAILURE
+  MAINTENANCE_REQUEST
+  OTHER
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  RETURN
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  nit       String?
+  address   String?
+  phone     String?
+  email     String?
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches Branch[]
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  city      String?
+  address   String?
+  phone     String?
+  timezone  String   @default("America/Bogota")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company          @relation(fields: [companyId], references: [id])
+  locations Location[]
+  users     User[]
+  stocks    SparePartStock[]
+  tickets   HelpdeskTicket[]
+}
+
+model Location {
+  id       String  @id @default(cuid())
+  branchId String
+  building String?
+  floor    String?
+  area     String
+
+  branch     Branch      @relation(fields: [branchId], references: [id])
+  equipments Equipment[]
+}
+
+model Equipment {
+  id            String          @id @default(cuid())
+  code          String          @unique
+  qrCode        String          @unique
+  name          String
+  serialNumber  String?
+  model         String?
+  brand         String?
+  year          Int?
+  type          EquipmentType   @default(GENERAL)
+  category      String
+  subcategory   String?
+  status        EquipmentStatus @default(ACTIVE)
+  locationId    String
+  assetNumber   String?
+  purchaseDate  DateTime?
+  purchaseValue Decimal?        @db.Decimal(12, 2)
+  notes         String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  location         Location                @relation(fields: [locationId], references: [id])
+  workOrders       WorkOrder[]
+  maintenancePlans MaintenancePlan[]
+  measurements     PredictiveMeasurement[]
+  spareParts       EquipmentSparePart[]
+  helpdeskTickets  HelpdeskTicket[]
+}
+
+model WorkOrder {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  type             WOType
+  priority         Priority  @default(MEDIUM)
+  status           WOStatus  @default(OPEN)
+  equipmentId      String
+  technicianId     String?
+  providerId       String?
+  helpdeskTicketId String?
+  scheduledDate    DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  estimatedHours   Decimal?  @db.Decimal(5, 2)
+  laborHours       Decimal?  @db.Decimal(5, 2)
+  beforeImages     String[]
+  afterImages      String[]
+  techSignature    String?
+  clientSignature  String?
+  signerName       String?
+  signerRole       String?
+  checklist        Json?
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  equipment      Equipment       @relation(fields: [equipmentId], references: [id])
+  technician     User?           @relation("TechnicianWO", fields: [technicianId], references: [id])
+  provider       Provider?       @relation(fields: [providerId], references: [id])
+  helpdeskTicket HelpdeskTicket? @relation(fields: [helpdeskTicketId], references: [id])
+  spareParts     WOSparePart[]
+}
+
+model WOSparePart {
+  id          String @id @default(cuid())
+  workOrderId String
+  sparePartId String
+  quantity    Int
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+  sparePart SparePart @relation(fields: [sparePartId], references: [id])
+
+  @@unique([workOrderId, sparePartId])
+}
+
+model MaintenancePlan {
+  id                   String    @id @default(cuid())
+  equipmentId          String
+  name                 String
+  frequency            Frequency
+  nextDueDate          DateTime
+  lastExecutedDate     DateTime?
+  alertDaysBefore      Int       @default(7)
+  estimatedHours       Decimal?  @db.Decimal(5, 2)
+  checklistTemplate    Json      @default("[]")
+  assignedToUserId     String?
+  assignedToProviderId String?
+  active               Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  equipment        Equipment @relation(fields: [equipmentId], references: [id])
+  assignedUser     User?     @relation("TechnicianPlans", fields: [assignedToUserId], references: [id])
+  assignedProvider Provider? @relation(fields: [assignedToProviderId], references: [id])
+}
+
+model PredictiveMeasurement {
+  id            String   @id @default(cuid())
+  equipmentId   String
+  variable      String
+  unit          String
+  value         Decimal  @db.Decimal(10, 4)
+  minThreshold  Decimal? @db.Decimal(10, 4)
+  maxThreshold  Decimal? @db.Decimal(10, 4)
+  alertSent     Boolean  @default(false)
+  recordedAt    DateTime @default(now())
+  recordedById  String
+  notes         String?
+
+  equipment    Equipment @relation(fields: [equipmentId], references: [id])
+  recordedBy   User      @relation(fields: [recordedById], references: [id])
+}
+
+model HelpdeskTicket {
+  id               String       @id @default(cuid())
+  code             String       @unique
+  trackingToken    String       @unique
+  requesterName    String
+  requesterEmail   String
+  requesterPhone   String?
+  branchId         String
+  area             String
+  requestType      RequestType  @default(MAINTENANCE_REQUEST)
+  priority         Priority     @default(MEDIUM)
+  description      String
+  attachments      String[]
+  status           TicketStatus @default(OPEN)
+  assignedToId     String?
+  equipmentId      String?
+  slaHours         Int          @default(24)
+  slaDeadline      DateTime?
+  resolvedAt       DateTime?
+  closedAt         DateTime?
+  resolutionNotes  String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  branch     Branch          @relation(fields: [branchId], references: [id])
+  equipment  Equipment?      @relation(fields: [equipmentId], references: [id])
+  assignedTo User?           @relation("TechnicianTickets", fields: [assignedToId], references: [id])
+  comments   TicketComment[]
+  workOrders WorkOrder[]
+}
+
+model TicketComment {
+  id         String   @id @default(cuid())
+  ticketId   String
+  authorId   String?
+  authorName String
+  content    String
+  isInternal Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  ticket HelpdeskTicket @relation(fields: [ticketId], references: [id])
+  author User?          @relation(fields: [authorId], references: [id])
+}
+
+model SparePart {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  unit        String
+  category    String?
+  providerId  String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  provider   Provider?           @relation(fields: [providerId], references: [id])
+  stocks     SparePartStock[]
+  movements  SparePartMovement[]
+  equipments EquipmentSparePart[]
+  workOrders WOSparePart[]
+}
+
+model SparePartStock {
+  id          String @id @default(cuid())
+  sparePartId String
+  branchId    String
+  quantity    Int    @default(0)
+  minStock    Int    @default(0)
+
+  sparePart SparePart @relation(fields: [sparePartId], references: [id])
+  branch    Branch    @relation(fields: [branchId], references: [id])
+
+  @@unique([sparePartId, branchId])
+}
+
+model SparePartMovement {
+  id          String       @id @default(cuid())
+  sparePartId String
+  branchId    String
+  type        MovementType
+  quantity    Int
+  workOrderId String?
+  notes       String?
+  createdById String
+  createdAt   DateTime     @default(now())
+
+  sparePart SparePart @relation(fields: [sparePartId], references: [id])
+  createdBy User      @relation(fields: [createdById], references: [id])
+}
+
+model EquipmentSparePart {
+  id          String @id @default(cuid())
+  equipmentId String
+  sparePartId String
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id])
+  sparePart SparePart @relation(fields: [sparePartId], references: [id])
+
+  @@unique([equipmentId, sparePartId])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(VIEWER)
+  branchId  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch           Branch?                 @relation(fields: [branchId], references: [id])
+  workOrders       WorkOrder[]             @relation("TechnicianWO")
+  maintenancePlans MaintenancePlan[]       @relation("TechnicianPlans")
+  measurements     PredictiveMeasurement[]
+  tickets          HelpdeskTicket[]        @relation("TechnicianTickets")
+  ticketComments   TicketComment[]
+  movements        SparePartMovement[]
+}
+
+model Provider {
+  id          String   @id @default(cuid())
+  nit         String?
+  name        String
+  contact     String?
+  email       String?
+  phone       String?
+  specialty   String?
+  city        String?
+  active      Boolean  @default(true)
+  rating      Decimal? @db.Decimal(3, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workOrders       WorkOrder[]
+  maintenancePlans MaintenancePlan[]
+  spareParts       SparePart[]
+}
