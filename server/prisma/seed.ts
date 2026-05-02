@@ -231,11 +231,32 @@ async function main() {
     create: { sparePartId: part2.id, branchId: branchMain.id, quantity: 20, minStock: 5 },
   });
 
+  // Mediciones predictivas de muestra
+  const techUser = await prisma.user.findFirst({ where: { role: 'TECHNICIAN' } });
+  const firstEquipment = await prisma.equipment.findFirst();
+  if (techUser && firstEquipment) {
+    const now = new Date();
+    const sampleMeasurements = Array.from({ length: 10 }, (_, i) => ({
+      equipmentId: firstEquipment.id,
+      variable: 'Temperatura',
+      unit: '°C',
+      value: 45 + Math.round((Math.random() * 20 - 5) * 10) / 10,
+      minThreshold: 20,
+      maxThreshold: 75,
+      recordedById: techUser.id,
+      recordedAt: new Date(now.getTime() - (9 - i) * 7 * 24 * 60 * 60 * 1000),
+    }));
+    for (const m of sampleMeasurements) {
+      await prisma.predictiveMeasurement.create({ data: m });
+    }
+  }
+
   console.log('✅ Seed completado');
   console.log('\n📋 Credenciales de acceso:');
   console.log('  Admin:   admin@miempresa.com / admin123');
   console.log('  Jefe:    jefe@miempresa.com  / jefe123');
-  console.log('  Técnico: tecnico@miempresa.com / tech123\n');
+  console.log('  Técnico: tecnico@miempresa.com / tech123');
+  console.log('\n⚙️  Configuración SMTP: ajustar en /configuracion (pestaña SMTP) o via variables de entorno.');
 }
 
 main()

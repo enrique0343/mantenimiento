@@ -33,6 +33,8 @@ export default function WorkOrderForm() {
   const location = useLocation();
   const presetEquipmentId = location.state?.equipmentId as string | undefined;
   const presetType = location.state?.type as string | undefined;
+  const presetNotes = location.state?.notes as string | undefined;
+  const presetScheduledDate = location.state?.scheduledDate as string | undefined;
 
   const [loading, setLoading] = useState(false);
   const [technicians, setTechnicians] = useState<AuthUser[]>([]);
@@ -49,6 +51,8 @@ export default function WorkOrderForm() {
       priority: 'MEDIUM',
       equipmentId: presetEquipmentId ?? '',
       equipmentSearch: '',
+      notes: presetNotes ?? '',
+      scheduledDate: presetScheduledDate ?? '',
     },
   });
 

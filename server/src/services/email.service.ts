@@ -1,24 +1,45 @@
 import nodemailer from 'nodemailer';
+import prisma from '../lib/prisma';
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
-
-const FROM = `"${process.env.SMTP_FROM_NAME || 'Gestión de Mantenimiento'}" <${process.env.SMTP_USER}>`;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+
+async function getTransport(): Promise<{ transport: nodemailer.Transporter; from: string }> {
+  // DB config takes priority over env vars
+  const company = await prisma.company.findFirst({
+    select: { name: true, smtpHost: true, smtpPort: true, smtpUser: true, smtpPass: true, smtpSecure: true, smtpFromName: true },
+  });
+
+  if (company?.smtpHost && company?.smtpUser && company?.smtpPass) {
+    return {
+      transport: nodemailer.createTransport({
+        host: company.smtpHost,
+        port: company.smtpPort ?? 587,
+        secure: company.smtpSecure,
+        auth: { user: company.smtpUser, pass: company.smtpPass },
+      }),
+      from: `"${company.smtpFromName || company.name}" <${company.smtpUser}>`,
+    };
+  }
+
+  // Fall back to environment variables
+  return {
+    transport: nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    }),
+    from: `"${process.env.SMTP_FROM_NAME || 'Gestión de Mantenimiento'}" <${process.env.SMTP_USER}>`,
+  };
+}
 
 async function send(to: string, subject: string, html: string): Promise<void> {
   if (process.env.NODE_ENV === 'development') {
     console.log(`📧 Email → ${to} | ${subject}`);
     return;
   }
-  await transporter.sendMail({ from: FROM, to, subject, html });
+  const { transport, from } = await getTransport();
+  await transport.sendMail({ from, to, subject, html });
 }
 
 function baseTemplate(title: string, body: string): string {
