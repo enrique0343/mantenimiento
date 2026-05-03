@@ -12,8 +12,17 @@ const path = Astro.url.pathname;
 const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
 const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol === "tecnico";
+const isMotorista = user?.rol === "motorista";
+const verFlota = isAdminOrJefe || isMotorista;
 
-const links = [
+const homeHref = user?.rol === "tecnico" || user?.rol === "motorista" ? "/mi-panel" : "/";
+
+// Motoristas: solo Mi panel, Flota y Tickets (para reportar problemas)
+const links = isMotorista ? [
+  { href: "/mi-panel", label: "Mi panel" },
+  { href: "/flota", label: "Flota" },
+  { href: "/tickets", label: "Reportes" },
+] : [
   { href: user?.rol === "tecnico" ? "/mi-panel" : "/", label: user?.rol === "tecnico" ? "Mi panel" : "Dashboard" },
   { href: "/kpis", label: "KPIs", show: isAdminOrJefe },
   { href: "/ordenes", label: "Ordenes" },
@@ -23,6 +32,7 @@ const links = [
   { href: "/tickets", label: "Tickets" },
   { href: "/inventario", label: "Inventario" },
   { href: "/recepciones", label: "Recepciones", show: isOperativo },
+  { href: "/flota", label: "Flota", show: verFlota },
   { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
   { href: "/usuarios", label: "Usuarios", show: isAdmin },
   { href: "/configuracion", label: "Configuracion", show: isAdmin },
@@ -35,6 +45,7 @@ const ROL_LABEL: Record<string, string> = {
   proveedor: "Proveedor",
   solicitante: "Solicitante",
   visualizador: "Visualizador",
+  motorista: "Motorista",
 };
 ---
 

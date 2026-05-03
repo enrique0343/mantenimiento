@@ -1,0 +1,341 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { vehiculos, viajes, usuarios, viajePropositos } from "@/lib/schema";
+import { eq, and } from "drizzle-orm";
+import { ESTADO_VEHICULO_LABEL, ESTADO_VEHICULO_COLOR, fmtKm, fmtDuracion, puedeVerFlota } from "@/lib/flota";
+export const prerender = false;
+
+const token = Astro.params.token!;
+const user = Astro.locals.user!;
+if (!puedeVerFlota(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const [v] = await db.select().from(vehiculos).where(eq(vehiculos.qrToken, token)).limit(1);
+if (!v) {
+  return new Response(`Vehículo no encontrado para token ${token}`, { status: 404 });
+}
+
+// Viaje en curso del vehículo
+const [activoRaw] = await db
+  .select({ viaje: viajes, motorista: usuarios, proposito: viajePropositos })
+  .from(viajes)
+  .leftJoin(usuarios, eq(usuarios.id, viajes.motoristaId))
+  .leftJoin(viajePropositos, eq(viajePropositos.id, viajes.propositoId))
+  .where(and(eq(viajes.vehiculoId, v.id), eq(viajes.estado, "en_curso")))
+  .limit(1);
+
+// ¿Tengo otro viaje en curso en otro vehículo?
+const [otroMio] = await db
+  .select()
+  .from(viajes)
+  .where(and(eq(viajes.motoristaId, user.id), eq(viajes.estado, "en_curso")))
+  .limit(1);
+
+const propositos = await db.select().from(viajePropositos).where(eq(viajePropositos.activo, true)).orderBy(viajePropositos.orden);
+
+const viajeActivo = activoRaw?.viaje ?? null;
+const motoristaViaje = activoRaw?.motorista ?? null;
+const esMioElViaje = viajeActivo && viajeActivo.motoristaId === user.id;
+const enUsoPorOtro = viajeActivo && !esMioElViaje;
+const bloqueadoPorOtroVehiculo = otroMio && otroMio.vehiculoId !== v.id;
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+---
+
+<Layout title={`${v.placa} · ${v.marca} ${v.modelo}`}>
+  <a href="/flota" class="text-sm text-slate-500 hover:underline">&larr; Volver a flota</a>
+
+  <div class="mt-2 flex items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">{v.marca} {v.modelo}</h1>
+      <p class="text-sm text-slate-500"><strong>{v.placa}</strong> · {v.codigo}</p>
+    </div>
+    <span class={`badge ${ESTADO_VEHICULO_COLOR[v.estado]}`}>{ESTADO_VEHICULO_LABEL[v.estado]}</span>
+  </div>
+
+  <div class="mt-2 text-right">
+    <span class="text-xs uppercase text-slate-500">Kilometraje actual</span>
+    <span class="ml-2 text-xl font-bold">{fmtKm(v.kilometrajeActual)}</span>
+  </div>
+
+  {/* === ESCENARIO 1: Yo tengo un viaje en curso AQUI === */}
+  {esMioElViaje && (
+    <div class="card mt-4 p-5 border-l-4 border-amber-500">
+      <h2 class="font-semibold text-amber-700">Tu viaje en curso</h2>
+      <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+        <div><div class="text-xs uppercase text-slate-500">Inició</div><div>{fmt(viajeActivo!.inicio)}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Km inicial</div><div class="font-mono">{viajeActivo!.kmInicial}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Destino</div><div>{viajeActivo!.destino ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Propósito</div><div>{activoRaw!.proposito?.nombre ?? "—"}</div></div>
+      </div>
+
+      <div class="mt-5 grid grid-cols-1 gap-3">
+        <button id="finalizarBtn" class="btn-primary w-full justify-center bg-emerald-600 hover:bg-emerald-700">✓ Finalizar viaje</button>
+        <a href="/ordenes/nueva" class="btn-secondary w-full justify-center">⚠ Reportar problema</a>
+        <button id="cargarBtn" class="btn-secondary w-full justify-center">⛽ Registrar carga de combustible</button>
+        <button id="cancelarBtn" class="text-xs text-red-500 hover:underline">Cancelar viaje</button>
+      </div>
+    </div>
+  )}
+
+  {/* === ESCENARIO 2: Vehículo en uso por OTRO motorista === */}
+  {enUsoPorOtro && (
+    <div class="card mt-4 p-5 border-l-4 border-red-500">
+      <h2 class="font-semibold text-red-700">Vehículo en uso</h2>
+      <p class="mt-2 text-sm text-slate-700">
+        Está siendo usado por <strong>{motoristaViaje?.nombre ?? "otro motorista"}</strong>
+        desde <strong>{fmt(viajeActivo!.inicio)}</strong>.
+      </p>
+      <p class="mt-1 text-xs text-slate-500">Espera a que el viaje finalice o usa otro vehículo disponible.</p>
+    </div>
+  )}
+
+  {/* === ESCENARIO 3: Yo tengo otro viaje en otro vehículo === */}
+  {!viajeActivo && bloqueadoPorOtroVehiculo && (
+    <div class="card mt-4 p-5 border-l-4 border-amber-500">
+      <h2 class="font-semibold text-amber-700">Tienes un viaje activo en otro vehículo</h2>
+      <p class="mt-2 text-sm text-slate-700">Debes finalizarlo antes de iniciar uno nuevo.</p>
+      <a href={`/flota/${otroMio!.vehiculoId}`} class="btn-primary mt-3 w-full justify-center">Ir al otro vehículo</a>
+    </div>
+  )}
+
+  {/* === ESCENARIO 4: Vehículo disponible — iniciar viaje === */}
+  {!viajeActivo && !bloqueadoPorOtroVehiculo && v.estado === "disponible" && (
+    <div class="card mt-4 p-5">
+      <h2 class="font-semibold">Iniciar viaje</h2>
+      <div class="mt-3 space-y-3">
+        <div>
+          <label class="label">Foto del odómetro * <span class="text-xs text-slate-500">(obligatoria)</span></label>
+          <input id="fotoInicio" type="file" accept="image/*" capture="environment" class="block w-full text-sm" required />
+          <img id="fotoPreview" class="mt-2 hidden h-32 w-full rounded border object-cover" />
+        </div>
+        <div>
+          <label class="label">Km inicial * <span class="text-xs text-slate-500">(actual: {v.kilometrajeActual})</span></label>
+          <input id="kmInicial" class="input" type="number" step="0.1" min={v.kilometrajeActual} value={v.kilometrajeActual} required />
+        </div>
+        <div>
+          <label class="label">Destino *</label>
+          <input id="destino" class="input" placeholder="A dónde vas" required />
+        </div>
+        <div>
+          <label class="label">Propósito *</label>
+          <select id="propositoId" class="input" required>
+            <option value="">— Seleccionar —</option>
+            {propositos.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Notas (opcional)</label>
+          <textarea id="notas" class="input" rows="2"></textarea>
+        </div>
+        <p class="text-xs text-slate-500" id="geoStatus">📍 Capturando ubicación...</p>
+        <p id="errMsg" class="hidden text-sm text-red-600"></p>
+        <button id="iniciarBtn" class="btn-primary w-full justify-center">▶ Iniciar viaje</button>
+      </div>
+    </div>
+  )}
+
+  {!viajeActivo && v.estado !== "disponible" && !bloqueadoPorOtroVehiculo && (
+    <div class="card mt-4 p-5 text-center text-slate-500">
+      <p>Vehículo no disponible (estado: <strong>{ESTADO_VEHICULO_LABEL[v.estado]}</strong>)</p>
+    </div>
+  )}
+
+  <!-- Modal finalizar viaje -->
+  <div id="finModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Finalizar viaje</h3>
+      <div class="mt-3 space-y-3">
+        <div>
+          <label class="label">Foto del odómetro *</label>
+          <input id="fotoFin" type="file" accept="image/*" capture="environment" class="block w-full text-sm" />
+          <img id="fotoFinPreview" class="mt-2 hidden h-32 w-full rounded border object-cover" />
+        </div>
+        <div>
+          <label class="label">Km final * <span class="text-xs text-slate-500">(mín: {viajeActivo?.kmInicial ?? 0})</span></label>
+          <input id="kmFinal" class="input" type="number" step="0.1" min={viajeActivo?.kmInicial} required />
+        </div>
+        <p class="text-xs text-slate-500" id="finGeoStatus">📍 Capturando ubicación...</p>
+        <p id="finErr" class="hidden text-sm text-red-600"></p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="finCancel" class="btn-secondary">Cerrar</button>
+        <button id="finConfirm" class="btn-primary">Finalizar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal carga combustible -->
+  <div id="cargaModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Registrar carga de combustible</h3>
+      <div class="mt-3 grid grid-cols-2 gap-3">
+        <div><label class="label">Litros *</label><input id="c_litros" class="input" type="number" step="0.01" min="0" /></div>
+        <div><label class="label">Monto total *</label><input id="c_monto" class="input" type="number" step="0.01" min="0" /></div>
+        <div><label class="label">Km actual</label><input id="c_km" class="input" type="number" step="0.1" /></div>
+        <div><label class="label">Estación</label><input id="c_estacion" class="input" /></div>
+        <div class="col-span-2"><label class="label">Foto del recibo</label><input id="c_recibo" type="file" accept="image/*" capture="environment" class="block w-full text-sm" /></div>
+        <div class="col-span-2"><label class="label">Notas</label><input id="c_notas" class="input" /></div>
+      </div>
+      <p id="cargaErr" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="cargaCancel" class="btn-secondary">Cancelar</button>
+        <button id="cargaSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ vehiculoId: v.id, viajeId: viajeActivo?.id ?? null, kmActual: v.kilometrajeActual }}>
+    let geoInicio = { lat: null, lng: null };
+    let geoFin = { lat: null, lng: null };
+
+    // Geolocalización al entrar (best-effort)
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          geoInicio = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const el = document.getElementById("geoStatus");
+          if (el) el.textContent = `📍 Ubicación capturada (${geoInicio.lat.toFixed(4)}, ${geoInicio.lng.toFixed(4)})`;
+        },
+        () => {
+          const el = document.getElementById("geoStatus");
+          if (el) el.textContent = "📍 No se pudo obtener ubicación (continuará sin GPS)";
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+    }
+
+    // Preview foto inicio
+    document.getElementById("fotoInicio")?.addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const url = await fileToDataUrl(f);
+      const img = document.getElementById("fotoPreview");
+      img.src = url; img.classList.remove("hidden");
+    });
+
+    // Iniciar viaje
+    document.getElementById("iniciarBtn")?.addEventListener("click", async () => {
+      const err = document.getElementById("errMsg");
+      err.classList.add("hidden");
+      const file = document.getElementById("fotoInicio").files[0];
+      if (!file) { err.textContent = "Foto del odómetro obligatoria"; err.classList.remove("hidden"); return; }
+      const destino = document.getElementById("destino").value.trim();
+      const proposito = document.getElementById("propositoId").value;
+      const km = Number(document.getElementById("kmInicial").value);
+      if (!destino || !proposito || Number.isNaN(km)) { err.textContent = "Completa todos los campos requeridos"; err.classList.remove("hidden"); return; }
+
+      const fotoOdometroBase64 = await fileToDataUrl(file);
+      const payload = {
+        vehiculoId,
+        propositoId: Number(proposito),
+        destino,
+        notas: document.getElementById("notas").value.trim() || null,
+        kmInicial: km,
+        inicioLat: geoInicio.lat,
+        inicioLng: geoInicio.lng,
+        fotoOdometroBase64,
+      };
+      const btn = document.getElementById("iniciarBtn");
+      btn.disabled = true; btn.textContent = "Iniciando...";
+      const res = await fetch("/api/flota/viajes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al iniciar viaje";
+        err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "▶ Iniciar viaje";
+        return;
+      }
+      location.reload();
+    });
+
+    // Finalizar viaje
+    document.getElementById("finalizarBtn")?.addEventListener("click", () => {
+      document.getElementById("finModal").classList.remove("hidden");
+      document.getElementById("finModal").classList.add("flex");
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            geoFin = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            document.getElementById("finGeoStatus").textContent = `📍 ${geoFin.lat.toFixed(4)}, ${geoFin.lng.toFixed(4)}`;
+          },
+          () => { document.getElementById("finGeoStatus").textContent = "📍 sin ubicación"; }
+        );
+      }
+    });
+    document.getElementById("finCancel")?.addEventListener("click", () => { document.getElementById("finModal").classList.add("hidden"); document.getElementById("finModal").classList.remove("flex"); });
+    document.getElementById("fotoFin")?.addEventListener("change", async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const url = await fileToDataUrl(f);
+      const img = document.getElementById("fotoFinPreview"); img.src = url; img.classList.remove("hidden");
+    });
+    document.getElementById("finConfirm")?.addEventListener("click", async () => {
+      const err = document.getElementById("finErr");
+      err.classList.add("hidden");
+      const file = document.getElementById("fotoFin").files[0];
+      const km = Number(document.getElementById("kmFinal").value);
+      if (!file) { err.textContent = "Foto del odómetro obligatoria"; err.classList.remove("hidden"); return; }
+      if (Number.isNaN(km)) { err.textContent = "Km final requerido"; err.classList.remove("hidden"); return; }
+      const fotoOdometroBase64 = await fileToDataUrl(file);
+      const res = await fetch(`/api/flota/viajes/${viajeId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kmFinal: km, finLat: geoFin.lat, finLng: geoFin.lng, fotoOdometroBase64 }),
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); return; }
+      const j = await res.json();
+      let msg = `Viaje finalizado: ${j.kmRecorrido} km en ${j.duracionMin} min.`;
+      if (j.ordenesGeneradas?.length) msg += ` Se generaron ${j.ordenesGeneradas.length} orden(es) de mantenimiento.`;
+      alert(msg);
+      location.href = "/flota";
+    });
+
+    document.getElementById("cancelarBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Cancelar viaje? No se registrará el km recorrido.")) return;
+      await fetch(`/api/flota/viajes/${viajeId}`, { method: "DELETE" });
+      location.reload();
+    });
+
+    // Cargas
+    document.getElementById("cargarBtn")?.addEventListener("click", () => {
+      document.getElementById("cargaModal").classList.remove("hidden");
+      document.getElementById("cargaModal").classList.add("flex");
+      document.getElementById("c_km").value = kmActual;
+    });
+    document.getElementById("cargaCancel")?.addEventListener("click", () => {
+      document.getElementById("cargaModal").classList.add("hidden");
+      document.getElementById("cargaModal").classList.remove("flex");
+    });
+    document.getElementById("cargaSave")?.addEventListener("click", async () => {
+      const err = document.getElementById("cargaErr");
+      err.classList.add("hidden");
+      const litros = Number(document.getElementById("c_litros").value);
+      const monto = Number(document.getElementById("c_monto").value);
+      if (!litros || litros <= 0 || isNaN(monto)) { err.textContent = "Litros y monto requeridos"; err.classList.remove("hidden"); return; }
+      const file = document.getElementById("c_recibo").files[0];
+      let reciboBase64 = null;
+      if (file) reciboBase64 = await fileToDataUrl(file);
+      const payload = {
+        vehiculoId,
+        litros, monto,
+        kmAlCargar: Number(document.getElementById("c_km").value) || null,
+        estacion: document.getElementById("c_estacion").value.trim() || null,
+        notas: document.getElementById("c_notas").value.trim() || null,
+        reciboBase64,
+      };
+      const res = await fetch("/api/flota/cargas", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { err.textContent = "Error al guardar"; err.classList.remove("hidden"); return; }
+      location.reload();
+    });
+  </script>
+</Layout>

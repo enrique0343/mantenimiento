@@ -1,0 +1,356 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { vehiculos, vehiculoDocumentos, viajes, cargasCombustible, planesVehiculo, usuarios } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import {
+  ESTADO_VEHICULO_LABEL, ESTADO_VEHICULO_COLOR, TIPO_DOCUMENTO_LABEL,
+  fmtKm, fmtDuracion, diasParaVencer, puedeVerFlota, puedeAdministrarFlota,
+} from "@/lib/flota";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/flota");
+
+const user = Astro.locals.user!;
+if (!puedeVerFlota(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const [v] = await db.select().from(vehiculos).where(eq(vehiculos.id, id)).limit(1);
+if (!v) return Astro.redirect("/flota");
+
+const docs = await db.select().from(vehiculoDocumentos).where(eq(vehiculoDocumentos.vehiculoId, id));
+const ultimosViajes = await db
+  .select({ v: viajes, m: usuarios })
+  .from(viajes)
+  .leftJoin(usuarios, eq(usuarios.id, viajes.motoristaId))
+  .where(eq(viajes.vehiculoId, id))
+  .orderBy(desc(viajes.id))
+  .limit(15);
+const ultimasCargas = await db
+  .select({ c: cargasCombustible, m: usuarios })
+  .from(cargasCombustible)
+  .leftJoin(usuarios, eq(usuarios.id, cargasCombustible.motoristaId))
+  .where(eq(cargasCombustible.vehiculoId, id))
+  .orderBy(desc(cargasCombustible.id))
+  .limit(15);
+const planes = await db.select().from(planesVehiculo).where(eq(planesVehiculo.vehiculoId, id));
+const tecnicos = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre })
+  .from(usuarios)
+  .where(eq(usuarios.activo, true));
+
+const admin = puedeAdministrarFlota(user.rol);
+
+// Rendimiento km/L (entre las 2 ultimas cargas)
+let rendimiento: number | null = null;
+if (ultimasCargas.length >= 2 && ultimasCargas[0].c.kmAlCargar != null && ultimasCargas[1].c.kmAlCargar != null) {
+  const km = ultimasCargas[0].c.kmAlCargar - ultimasCargas[1].c.kmAlCargar;
+  if (km > 0 && ultimasCargas[0].c.litros > 0) {
+    rendimiento = km / ultimasCargas[0].c.litros;
+  }
+}
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const host = new URL(Astro.request.url).origin;
+const qrUrl = `${host}/vehiculo/qr/${v.qrToken}`;
+---
+
+<Layout title={`${v.placa} · ${v.marca} ${v.modelo}`}>
+  <a href="/flota" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{v.marca} {v.modelo}{v.anio ? ` (${v.anio})` : ""}</h1>
+        <span class={`badge ${ESTADO_VEHICULO_COLOR[v.estado]}`}>{ESTADO_VEHICULO_LABEL[v.estado]}</span>
+      </div>
+      <p class="mt-1 text-sm text-slate-500">
+        <span class="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs">{v.codigo}</span>
+        · Placa <strong>{v.placa}</strong> · {v.color ?? "—"}
+      </p>
+    </div>
+    <div class="text-right">
+      <div class="text-xs uppercase text-slate-500">Kilometraje</div>
+      <div class="text-3xl font-bold text-brand-600">{fmtKm(v.kilometrajeActual)}</div>
+      {rendimiento && <div class="text-xs text-slate-500">~ {rendimiento.toFixed(1)} km/L</div>}
+    </div>
+  </div>
+
+  <!-- Datos + QR -->
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="card lg:col-span-2 p-5">
+      <h2 class="font-semibold text-slate-900">Datos del vehículo</h2>
+      <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div class="capitalize">{v.tipo}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Combustible</div><div class="capitalize">{v.combustible}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">VIN</div><div class="font-mono text-xs">{v.vin ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Capacidad tanque</div><div>{v.capacidadTanque ? `${v.capacidadTanque} L` : "—"}</div></div>
+      </div>
+      {v.notas && <p class="mt-3 whitespace-pre-wrap text-sm text-slate-600">{v.notas}</p>}
+    </div>
+
+    <div class="card p-5 text-center">
+      <h2 class="font-semibold text-slate-900">QR del vehículo</h2>
+      <p class="mt-1 text-xs text-slate-500">Imprime y pega en el vehículo</p>
+      <div id="qrcode" class="mx-auto mt-3" style="max-width:200px"></div>
+      <p class="mt-2 break-all text-[10px] text-slate-400">{qrUrl}</p>
+      <button id="qrPrintBtn" class="btn-secondary mt-3 w-full justify-center text-sm">🖨 Imprimir</button>
+    </div>
+  </div>
+
+  <!-- Documentos -->
+  <div class="card mt-6 p-5">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">Documentos</h2>
+      {admin && <button id="newDocBtn" class="btn-secondary text-sm">+ Agregar</button>}
+    </div>
+
+    {admin && (
+      <div id="newDocForm" class="mt-3 hidden rounded border border-slate-200 bg-slate-50 p-3">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <select class="input text-sm" id="d_tipo">
+            <option value="tarjeta_circulacion">Tarjeta de circulación</option>
+            <option value="seguro">Seguro vehicular</option>
+            <option value="revision_tecnica">Revisión técnica</option>
+            <option value="otro">Otro</option>
+          </select>
+          <input class="input text-sm" id="d_numero" placeholder="Número / referencia" />
+          <input class="input text-sm" id="d_vencimiento" type="date" />
+        </div>
+        <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <input class="block text-sm" id="d_archivo" type="file" accept="image/*,application/pdf" />
+          <input class="input text-sm" id="d_notas" placeholder="Notas (opcional)" />
+        </div>
+        <div class="mt-2 flex gap-2">
+          <button id="d_save" class="btn-primary text-sm">Guardar</button>
+          <button id="d_cancel" class="btn-secondary text-sm">Cancelar</button>
+        </div>
+      </div>
+    )}
+
+    <ul class="mt-3 divide-y divide-slate-100">
+      {docs.length === 0 && <li class="py-2 text-sm text-slate-500">Sin documentos.</li>}
+      {docs.map((d) => {
+        const dias = diasParaVencer(d.vencimiento);
+        return (
+          <li class="flex items-center justify-between py-2 text-sm">
+            <div>
+              <strong>{TIPO_DOCUMENTO_LABEL[d.tipo] ?? d.tipo}</strong>
+              {d.numero && <span class="ml-2 text-slate-500">#{d.numero}</span>}
+              {d.vencimiento && (
+                <span class:list={[
+                  "ml-2 text-xs",
+                  dias != null && dias < 0 ? "text-red-600 font-bold" :
+                  dias != null && dias < 30 ? "text-amber-600" : "text-slate-500",
+                ]}>
+                  Vence: {new Date(d.vencimiento).toLocaleDateString("es")}
+                  {dias != null && dias < 0 && ` (vencido hace ${Math.abs(dias)}d)`}
+                  {dias != null && dias >= 0 && dias < 30 && ` (en ${dias}d)`}
+                </span>
+              )}
+              {d.notas && <div class="text-xs text-slate-500">{d.notas}</div>}
+            </div>
+            <div class="flex items-center gap-2">
+              {d.r2Key && <a href={`/api/flota/documentos/${d.id}`} target="_blank" class="text-xs text-brand-700 hover:underline">Ver archivo</a>}
+              {admin && <button class="doc-del-btn text-xs text-red-500 hover:underline" data-id={d.id}>Eliminar</button>}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+
+  <!-- Planes de mantenimiento -->
+  <div class="card mt-6 p-5">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">Planes de mantenimiento</h2>
+      {admin && <button id="newPlanBtn" class="btn-secondary text-sm">+ Agregar</button>}
+    </div>
+
+    {admin && (
+      <div id="newPlanForm" class="mt-3 hidden rounded border border-slate-200 bg-slate-50 p-3">
+        <div class="grid grid-cols-1 gap-2">
+          <input class="input text-sm" id="p_titulo" placeholder="Título (Ej: Cambio de aceite)" />
+          <textarea class="input text-sm" id="p_descripcion" rows="2" placeholder="Descripción (opcional)"></textarea>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
+              <label class="text-xs text-slate-500">Cada cuántos km (Ej: 5000)</label>
+              <input class="input text-sm" id="p_km" type="number" min="0" step="100" placeholder="5000" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-500">O cada cuántos meses</label>
+              <input class="input text-sm" id="p_meses" type="number" min="0" max="60" placeholder="6" />
+            </div>
+          </div>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <select class="input text-sm" id="p_prioridad">
+              <option value="baja">Baja</option>
+              <option value="media" selected>Media</option>
+              <option value="alta">Alta</option>
+              <option value="urgente">Urgente</option>
+            </select>
+            <select class="input text-sm" id="p_asignado">
+              <option value="">— Sin asignar —</option>
+              {tecnicos.map((t) => <option value={t.id}>{t.nombre}</option>)}
+            </select>
+          </div>
+          <div class="flex gap-2">
+            <button id="p_save" class="btn-primary text-sm">Guardar plan</button>
+            <button id="p_cancel" class="btn-secondary text-sm">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    <ul class="mt-3 divide-y divide-slate-100">
+      {planes.length === 0 && <li class="py-2 text-sm text-slate-500">Sin planes configurados.</li>}
+      {planes.map((p) => (
+        <li class="flex items-center justify-between py-2 text-sm">
+          <div>
+            <strong>{p.titulo}</strong>
+            <div class="text-xs text-slate-500">
+              {p.kmIntervalo && <span>Cada {p.kmIntervalo.toLocaleString()} km</span>}
+              {p.kmIntervalo && p.frecuenciaMeses && <span> · </span>}
+              {p.frecuenciaMeses && <span>Cada {p.frecuenciaMeses} meses</span>}
+              {p.kmProximo && <span> · próximo: {p.kmProximo.toLocaleString()} km</span>}
+              {p.proximaFecha && <span> · próxima fecha: {new Date(p.proximaFecha).toLocaleDateString("es")}</span>}
+            </div>
+          </div>
+          {admin && <button class="plan-del-btn text-xs text-red-500 hover:underline" data-id={p.id}>Eliminar</button>}
+        </li>
+      ))}
+    </ul>
+  </div>
+
+  <!-- Viajes recientes -->
+  <div class="card mt-6 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Últimos viajes ({ultimosViajes.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Inicio</th>
+          <th class="px-4 py-2">Motorista</th>
+          <th class="px-4 py-2">Destino</th>
+          <th class="px-4 py-2 text-right">Km</th>
+          <th class="px-4 py-2 text-right">Duración</th>
+          <th class="px-4 py-2">Estado</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {ultimosViajes.length === 0 && <tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Sin viajes.</td></tr>}
+        {ultimosViajes.map((r) => (
+          <tr>
+            <td class="px-4 py-2 text-xs">{fmt(r.v.inicio)}</td>
+            <td class="px-4 py-2">{r.m?.nombre ?? "—"}</td>
+            <td class="px-4 py-2 text-slate-600">{r.v.destino ?? "—"}</td>
+            <td class="px-4 py-2 text-right font-mono">{r.v.kmRecorrido ? r.v.kmRecorrido.toFixed(1) : "—"}</td>
+            <td class="px-4 py-2 text-right font-mono">{fmtDuracion(r.v.duracionMin)}</td>
+            <td class="px-4 py-2"><span class:list={["badge", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Cargas combustible -->
+  <div class="card mt-6 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Últimas cargas de combustible ({ultimasCargas.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Fecha</th>
+          <th class="px-4 py-2">Motorista</th>
+          <th class="px-4 py-2 text-right">Litros</th>
+          <th class="px-4 py-2 text-right">Monto</th>
+          <th class="px-4 py-2 text-right">Precio/L</th>
+          <th class="px-4 py-2 text-right">Km</th>
+          <th class="px-4 py-2">Estación</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {ultimasCargas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin cargas registradas.</td></tr>}
+        {ultimasCargas.map((r) => (
+          <tr>
+            <td class="px-4 py-2 text-xs">{fmt(r.c.fecha)}</td>
+            <td class="px-4 py-2">{r.m?.nombre ?? "—"}</td>
+            <td class="px-4 py-2 text-right font-mono">{r.c.litros.toFixed(2)}</td>
+            <td class="px-4 py-2 text-right font-mono">${r.c.monto.toFixed(2)}</td>
+            <td class="px-4 py-2 text-right font-mono">{r.c.precioLitro ? `$${r.c.precioLitro.toFixed(3)}` : "—"}</td>
+            <td class="px-4 py-2 text-right font-mono">{r.c.kmAlCargar ? r.c.kmAlCargar.toLocaleString() : "—"}</td>
+            <td class="px-4 py-2 text-slate-600">{r.c.estacion ?? "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <script define:vars={{ id, qrUrl, vehiculoId: v.id }}>
+    // QR generation con CDN
+    (async () => {
+      await new Promise((r, e) => { const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"; s.onload = r; s.onerror = e; document.head.appendChild(s); });
+      const canvas = document.createElement("canvas");
+      await window.QRCode.toCanvas(canvas, qrUrl, { width: 200, margin: 1 });
+      document.getElementById("qrcode").appendChild(canvas);
+    })();
+
+    document.getElementById("qrPrintBtn")?.addEventListener("click", () => {
+      const w = window.open("", "_blank");
+      w.document.write(`<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>Vehículo</h2><div id="q"></div><p style="font-size:12px;color:#666">${qrUrl}</p><script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></scr` + `ipt><script>QRCode.toCanvas(document.getElementById('q'),'${qrUrl}',{width:300}).then(()=>window.print());</scr` + `ipt></body></html>`);
+    });
+
+    // Documentos
+    document.getElementById("newDocBtn")?.addEventListener("click", () => document.getElementById("newDocForm").classList.remove("hidden"));
+    document.getElementById("d_cancel")?.addEventListener("click", () => document.getElementById("newDocForm").classList.add("hidden"));
+    document.getElementById("d_save")?.addEventListener("click", async () => {
+      const file = document.getElementById("d_archivo").files[0];
+      let archivoBase64 = null;
+      if (file) {
+        archivoBase64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+      }
+      const payload = {
+        vehiculoId,
+        tipo: document.getElementById("d_tipo").value,
+        numero: document.getElementById("d_numero").value.trim() || null,
+        vencimiento: document.getElementById("d_vencimiento").value || null,
+        notas: document.getElementById("d_notas").value.trim() || null,
+        archivoBase64,
+      };
+      const res = await fetch("/api/flota/documentos", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { alert("Error al guardar documento"); return; }
+      location.reload();
+    });
+    document.querySelectorAll(".doc-del-btn").forEach((b) => b.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar documento?")) return;
+      await fetch(`/api/flota/documentos/${b.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    }));
+
+    // Planes
+    document.getElementById("newPlanBtn")?.addEventListener("click", () => document.getElementById("newPlanForm").classList.remove("hidden"));
+    document.getElementById("p_cancel")?.addEventListener("click", () => document.getElementById("newPlanForm").classList.add("hidden"));
+    document.getElementById("p_save")?.addEventListener("click", async () => {
+      const num = (id) => { const v = document.getElementById(id).value; return v === "" ? null : Number(v); };
+      const asign = document.getElementById("p_asignado").value;
+      const payload = {
+        vehiculoId,
+        titulo: document.getElementById("p_titulo").value.trim(),
+        descripcion: document.getElementById("p_descripcion").value.trim() || null,
+        kmIntervalo: num("p_km"),
+        frecuenciaMeses: num("p_meses"),
+        prioridad: document.getElementById("p_prioridad").value,
+        asignadoA: asign ? Number(asign) : null,
+      };
+      if (!payload.titulo) return alert("Título requerido");
+      if (!payload.kmIntervalo && !payload.frecuenciaMeses) return alert("Define km o meses");
+      const res = await fetch("/api/flota/planes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.error?.formErrors?.join?.(", ") ?? "Error"); return; }
+      location.reload();
+    });
+    document.querySelectorAll(".plan-del-btn").forEach((b) => b.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar plan?")) return;
+      await fetch(`/api/flota/planes/${b.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    }));
+  </script>
+</Layout>

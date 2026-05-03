@@ -1,7 +1,7 @@
 import { sqliteTable, integer, text, real } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
-export const ROLES = ["admin", "jefe", "tecnico", "proveedor", "solicitante", "visualizador"] as const;
+export const ROLES = ["admin", "jefe", "tecnico", "proveedor", "solicitante", "visualizador", "motorista"] as const;
 export type Rol = (typeof ROLES)[number];
 
 // ─── Empresa (singleton id=1) ─────────────────────────────────────────────────
@@ -111,6 +111,7 @@ export const ordenes = sqliteTable("ordenes", {
     .notNull()
     .default("abierta"),
   activoId: integer("activo_id").references(() => activos.id),
+  vehiculoId: integer("vehiculo_id").references((): any => vehiculos.id),
   asignadoA: integer("asignado_a").references(() => usuarios.id),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
@@ -362,3 +363,104 @@ export type Ticket = typeof tickets.$inferSelect;
 export type TicketComentario = typeof ticketComentarios.$inferSelect;
 export type VariablePredictiva = typeof variablesPredictivas.$inferSelect;
 export type Medicion = typeof mediciones.$inferSelect;
+
+// ─── Flota ───────────────────────────────────────────────────────────────────
+export const vehiculos = sqliteTable("vehiculos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  placa: text("placa").notNull().unique(),
+  marca: text("marca").notNull(),
+  modelo: text("modelo").notNull(),
+  anio: integer("anio"),
+  color: text("color"),
+  vin: text("vin"),
+  tipo: text("tipo", { enum: ["carro", "pickup", "moto", "camion", "microbus", "otro"] }).notNull().default("carro"),
+  combustible: text("combustible", { enum: ["gasolina", "diesel", "electrico", "hibrido"] }).notNull().default("gasolina"),
+  capacidadTanque: real("capacidad_tanque"),
+  kilometrajeActual: real("kilometraje_actual").notNull().default(0),
+  fotoR2: text("foto_r2"),
+  qrToken: text("qr_token").notNull().unique(),
+  estado: text("estado", { enum: ["disponible", "en_viaje", "mantenimiento", "baja"] }).notNull().default("disponible"),
+  notas: text("notas"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const vehiculoDocumentos = sqliteTable("vehiculo_documentos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  vehiculoId: integer("vehiculo_id").notNull().references(() => vehiculos.id, { onDelete: "cascade" }),
+  tipo: text("tipo", { enum: ["tarjeta_circulacion", "seguro", "revision_tecnica", "otro"] }).notNull(),
+  numero: text("numero"),
+  vencimiento: text("vencimiento"),
+  r2Key: text("r2_key"),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const viajePropositos = sqliteTable("viaje_propositos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull().unique(),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  orden: integer("orden").notNull().default(0),
+});
+
+export const viajes = sqliteTable("viajes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  vehiculoId: integer("vehiculo_id").notNull().references(() => vehiculos.id),
+  motoristaId: integer("motorista_id").notNull().references(() => usuarios.id),
+  propositoId: integer("proposito_id").references(() => viajePropositos.id),
+  destino: text("destino"),
+  notas: text("notas"),
+  kmInicial: real("km_inicial").notNull(),
+  kmFinal: real("km_final"),
+  kmRecorrido: real("km_recorrido"),
+  inicio: text("inicio").notNull().default(sql`CURRENT_TIMESTAMP`),
+  fin: text("fin"),
+  duracionMin: integer("duracion_min"),
+  inicioLat: real("inicio_lat"),
+  inicioLng: real("inicio_lng"),
+  finLat: real("fin_lat"),
+  finLng: real("fin_lng"),
+  distanciaGpsKm: real("distancia_gps_km"),
+  fotoOdometroInicioR2: text("foto_odometro_inicio_r2"),
+  fotoOdometroFinR2: text("foto_odometro_fin_r2"),
+  estado: text("estado", { enum: ["en_curso", "finalizado", "cancelado"] }).notNull().default("en_curso"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const cargasCombustible = sqliteTable("cargas_combustible", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  vehiculoId: integer("vehiculo_id").notNull().references(() => vehiculos.id),
+  motoristaId: integer("motorista_id").references(() => usuarios.id),
+  fecha: text("fecha").notNull().default(sql`CURRENT_TIMESTAMP`),
+  litros: real("litros").notNull(),
+  monto: real("monto").notNull(),
+  precioLitro: real("precio_litro"),
+  kmAlCargar: real("km_al_cargar"),
+  estacion: text("estacion"),
+  reciboR2: text("recibo_r2"),
+  notas: text("notas"),
+});
+
+export const planesVehiculo = sqliteTable("planes_vehiculo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  vehiculoId: integer("vehiculo_id").notNull().references(() => vehiculos.id, { onDelete: "cascade" }),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  kmIntervalo: real("km_intervalo"),
+  kmProximo: real("km_proximo"),
+  frecuenciaMeses: integer("frecuencia_meses"),
+  proximaFecha: text("proxima_fecha"),
+  prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] }).notNull().default("media"),
+  asignadoA: integer("asignado_a").references(() => usuarios.id),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  ultimaGeneracion: text("ultima_generacion"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type Vehiculo = typeof vehiculos.$inferSelect;
+export type VehiculoDocumento = typeof vehiculoDocumentos.$inferSelect;
+export type ViajePropozito = typeof viajePropositos.$inferSelect;
+export type Viaje = typeof viajes.$inferSelect;
+export type CargaCombustible = typeof cargasCombustible.$inferSelect;
+export type PlanVehiculo = typeof planesVehiculo.$inferSelect;

@@ -1,0 +1,113 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { TIPOS_VEHICULO, COMBUSTIBLES, puedeAdministrarFlota } from "@/lib/flota";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeAdministrarFlota(user.rol)) return Astro.redirect("/flota");
+---
+
+<Layout title="Nuevo vehículo">
+  <a href="/flota" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nuevo vehículo</h1>
+
+  <form id="form" class="card mt-4 space-y-4 p-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Código interno *</label>
+        <input class="input" id="codigo" required placeholder="VEH-001" />
+      </div>
+      <div>
+        <label class="label">Placa *</label>
+        <input class="input uppercase" id="placa" required placeholder="P-123456" />
+      </div>
+      <div>
+        <label class="label">Marca *</label>
+        <input class="input" id="marca" required placeholder="Toyota" />
+      </div>
+      <div>
+        <label class="label">Modelo *</label>
+        <input class="input" id="modelo" required placeholder="Hilux" />
+      </div>
+      <div>
+        <label class="label">Año</label>
+        <input class="input" id="anio" type="number" min="1980" max="2100" />
+      </div>
+      <div>
+        <label class="label">Color</label>
+        <input class="input" id="color" />
+      </div>
+      <div>
+        <label class="label">VIN / Número de chasis</label>
+        <input class="input" id="vin" />
+      </div>
+      <div>
+        <label class="label">Tipo</label>
+        <select class="input" id="tipo">
+          {TIPOS_VEHICULO.map((t) => <option value={t.value}>{t.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label">Combustible</label>
+        <select class="input" id="combustible">
+          {COMBUSTIBLES.map((c) => <option value={c.value}>{c.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label">Capacidad de tanque (L)</label>
+        <input class="input" id="capacidadTanque" type="number" min="0" step="0.1" />
+      </div>
+      <div>
+        <label class="label">Kilometraje actual *</label>
+        <input class="input" id="kilometrajeActual" type="number" min="0" step="0.1" value="0" required />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Notas</label>
+        <textarea class="input" id="notas" rows="2"></textarea>
+      </div>
+    </div>
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Crear vehículo</button>
+      <a class="btn-secondary" href="/flota">Cancelar</a>
+    </div>
+  </form>
+
+  <script>
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
+    form?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.add("hidden");
+      const v = (id) => document.getElementById(id).value.trim();
+      const num = (id) => { const x = document.getElementById(id).value; return x === "" ? null : Number(x); };
+      const payload = {
+        codigo: v("codigo"),
+        placa: v("placa").toUpperCase(),
+        marca: v("marca"),
+        modelo: v("modelo"),
+        anio: num("anio"),
+        color: v("color") || null,
+        vin: v("vin") || null,
+        tipo: document.getElementById("tipo").value,
+        combustible: document.getElementById("combustible").value,
+        capacidadTanque: num("capacidadTanque"),
+        kilometrajeActual: num("kilometrajeActual") ?? 0,
+        notas: v("notas") || null,
+      };
+      const res = await fetch("/api/flota/vehiculos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await res.json();
+      location.href = `/flota/${j.vehiculo.id}`;
+    });
+  </script>
+</Layout>
