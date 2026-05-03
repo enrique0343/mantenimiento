@@ -1,14 +1,15 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock } from "@/lib/schema";
+import { eq, desc, and } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
   transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
   parseChecklist, progresoChecklist,
   type EstadoOT,
 } from "@/lib/ordenes";
+import { fmtCantidad } from "@/lib/inventario";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -50,6 +51,35 @@ const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
   .where(eq(usuarios.activo, true));
+
+// Repuestos consumidos en esta OT
+const repuestosRows = await db
+  .select({ rep: ordenRepuestos, it: itemsTable, suc: sucursales })
+  .from(ordenRepuestos)
+  .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
+  .leftJoin(sucursales, eq(sucursales.id, ordenRepuestos.sucursalId))
+  .where(eq(ordenRepuestos.ordenId, id))
+  .orderBy(desc(ordenRepuestos.id));
+
+const totalRepuestos = repuestosRows.reduce(
+  (s, r) => s + (r.rep.precioUnitario ?? 0) * r.rep.cantidad,
+  0
+);
+
+// Para el formulario de agregar repuesto
+const itemsActivos = await db
+  .select({ id: itemsTable.id, codigo: itemsTable.codigo, nombre: itemsTable.nombre, unidad: itemsTable.unidad, precio: itemsTable.precioReferencia })
+  .from(itemsTable)
+  .where(eq(itemsTable.activo, true))
+  .orderBy(itemsTable.nombre);
+
+const sucursalesActivas = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
+
+const itemsRepJson = JSON.stringify(itemsActivos);
 
 const checklistItems = parseChecklist(o.checklistEjecucion);
 const progreso = progresoChecklist(checklistItems);
@@ -206,6 +236,79 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
       </div>
 
+      <!-- Repuestos consumidos -->
+      {(itemsActivos.length > 0 || repuestosRows.length > 0) && (
+        <div class="card p-5">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900">Repuestos consumidos</h2>
+            <span class="text-xs text-slate-500">
+              {repuestosRows.length} líneas
+              {totalRepuestos > 0 && <span> · ${totalRepuestos.toFixed(2)}</span>}
+            </span>
+          </div>
+          {repuestosRows.length === 0 && <p class="mt-2 text-sm text-slate-500">Sin repuestos registrados.</p>}
+          {repuestosRows.length > 0 && (
+            <div class="mt-3 overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-3 py-1.5">Item</th>
+                    <th class="px-3 py-1.5">Sucursal</th>
+                    <th class="px-3 py-1.5 text-right">Cant.</th>
+                    <th class="px-3 py-1.5 text-right">P. unit.</th>
+                    <th class="px-3 py-1.5 text-right">Subtotal</th>
+                    {puedeEditar && <th class="px-3 py-1.5"></th>}
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {repuestosRows.map((r) => {
+                    const sub = (r.rep.precioUnitario ?? 0) * r.rep.cantidad;
+                    return (
+                      <tr id={`rep-${r.rep.id}`}>
+                        <td class="px-3 py-1.5">
+                          <a class="text-brand-700 hover:underline" href={`/inventario/${r.it?.id}`}>{r.it?.codigo} · {r.it?.nombre}</a>
+                        </td>
+                        <td class="px-3 py-1.5 text-slate-600">{r.suc?.nombre ?? "—"}</td>
+                        <td class="px-3 py-1.5 text-right font-mono">{fmtCantidad(r.rep.cantidad, r.it?.unidad)}</td>
+                        <td class="px-3 py-1.5 text-right font-mono">{r.rep.precioUnitario != null ? `$${r.rep.precioUnitario.toFixed(2)}` : "—"}</td>
+                        <td class="px-3 py-1.5 text-right font-mono">{sub > 0 ? `$${sub.toFixed(2)}` : "—"}</td>
+                        {puedeEditar && (
+                          <td class="px-3 py-1.5 text-right">
+                            <button class="rep-del-btn text-xs text-red-500 hover:underline" data-id={r.rep.id}>Revertir</button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {puedeEditar && itemsActivos.length > 0 && sucursalesActivas.length > 0 && (
+            <div class="mt-4 rounded border border-dashed border-slate-300 p-3">
+              <h3 class="mb-2 text-sm font-semibold text-slate-700">+ Registrar consumo</h3>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-5">
+                <select id="rep_item" class="input text-sm sm:col-span-2">
+                  <option value="">— Item —</option>
+                  {itemsActivos.map((it) => <option value={it.id} data-precio={it.precio ?? ""} data-unidad={it.unidad}>{it.codigo} · {it.nombre}</option>)}
+                </select>
+                <select id="rep_suc" class="input text-sm">
+                  {sucursalesActivas.map((s) => <option value={s.id}>{s.nombre}</option>)}
+                </select>
+                <input id="rep_cant" type="number" min="0" step="0.01" placeholder="Cantidad" class="input text-sm" />
+                <input id="rep_precio" type="number" min="0" step="0.01" placeholder="Precio unit. (opcional)" class="input text-sm" />
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-2">
+                <input id="rep_notas" placeholder="Notas (opcional)" class="input flex-1 text-sm" />
+                <button id="rep_save" class="btn-primary text-sm">Registrar</button>
+              </div>
+              <p id="rep_msg" class="mt-2 hidden text-xs"></p>
+            </div>
+          )}
+        </div>
+      )}
+
       <!-- Verificacion (cuando ya esta verificada o cerrada) -->
       {(o.verificadoEn || o.verificacionNotas) && (
         <div class="card p-5 border-l-4 border-teal-500">
@@ -323,7 +426,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <script define:vars={{ id, checklistJson: o.checklistEjecucion ?? null }}>
+  <script define:vars={{ id, checklistJson: o.checklistEjecucion ?? null, itemsRepJson }}>
     const $ = (id) => document.getElementById(id);
     let checklist = checklistJson ? JSON.parse(checklistJson) : [];
 
@@ -421,6 +524,51 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         body: JSON.stringify({ texto }),
       });
       if (res.ok) location.reload();
+    });
+
+    // Repuestos: auto-rellenar precio cuando elige item
+    const repItem = $("rep_item");
+    const repPrecio = $("rep_precio");
+    repItem?.addEventListener("change", () => {
+      const opt = repItem.options[repItem.selectedIndex];
+      const p = opt?.dataset?.precio;
+      if (p && !repPrecio.value) repPrecio.value = p;
+    });
+
+    $("rep_save")?.addEventListener("click", async () => {
+      const msg = $("rep_msg");
+      msg.classList.add("hidden");
+      const itemId = Number($("rep_item").value);
+      const sucursalId = Number($("rep_suc").value);
+      const cantidad = Number($("rep_cant").value);
+      const precio = $("rep_precio").value;
+      if (!itemId || !sucursalId || !cantidad || cantidad <= 0) {
+        msg.textContent = "Completa item, sucursal y cantidad.";
+        msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return;
+      }
+      const res = await fetch(`/api/ordenes/${id}/repuestos`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          itemId, sucursalId, cantidad,
+          precioUnitario: precio ? Number(precio) : null,
+          notas: $("rep_notas").value.trim() || null,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        msg.textContent = typeof j.error === "string" ? j.error : "Error al registrar";
+        msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return;
+      }
+      location.reload();
+    });
+
+    document.querySelectorAll(".rep-del-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("¿Revertir este consumo y devolver al stock?")) return;
+        const res = await fetch(`/api/ordenes/${id}/repuestos?repuesto_id=${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) location.reload();
+      });
     });
 
     // Subida de adjuntos por categoria

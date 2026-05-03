@@ -11,12 +11,15 @@ const path = Astro.url.pathname;
 
 const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
+const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol === "tecnico";
 
 const links = [
   { href: "/", label: "Dashboard" },
   { href: "/ordenes", label: "Ordenes" },
   { href: "/cronograma", label: "Cronograma" },
   { href: "/activos", label: "Equipos" },
+  { href: "/inventario", label: "Inventario" },
+  { href: "/recepciones", label: "Recepciones", show: isOperativo },
   { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
   { href: "/usuarios", label: "Usuarios", show: isAdmin },
   { href: "/configuracion", label: "Configuracion", show: isAdmin },

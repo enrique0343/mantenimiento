@@ -1,0 +1,211 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { items, sucursales, proveedores } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/recepciones");
+
+const db = getDb(Astro);
+const sucRows = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
+
+const provRows = await db
+  .select({ id: proveedores.id, nombre: proveedores.nombre })
+  .from(proveedores)
+  .where(eq(proveedores.activo, true))
+  .orderBy(proveedores.nombre);
+
+const itRows = await db
+  .select({ id: items.id, codigo: items.codigo, nombre: items.nombre, unidad: items.unidad, precio: items.precioReferencia })
+  .from(items)
+  .where(eq(items.activo, true))
+  .orderBy(items.nombre);
+
+const itemsJson = JSON.stringify(itRows);
+const hoy = new Date().toISOString().slice(0, 10);
+---
+
+<Layout title="Nueva recepción">
+  <a href="/recepciones" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nueva recepción de proveedor</h1>
+
+  {sucRows.length === 0 && (
+    <div class="card mt-4 border-l-4 border-amber-500 p-4 text-sm">
+      Necesitas crear al menos una <a class="text-brand-700 hover:underline" href="/configuracion">sucursal</a> antes de registrar recepciones.
+    </div>
+  )}
+  {itRows.length === 0 && (
+    <div class="card mt-4 border-l-4 border-amber-500 p-4 text-sm">
+      Necesitas crear items en el <a class="text-brand-700 hover:underline" href="/inventario">inventario</a> antes de registrar recepciones.
+    </div>
+  )}
+
+  {sucRows.length > 0 && itRows.length > 0 && (
+    <form id="form" class="card mt-4 space-y-4 p-5">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div>
+          <label class="label">Fecha *</label>
+          <input class="input" id="fecha" type="date" value={hoy} required />
+        </div>
+        <div>
+          <label class="label">Sucursal destino *</label>
+          <select class="input" id="sucursalId" required>
+            {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Proveedor</label>
+          <select class="input" id="proveedorId">
+            <option value="">— Sin proveedor —</option>
+            {provRows.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label">Número de factura</label>
+          <input class="input" id="numeroFactura" placeholder="FACT-001" />
+        </div>
+        <div class="sm:col-span-3">
+          <label class="label">Notas</label>
+          <textarea class="input" id="notas" rows="2"></textarea>
+        </div>
+      </div>
+
+      <div>
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Items recibidos</h2>
+          <button type="button" id="addLine" class="btn-secondary text-sm">+ Agregar línea</button>
+        </div>
+        <div class="overflow-x-auto rounded border border-slate-200">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th class="px-3 py-2">Item</th>
+                <th class="px-3 py-2 w-32">Cantidad</th>
+                <th class="px-3 py-2 w-32">Precio unit.</th>
+                <th class="px-3 py-2 w-32 text-right">Subtotal</th>
+                <th class="px-3 py-2 w-12"></th>
+              </tr>
+            </thead>
+            <tbody id="lines"></tbody>
+            <tfoot class="bg-slate-50 text-sm font-semibold">
+              <tr>
+                <td colspan="3" class="px-3 py-2 text-right">Total</td>
+                <td class="px-3 py-2 text-right font-mono"><span id="total">0.00</span></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <p id="err" class="hidden text-sm text-red-600"></p>
+      <div class="flex gap-2">
+        <button class="btn-primary" type="submit">Registrar recepción</button>
+        <a class="btn-secondary" href="/recepciones">Cancelar</a>
+      </div>
+    </form>
+  )}
+
+  <script define:vars={{ itemsJson }}>
+    const ITEMS = JSON.parse(itemsJson);
+    const lines = document.getElementById("lines");
+    let idx = 0;
+
+    function recalc() {
+      let total = 0;
+      lines.querySelectorAll("tr").forEach((tr) => {
+        const cant = Number(tr.querySelector(".li-cant").value) || 0;
+        const precio = Number(tr.querySelector(".li-precio").value) || 0;
+        const sub = cant * precio;
+        tr.querySelector(".li-sub").textContent = sub.toFixed(2);
+        total += sub;
+      });
+      document.getElementById("total").textContent = total.toFixed(2);
+    }
+
+    function addLine() {
+      const i = idx++;
+      const tr = document.createElement("tr");
+      tr.className = "border-t border-slate-100";
+      tr.innerHTML = `
+        <td class="px-3 py-2">
+          <select class="input li-item" data-i="${i}">
+            <option value="">— Selecciona item —</option>
+            ${ITEMS.map((it) => `<option value="${it.id}" data-precio="${it.precio ?? ""}" data-unidad="${it.unidad}">${it.codigo} · ${it.nombre}</option>`).join("")}
+          </select>
+        </td>
+        <td class="px-3 py-2"><input class="input li-cant" type="number" min="0" step="0.01" value="1" /></td>
+        <td class="px-3 py-2"><input class="input li-precio" type="number" min="0" step="0.01" placeholder="0.00" /></td>
+        <td class="px-3 py-2 text-right font-mono li-sub">0.00</td>
+        <td class="px-3 py-2 text-center">
+          <button type="button" class="text-red-500 hover:underline text-xs" onclick="this.closest('tr').remove(); window.__recalc();">✕</button>
+        </td>
+      `;
+      lines.appendChild(tr);
+      tr.querySelectorAll("input, select").forEach((el) => el.addEventListener("input", recalc));
+      tr.querySelector(".li-item").addEventListener("change", (e) => {
+        const opt = e.target.options[e.target.selectedIndex];
+        const precio = opt.dataset.precio;
+        if (precio && !tr.querySelector(".li-precio").value) {
+          tr.querySelector(".li-precio").value = precio;
+          recalc();
+        }
+      });
+    }
+    window.__recalc = recalc;
+
+    document.getElementById("addLine").addEventListener("click", addLine);
+    addLine();
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      err.classList.add("hidden");
+      const itemsLines = [];
+      let invalid = false;
+      lines.querySelectorAll("tr").forEach((tr) => {
+        const itemId = Number(tr.querySelector(".li-item").value);
+        const cantidad = Number(tr.querySelector(".li-cant").value);
+        const precio = tr.querySelector(".li-precio").value;
+        if (!itemId || cantidad <= 0) { invalid = true; return; }
+        itemsLines.push({
+          itemId,
+          cantidad,
+          precioUnitario: precio ? Number(precio) : null,
+        });
+      });
+      if (invalid || itemsLines.length === 0) {
+        err.textContent = "Agrega al menos un item con cantidad mayor a 0.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const provV = document.getElementById("proveedorId").value;
+      const payload = {
+        proveedorId: provV ? Number(provV) : null,
+        sucursalId: Number(document.getElementById("sucursalId").value),
+        numeroFactura: document.getElementById("numeroFactura").value.trim() || null,
+        fecha: document.getElementById("fecha").value,
+        notas: document.getElementById("notas").value.trim() || null,
+        items: itemsLines,
+      };
+      const res = await fetch("/api/recepciones", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al registrar";
+        err.classList.remove("hidden");
+        return;
+      }
+      location.href = "/recepciones";
+    });
+  </script>
+</Layout>

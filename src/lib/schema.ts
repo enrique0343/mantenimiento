@@ -163,6 +163,76 @@ export const adjuntos = sqliteTable("adjuntos", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Inventario ──────────────────────────────────────────────────────────────
+export const items = sqliteTable("items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  categoria: text("categoria"),
+  unidad: text("unidad").notNull().default("unidad"),
+  stockMinimo: real("stock_minimo").notNull().default(0),
+  proveedorPrincipalId: integer("proveedor_principal_id").references(() => proveedores.id),
+  precioReferencia: real("precio_referencia"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const stock = sqliteTable("stock", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  itemId: integer("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id, { onDelete: "cascade" }),
+  cantidad: real("cantidad").notNull().default(0),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const movimientosInventario = sqliteTable("movimientos_inventario", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  itemId: integer("item_id").notNull().references(() => items.id),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  tipo: text("tipo", { enum: ["entrada", "salida", "ajuste"] }).notNull(),
+  cantidad: real("cantidad").notNull(),
+  motivo: text("motivo"),
+  referencia: text("referencia"),
+  ordenId: integer("orden_id").references(() => ordenes.id),
+  recepcionId: integer("recepcion_id"),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const recepciones = sqliteTable("recepciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  numeroFactura: text("numero_factura"),
+  fecha: text("fecha").notNull(),
+  total: real("total"),
+  notas: text("notas"),
+  recibidoPor: integer("recibido_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const recepcionItems = sqliteTable("recepcion_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  recepcionId: integer("recepcion_id").notNull().references(() => recepciones.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => items.id),
+  cantidad: real("cantidad").notNull(),
+  precioUnitario: real("precio_unitario"),
+});
+
+export const ordenRepuestos = sqliteTable("orden_repuestos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => items.id),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  cantidad: real("cantidad").notNull(),
+  precioUnitario: real("precio_unitario"),
+  notas: text("notas"),
+  registradoPor: integer("registrado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 // ─── Planes de mantenimiento preventivo ──────────────────────────────────────
 export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -198,3 +268,9 @@ export type Orden = typeof ordenes.$inferSelect;
 export type Comentario = typeof comentarios.$inferSelect;
 export type Adjunto = typeof adjuntos.$inferSelect;
 export type PlanMantenimiento = typeof planesMantenimiento.$inferSelect;
+export type Item = typeof items.$inferSelect;
+export type Stock = typeof stock.$inferSelect;
+export type MovimientoInventario = typeof movimientosInventario.$inferSelect;
+export type Recepcion = typeof recepciones.$inferSelect;
+export type RecepcionItem = typeof recepcionItems.$inferSelect;
+export type OrdenRepuesto = typeof ordenRepuestos.$inferSelect;

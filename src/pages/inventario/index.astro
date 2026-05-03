@@ -1,0 +1,125 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { items, stock, proveedores } from "@/lib/schema";
+import { sql, eq, desc } from "drizzle-orm";
+import { fmtCantidad } from "@/lib/inventario";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+// Items + stock total agregado por todas las sucursales
+const itemsRows = await db
+  .select({ it: items, prov: proveedores })
+  .from(items)
+  .leftJoin(proveedores, eq(proveedores.id, items.proveedorPrincipalId))
+  .orderBy(desc(items.id));
+
+const stockTotales = await db
+  .select({ itemId: stock.itemId, total: sql<number>`SUM(${stock.cantidad})` })
+  .from(stock)
+  .groupBy(stock.itemId);
+
+const stockMap = new Map<number, number>();
+for (const s of stockTotales) stockMap.set(s.itemId, Number(s.total ?? 0));
+
+const enriched = itemsRows.map((r) => ({
+  ...r.it,
+  proveedor: r.prov ? { id: r.prov.id, nombre: r.prov.nombre } : null,
+  stockActual: stockMap.get(r.it.id) ?? 0,
+  bajo: (stockMap.get(r.it.id) ?? 0) < r.it.stockMinimo,
+}));
+
+const activos = enriched.filter((i) => i.activo);
+const bajos = activos.filter((i) => i.bajo);
+const sinStock = activos.filter((i) => i.stockActual <= 0);
+
+const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
+---
+
+<Layout title="Inventario">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Inventario</h1>
+      <p class="text-sm text-slate-500">{activos.length} items activos · {bajos.length} bajo stock mínimo · {sinStock.length} sin stock</p>
+    </div>
+    {puedeCrear && (
+      <div class="flex gap-2">
+        <a href="/recepciones/nueva" class="btn-secondary">📦 Recepción</a>
+        <a href="/inventario/nuevo" class="btn-primary">+ Nuevo item</a>
+      </div>
+    )}
+  </div>
+
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Items activos</div>
+      <div class="mt-1 text-3xl font-bold text-brand-600">{activos.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Bajo mínimo</div>
+      <div class="mt-1 text-3xl font-bold text-amber-600">{bajos.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Sin stock</div>
+      <div class="mt-1 text-3xl font-bold text-red-600">{sinStock.length}</div>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <input
+      id="search"
+      class="input w-full"
+      placeholder="Buscar por código, nombre o categoría..."
+    />
+  </div>
+
+  <div class="card mt-3 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Nombre</th>
+          <th class="px-4 py-2">Categoría</th>
+          <th class="px-4 py-2">Unidad</th>
+          <th class="px-4 py-2 text-right">Stock</th>
+          <th class="px-4 py-2 text-right">Mínimo</th>
+          <th class="px-4 py-2">Proveedor</th>
+        </tr>
+      </thead>
+      <tbody id="tbody" class="divide-y divide-slate-100">
+        {enriched.length === 0 && (
+          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin items aún. Crea el primero.</td></tr>
+        )}
+        {enriched.map((i) => (
+          <tr class="searchable hover:bg-slate-50" data-search={`${i.codigo} ${i.nombre} ${i.categoria ?? ""}`.toLowerCase()} class:list={[!i.activo && "opacity-50"]}>
+            <td class="px-4 py-2 font-mono text-xs">{i.codigo}</td>
+            <td class="px-4 py-2">
+              <a class="font-medium text-brand-700 hover:underline" href={`/inventario/${i.id}`}>{i.nombre}</a>
+              {i.descripcion && <div class="text-xs text-slate-500 truncate">{i.descripcion}</div>}
+            </td>
+            <td class="px-4 py-2 text-slate-600">{i.categoria ?? "—"}</td>
+            <td class="px-4 py-2 text-slate-600">{i.unidad}</td>
+            <td class:list={["px-4 py-2 text-right font-mono", i.bajo ? "text-red-600 font-bold" : "text-slate-700"]}>
+              {fmtCantidad(i.stockActual)}
+            </td>
+            <td class="px-4 py-2 text-right font-mono text-slate-500">{fmtCantidad(i.stockMinimo)}</td>
+            <td class="px-4 py-2 text-slate-600">{i.proveedor?.nombre ?? "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const inp = document.getElementById("search") as HTMLInputElement;
+    inp?.addEventListener("input", () => {
+      const q = inp.value.trim().toLowerCase();
+      document.querySelectorAll<HTMLElement>(".searchable").forEach((tr) => {
+        const txt = tr.dataset.search ?? "";
+        tr.style.display = !q || txt.includes(q) ? "" : "none";
+      });
+    });
+  </script>
+</Layout>

@@ -1,0 +1,107 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { proveedores } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { UNIDADES } from "@/lib/inventario";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/inventario");
+
+const db = getDb(Astro);
+const provRows = await db
+  .select({ id: proveedores.id, nombre: proveedores.nombre })
+  .from(proveedores)
+  .where(eq(proveedores.activo, true))
+  .orderBy(proveedores.nombre);
+---
+
+<Layout title="Nuevo item">
+  <a href="/inventario" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nuevo item de inventario</h1>
+
+  <form id="form" class="card mt-4 space-y-4 p-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Código *</label>
+        <input class="input" id="codigo" required placeholder="REP-001" />
+      </div>
+      <div>
+        <label class="label">Categoría</label>
+        <input class="input" id="categoria" placeholder="Ej: Filtros, Lubricantes, Tornillería..." />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Nombre *</label>
+        <input class="input" id="nombre" required />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Descripción</label>
+        <textarea class="input" id="descripcion" rows="2"></textarea>
+      </div>
+      <div>
+        <label class="label">Unidad de medida</label>
+        <select class="input" id="unidad">
+          {UNIDADES.map((u) => <option value={u.value}>{u.label}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label">Stock mínimo (alerta)</label>
+        <input class="input" id="stockMinimo" type="number" min="0" step="0.01" value="0" />
+      </div>
+      <div>
+        <label class="label">Precio de referencia</label>
+        <input class="input" id="precioReferencia" type="number" min="0" step="0.01" placeholder="0.00" />
+      </div>
+      {provRows.length > 0 && (
+        <div>
+          <label class="label">Proveedor principal</label>
+          <select class="input" id="proveedorPrincipalId">
+            <option value="">— Sin proveedor —</option>
+            {provRows.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+      )}
+    </div>
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Crear item</button>
+      <a class="btn-secondary" href="/inventario">Cancelar</a>
+    </div>
+  </form>
+
+  <script>
+    const form = document.getElementById("form") as HTMLFormElement;
+    const err = document.getElementById("err") as HTMLElement;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.add("hidden");
+      const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value.trim();
+      const sv = (id: string) => (document.getElementById(id) as HTMLInputElement)?.value;
+      const provEl = document.getElementById("proveedorPrincipalId") as HTMLSelectElement | null;
+      const payload: any = {
+        codigo: v("codigo"),
+        nombre: v("nombre"),
+        descripcion: v("descripcion") || null,
+        categoria: v("categoria") || null,
+        unidad: v("unidad"),
+        stockMinimo: Number(sv("stockMinimo") || 0),
+        precioReferencia: sv("precioReferencia") ? Number(sv("precioReferencia")) : null,
+        proveedorPrincipalId: provEl?.value ? Number(provEl.value) : null,
+      };
+      const res = await fetch("/api/items", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await res.json();
+      location.href = `/inventario/${j.item.id}`;
+    });
+  </script>
+</Layout>
