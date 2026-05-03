@@ -35,8 +35,8 @@ CREATE TABLE ubicaciones (
   activa integer NOT NULL DEFAULT 1,
   created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX idx_ubicaciones_sucursal ON ubicaciones (sucursal_id);
-CREATE INDEX idx_ubicaciones_padre ON ubicaciones (padre_id);
+CREATE INDEX IF NOT EXISTS idx_ubicaciones_sucursal ON ubicaciones (sucursal_id);
+CREATE INDEX IF NOT EXISTS idx_ubicaciones_padre ON ubicaciones (padre_id);
 
 -- ── Proveedores ───────────────────────────────────────────────────────────────
 CREATE TABLE proveedores (
@@ -57,5 +57,5 @@ ALTER TABLE usuarios ADD COLUMN sucursal_id integer REFERENCES sucursales(id);
 -- ── Extiende activos: ubicacion estructurada + proveedor ─────────────────────
 ALTER TABLE activos ADD COLUMN ubicacion_id integer REFERENCES ubicaciones(id);
 ALTER TABLE activos ADD COLUMN proveedor_id integer REFERENCES proveedores(id);
-CREATE INDEX idx_activos_ubicacion ON activos (ubicacion_id);
-CREATE INDEX idx_activos_proveedor ON activos (proveedor_id);
+CREATE INDEX IF NOT EXISTS idx_activos_ubicacion ON activos (ubicacion_id);
+CREATE INDEX IF NOT EXISTS idx_activos_proveedor ON activos (proveedor_id);

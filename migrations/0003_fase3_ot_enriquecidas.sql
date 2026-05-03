@@ -14,10 +14,10 @@ ALTER TABLE ordenes ADD COLUMN verificacion_notas text;
 ALTER TABLE ordenes ADD COLUMN cerrado_por integer REFERENCES usuarios(id);
 ALTER TABLE ordenes ADD COLUMN cerrado_en text;
 
-CREATE INDEX idx_ordenes_estado ON ordenes (estado);
-CREATE INDEX idx_ordenes_tipo ON ordenes (tipo);
-CREATE INDEX idx_ordenes_verificado_por ON ordenes (verificado_por);
+CREATE INDEX IF NOT EXISTS idx_ordenes_estado ON ordenes (estado);
+CREATE INDEX IF NOT EXISTS idx_ordenes_tipo ON ordenes (tipo);
+CREATE INDEX IF NOT EXISTS idx_ordenes_verificado_por ON ordenes (verificado_por);
 
 -- ── Extension de tabla adjuntos: categoria (antes/despues/documento/general) ─
 ALTER TABLE adjuntos ADD COLUMN categoria text NOT NULL DEFAULT 'general';
-CREATE INDEX idx_adjuntos_categoria ON adjuntos (categoria);
+CREATE INDEX IF NOT EXISTS idx_adjuntos_categoria ON adjuntos (categoria);
