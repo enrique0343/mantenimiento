@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { desc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { usuarios } from "@/lib/schema";
+import { usuarios, ROLES } from "@/lib/schema";
 import { hashPassword, requireUser } from "@/lib/auth";
 
 export const prerender = false;
@@ -28,7 +28,8 @@ const createSchema = z.object({
   email: z.string().email(),
   nombre: z.string().min(2),
   password: z.string().min(6),
-  rol: z.enum(["admin", "tecnico", "solicitante"]),
+  rol: z.enum(ROLES),
+  sucursalId: z.number().int().nullable().optional(),
 });
 
 export const POST: APIRoute = async (ctx) => {

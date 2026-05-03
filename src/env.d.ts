@@ -20,7 +20,7 @@ declare namespace App {
       id: number;
       email: string;
       nombre: string;
-      rol: "admin" | "tecnico" | "solicitante";
+      rol: import("./lib/schema").Rol;
     };
   }
 }

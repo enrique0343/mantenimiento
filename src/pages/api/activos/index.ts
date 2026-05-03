@@ -32,6 +32,8 @@ const baseSchema = {
   claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
   ultimaCalibracion: z.string().nullable().optional(),
   proximaCalibracion: z.string().nullable().optional(),
+  ubicacionId: z.number().int().nullable().optional(),
+  proveedorId: z.number().int().nullable().optional(),
 };
 
 const createSchema = z.object(baseSchema);

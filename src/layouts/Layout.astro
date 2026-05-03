@@ -9,13 +9,27 @@ const { title = "Mantenimiento", hideNav = false } = Astro.props;
 const user = Astro.locals.user;
 const path = Astro.url.pathname;
 
+const isAdmin = user?.rol === "admin";
+const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
+
 const links = [
   { href: "/", label: "Dashboard" },
   { href: "/ordenes", label: "Ordenes" },
   { href: "/cronograma", label: "Cronograma" },
   { href: "/activos", label: "Equipos" },
-  { href: "/usuarios", label: "Usuarios", adminOnly: true },
+  { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
+  { href: "/usuarios", label: "Usuarios", show: isAdmin },
+  { href: "/configuracion", label: "Configuracion", show: isAdmin },
 ];
+
+const ROL_LABEL: Record<string, string> = {
+  admin: "Admin",
+  jefe: "Jefe",
+  tecnico: "Técnico",
+  proveedor: "Proveedor",
+  solicitante: "Solicitante",
+  visualizador: "Visualizador",
+};
 ---
 
 <!doctype html>
@@ -33,7 +47,7 @@ const links = [
             <a href="/" class="text-lg font-bold text-brand-600">Mantenimiento</a>
             <nav class="flex items-center gap-1">
               {links
-                .filter((l) => !l.adminOnly || user.rol === "admin")
+                .filter((l) => l.show === undefined || l.show)
                 .map((l) => (
                   <a
                     href={l.href}
@@ -50,7 +64,10 @@ const links = [
             </nav>
             <div class="flex items-center gap-3">
               <span class="text-sm text-slate-600">
-                {user.nombre} <span class="text-xs text-slate-400">({user.rol})</span>
+                {user.nombre}
+                <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                  {ROL_LABEL[user.rol] ?? user.rol}
+                </span>
               </span>
               <button id="logoutBtn" class="btn-secondary">Salir</button>
             </div>

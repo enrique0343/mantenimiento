@@ -1,0 +1,277 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { empresa, sucursales, ubicaciones } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin") return Astro.redirect("/");
+
+const db = getDb(Astro);
+
+const [emp] = await db.select().from(empresa).limit(1);
+const sucRows = await db.select().from(sucursales).orderBy(sucursales.nombre);
+const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
+
+const ubPorSucursal = (id: number) => ubRows.filter((u) => u.sucursalId === id);
+
+const TIPOS_UB = [
+  { value: "edificio", label: "Edificio" },
+  { value: "piso", label: "Piso" },
+  { value: "area", label: "Área" },
+  { value: "sala", label: "Sala" },
+];
+---
+
+<Layout title="Configuración">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">Configuración</h1>
+      <p class="text-sm text-slate-500">Empresa, sucursales y ubicaciones</p>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="mt-4 flex gap-1 border-b border-slate-200">
+    {["empresa", "sucursales", "correo"].map((t) => (
+      <button
+        data-tab={t}
+        class:list={["tab-btn px-4 py-2 text-sm font-medium rounded-t-md", t === "empresa" ? "bg-brand-50 text-brand-700 border border-b-white border-slate-200" : "text-slate-600 hover:bg-slate-100"]}
+      >
+        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : "Correo electrónico"}
+      </button>
+    ))}
+  </div>
+
+  <!-- Tab: Empresa -->
+  <div id="tab-empresa" class="tab-panel card mt-4 p-5">
+    <h2 class="mb-4 font-semibold text-slate-900">Datos de la empresa</h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Nombre de la empresa *</label>
+        <input class="input" id="e_nombre" value={emp?.nombre ?? ""} />
+      </div>
+      <div>
+        <label class="label">NIT / Identificación fiscal</label>
+        <input class="input" id="e_nit" value={emp?.nit ?? ""} placeholder="0000-000000-000-0" />
+      </div>
+      <div>
+        <label class="label">Teléfono</label>
+        <input class="input" id="e_telefono" value={emp?.telefono ?? ""} />
+      </div>
+      <div>
+        <label class="label">País</label>
+        <input class="input" id="e_pais" value={emp?.pais ?? "SV"} placeholder="SV" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Dirección</label>
+        <input class="input" id="e_direccion" value={emp?.direccion ?? ""} />
+      </div>
+      <div>
+        <label class="label">Moneda</label>
+        <select class="input" id="e_moneda">
+          <option value="USD" selected={emp?.moneda === "USD"}>USD — Dólar</option>
+          <option value="EUR" selected={emp?.moneda === "EUR"}>EUR — Euro</option>
+          <option value="GTQ" selected={emp?.moneda === "GTQ"}>GTQ — Quetzal</option>
+          <option value="HNL" selected={emp?.moneda === "HNL"}>HNL — Lempira</option>
+          <option value="MXN" selected={emp?.moneda === "MXN"}>MXN — Peso mexicano</option>
+        </select>
+      </div>
+    </div>
+    <p id="e_err" class="mt-2 hidden text-sm text-red-600"></p>
+    <p id="e_ok" class="mt-2 hidden text-sm text-emerald-600">Guardado correctamente.</p>
+    <button id="e_save" class="btn-primary mt-4">Guardar empresa</button>
+  </div>
+
+  <!-- Tab: Sucursales -->
+  <div id="tab-sucursales" class="tab-panel mt-4 hidden">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900">Sucursales / Sedes ({sucRows.length})</h2>
+      <button id="suc_newBtn" class="btn-primary">+ Nueva sucursal</button>
+    </div>
+
+    <div id="suc_form" class="card mt-3 hidden p-4">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <input type="hidden" id="suc_id" value="" />
+        <div><label class="label">Nombre *</label><input class="input" id="suc_nombre" /></div>
+        <div><label class="label">Código</label><input class="input" id="suc_codigo" placeholder="HB01" /></div>
+        <div><label class="label">Teléfono</label><input class="input" id="suc_telefono" /></div>
+        <div class="sm:col-span-2"><label class="label">Dirección</label><input class="input" id="suc_direccion" /></div>
+      </div>
+      <p id="suc_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-3 flex gap-2">
+        <button id="suc_save" class="btn-primary">Guardar</button>
+        <button id="suc_cancel" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+
+    <div class="mt-4 space-y-3">
+      {sucRows.length === 0 && <p class="text-sm text-slate-500 card p-4">Sin sucursales aún. Crea la primera.</p>}
+      {sucRows.map((s) => {
+        const ubs = ubPorSucursal(s.id);
+        return (
+          <div class="card overflow-hidden" data-suc-id={s.id}>
+            <div class="flex items-center justify-between px-4 py-3">
+              <div>
+                <span class="font-medium">{s.nombre}</span>
+                {s.codigo && <span class="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{s.codigo}</span>}
+                <div class="text-xs text-slate-500">{s.telefono} {s.direccion}</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-500">{ubs.length} ubicaciones</span>
+                <button class="suc-edit-btn text-xs text-brand-600 hover:underline" data-id={s.id} data-nombre={s.nombre} data-codigo={s.codigo ?? ""} data-telefono={s.telefono ?? ""} data-direccion={s.direccion ?? ""}>Editar</button>
+                <button class="suc-toggle-ub text-xs text-slate-500 hover:underline">+ ubicaciones</button>
+              </div>
+            </div>
+            <div class="suc-ub-panel hidden border-t border-slate-100 bg-slate-50 px-4 py-3">
+              <div class="mb-2 flex items-center justify-between">
+                <span class="text-xs font-medium uppercase text-slate-500">Ubicaciones</span>
+                <button class="ub-new-btn btn-secondary text-xs" data-suc={s.id}>+ Agregar</button>
+              </div>
+              <div id={`ub-list-${s.id}`} class="space-y-1">
+                {ubs.length === 0 && <p class="text-xs text-slate-400">Sin ubicaciones.</p>}
+                {ubs.map((u) => (
+                  <div class="flex items-center justify-between rounded bg-white px-3 py-1.5 text-sm" id={`ub-row-${u.id}`}>
+                    <span>{u.nombre} <span class="ml-1 text-xs text-slate-400 capitalize">({u.tipo})</span></span>
+                    <button class="ub-del-btn text-xs text-red-500 hover:underline" data-id={u.id}>Eliminar</button>
+                  </div>
+                ))}
+              </div>
+              <div id={`ub-form-${s.id}`} class="mt-2 hidden grid grid-cols-2 gap-2">
+                <input class="input text-sm" placeholder="Nombre (ej: Quirófano 1)" id={`ub-f-nombre-${s.id}`} />
+                <select class="input text-sm" id={`ub-f-tipo-${s.id}`}>
+                  {TIPOS_UB.map((t) => <option value={t.value}>{t.label}</option>)}
+                </select>
+                <div class="col-span-2 flex gap-2">
+                  <button class="ub-save-btn btn-primary text-sm" data-suc={s.id}>Guardar</button>
+                  <button class="ub-cancel-btn btn-secondary text-sm" data-suc={s.id}>Cancelar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+
+  <!-- Tab: Correo -->
+  <div id="tab-correo" class="tab-panel card mt-4 hidden p-5">
+    <h2 class="mb-2 font-semibold text-slate-900">Correo electrónico</h2>
+    <p class="text-sm text-slate-500">Las notificaciones por correo estarán disponibles en una próxima versión (Microsoft 365 / Graph API).</p>
+    <div class="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-400">
+      Próximamente — Fase 11
+    </div>
+  </div>
+</Layout>
+
+<script>
+  // ── Tab switching ──────────────────────────────────────────────────────────
+  const tabs = document.querySelectorAll<HTMLButtonElement>(".tab-btn");
+  const panels = document.querySelectorAll<HTMLElement>(".tab-panel");
+  tabs.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const t = btn.dataset.tab!;
+      tabs.forEach((b) => b.classList.replace("bg-brand-50", "bg-transparent") || b.classList.remove("bg-brand-50", "text-brand-700", "border", "border-b-white", "border-slate-200"));
+      panels.forEach((p) => p.classList.add("hidden"));
+      btn.classList.add("bg-brand-50", "text-brand-700", "border", "border-b-white", "border-slate-200");
+      document.getElementById(`tab-${t}`)?.classList.remove("hidden");
+    });
+  });
+
+  // ── Empresa save ──────────────────────────────────────────────────────────
+  document.getElementById("e_save")?.addEventListener("click", async () => {
+    const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+    const err = document.getElementById("e_err")!;
+    const ok = document.getElementById("e_ok")!;
+    err.classList.add("hidden"); ok.classList.add("hidden");
+    const res = await fetch("/api/empresa", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nombre: g("e_nombre"), nit: g("e_nit") || null, telefono: g("e_telefono") || null, pais: g("e_pais") || null, direccion: g("e_direccion") || null, moneda: (document.getElementById("e_moneda") as HTMLSelectElement).value }),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); return; }
+    ok.classList.remove("hidden");
+  });
+
+  // ── Sucursales CRUD ───────────────────────────────────────────────────────
+  const sucForm = document.getElementById("suc_form")!;
+  const sucIdEl = document.getElementById("suc_id") as HTMLInputElement;
+  const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+
+  document.getElementById("suc_newBtn")?.addEventListener("click", () => {
+    sucIdEl.value = ""; (document.getElementById("suc_nombre") as HTMLInputElement).value = "";
+    (document.getElementById("suc_codigo") as HTMLInputElement).value = "";
+    (document.getElementById("suc_telefono") as HTMLInputElement).value = "";
+    (document.getElementById("suc_direccion") as HTMLInputElement).value = "";
+    sucForm.classList.remove("hidden");
+  });
+  document.getElementById("suc_cancel")?.addEventListener("click", () => sucForm.classList.add("hidden"));
+
+  document.querySelectorAll<HTMLButtonElement>(".suc-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      sucIdEl.value = btn.dataset.id!;
+      (document.getElementById("suc_nombre") as HTMLInputElement).value = btn.dataset.nombre!;
+      (document.getElementById("suc_codigo") as HTMLInputElement).value = btn.dataset.codigo!;
+      (document.getElementById("suc_telefono") as HTMLInputElement).value = btn.dataset.telefono!;
+      (document.getElementById("suc_direccion") as HTMLInputElement).value = btn.dataset.direccion!;
+      sucForm.classList.remove("hidden");
+      sucForm.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+
+  document.getElementById("suc_save")?.addEventListener("click", async () => {
+    const err = document.getElementById("suc_err")!;
+    err.classList.add("hidden");
+    const id = sucIdEl.value;
+    const payload = { nombre: g("suc_nombre"), codigo: g("suc_codigo") || null, telefono: g("suc_telefono") || null, direccion: g("suc_direccion") || null };
+    const url = id ? `/api/sucursales/${id}` : "/api/sucursales";
+    const method = id ? "PATCH" : "POST";
+    const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); return; }
+    location.reload();
+  });
+
+  // ── Ubicaciones toggle & CRUD ─────────────────────────────────────────────
+  document.querySelectorAll<HTMLButtonElement>(".suc-toggle-ub").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const panel = btn.closest(".card")?.querySelector(".suc-ub-panel");
+      panel?.classList.toggle("hidden");
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".ub-new-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sid = btn.dataset.suc!;
+      document.getElementById(`ub-form-${sid}`)?.classList.remove("hidden");
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".ub-cancel-btn").forEach((btn) => {
+    btn.addEventListener("click", () => document.getElementById(`ub-form-${btn.dataset.suc!}`)?.classList.add("hidden"));
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".ub-save-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const sid = Number(btn.dataset.suc!);
+      const nombre = (document.getElementById(`ub-f-nombre-${sid}`) as HTMLInputElement).value.trim();
+      const tipo = (document.getElementById(`ub-f-tipo-${sid}`) as HTMLSelectElement).value;
+      if (!nombre) return;
+      const res = await fetch("/api/ubicaciones", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sucursalId: sid, nombre, tipo }),
+      });
+      if (!res.ok) return;
+      location.reload();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".ub-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar esta ubicación?")) return;
+      await fetch(`/api/ubicaciones/${btn.dataset.id!}`, { method: "DELETE" });
+      document.getElementById(`ub-row-${btn.dataset.id!}`)?.remove();
+    });
+  });
+</script>

@@ -1,7 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { APIContext } from "astro";
 import { getDb, getEnv } from "./db";
-import { usuarios } from "./schema";
+import { usuarios, ROLES, type Rol } from "./schema";
 import { eq } from "drizzle-orm";
 
 const COOKIE_NAME = "mant_session";
@@ -116,7 +116,7 @@ export async function getCurrentUser(ctx: APIContext) {
   return { id: u.id, email: u.email, nombre: u.nombre, rol: u.rol };
 }
 
-export async function requireUser(ctx: APIContext, roles?: Array<"admin" | "tecnico" | "solicitante">) {
+export async function requireUser(ctx: APIContext, roles?: Array<Rol>) {
   const user = await getCurrentUser(ctx);
   if (!user) {
     return { user: null as null, response: new Response("No autenticado", { status: 401 }) };

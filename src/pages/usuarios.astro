@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { usuarios } from "@/lib/schema";
+import { usuarios, sucursales, ROLES } from "@/lib/schema";
 import { desc } from "drizzle-orm";
 export const prerender = false;
 
@@ -10,9 +10,16 @@ if (user.rol !== "admin") return Astro.redirect("/");
 
 const db = getDb(Astro);
 const rows = await db
-  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo })
+  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo, sucursalId: usuarios.sucursalId })
   .from(usuarios)
   .orderBy(desc(usuarios.id));
+
+const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
+
+const ROL_LABEL: Record<string, string> = {
+  admin: "Admin", jefe: "Jefe Mantenimiento", tecnico: "Técnico",
+  proveedor: "Proveedor", solicitante: "Solicitante", visualizador: "Visualizador",
+};
 ---
 
 <Layout title="Usuarios">
@@ -25,18 +32,32 @@ const rows = await db
   </div>
 
   <div id="newForm" class="card mt-4 hidden p-4">
+    <h2 class="mb-3 font-semibold" id="formTitle">Nuevo usuario</h2>
+    <input type="hidden" id="f_id" value="" />
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div><label class="label">Nombre</label><input class="input" id="f_nombre" /></div>
       <div><label class="label">Email</label><input class="input" id="f_email" type="email" /></div>
-      <div><label class="label">Contrasena</label><input class="input" id="f_password" type="password" minlength="6" /></div>
+      <div><label class="label">Contraseña <span id="pwdNote" class="text-xs text-slate-400">(mín 6 caracteres)</span></label><input class="input" id="f_password" type="password" minlength="6" /></div>
       <div>
         <label class="label">Rol</label>
         <select class="input" id="f_rol">
           <option value="solicitante">Solicitante</option>
-          <option value="tecnico">Tecnico</option>
+          <option value="tecnico">Técnico</option>
+          <option value="jefe">Jefe de Mantenimiento</option>
+          <option value="proveedor">Proveedor</option>
+          <option value="visualizador">Visualizador</option>
           <option value="admin">Admin</option>
         </select>
       </div>
+      {sucRows.length > 0 && (
+        <div>
+          <label class="label">Sucursal</label>
+          <select class="input" id="f_sucursal">
+            <option value="">— Todas —</option>
+            {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+      )}
     </div>
     <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
     <div class="mt-3 flex gap-2">
@@ -60,7 +81,9 @@ const rows = await db
           <tr>
             <td class="px-4 py-2">{u.nombre}</td>
             <td class="px-4 py-2 text-slate-600">{u.email}</td>
-            <td class="px-4 py-2 capitalize">{u.rol}</td>
+            <td class="px-4 py-2">
+              <span class="rounded bg-slate-100 px-2 py-0.5 text-xs">{ROL_LABEL[u.rol] ?? u.rol}</span>
+            </td>
             <td class="px-4 py-2">
               <span class={`badge ${u.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                 {u.activo ? "activo" : "inactivo"}
@@ -74,17 +97,27 @@ const rows = await db
 
   <script>
     const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
-    document.getElementById("newBtn")?.addEventListener("click", () => document.getElementById("newForm")?.classList.remove("hidden"));
-    document.getElementById("cancelBtn")?.addEventListener("click", () => document.getElementById("newForm")?.classList.add("hidden"));
+    const form = document.getElementById("newForm")!;
+
+    document.getElementById("newBtn")?.addEventListener("click", () => {
+      $("f_id").value = ""; $("f_nombre").value = ""; $("f_email").value = ""; $("f_password").value = "";
+      document.getElementById("formTitle")!.textContent = "Nuevo usuario";
+      document.getElementById("pwdNote")!.textContent = "(mín 6 caracteres)";
+      form.classList.remove("hidden");
+    });
+    document.getElementById("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
+
     document.getElementById("saveBtn")?.addEventListener("click", async () => {
       const err = document.getElementById("formErr") as HTMLElement;
       err.classList.add("hidden");
-      const payload = {
+      const payload: any = {
         nombre: $("f_nombre").value.trim(),
         email: $("f_email").value.trim(),
         password: $("f_password").value,
         rol: ($("f_rol") as unknown as HTMLSelectElement).value,
       };
+      const sucEl = document.getElementById("f_sucursal") as HTMLSelectElement | null;
+      if (sucEl?.value) payload.sucursalId = Number(sucEl.value);
       const res = await fetch("/api/usuarios", {
         method: "POST",
         headers: { "content-type": "application/json" },

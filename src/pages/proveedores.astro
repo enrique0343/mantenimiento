@@ -1,0 +1,136 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { proveedores } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const db = getDb(Astro);
+const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
+---
+
+<Layout title="Proveedores">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">Proveedores</h1>
+      <p class="text-sm text-slate-500">{rows.filter((r) => r.activo).length} activos</p>
+    </div>
+    <button id="newBtn" class="btn-primary">+ Nuevo proveedor</button>
+  </div>
+
+  <div id="form" class="card mt-4 hidden p-5">
+    <h2 class="mb-3 font-semibold" id="formTitle">Nuevo proveedor</h2>
+    <input type="hidden" id="f_id" value="" />
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div><label class="label">Nombre *</label><input class="input" id="f_nombre" /></div>
+      <div><label class="label">NIT</label><input class="input" id="f_nit" placeholder="0000-000000-000-0" /></div>
+      <div><label class="label">Persona de contacto</label><input class="input" id="f_contacto" /></div>
+      <div><label class="label">Teléfono</label><input class="input" id="f_telefono" /></div>
+      <div><label class="label">Email</label><input class="input" id="f_email" type="email" /></div>
+      <div class="sm:col-span-2"><label class="label">Notas</label><textarea class="input" id="f_notas" rows="2"></textarea></div>
+    </div>
+    <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
+    <div class="mt-3 flex gap-2">
+      <button id="saveBtn" class="btn-primary">Guardar</button>
+      <button id="cancelBtn" class="btn-secondary">Cancelar</button>
+    </div>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Nombre</th>
+          <th class="px-4 py-2">NIT</th>
+          <th class="px-4 py-2">Contacto</th>
+          <th class="px-4 py-2">Teléfono</th>
+          <th class="px-4 py-2">Email</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && (
+          <tr>
+            <td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin proveedores aún.</td>
+          </tr>
+        )}
+        {rows.map((p) => (
+          <tr class:list={[!p.activo && "opacity-50"]} id={`row-${p.id}`}>
+            <td class="px-4 py-2 font-medium">{p.nombre}</td>
+            <td class="px-4 py-2 text-slate-600">{p.nit ?? "—"}</td>
+            <td class="px-4 py-2">{p.contacto ?? "—"}</td>
+            <td class="px-4 py-2">{p.telefono ?? "—"}</td>
+            <td class="px-4 py-2">{p.email ?? "—"}</td>
+            <td class="px-4 py-2">
+              <span class:list={["badge", p.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"]}>
+                {p.activo ? "Activo" : "Inactivo"}
+              </span>
+            </td>
+            <td class="px-4 py-2">
+              <button
+                class="edit-btn text-xs text-brand-600 hover:underline"
+                data-id={p.id}
+                data-nombre={p.nombre}
+                data-nit={p.nit ?? ""}
+                data-contacto={p.contacto ?? ""}
+                data-telefono={p.telefono ?? ""}
+                data-email={p.email ?? ""}
+                data-notas={p.notas ?? ""}
+              >Editar</button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>
+
+<script>
+  const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+  const s = (id: string, v: string) => { (document.getElementById(id) as HTMLInputElement).value = v; };
+  const form = document.getElementById("form")!;
+  const formTitle = document.getElementById("formTitle")!;
+
+  document.getElementById("newBtn")?.addEventListener("click", () => {
+    s("f_id", ""); s("f_nombre", ""); s("f_nit", ""); s("f_contacto", ""); s("f_telefono", ""); s("f_email", ""); s("f_notas", "");
+    formTitle.textContent = "Nuevo proveedor";
+    form.classList.remove("hidden");
+  });
+
+  document.getElementById("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
+
+  document.querySelectorAll<HTMLButtonElement>(".edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      s("f_id", btn.dataset.id!); s("f_nombre", btn.dataset.nombre!); s("f_nit", btn.dataset.nit!);
+      s("f_contacto", btn.dataset.contacto!); s("f_telefono", btn.dataset.telefono!);
+      s("f_email", btn.dataset.email!); s("f_notas", btn.dataset.notas!);
+      formTitle.textContent = "Editar proveedor";
+      form.classList.remove("hidden");
+      form.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+
+  document.getElementById("saveBtn")?.addEventListener("click", async () => {
+    const err = document.getElementById("formErr")!;
+    err.classList.add("hidden");
+    const id = g("f_id");
+    const payload = {
+      nombre: g("f_nombre"), nit: g("f_nit") || null, contacto: g("f_contacto") || null,
+      telefono: g("f_telefono") || null, email: g("f_email") || null, notas: g("f_notas") || null,
+    };
+    const url = id ? `/api/proveedores/${id}` : "/api/proveedores";
+    const method = id ? "PATCH" : "POST";
+    const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+      err.classList.remove("hidden");
+      return;
+    }
+    location.reload();
+  });
+</script>

@@ -1,9 +1,21 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { sucursales, ubicaciones, proveedores } from "@/lib/schema";
+import { eq } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol === "solicitante") return Astro.redirect("/activos");
+if (user.rol === "solicitante" || user.rol === "visualizador" || user.rol === "proveedor") {
+  return Astro.redirect("/activos");
+}
+
+const db = getDb(Astro);
+const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
+const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
+const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+
+const ubJson = JSON.stringify(ubRows);
 ---
 
 <Layout title="Nuevo equipo">
@@ -55,10 +67,31 @@ if (user.rol === "solicitante") return Astro.redirect("/activos");
         <label class="label">Año</label>
         <input class="input" id="anio" type="number" min="1900" max="2100" />
       </div>
+
+      <!-- Ubicacion estructurada (si hay sucursales) -->
+      {sucRows.length > 0 && (
+        <>
+          <div>
+            <label class="label">Sucursal</label>
+            <select class="input" id="sucursalSel">
+              <option value="">— Seleccionar —</option>
+              {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label">Ubicacion</label>
+            <select class="input" id="ubicacionSel">
+              <option value="">— Seleccionar —</option>
+            </select>
+          </div>
+        </>
+      )}
+
       <div class="sm:col-span-2">
-        <label class="label">Ubicacion</label>
+        <label class="label">{sucRows.length > 0 ? "Ubicacion adicional / Detalle" : "Ubicacion"}</label>
         <input class="input" id="ubicacion" placeholder="Ej: Sala 3 - Quirofano A" />
       </div>
+
       <div>
         <label class="label">Estado</label>
         <select class="input" id="estado">
@@ -68,6 +101,16 @@ if (user.rol === "solicitante") return Astro.redirect("/activos");
           <option value="baja">Dado de baja</option>
         </select>
       </div>
+
+      {provRows.length > 0 && (
+        <div>
+          <label class="label">Proveedor / Fabricante</label>
+          <select class="input" id="proveedorSel">
+            <option value="">— Sin proveedor —</option>
+            {provRows.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+      )}
     </div>
 
     <div id="bioFields" class="hidden border-t border-slate-200 pt-5">
@@ -105,22 +148,43 @@ if (user.rol === "solicitante") return Astro.redirect("/activos");
     </div>
   </form>
 
-  <script>
-    const tipoSel = document.getElementById("tipo") as HTMLSelectElement;
-    const bioFields = document.getElementById("bioFields") as HTMLElement;
-    const toggleBio = () => bioFields.classList.toggle("hidden", tipoSel.value !== "biomedico");
-    tipoSel.addEventListener("change", toggleBio);
+  <script define:vars={{ ubJson }}>
+    const allUbs = JSON.parse(ubJson);
+
+    // Biomedico toggle
+    const tipoSel = document.getElementById("tipo");
+    const bioFields = document.getElementById("bioFields");
+    const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
+    tipoSel?.addEventListener("change", toggleBio);
     toggleBio();
 
-    const form = document.getElementById("form") as HTMLFormElement;
-    const err = document.getElementById("err") as HTMLElement;
-    form.addEventListener("submit", async (e) => {
+    // Sucursal → ubicacion filter
+    const sucursalSel = document.getElementById("sucursalSel");
+    const ubicacionSel = document.getElementById("ubicacionSel");
+    if (sucursalSel && ubicacionSel) {
+      sucursalSel.addEventListener("change", () => {
+        const sid = Number(sucursalSel.value);
+        const filtered = sid ? allUbs.filter((u) => u.sucursalId === sid) : [];
+        ubicacionSel.innerHTML = '<option value="">— Seleccionar —</option>';
+        filtered.forEach((u) => {
+          const opt = document.createElement("option");
+          opt.value = u.id;
+          opt.textContent = `${u.nombre} (${u.tipo})`;
+          ubicacionSel.appendChild(opt);
+        });
+      });
+    }
+
+    // Form submit
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
+    form?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      err.classList.add("hidden");
-      const v = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
-      const sv = (id: string) => (document.getElementById(id) as HTMLSelectElement).value;
+      err?.classList.add("hidden");
+      const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
+      const sv = (id) => document.getElementById(id)?.value ?? "";
       const isBio = sv("tipo") === "biomedico";
-      const payload: any = {
+      const payload = {
         codigo: v("codigo"),
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
@@ -133,6 +197,8 @@ if (user.rol === "solicitante") return Astro.redirect("/activos");
         modelo: v("modelo") || null,
         serial: v("serial") || null,
         anio: v("anio") ? Number(v("anio")) : null,
+        ubicacionId: sv("ubicacionSel") ? Number(sv("ubicacionSel")) : null,
+        proveedorId: sv("proveedorSel") ? Number(sv("proveedorSel")) : null,
       };
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;
@@ -147,8 +213,7 @@ if (user.rol === "solicitante") return Astro.redirect("/activos");
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
-        err.classList.remove("hidden");
+        if (err) { err.textContent = typeof j.error === "string" ? j.error : "Error al crear"; err.classList.remove("hidden"); }
         return;
       }
       const j = await res.json();
