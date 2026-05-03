@@ -1,0 +1,203 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, variablesPredictivas, mediciones } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import { ESTADO_ALERTA_COLOR, ESTADO_ALERTA_LABEL, type EstadoAlerta } from "@/lib/predictivo";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/activos");
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const [act] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
+if (!act) return Astro.redirect("/activos");
+
+const vars = await db.select().from(variablesPredictivas).where(eq(variablesPredictivas.activoId, id)).orderBy(variablesPredictivas.nombre);
+
+// Last 30 mediciones por variable (para graficar)
+const allMeds = await Promise.all(
+  vars.map(async (v) => {
+    const meds = await db.select().from(mediciones).where(eq(mediciones.variableId, v.id)).orderBy(desc(mediciones.fecha)).limit(30);
+    return { variable: v, mediciones: meds.reverse() };
+  })
+);
+
+const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
+
+function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height: number, padding = 8) {
+  if (meds.length === 0) return { path: "", points: [] };
+  const values = meds.map((m) => m.valor);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = (width - padding * 2) / Math.max(meds.length - 1, 1);
+  const points = meds.map((m, i) => ({
+    x: padding + i * stepX,
+    y: padding + (height - padding * 2) * (1 - (m.valor - min) / range),
+    valor: m.valor,
+    estado: (m.estadoAlerta ?? "ok") as EstadoAlerta,
+  }));
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  return { path, points, min, max };
+}
+---
+
+<Layout title={`Predictivo · ${act.nombre}`}>
+  <a href={`/activos/${id}`} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
+  <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Mantenimiento predictivo</h1>
+      <p class="text-sm text-slate-500">{act.codigo} · {act.nombre}</p>
+    </div>
+    {puedeEditar && (
+      <button id="newVarBtn" class="btn-primary">+ Nueva variable</button>
+    )}
+  </div>
+
+  <!-- Form nueva variable -->
+  {puedeEditar && (
+    <div id="newVarForm" class="card mt-4 hidden p-5">
+      <h2 class="mb-3 font-semibold">Nueva variable a monitorear</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div><label class="label">Nombre</label><input class="input" id="vf_nombre" placeholder="Ej: Temperatura, Presión..." /></div>
+        <div><label class="label">Unidad</label><input class="input" id="vf_unidad" placeholder="°C, psi, RPM..." /></div>
+        <div></div>
+        <div><label class="label">Mín. crítico</label><input class="input" id="vf_minc" type="number" step="0.01" /></div>
+        <div><label class="label">Mín. alerta</label><input class="input" id="vf_minw" type="number" step="0.01" /></div>
+        <div></div>
+        <div><label class="label">Máx. alerta</label><input class="input" id="vf_maxw" type="number" step="0.01" /></div>
+        <div><label class="label">Máx. crítico</label><input class="input" id="vf_maxc" type="number" step="0.01" /></div>
+      </div>
+      <p class="mt-2 text-xs text-slate-500">Cuando una medición sale de rango crítico se genera automáticamente una OT predictiva de prioridad alta.</p>
+      <div class="mt-3 flex gap-2">
+        <button id="vf_save" class="btn-primary">Guardar variable</button>
+        <button id="vf_cancel" class="btn-secondary">Cancelar</button>
+      </div>
+      <p id="vf_err" class="mt-2 hidden text-sm text-red-600"></p>
+    </div>
+  )}
+
+  <!-- Cards de variables -->
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    {allMeds.length === 0 && <div class="card p-6 text-center text-slate-500">Sin variables configuradas. Agrega una para empezar a registrar mediciones.</div>}
+    {allMeds.map(({ variable: v, mediciones: meds }) => {
+      const last = meds[meds.length - 1];
+      const chart = chartPath(meds, 400, 120);
+      return (
+        <div class="card p-5">
+          <div class="flex items-start justify-between">
+            <div>
+              <h3 class="font-semibold text-slate-900">{v.nombre}</h3>
+              <p class="text-xs text-slate-500">
+                Rango OK:
+                {v.minWarning != null && <span> ≥ {v.minWarning}</span>}
+                {v.maxWarning != null && <span> · ≤ {v.maxWarning}</span>}
+                {v.unidad && <span> {v.unidad}</span>}
+              </p>
+            </div>
+            {last && (
+              <div class="text-right">
+                <span class={`badge ${ESTADO_ALERTA_COLOR[(last.estadoAlerta ?? "ok") as EstadoAlerta]}`}>{ESTADO_ALERTA_LABEL[(last.estadoAlerta ?? "ok") as EstadoAlerta]}</span>
+                <div class="mt-1 text-2xl font-bold">{last.valor}<span class="text-sm font-normal text-slate-500"> {v.unidad ?? ""}</span></div>
+                <div class="text-xs text-slate-400">{new Date(last.fecha).toLocaleString("es")}</div>
+              </div>
+            )}
+          </div>
+
+          <!-- Mini chart SVG -->
+          {meds.length >= 2 && (
+            <svg viewBox="0 0 400 120" class="mt-4 w-full" style="height:120px">
+              {/* zonas */}
+              {v.maxCritico != null && v.minCritico != null && (
+                <line x1="0" x2="400" y1="60" y2="60" stroke="#cbd5e1" stroke-dasharray="3,3" stroke-width="1" />
+              )}
+              <path d={chart.path} fill="none" stroke="#0284c7" stroke-width="2" />
+              {chart.points.map((p) => (
+                <circle cx={p.x} cy={p.y} r="3" class:list={[
+                  p.estado === "critico" ? "fill-red-500" :
+                  p.estado === "warning" ? "fill-amber-500" : "fill-emerald-500"
+                ]} />
+              ))}
+            </svg>
+          )}
+          {meds.length < 2 && (
+            <p class="mt-4 text-center text-xs text-slate-400">Necesitas al menos 2 mediciones para ver la gráfica.</p>
+          )}
+
+          {puedeEditar && (
+            <div class="mt-4 grid grid-cols-3 gap-2">
+              <input class="input text-sm med-valor" data-var={v.id} type="number" step="0.01" placeholder="Valor" />
+              <input class="input text-sm med-notas" data-var={v.id} placeholder="Notas (opcional)" />
+              <button class="btn-primary med-save text-sm" data-var={v.id}>Registrar</button>
+            </div>
+          )}
+        </div>
+      );
+    })}
+  </div>
+
+  <script define:vars={{ activoId: id }}>
+    const $ = (id) => document.getElementById(id);
+
+    $("newVarBtn")?.addEventListener("click", () => $("newVarForm").classList.remove("hidden"));
+    $("vf_cancel")?.addEventListener("click", () => $("newVarForm").classList.add("hidden"));
+
+    $("vf_save")?.addEventListener("click", async () => {
+      const err = $("vf_err");
+      err.classList.add("hidden");
+      const num = (id) => { const v = $(id).value; return v === "" ? null : Number(v); };
+      const payload = {
+        activoId,
+        nombre: $("vf_nombre").value.trim(),
+        unidad: $("vf_unidad").value.trim() || null,
+        minCritico: num("vf_minc"),
+        minWarning: num("vf_minw"),
+        maxWarning: num("vf_maxw"),
+        maxCritico: num("vf_maxc"),
+      };
+      if (!payload.nombre) {
+        err.textContent = "Nombre requerido";
+        err.classList.remove("hidden");
+        return;
+      }
+      const res = await fetch("/api/variables", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        err.textContent = "Error al guardar";
+        err.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+
+    document.querySelectorAll(".med-save").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const varId = Number(btn.dataset.var);
+        const valorEl = document.querySelector(`.med-valor[data-var="${varId}"]`);
+        const notasEl = document.querySelector(`.med-notas[data-var="${varId}"]`);
+        const valor = Number(valorEl.value);
+        if (Number.isNaN(valor)) { alert("Valor numérico requerido"); return; }
+        const res = await fetch("/api/mediciones", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ variableId: varId, valor, notas: notasEl.value.trim() || null }),
+        });
+        if (!res.ok) { alert("Error al registrar"); return; }
+        const j = await res.json();
+        if (j.ordenAutomatica) {
+          if (confirm(`Medición crítica detectada. Se generó OT #${j.ordenAutomatica.id}. ¿Abrirla?`)) {
+            location.href = `/ordenes/${j.ordenAutomatica.id}`;
+            return;
+          }
+        }
+        location.reload();
+      });
+    });
+  </script>
+</Layout>

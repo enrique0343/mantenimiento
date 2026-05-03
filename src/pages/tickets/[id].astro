@@ -1,0 +1,204 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { tickets, usuarios, sucursales, activos, ticketComentarios } from "@/lib/schema";
+import { eq, asc } from "drizzle-orm";
+import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
+import { PRIO_COLOR } from "@/lib/ordenes";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/tickets");
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const [r] = await db
+  .select({ t: tickets, a: usuarios, s: sucursales, act: activos })
+  .from(tickets)
+  .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
+  .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+  .leftJoin(activos, eq(activos.id, tickets.activoId))
+  .where(eq(tickets.id, id))
+  .limit(1);
+if (!r) return Astro.redirect("/tickets");
+const t = r.t;
+
+const coms = await db
+  .select({ c: ticketComentarios, u: usuarios })
+  .from(ticketComentarios)
+  .leftJoin(usuarios, eq(usuarios.id, ticketComentarios.usuarioId))
+  .where(eq(ticketComentarios.ticketId, id))
+  .orderBy(asc(ticketComentarios.id));
+
+const tecnicos = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+  .from(usuarios)
+  .where(eq(usuarios.activo, true));
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
+const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
+---
+
+<Layout title={`Ticket #${t.id}`}>
+  <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{t.asunto}</h1>
+        <span class={`badge ${PRIO_COLOR[t.prioridad]} capitalize`}>{t.prioridad}</span>
+        <span class={`badge ${ESTADO_TICKET_COLOR[t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[t.estado as EstadoTicket]}</span>
+        {sla === "vencido" && <span class="badge bg-red-100 text-red-700">⚠ SLA vencido</span>}
+        {sla === "warning" && <span class="badge bg-amber-100 text-amber-700">SLA próximo</span>}
+      </div>
+      <p class="mt-1 font-mono text-xs text-slate-500">#{t.id} · Token <span class="rounded bg-slate-100 px-1.5 py-0.5">{t.trackingToken}</span></p>
+    </div>
+    {t.otId && (
+      <a href={`/ordenes/${t.otId}`} class="btn-secondary">Ver OT #{t.otId} →</a>
+    )}
+  </div>
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="card lg:col-span-2 p-5">
+      <h2 class="font-semibold text-slate-900">Solicitud</h2>
+      <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{t.descripcion}</p>
+      <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{t.ubicacion ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">SLA</div><div>{fmt(t.vencimientoSla)}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Creado</div><div>{fmt(t.createdAt)}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Resuelto</div><div>{fmt(t.resueltoEn)}</div></div>
+      </div>
+
+      {t.resolucionNotas && (
+        <div class="mt-4 rounded-lg border-l-4 border-emerald-500 bg-emerald-50 p-3 text-sm">
+          <strong>Resolución:</strong> <p class="mt-1 whitespace-pre-wrap">{t.resolucionNotas}</p>
+        </div>
+      )}
+    </div>
+
+    <div class="space-y-4">
+      {puedeEditar && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Gestión</h2>
+          <div class="mt-3 space-y-2 text-sm">
+            <div>
+              <label class="label">Estado</label>
+              <select id="estado" class="input">
+                <option value="nuevo" selected={t.estado === "nuevo"}>Nuevo</option>
+                <option value="asignado" selected={t.estado === "asignado"}>Asignado</option>
+                <option value="en_proceso" selected={t.estado === "en_proceso"}>En proceso</option>
+                <option value="resuelto" selected={t.estado === "resuelto"}>Resuelto</option>
+                <option value="cerrado" selected={t.estado === "cerrado"}>Cerrado</option>
+                <option value="descartado" selected={t.estado === "descartado"}>Descartado</option>
+              </select>
+            </div>
+            <div>
+              <label class="label">Asignar a</label>
+              <select id="asignadoA" class="input">
+                <option value="">— Sin asignar —</option>
+                {tecnicos.map((u) => <option value={u.id} selected={t.asignadoA === u.id}>{u.nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label">Prioridad</label>
+              <select id="prioridad" class="input">
+                <option value="baja" selected={t.prioridad === "baja"}>Baja</option>
+                <option value="media" selected={t.prioridad === "media"}>Media</option>
+                <option value="alta" selected={t.prioridad === "alta"}>Alta</option>
+                <option value="urgente" selected={t.prioridad === "urgente"}>Urgente</option>
+              </select>
+            </div>
+            <div>
+              <label class="label">Notas de resolución</label>
+              <textarea id="resolucionNotas" class="input" rows="2">{t.resolucionNotas ?? ""}</textarea>
+            </div>
+            <button id="saveBtn" class="btn-primary w-full justify-center">Guardar</button>
+            <p id="saveMsg" class="hidden text-xs"></p>
+
+            {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
+              <button id="convertBtn" class="btn-secondary w-full justify-center mt-2">⚙ Convertir en OT</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Conversación ({coms.length})</h2>
+        <ul class="mt-3 space-y-3 text-sm">
+          {coms.map((c) => (
+            <li class:list={["rounded-md p-3", c.c.publico ? "bg-slate-50" : "bg-amber-50 border border-amber-200"]}>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-slate-500">{c.u?.nombre ?? c.c.autorExterno ?? "Solicitante"} · {fmt(c.c.createdAt)}</span>
+                {!c.c.publico && <span class="text-xs font-medium text-amber-700">🔒 nota interna</span>}
+              </div>
+              <div class="mt-1 whitespace-pre-wrap">{c.c.texto}</div>
+            </li>
+          ))}
+        </ul>
+        {puedeEditar && (
+          <form id="comForm" class="mt-3 space-y-2">
+            <textarea id="comTexto" class="input" rows="2" placeholder="Comentario..."></textarea>
+            <label class="flex items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" id="comInterna" /> Nota interna (solo equipo)
+            </label>
+            <button type="submit" class="btn-primary w-full justify-center">Enviar</button>
+          </form>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ id }}>
+    document.getElementById("saveBtn")?.addEventListener("click", async () => {
+      const msg = document.getElementById("saveMsg");
+      msg.classList.add("hidden");
+      const v = (id) => document.getElementById(id).value;
+      const payload = {
+        estado: v("estado"),
+        asignadoA: v("asignadoA") ? Number(v("asignadoA")) : null,
+        prioridad: v("prioridad"),
+        resolucionNotas: v("resolucionNotas").trim() || null,
+      };
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) { msg.textContent = "Error"; msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return; }
+      location.reload();
+    });
+
+    document.getElementById("convertBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Convertir este ticket en una orden de trabajo?")) return;
+      const asignadoA = document.getElementById("asignadoA").value;
+      const res = await fetch(`/api/tickets/${id}/convertir`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ asignadoA: asignadoA ? Number(asignadoA) : null }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        location.href = `/ordenes/${j.orden.id}`;
+      }
+    });
+
+    document.getElementById("comForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const texto = document.getElementById("comTexto").value.trim();
+      const interna = document.getElementById("comInterna").checked;
+      if (!texto) return;
+      const res = await fetch(`/api/tickets/${id}/comentario`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texto, publico: !interna }),
+      });
+      if (res.ok) location.reload();
+    });
+  </script>
+</Layout>

@@ -1,0 +1,189 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos, planesMantenimiento } from "@/lib/schema";
+import { eq, and, desc, gte, sql, isNotNull, lte } from "drizzle-orm";
+import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+// OTs activas asignadas a mi
+const misActivas = await db
+  .select({ o: ordenes, a: activos })
+  .from(ordenes)
+  .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'completada')`))
+  .orderBy(desc(ordenes.prioridad), ordenes.vencimiento);
+
+// Planes preventivos asignados a mi
+const misPlanes = await db
+  .select({ p: planesMantenimiento, a: activos })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .where(and(eq(planesMantenimiento.asignadoA, user.id), eq(planesMantenimiento.activo, true)))
+  .orderBy(planesMantenimiento.proximaFecha)
+  .limit(10);
+
+// Stats: completadas este mes
+const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+const completadasMes = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+const nCompletadas = Number(completadasMes[0]?.n ?? 0);
+
+// Total horas trabajadas (mes)
+const horasMes = await db
+  .select({ h: sql<number>`SUM(COALESCE(${ordenes.horasTrabajadas}, 0))` })
+  .from(ordenes)
+  .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+const totalHoras = Number(horasMes[0]?.h ?? 0);
+
+// % a tiempo: completadas antes del vencimiento
+const aTiempoRows = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(and(
+    eq(ordenes.asignadoA, user.id),
+    isNotNull(ordenes.completadaEn),
+    isNotNull(ordenes.vencimiento),
+    gte(ordenes.completadaEn, inicioMes),
+    sql`${ordenes.completadaEn} <= ${ordenes.vencimiento}`,
+  ));
+const aTiempo = Number(aTiempoRows[0]?.n ?? 0);
+const pctATiempo = nCompletadas > 0 ? Math.round((aTiempo / nCompletadas) * 100) : 100;
+
+// Gamificacion: nivel basico segun completadas totales
+const totalCompletadasRows = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(and(eq(ordenes.asignadoA, user.id), isNotNull(ordenes.completadaEn)));
+const totalCompletadasGlobal = Number(totalCompletadasRows[0]?.n ?? 0);
+
+const NIVELES = [
+  { min: 0, nombre: "Aprendiz", emoji: "🔧" },
+  { min: 10, nombre: "Operador", emoji: "⚙️" },
+  { min: 25, nombre: "Técnico", emoji: "🛠️" },
+  { min: 50, nombre: "Especialista", emoji: "🏅" },
+  { min: 100, nombre: "Maestro", emoji: "🏆" },
+  { min: 250, nombre: "Leyenda", emoji: "👑" },
+];
+const nivelActual = [...NIVELES].reverse().find((n) => totalCompletadasGlobal >= n.min) ?? NIVELES[0];
+const nivelSiguiente = NIVELES.find((n) => totalCompletadasGlobal < n.min);
+const pctSiguiente = nivelSiguiente
+  ? Math.round(((totalCompletadasGlobal - nivelActual.min) / (nivelSiguiente.min - nivelActual.min)) * 100)
+  : 100;
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "—");
+---
+
+<Layout title="Mi panel">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} 👋</h1>
+      <p class="text-sm text-slate-500">Resumen personal del mes</p>
+    </div>
+    <div class="card flex items-center gap-3 px-4 py-2">
+      <span class="text-3xl">{nivelActual.emoji}</span>
+      <div>
+        <div class="text-xs text-slate-500">Nivel</div>
+        <div class="text-sm font-bold">{nivelActual.nombre}</div>
+        {nivelSiguiente && (
+          <div class="text-[10px] text-slate-400">{totalCompletadasGlobal}/{nivelSiguiente.min} → {nivelSiguiente.nombre}</div>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats personales -->
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">OTs activas</div>
+      <div class="mt-1 text-3xl font-bold text-brand-600">{misActivas.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Completadas (mes)</div>
+      <div class="mt-1 text-3xl font-bold text-emerald-600">{nCompletadas}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Horas (mes)</div>
+      <div class="mt-1 text-3xl font-bold text-amber-600">{totalHoras.toFixed(1)}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">% a tiempo</div>
+      <div class:list={["mt-1 text-3xl font-bold", pctATiempo >= 80 ? "text-emerald-600" : pctATiempo >= 60 ? "text-amber-600" : "text-red-600"]}>{pctATiempo}%</div>
+    </div>
+  </div>
+
+  {nivelSiguiente && (
+    <div class="card mt-4 p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-medium text-slate-700">Progreso al siguiente nivel</span>
+        <span class="text-xs text-slate-500">{nivelSiguiente.emoji} {nivelSiguiente.nombre} en {nivelSiguiente.min - totalCompletadasGlobal} OTs</span>
+      </div>
+      <div class="mt-2 h-3 overflow-hidden rounded bg-slate-100">
+        <div class="h-full bg-gradient-to-r from-brand-500 to-emerald-500" style={`width: ${pctSiguiente}%`}></div>
+      </div>
+    </div>
+  )}
+
+  <!-- Mis OTs activas -->
+  <div class="mt-6 card overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Mis OTs activas ({misActivas.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">#</th>
+          <th class="px-4 py-2">Título</th>
+          <th class="px-4 py-2">Equipo</th>
+          <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2">Prioridad</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Vence</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {misActivas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No tienes OTs activas.</td></tr>}
+        {misActivas.map((r) => (
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
+            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
+            <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
+            <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo]} capitalize`}>{r.o.tipo}</span></td>
+            <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize`}>{r.o.prioridad}</span></td>
+            <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span></td>
+            <td class="px-4 py-2 text-xs text-slate-600">{fmt(r.o.vencimiento)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Mis planes -->
+  <div class="mt-6 card overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Plan</th>
+          <th class="px-4 py-2">Equipo</th>
+          <th class="px-4 py-2">Frecuencia</th>
+          <th class="px-4 py-2">Próxima fecha</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {misPlanes.length === 0 && <tr><td colspan="4" class="px-4 py-6 text-center text-slate-400">Sin planes asignados.</td></tr>}
+        {misPlanes.map((r) => (
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2">{r.p.titulo}</td>
+            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/activos/${r.a?.id}`}>{r.a?.codigo}</a></td>
+            <td class="px-4 py-2 capitalize text-slate-600">{r.p.frecuencia}</td>
+            <td class="px-4 py-2 text-slate-700">{fmt(r.p.proximaFecha)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>

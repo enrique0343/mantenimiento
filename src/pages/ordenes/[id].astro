@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock, empresa } from "@/lib/schema";
 import { eq, desc, and } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
@@ -413,6 +413,55 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <p id="upErr" class="mt-2 hidden text-sm text-red-600"></p>
   </div>
 
+  <!-- Firmas digitales + PDF -->
+  <div class="card mt-6 p-5">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900">Firmas digitales</h2>
+      <button id="pdfBtn" class="btn-primary text-sm">📄 Descargar PDF</button>
+    </div>
+    <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+      {(["tecnico", "jefe", "solicitante"] as const).map((rol) => {
+        const r2 = rol === "tecnico" ? o.firmaTecnicoR2 : rol === "jefe" ? o.firmaJefeR2 : o.firmaSolicitanteR2;
+        const nombre = rol === "tecnico" ? o.firmaTecnicoNombre : rol === "jefe" ? o.firmaJefeNombre : o.firmaSolicitanteNombre;
+        const fecha = rol === "tecnico" ? o.firmaTecnicoFecha : rol === "jefe" ? o.firmaJefeFecha : o.firmaSolicitanteFecha;
+        const labels = { tecnico: "Técnico", jefe: "Jefe / Supervisor", solicitante: "Solicitante / Usuario" };
+        return (
+          <div class="rounded-lg border border-slate-200 p-3">
+            <div class="text-xs font-medium uppercase text-slate-500">{labels[rol]}</div>
+            {r2 ? (
+              <div class="mt-2">
+                <img src={`/api/firmas/${o.id}/${rol}`} alt={`Firma ${rol}`} class="h-20 w-full rounded bg-white object-contain" />
+                <div class="mt-1 text-xs text-slate-600"><strong>{nombre}</strong></div>
+                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es") : ""}</div>
+                <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>
+              </div>
+            ) : (
+              <button class="firma-add-btn mt-2 w-full rounded border border-dashed border-slate-300 py-3 text-xs text-slate-500 hover:border-brand-500 hover:text-brand-700" data-rol={rol}>
+                + Agregar firma
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+
+  <!-- Modal de firma -->
+  <div id="firmaModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+      <h3 id="firmaTitulo" class="font-semibold">Firmar como técnico</h3>
+      <p class="mt-1 text-xs text-slate-500">Dibuja con el mouse o el dedo (touch).</p>
+      <input id="firmaNombre" class="input mt-3" placeholder="Nombre completo del firmante" />
+      <canvas id="firmaCanvas" width="500" height="180" class="mt-3 w-full rounded border-2 border-dashed border-slate-300 bg-white" style="touch-action:none"></canvas>
+      <div class="mt-3 flex justify-end gap-2">
+        <button id="firmaClear" class="btn-secondary">Limpiar</button>
+        <button id="firmaCancel" class="btn-secondary">Cancelar</button>
+        <button id="firmaSave" class="btn-primary">Guardar firma</button>
+      </div>
+      <p id="firmaErr" class="mt-2 hidden text-xs text-red-600"></p>
+    </div>
+  </div>
+
   <!-- Modal verificacion (capturar notas) -->
   <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
     <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
@@ -591,6 +640,294 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         location.reload();
       });
+    });
+  </script>
+
+  <!-- Firmas + PDF -->
+  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, sucursal: r.suc?.nombre, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
+    const $ = (s) => document.getElementById(s);
+    const modal = $("firmaModal");
+    const canvas = $("firmaCanvas");
+    const ctx = canvas.getContext("2d");
+    let drawing = false, currentRol = null;
+
+    function clearCanvas() {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+    }
+
+    function getPos(e) {
+      const r = canvas.getBoundingClientRect();
+      const sx = canvas.width / r.width;
+      const sy = canvas.height / r.height;
+      const t = e.touches ? e.touches[0] : e;
+      return { x: (t.clientX - r.left) * sx, y: (t.clientY - r.top) * sy };
+    }
+
+    canvas.addEventListener("pointerdown", (e) => { drawing = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); });
+    canvas.addEventListener("pointermove", (e) => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); });
+    canvas.addEventListener("pointerup", () => { drawing = false; });
+    canvas.addEventListener("pointerleave", () => { drawing = false; });
+
+    document.querySelectorAll(".firma-add-btn, .firma-clear-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentRol = btn.dataset.rol;
+        const labels = { tecnico: "técnico", jefe: "jefe / supervisor", solicitante: "solicitante / usuario" };
+        $("firmaTitulo").textContent = `Firmar como ${labels[currentRol]}`;
+        $("firmaNombre").value = "";
+        clearCanvas();
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+      });
+    });
+
+    $("firmaCancel").addEventListener("click", () => { modal.classList.add("hidden"); modal.classList.remove("flex"); });
+    $("firmaClear").addEventListener("click", clearCanvas);
+
+    $("firmaSave").addEventListener("click", async () => {
+      const err = $("firmaErr");
+      err.classList.add("hidden");
+      const nombre = $("firmaNombre").value.trim();
+      if (!nombre) { err.textContent = "Nombre requerido"; err.classList.remove("hidden"); return; }
+      const dataUrl = canvas.toDataURL("image/png");
+      const res = await fetch(`/api/ordenes/${id}/firma`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rol: currentRol, nombre, imagenDataUrl: dataUrl }),
+      });
+      if (!res.ok) { err.textContent = "Error al guardar firma"; err.classList.remove("hidden"); return; }
+      location.reload();
+    });
+    clearCanvas();
+
+    // ── PDF ───────────────────────────────────────────────────────────────────
+    async function loadJsPdf() {
+      if (window.jspdf) return window.jspdf;
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js";
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+      return window.jspdf;
+    }
+
+    async function fetchEmpresa() {
+      try { const r = await fetch("/api/empresa"); if (r.ok) { const j = await r.json(); return j.empresa; } } catch {}
+      return null;
+    }
+
+    async function fetchImageAsDataURL(url) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        const blob = await r.blob();
+        return await new Promise((resolve) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.readAsDataURL(blob);
+        });
+      } catch { return null; }
+    }
+
+    function fmt(s) { return s ? new Date(s).toLocaleString("es") : "—"; }
+
+    $("pdfBtn").addEventListener("click", async () => {
+      $("pdfBtn").disabled = true;
+      $("pdfBtn").textContent = "Generando...";
+      try {
+        const { jsPDF } = await loadJsPdf();
+        const empresa = await fetchEmpresa();
+        const doc = new jsPDF({ unit: "mm", format: "a4" });
+        const W = 210, M = 14;
+        let y = M;
+
+        // Header
+        doc.setFillColor(10, 64, 130);
+        doc.rect(0, 0, W, 22, "F");
+        doc.setTextColor(255);
+        doc.setFontSize(16); doc.setFont("helvetica", "bold");
+        doc.text(empresa?.nombre ?? "Mantenimiento", M, 12);
+        doc.setFontSize(10); doc.setFont("helvetica", "normal");
+        doc.text(`Orden de Trabajo #${ordenData.id}`, M, 18);
+        doc.setTextColor(0);
+        y = 30;
+
+        // Info empresa
+        if (empresa) {
+          doc.setFontSize(8); doc.setTextColor(100);
+          if (empresa.nit) doc.text(`NIT: ${empresa.nit}`, W - M, 8, { align: "right" });
+          if (empresa.direccion) doc.text(empresa.direccion, W - M, 12, { align: "right" });
+          if (empresa.telefono) doc.text(`Tel: ${empresa.telefono}`, W - M, 16, { align: "right" });
+          doc.setTextColor(0);
+        }
+
+        // Titulo OT
+        doc.setFontSize(14); doc.setFont("helvetica", "bold");
+        doc.text(ordenData.titulo, M, y); y += 8;
+
+        // Tabla datos
+        doc.setFontSize(9); doc.setFont("helvetica", "normal");
+        const rows = [
+          ["Tipo", ordenData.tipo, "Prioridad", ordenData.prioridad],
+          ["Estado", ordenData.estado, "Creada", fmt(ordenData.createdAt)],
+          ["Equipo", activoData ? `${activoData.codigo} - ${activoData.nombre}` : "Sin equipo", "Vencimiento", fmt(ordenData.vencimiento)],
+          ["Asignado", asignadoData?.nombre ?? "—", "Completada", fmt(ordenData.completadaEn)],
+        ];
+        rows.forEach((r) => {
+          doc.setFont("helvetica", "bold"); doc.text(r[0] + ":", M, y);
+          doc.setFont("helvetica", "normal"); doc.text(String(r[1] ?? "—"), M + 28, y);
+          doc.setFont("helvetica", "bold"); doc.text(r[2] + ":", W / 2, y);
+          doc.setFont("helvetica", "normal"); doc.text(String(r[3] ?? "—"), W / 2 + 28, y);
+          y += 5;
+        });
+        y += 3;
+
+        // Descripcion
+        if (ordenData.descripcion) {
+          doc.setFont("helvetica", "bold"); doc.text("Descripción", M, y); y += 5;
+          doc.setFont("helvetica", "normal");
+          const lines = doc.splitTextToSize(ordenData.descripcion, W - M * 2);
+          doc.text(lines, M, y); y += lines.length * 4 + 3;
+        }
+
+        // Trabajos realizados
+        if (ordenData.trabajosRealizados) {
+          if (y > 250) { doc.addPage(); y = M; }
+          doc.setFont("helvetica", "bold"); doc.text("Trabajos realizados", M, y); y += 5;
+          doc.setFont("helvetica", "normal");
+          const lines = doc.splitTextToSize(ordenData.trabajosRealizados, W - M * 2);
+          doc.text(lines, M, y); y += lines.length * 4 + 3;
+        }
+
+        if (ordenData.causaRaiz) {
+          doc.setFont("helvetica", "bold"); doc.text("Causa raíz: ", M, y);
+          doc.setFont("helvetica", "normal");
+          const lines = doc.splitTextToSize(ordenData.causaRaiz, W - M * 2 - 20);
+          doc.text(lines, M + 20, y); y += Math.max(lines.length * 4, 5) + 1;
+        }
+        if (ordenData.solucionAplicada) {
+          doc.setFont("helvetica", "bold"); doc.text("Solución: ", M, y);
+          doc.setFont("helvetica", "normal");
+          const lines = doc.splitTextToSize(ordenData.solucionAplicada, W - M * 2 - 20);
+          doc.text(lines, M + 20, y); y += Math.max(lines.length * 4, 5) + 1;
+        }
+        if (ordenData.horasTrabajadas != null) {
+          doc.setFont("helvetica", "bold"); doc.text(`Horas trabajadas: `, M, y);
+          doc.setFont("helvetica", "normal"); doc.text(`${ordenData.horasTrabajadas}`, M + 35, y); y += 6;
+        }
+
+        // Checklist
+        if (checklistItems && checklistItems.length > 0) {
+          if (y > 240) { doc.addPage(); y = M; }
+          doc.setFont("helvetica", "bold"); doc.text("Checklist", M, y); y += 5;
+          doc.setFont("helvetica", "normal");
+          checklistItems.forEach((it) => {
+            doc.text(`${it.hecho ? "[X]" : "[ ]"} ${it.texto}`, M, y); y += 4.5;
+            if (y > 280) { doc.addPage(); y = M; }
+          });
+          y += 2;
+        }
+
+        // Repuestos
+        if (repuestos && repuestos.length > 0) {
+          if (y > 240) { doc.addPage(); y = M; }
+          doc.setFont("helvetica", "bold"); doc.text("Repuestos consumidos", M, y); y += 5;
+          doc.setFontSize(8);
+          doc.text("Item", M, y); doc.text("Sucursal", 90, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
+          doc.setLineWidth(0.2); doc.line(M, y - 2, W - M, y - 2);
+          doc.setFont("helvetica", "normal");
+          repuestos.forEach((r) => {
+            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 40), M, y);
+            doc.text(String(r.sucursal ?? "—").slice(0, 25), 90, y);
+            doc.text(String(r.cantidad), 140, y);
+            doc.text(r.precio != null ? `$${r.precio.toFixed(2)}` : "—", 160, y);
+            doc.text(r.precio != null ? `$${(r.precio * r.cantidad).toFixed(2)}` : "—", 185, y);
+            y += 4.5;
+            if (y > 280) { doc.addPage(); y = M; }
+          });
+          if (totalRepuestos > 0) {
+            doc.setFont("helvetica", "bold");
+            doc.text(`Total: $${totalRepuestos.toFixed(2)}`, W - M, y, { align: "right" }); y += 6;
+          }
+          doc.setFontSize(9);
+        }
+
+        // Verificacion
+        if (ordenData.verificacionNotas) {
+          if (y > 250) { doc.addPage(); y = M; }
+          doc.setFont("helvetica", "bold"); doc.text("Verificación", M, y); y += 5;
+          doc.setFont("helvetica", "normal");
+          const lines = doc.splitTextToSize(ordenData.verificacionNotas, W - M * 2);
+          doc.text(lines, M, y); y += lines.length * 4 + 3;
+        }
+
+        // Imagenes (antes/despues) - max 4
+        const imgs = adjs.filter(a => (a.categoria === "antes" || a.categoria === "despues") && a.contentType.startsWith("image/")).slice(0, 4);
+        if (imgs.length > 0) {
+          if (y > 200) { doc.addPage(); y = M; }
+          doc.setFont("helvetica", "bold"); doc.text("Evidencia fotográfica", M, y); y += 5;
+          for (let i = 0; i < imgs.length; i++) {
+            const a = imgs[i];
+            const dataUrl = await fetchImageAsDataURL(`/api/adjuntos/${a.id}`);
+            if (!dataUrl) continue;
+            try {
+              const x = M + (i % 2) * 90;
+              const yy = y + Math.floor(i / 2) * 65;
+              if (yy + 60 > 280) { doc.addPage(); y = M; continue; }
+              doc.addImage(dataUrl, "JPEG", x, yy, 80, 55);
+              doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+              doc.text(`${a.categoria}: ${a.nombre.slice(0, 30)}`, x, yy + 60);
+              doc.setFontSize(9);
+            } catch {}
+          }
+          y += Math.ceil(imgs.length / 2) * 65 + 5;
+        }
+
+        // Firmas
+        if (y > 220) { doc.addPage(); y = M; }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+        doc.text("Firmas", M, y); y += 5;
+
+        const firmas = [
+          { rol: "tecnico", nombre: ordenData.firmaTecnicoNombre, r2: ordenData.firmaTecnicoR2, label: "Técnico" },
+          { rol: "jefe", nombre: ordenData.firmaJefeNombre, r2: ordenData.firmaJefeR2, label: "Jefe / Supervisor" },
+          { rol: "solicitante", nombre: ordenData.firmaSolicitanteNombre, r2: ordenData.firmaSolicitanteR2, label: "Solicitante" },
+        ];
+        const colW = (W - M * 2) / 3;
+        for (let i = 0; i < firmas.length; i++) {
+          const f = firmas[i];
+          const x = M + i * colW;
+          doc.setLineWidth(0.3); doc.rect(x, y, colW - 4, 35);
+          if (f.r2) {
+            const dataUrl = await fetchImageAsDataURL(`/api/firmas/${ordenData.id}/${f.rol}`);
+            if (dataUrl) try { doc.addImage(dataUrl, "PNG", x + 2, y + 2, colW - 8, 22); } catch {}
+          }
+          doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+          doc.text(f.label, x + 2, y + 30);
+          doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+          doc.text(f.nombre ?? "—", x + 2, y + 33);
+        }
+        y += 40;
+
+        // Footer
+        const pages = doc.internal.getNumberOfPages();
+        for (let p = 1; p <= pages; p++) {
+          doc.setPage(p);
+          doc.setFontSize(7); doc.setTextColor(120);
+          doc.text(`Generado ${new Date().toLocaleString("es")} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
+        }
+
+        doc.save(`OT-${ordenData.id}.pdf`);
+      } catch (e) {
+        console.error(e);
+        alert("Error al generar PDF");
+      }
+      $("pdfBtn").disabled = false;
+      $("pdfBtn").textContent = "📄 Descargar PDF";
     });
   </script>
 </Layout>

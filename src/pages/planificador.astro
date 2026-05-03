@@ -1,0 +1,177 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, planesMantenimiento, activos, usuarios } from "@/lib/schema";
+import { eq, and, gte, lte, isNotNull } from "drizzle-orm";
+import { ESTADO_COLOR, TIPO_COLOR, type EstadoOT } from "@/lib/ordenes";
+export const prerender = false;
+
+const url = new URL(Astro.request.url);
+const monthParam = url.searchParams.get("m"); // YYYY-MM
+const today = new Date();
+const [yy, mm] = monthParam
+  ? monthParam.split("-").map(Number)
+  : [today.getFullYear(), today.getMonth() + 1];
+
+const firstDay = new Date(yy, mm - 1, 1);
+const lastDay = new Date(yy, mm, 0);
+const firstStr = firstDay.toISOString().slice(0, 10);
+const lastStr = lastDay.toISOString().slice(0, 10);
+
+// Calendar starts on Sunday of the week containing day 1
+const startDate = new Date(firstDay);
+startDate.setDate(startDate.getDate() - firstDay.getDay());
+const endDate = new Date(lastDay);
+endDate.setDate(endDate.getDate() + (6 - lastDay.getDay()));
+
+const db = getDb(Astro);
+
+// OTs con vencimiento en el mes
+const otRows = await db
+  .select({ o: ordenes, a: activos, u: usuarios })
+  .from(ordenes)
+  .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(and(isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, firstStr), lte(ordenes.vencimiento, lastStr + "T23:59:59")));
+
+// Planes con proxima fecha en el mes
+const planRows = await db
+  .select({ p: planesMantenimiento, a: activos })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .where(and(eq(planesMantenimiento.activo, true), gte(planesMantenimiento.proximaFecha, firstStr), lte(planesMantenimiento.proximaFecha, lastStr)));
+
+// Carga por tecnico (OTs activas asignadas)
+const cargas = await db
+  .select({ u: usuarios, o: ordenes })
+  .from(ordenes)
+  .innerJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(and(isNotNull(ordenes.asignadoA)));
+
+const cargaMap = new Map<number, { nombre: string; abierta: number; en_proceso: number; completada: number; total: number }>();
+for (const r of cargas) {
+  const key = r.u.id;
+  const cur = cargaMap.get(key) ?? { nombre: r.u.nombre, abierta: 0, en_proceso: 0, completada: 0, total: 0 };
+  if (r.o.estado === "abierta") cur.abierta++;
+  else if (r.o.estado === "en_proceso") cur.en_proceso++;
+  else if (r.o.estado === "completada") cur.completada++;
+  cur.total++;
+  cargaMap.set(key, cur);
+}
+const cargasArr = Array.from(cargaMap.values()).sort((a, b) => b.total - a.total);
+
+// Construye grilla de dias
+type Cell = {
+  date: Date;
+  dateStr: string;
+  inMonth: boolean;
+  ots: typeof otRows;
+  planes: typeof planRows;
+};
+const cells: Cell[] = [];
+const cur = new Date(startDate);
+while (cur <= endDate) {
+  const dateStr = cur.toISOString().slice(0, 10);
+  cells.push({
+    date: new Date(cur),
+    dateStr,
+    inMonth: cur.getMonth() === mm - 1,
+    ots: otRows.filter((r) => r.o.vencimiento?.slice(0, 10) === dateStr),
+    planes: planRows.filter((r) => r.p.proximaFecha === dateStr),
+  });
+  cur.setDate(cur.getDate() + 1);
+}
+
+const monthLabel = firstDay.toLocaleDateString("es", { month: "long", year: "numeric" });
+const prevDate = new Date(yy, mm - 2, 1);
+const nextDate = new Date(yy, mm, 1);
+const prevQ = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+const nextQ = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`;
+const todayStr = today.toISOString().slice(0, 10);
+const dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+---
+
+<Layout title="Planificador">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Planificador</h1>
+      <p class="text-sm text-slate-500">Calendario de OTs con vencimiento y planes preventivos</p>
+    </div>
+    <div class="flex items-center gap-1">
+      <a href={`/planificador?m=${prevQ}`} class="btn-secondary px-3 py-1.5">←</a>
+      <span class="px-4 font-semibold capitalize">{monthLabel}</span>
+      <a href={`/planificador?m=${nextQ}`} class="btn-secondary px-3 py-1.5">→</a>
+      <a href="/planificador" class="ml-2 text-xs text-brand-700 hover:underline">Hoy</a>
+    </div>
+  </div>
+
+  <!-- Calendario -->
+  <div class="card mt-4 overflow-hidden">
+    <div class="grid grid-cols-7 bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+      {dayNames.map((d) => <div class="px-2 py-2 text-center">{d}</div>)}
+    </div>
+    <div class="grid grid-cols-7">
+      {cells.map((c) => (
+        <div class:list={[
+          "min-h-[110px] border-r border-b border-slate-100 p-1.5",
+          !c.inMonth && "bg-slate-50/50 text-slate-400",
+          c.dateStr === todayStr && "bg-brand-50",
+        ]}>
+          <div class="mb-1 flex items-center justify-between">
+            <span class:list={["text-xs font-semibold", c.dateStr === todayStr && "text-brand-700"]}>
+              {c.date.getDate()}
+            </span>
+            {(c.ots.length + c.planes.length > 0) && (
+              <span class="text-[10px] text-slate-400">{c.ots.length + c.planes.length}</span>
+            )}
+          </div>
+          <div class="space-y-1">
+            {c.planes.slice(0, 3).map((p) => (
+              <a href={`/activos/${p.a?.id}`} title={`Plan: ${p.p.titulo}`}
+                 class="block truncate rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200">
+                🛡 {p.p.titulo}
+              </a>
+            ))}
+            {c.ots.slice(0, 3).map((r) => (
+              <a href={`/ordenes/${r.o.id}`} title={r.o.titulo}
+                 class:list={["block truncate rounded px-1.5 py-0.5 text-[10px] font-medium hover:opacity-80", ESTADO_COLOR[r.o.estado as EstadoOT]]}>
+                #{r.o.id} {r.o.titulo}
+              </a>
+            ))}
+            {(c.ots.length + c.planes.length) > 6 && (
+              <span class="block text-[10px] text-slate-500">+{c.ots.length + c.planes.length - 6} más</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+
+  <!-- Carga por tecnico -->
+  <div class="mt-6 card overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Carga por técnico</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Técnico</th>
+          <th class="px-4 py-2 text-center">Abiertas</th>
+          <th class="px-4 py-2 text-center">En proceso</th>
+          <th class="px-4 py-2 text-center">Completadas</th>
+          <th class="px-4 py-2 text-center">Total</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {cargasArr.length === 0 && <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Sin OTs asignadas.</td></tr>}
+        {cargasArr.map((c) => (
+          <tr>
+            <td class="px-4 py-2 font-medium">{c.nombre}</td>
+            <td class="px-4 py-2 text-center"><span class="badge bg-blue-100 text-blue-700">{c.abierta}</span></td>
+            <td class="px-4 py-2 text-center"><span class="badge bg-amber-100 text-amber-700">{c.en_proceso}</span></td>
+            <td class="px-4 py-2 text-center"><span class="badge bg-emerald-100 text-emerald-700">{c.completada}</span></td>
+            <td class="px-4 py-2 text-center font-bold">{c.total}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>

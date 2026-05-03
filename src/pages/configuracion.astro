@@ -157,12 +157,53 @@ const TIPOS_UB = [
 
   <!-- Tab: Correo -->
   <div id="tab-correo" class="tab-panel card mt-4 hidden p-5">
-    <h2 class="mb-2 font-semibold text-slate-900">Correo electrónico</h2>
-    <p class="text-sm text-slate-500">Las notificaciones por correo estarán disponibles en una próxima versión (Microsoft 365 / Graph API).</p>
-    <div class="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-400">
-      Próximamente — Fase 11
+    <h2 class="mb-2 font-semibold text-slate-900">Correo electrónico (Microsoft 365)</h2>
+    <p class="text-sm text-slate-500">Las notificaciones se envían vía Microsoft Graph API. Configura los secretos como variables de entorno en Cloudflare Pages.</p>
+
+    <div class="mt-4 rounded-lg bg-slate-900 p-4 font-mono text-xs text-emerald-200">
+      <div># Setup en Azure AD:</div>
+      <div># 1. Registrar app con permiso Mail.Send (Application, con admin consent)</div>
+      <div># 2. Generar client secret</div>
+      <div># 3. Tener un buzon Microsoft 365 que enviara los emails</div>
+      <div class="mt-3 text-amber-200"># Setear los 4 secrets en Cloudflare Pages:</div>
+      <div>npx wrangler pages secret put M365_TENANT_ID --project-name=mantenimiento</div>
+      <div>npx wrangler pages secret put M365_CLIENT_ID --project-name=mantenimiento</div>
+      <div>npx wrangler pages secret put M365_CLIENT_SECRET --project-name=mantenimiento</div>
+      <div>npx wrangler pages secret put M365_FROM_ADDRESS --project-name=mantenimiento</div>
+    </div>
+
+    <div class="mt-5 rounded-lg border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold">Probar envío</h3>
+      <p class="text-xs text-slate-500">Envía un email de prueba para verificar la configuración.</p>
+      <div class="mt-2 flex gap-2">
+        <input id="testTo" class="input flex-1" type="email" placeholder="tu-email@dominio.com" />
+        <button id="testBtn" class="btn-primary">Enviar prueba</button>
+      </div>
+      <p id="testMsg" class="mt-2 hidden text-sm"></p>
+    </div>
+
+    <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-xs text-blue-800">
+      <strong>Eventos que disparan emails automáticamente:</strong>
+      <ul class="mt-1 list-disc pl-5">
+        <li>Nuevo ticket de soporte → admins + confirmación al solicitante</li>
+        <li>Asignación de OT → técnico asignado</li>
+      </ul>
     </div>
   </div>
+
+  <script>
+    document.getElementById("testBtn")?.addEventListener("click", async () => {
+      const to = (document.getElementById("testTo")).value.trim();
+      const msg = document.getElementById("testMsg");
+      msg.classList.add("hidden");
+      if (!to) { msg.textContent = "Email requerido"; msg.className = "text-sm text-red-600"; msg.classList.remove("hidden"); return; }
+      const res = await fetch("/api/email/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ to }) });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) { msg.textContent = "✓ Email de prueba enviado"; msg.className = "text-sm text-emerald-600"; }
+      else { msg.textContent = "✗ " + (j.error ?? "Error desconocido"); msg.className = "text-sm text-red-600"; }
+      msg.classList.remove("hidden");
+    });
+  </script>
 </Layout>
 
 <script>

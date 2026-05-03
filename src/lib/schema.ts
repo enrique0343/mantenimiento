@@ -128,6 +128,16 @@ export const ordenes = sqliteTable("ordenes", {
   verificacionNotas: text("verificacion_notas"),
   cerradoPor: integer("cerrado_por").references(() => usuarios.id),
   cerradoEn: text("cerrado_en"),
+  // Firmas digitales (Fase 10)
+  firmaTecnicoR2: text("firma_tecnico_r2"),
+  firmaTecnicoNombre: text("firma_tecnico_nombre"),
+  firmaTecnicoFecha: text("firma_tecnico_fecha"),
+  firmaJefeR2: text("firma_jefe_r2"),
+  firmaJefeNombre: text("firma_jefe_nombre"),
+  firmaJefeFecha: text("firma_jefe_fecha"),
+  firmaSolicitanteR2: text("firma_solicitante_r2"),
+  firmaSolicitanteNombre: text("firma_solicitante_nombre"),
+  firmaSolicitanteFecha: text("firma_solicitante_fecha"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -233,6 +243,80 @@ export const ordenRepuestos = sqliteTable("orden_repuestos", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Helpdesk ────────────────────────────────────────────────────────────────
+export const tickets = sqliteTable("tickets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  trackingToken: text("tracking_token").notNull().unique(),
+  solicitanteNombre: text("solicitante_nombre").notNull(),
+  solicitanteEmail: text("solicitante_email").notNull(),
+  solicitanteTelefono: text("solicitante_telefono"),
+  solicitanteUsuarioId: integer("solicitante_usuario_id").references(() => usuarios.id),
+  asunto: text("asunto").notNull(),
+  descripcion: text("descripcion").notNull(),
+  prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] }).notNull().default("media"),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacion: text("ubicacion"),
+  activoId: integer("activo_id").references(() => activos.id),
+  estado: text("estado", { enum: ["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"] })
+    .notNull().default("nuevo"),
+  slaHoras: integer("sla_horas"),
+  vencimientoSla: text("vencimiento_sla"),
+  asignadoA: integer("asignado_a").references(() => usuarios.id),
+  otId: integer("ot_id").references(() => ordenes.id),
+  resueltoEn: text("resuelto_en"),
+  resolucionNotas: text("resolucion_notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ─── Predictivo ──────────────────────────────────────────────────────────────
+export const variablesPredictivas = sqliteTable("variables_predictivas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  unidad: text("unidad"),
+  minCritico: real("min_critico"),
+  minWarning: real("min_warning"),
+  maxWarning: real("max_warning"),
+  maxCritico: real("max_critico"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const emailLog = sqliteTable("email_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  destinatario: text("destinatario").notNull(),
+  asunto: text("asunto").notNull(),
+  tipo: text("tipo"),
+  referencia: text("referencia"),
+  estado: text("estado", { enum: ["enviado", "error"] }).notNull().default("enviado"),
+  error: text("error"),
+  enviadoPor: integer("enviado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const mediciones = sqliteTable("mediciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  variableId: integer("variable_id").notNull().references(() => variablesPredictivas.id, { onDelete: "cascade" }),
+  valor: real("valor").notNull(),
+  fecha: text("fecha").notNull().default(sql`CURRENT_TIMESTAMP`),
+  estadoAlerta: text("estado_alerta"),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const ticketComentarios = sqliteTable("ticket_comentarios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ticketId: integer("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  autorExterno: text("autor_externo"),
+  texto: text("texto").notNull(),
+  publico: integer("publico", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 // ─── Planes de mantenimiento preventivo ──────────────────────────────────────
 export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -274,3 +358,7 @@ export type MovimientoInventario = typeof movimientosInventario.$inferSelect;
 export type Recepcion = typeof recepciones.$inferSelect;
 export type RecepcionItem = typeof recepcionItems.$inferSelect;
 export type OrdenRepuesto = typeof ordenRepuestos.$inferSelect;
+export type Ticket = typeof tickets.$inferSelect;
+export type TicketComentario = typeof ticketComentarios.$inferSelect;
+export type VariablePredictiva = typeof variablesPredictivas.$inferSelect;
+export type Medicion = typeof mediciones.$inferSelect;

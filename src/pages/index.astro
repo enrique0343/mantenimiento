@@ -5,6 +5,10 @@ import { ordenes, activos, planesMantenimiento } from "@/lib/schema";
 import { sql, eq, and, lte, gte, asc } from "drizzle-orm";
 export const prerender = false;
 
+// Tecnico → su panel personal
+const user = Astro.locals.user;
+if (user?.rol === "tecnico") return Astro.redirect("/mi-panel");
+
 const db = getDb(Astro);
 
 const ordenesPorEstado = await db

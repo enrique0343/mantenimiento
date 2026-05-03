@@ -1,0 +1,205 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos, ordenRepuestos, items as itemsTable } from "@/lib/schema";
+import { eq, and, sql, isNotNull, desc, gte } from "drizzle-orm";
+export const prerender = false;
+
+const db = getDb(Astro);
+const now = new Date();
+const inicioAno = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+const inicio30d = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+
+// Total OTs y por estado
+const totalesEstado = await db
+  .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
+  .from(ordenes)
+  .groupBy(ordenes.estado);
+
+const total = totalesEstado.reduce((s, r) => s + Number(r.n), 0);
+const get = (estado: string) => Number(totalesEstado.find((r) => r.estado === estado)?.n ?? 0);
+
+// OTs vencidas
+const vencidasRows = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada')`);
+const vencidas = Number(vencidasRows[0]?.n ?? 0);
+
+// OTs por tipo
+const porTipo = await db
+  .select({ tipo: ordenes.tipo, n: sql<number>`count(*)` })
+  .from(ordenes)
+  .groupBy(ordenes.tipo);
+
+// OTs completadas en ultimos 30d - calcular MTTR
+const completadas30d = await db
+  .select({ createdAt: ordenes.createdAt, completadaEn: ordenes.completadaEn })
+  .from(ordenes)
+  .where(and(
+    gte(ordenes.completadaEn, inicio30d),
+    isNotNull(ordenes.completadaEn),
+  ));
+
+let mttrHoras = 0;
+if (completadas30d.length > 0) {
+  const totalMs = completadas30d.reduce((s, r) => {
+    const a = new Date(r.createdAt).getTime();
+    const b = r.completadaEn ? new Date(r.completadaEn).getTime() : a;
+    return s + Math.max(b - a, 0);
+  }, 0);
+  mttrHoras = totalMs / completadas30d.length / 3_600_000;
+}
+
+// MTBF aproximado: tiempo total / cantidad de fallos correctivos
+const correctivos30dRows = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio30d)));
+const correctivos30d = Number(correctivos30dRows[0]?.n ?? 0);
+const mtbfHoras = correctivos30d > 0 ? (30 * 24) / correctivos30d : 0;
+
+// Top 10 equipos con mas correctivos en el año
+const topEquipos = await db
+  .select({
+    activoId: ordenes.activoId,
+    codigo: activos.codigo,
+    nombre: activos.nombre,
+    n: sql<number>`count(*)`,
+  })
+  .from(ordenes)
+  .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicioAno), isNotNull(ordenes.activoId)))
+  .groupBy(ordenes.activoId)
+  .orderBy(desc(sql`count(*)`))
+  .limit(10);
+
+// Disponibilidad estimada por equipo: 100% - (horas en mantenimiento / horas totales del periodo)
+// Aproximacion: cuenta OTs activas que tocaron ese equipo en el año y suma horas estimadas
+const totalActivos = (await db.select({ n: sql<number>`count(*)` }).from(activos))[0]?.n ?? 0;
+const operativos = (await db.select({ n: sql<number>`count(*)` }).from(activos).where(eq(activos.estado, "operativo")))[0]?.n ?? 0;
+const disponibilidad = totalActivos > 0 ? (Number(operativos) / Number(totalActivos)) * 100 : 0;
+
+// Costo estimado de repuestos consumidos en el año
+const costoRepRows = await db
+  .select({
+    total: sql<number>`SUM(${ordenRepuestos.cantidad} * COALESCE(${ordenRepuestos.precioUnitario}, ${itemsTable.precioReferencia}, 0))`,
+  })
+  .from(ordenRepuestos)
+  .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
+  .where(gte(ordenRepuestos.createdAt, inicioAno));
+const costoTotal = Number(costoRepRows[0]?.total ?? 0);
+
+const TIPO_LABEL = { preventivo: "Preventivo", correctivo: "Correctivo", predictivo: "Predictivo" };
+
+function pct(n: number) { return Math.round(n * 100) / 100; }
+function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(h)} h`; }
+---
+
+<Layout title="KPIs">
+  <h1 class="text-2xl font-bold">Indicadores de mantenimiento</h1>
+  <p class="text-sm text-slate-500">Vista ejecutiva de la operación · ventana de cálculo: últimos 30 días / año en curso</p>
+
+  <!-- Top KPIs -->
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Disponibilidad estimada</div>
+      <div class="mt-1 text-3xl font-bold text-emerald-600">{pct(disponibilidad)}%</div>
+      <div class="text-xs text-slate-500">{operativos} de {totalActivos} equipos operativos</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">MTTR (30d)</div>
+      <div class="mt-1 text-3xl font-bold text-blue-600">{fmtH(mttrHoras)}</div>
+      <div class="text-xs text-slate-500">Tiempo medio de reparación</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">MTBF (30d)</div>
+      <div class="mt-1 text-3xl font-bold text-purple-600">{fmtH(mtbfHoras)}</div>
+      <div class="text-xs text-slate-500">Tiempo medio entre fallas</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Backlog vencido</div>
+      <div class="mt-1 text-3xl font-bold text-red-600">{vencidas}</div>
+      <div class="text-xs text-slate-500">OTs con vencimiento pasado y sin cerrar</div>
+    </div>
+  </div>
+
+  <!-- Distribucion -->
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Estado de las OTs</h2>
+      <div class="mt-3 space-y-2 text-sm">
+        {[
+          { k: "abierta", l: "Abiertas", c: "bg-blue-500" },
+          { k: "en_proceso", l: "En proceso", c: "bg-amber-500" },
+          { k: "completada", l: "Completadas", c: "bg-emerald-500" },
+          { k: "verificada", l: "Verificadas", c: "bg-teal-500" },
+          { k: "cerrada", l: "Cerradas", c: "bg-slate-700" },
+          { k: "cancelada", l: "Canceladas", c: "bg-red-400" },
+        ].map((s) => {
+          const v = get(s.k);
+          const w = total > 0 ? (v / total) * 100 : 0;
+          return (
+            <div>
+              <div class="flex justify-between text-xs">
+                <span>{s.l}</span><span class="font-mono">{v} ({pct(w)}%)</span>
+              </div>
+              <div class="h-2 overflow-hidden rounded bg-slate-100">
+                <div class={`h-full ${s.c}`} style={`width: ${w}%`}></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Por tipo (año)</h2>
+      <div class="mt-3 space-y-2 text-sm">
+        {porTipo.map((t) => {
+          const v = Number(t.n);
+          const w = total > 0 ? (v / total) * 100 : 0;
+          return (
+            <div>
+              <div class="flex justify-between text-xs">
+                <span>{TIPO_LABEL[t.tipo as keyof typeof TIPO_LABEL] ?? t.tipo}</span>
+                <span class="font-mono">{v}</span>
+              </div>
+              <div class="h-2 overflow-hidden rounded bg-slate-100">
+                <div class="h-full bg-brand-500" style={`width: ${w}%`}></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div class="mt-5 rounded bg-slate-50 p-3">
+        <div class="text-xs uppercase text-slate-500">Costo de repuestos (año)</div>
+        <div class="mt-1 text-2xl font-bold">${costoTotal.toFixed(2)}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top equipos problematicos -->
+  <div class="card mt-6 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Top 10 equipos con más correctivos (año)</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">#</th>
+          <th class="px-4 py-2">Equipo</th>
+          <th class="px-4 py-2 text-right">OTs correctivas</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {topEquipos.length === 0 && <tr><td colspan="3" class="px-4 py-6 text-center text-slate-400">Sin datos.</td></tr>}
+        {topEquipos.map((e, i) => (
+          <tr>
+            <td class="px-4 py-2 font-mono text-xs">{i + 1}</td>
+            <td class="px-4 py-2"><a href={`/activos/${e.activoId}`} class="text-brand-700 hover:underline">{e.codigo} — {e.nombre}</a></td>
+            <td class="px-4 py-2 text-right font-bold text-red-600">{Number(e.n)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>

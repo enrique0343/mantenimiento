@@ -1,0 +1,97 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { tickets, usuarios, sucursales } from "@/lib/schema";
+import { desc, eq } from "drizzle-orm";
+import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
+import { PRIO_COLOR } from "@/lib/ordenes";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const url = new URL(Astro.request.url);
+const filtroEstado = url.searchParams.get("estado");
+
+const rowsRaw = await db
+  .select({ t: tickets, a: usuarios, s: sucursales })
+  .from(tickets)
+  .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
+  .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+  .orderBy(desc(tickets.id));
+
+const rows = rowsRaw.filter((r) => !filtroEstado || r.t.estado === filtroEstado);
+
+const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
+  acc[r.t.estado] = (acc[r.t.estado] ?? 0) + 1;
+  return acc;
+}, {});
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"];
+---
+
+<Layout title="Tickets de soporte">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Tickets de soporte</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
+    </div>
+    <a href="/soporte" target="_blank" class="btn-secondary">Ver formulario público ↗</a>
+  </div>
+
+  <div class="mt-4 flex flex-wrap gap-1 text-xs">
+    <a href="/tickets" class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>Todos ({rowsRaw.length})</a>
+    {ESTADOS.map((s) => (
+      <a href={`/tickets?estado=${s}`} class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_TICKET_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+        {ESTADO_TICKET_LABEL[s]} ({conteo[s] ?? 0})
+      </a>
+    ))}
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">#</th>
+          <th class="px-4 py-2">Asunto</th>
+          <th class="px-4 py-2">Solicitante</th>
+          <th class="px-4 py-2">Sucursal</th>
+          <th class="px-4 py-2">Prioridad</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">SLA</th>
+          <th class="px-4 py-2">Asignado</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
+        {rows.map((r) => {
+          const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
+          return (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">#{r.t.id}</td>
+              <td class="px-4 py-2">
+                <a class="font-medium text-brand-700 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
+                <div class="text-xs text-slate-400 truncate max-w-md">{r.t.descripcion}</div>
+              </td>
+              <td class="px-4 py-2 text-xs">
+                <div>{r.t.solicitanteNombre}</div>
+                <div class="text-slate-500">{r.t.solicitanteEmail}</div>
+              </td>
+              <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
+              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.t.prioridad]} capitalize`}>{r.t.prioridad}</span></td>
+              <td class="px-4 py-2"><span class={`badge ${ESTADO_TICKET_COLOR[r.t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[r.t.estado as EstadoTicket]}</span></td>
+              <td class="px-4 py-2 text-xs">
+                {sla === "vencido" && <span class="font-medium text-red-600">⚠ Vencido</span>}
+                {sla === "warning" && <span class="font-medium text-amber-600">Por vencer</span>}
+                {sla === "ok" && <span class="text-slate-500">{fmt(r.t.vencimientoSla)}</span>}
+                {sla === "n/a" && <span class="text-slate-400">—</span>}
+              </td>
+              <td class="px-4 py-2 text-slate-600">{r.a?.nombre ?? "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Layout>

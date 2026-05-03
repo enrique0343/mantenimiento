@@ -12,6 +12,10 @@ interface Env {
   JWT_SECRET: string;
   CRON_SECRET: string;
   APP_NAME: string;
+  M365_TENANT_ID?: string;
+  M365_CLIENT_ID?: string;
+  M365_CLIENT_SECRET?: string;
+  M365_FROM_ADDRESS?: string;
 }
 
 declare namespace App {

@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
+import { sendMail, emailLayout } from "@/lib/email";
 
 export const prerender = false;
 
@@ -116,6 +117,33 @@ export const PATCH: APIRoute = async (ctx) => {
   }
 
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
+
+  // Notifica al tecnico cuando se le asigna una OT
+  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
+    try {
+      const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre })
+        .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
+      if (u?.email) {
+        ctx.locals.runtime.ctx.waitUntil(
+          sendMail(ctx, {
+            to: u.email,
+            subject: `[OT #${row.id}] Te asignaron: ${row.titulo}`,
+            html: emailLayout(
+              `Nueva orden asignada`,
+              `<p>Hola <strong>${u.nombre}</strong>,</p>
+               <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
+               <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
+               ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
+               <p><a href="https://mantenimiento-49c.pages.dev/ordenes/${row.id}">Abrir orden →</a></p>`
+            ),
+            tipo: "ot_asignada",
+            referencia: `orden:${row.id}`,
+          }).catch(() => {})
+        );
+      }
+    } catch {}
+  }
+
   return Response.json({ orden: row });
 };
 

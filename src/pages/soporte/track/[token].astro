@@ -1,0 +1,96 @@
+---
+import "@/styles/globals.css";
+import { getDb } from "@/lib/db";
+import { tickets, ticketComentarios, usuarios } from "@/lib/schema";
+import { eq, asc } from "drizzle-orm";
+import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
+export const prerender = false;
+
+const token = String(Astro.params.token ?? "").toUpperCase();
+const db = getDb(Astro);
+const [t] = await db.select().from(tickets).where(eq(tickets.trackingToken, token)).limit(1);
+
+const coms = t
+  ? await db
+      .select({ c: ticketComentarios, u: usuarios })
+      .from(ticketComentarios)
+      .leftJoin(usuarios, eq(usuarios.id, ticketComentarios.usuarioId))
+      .where(eq(ticketComentarios.ticketId, t.id))
+      .orderBy(asc(ticketComentarios.id))
+  : [];
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ticket {token}</title>
+  </head>
+  <body class="min-h-screen bg-slate-50">
+    <header class="border-b border-slate-200 bg-white">
+      <div class="mx-auto max-w-3xl px-4 py-3"><a href="/soporte" class="text-lg font-bold text-brand-600">← Soporte</a></div>
+    </header>
+    <main class="mx-auto max-w-3xl px-4 py-8">
+      {!t && <div class="card p-6 text-center text-slate-500">Ticket no encontrado. Verifica el código.</div>}
+      {t && (
+        <>
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h1 class="text-2xl font-bold">{t.asunto}</h1>
+              <p class="mt-1 font-mono text-xs text-slate-500">#{t.id} · {token}</p>
+            </div>
+            <span class={`badge ${ESTADO_TICKET_COLOR[t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[t.estado as EstadoTicket]}</span>
+          </div>
+
+          <div class="card mt-4 p-5">
+            <h2 class="text-sm font-semibold text-slate-700">Tu solicitud</h2>
+            <p class="mt-2 whitespace-pre-wrap text-sm text-slate-600">{t.descripcion}</p>
+            <div class="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-500">
+              <div><strong>Creado:</strong> {fmt(t.createdAt)}</div>
+              <div><strong>SLA:</strong> {fmt(t.vencimientoSla)}</div>
+              {t.resueltoEn && <div class="col-span-2"><strong>Resuelto:</strong> {fmt(t.resueltoEn)}</div>}
+            </div>
+            {t.resolucionNotas && (
+              <div class="mt-3 rounded bg-emerald-50 p-3 text-sm text-slate-700"><strong>Resolución:</strong> {t.resolucionNotas}</div>
+            )}
+          </div>
+
+          <div class="card mt-4 p-5">
+            <h2 class="text-sm font-semibold text-slate-700">Conversación</h2>
+            <ul class="mt-3 space-y-3 text-sm">
+              {coms.filter((c) => c.c.publico).length === 0 && <li class="text-slate-500">Sin comentarios aún.</li>}
+              {coms.filter((c) => c.c.publico).map((r) => (
+                <li class="rounded-md bg-slate-50 p-3">
+                  <div class="text-xs text-slate-500">{r.u?.nombre ?? r.c.autorExterno ?? "Solicitante"} · {fmt(r.c.createdAt)}</div>
+                  <div class="mt-1 whitespace-pre-wrap">{r.c.texto}</div>
+                </li>
+              ))}
+            </ul>
+            {(t.estado !== "cerrado" && t.estado !== "descartado") && (
+              <form id="comForm" class="mt-3 space-y-2">
+                <textarea id="comTexto" class="input" rows="3" placeholder="Agregar mensaje..."></textarea>
+                <button type="submit" class="btn-primary">Enviar</button>
+              </form>
+            )}
+          </div>
+        </>
+      )}
+    </main>
+    <script define:vars={{ token }}>
+      document.getElementById("comForm")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const texto = document.getElementById("comTexto").value.trim();
+        if (!texto) return;
+        const res = await fetch(`/api/tickets/track/${token}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ texto }),
+        });
+        if (res.ok) location.reload();
+      });
+    </script>
+  </body>
+</html>
