@@ -3,37 +3,49 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
+import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 export const prerender = false;
 
 const db = getDb(Astro);
-const rows = await db
+const url = new URL(Astro.request.url);
+const filtroEstado = url.searchParams.get("estado");
+const filtroTipo = url.searchParams.get("tipo");
+
+const rowsRaw = await db
   .select({ orden: ordenes, activo: activos, asignado: usuarios })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
   .orderBy(desc(ordenes.id));
 
-const estadoColor: Record<string, string> = {
-  abierta: "bg-blue-100 text-blue-700",
-  en_proceso: "bg-amber-100 text-amber-700",
-  completada: "bg-emerald-100 text-emerald-700",
-  cancelada: "bg-slate-200 text-slate-600",
-};
-const prioColor: Record<string, string> = {
-  baja: "bg-slate-100 text-slate-600",
-  media: "bg-blue-100 text-blue-700",
-  alta: "bg-orange-100 text-orange-700",
-  urgente: "bg-red-100 text-red-700",
-};
+const rows = rowsRaw.filter((r) =>
+  (!filtroEstado || r.orden.estado === filtroEstado) &&
+  (!filtroTipo || r.orden.tipo === filtroTipo)
+);
+
+const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
+  acc[r.orden.estado] = (acc[r.orden.estado] ?? 0) + 1;
+  return acc;
+}, {});
 ---
 
-<Layout title="Ordenes de trabajo">
-  <div class="flex items-center justify-between">
+<Layout title="Órdenes de trabajo">
+  <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">Ordenes de trabajo</h1>
-      <p class="text-sm text-slate-500">{rows.length} en total</p>
+      <h1 class="text-2xl font-bold">Órdenes de trabajo</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} en total · mostrando {rows.length}</p>
     </div>
     <a href="/ordenes/nueva" class="btn-primary">+ Nueva orden</a>
+  </div>
+
+  <!-- Filtros rapidos por estado -->
+  <div class="mt-4 flex flex-wrap gap-1 text-xs">
+    <a href="/ordenes" class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>Todas ({rowsRaw.length})</a>
+    {(["abierta", "en_proceso", "completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
+      <a href={`/ordenes?estado=${s}`} class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+        {ESTADO_LABEL[s]} ({conteoEstados[s] ?? 0})
+      </a>
+    ))}
   </div>
 
   <div class="card mt-4 overflow-hidden">
@@ -41,8 +53,8 @@ const prioColor: Record<string, string> = {
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
           <th class="px-4 py-2">#</th>
-          <th class="px-4 py-2">Titulo</th>
-          <th class="px-4 py-2">Activo</th>
+          <th class="px-4 py-2">Título</th>
+          <th class="px-4 py-2">Equipo</th>
           <th class="px-4 py-2">Tipo</th>
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
@@ -51,21 +63,26 @@ const prioColor: Record<string, string> = {
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && (
-          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Aun no hay ordenes.</td></tr>
+          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
         )}
-        {rows.map((r) => (
-          <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2 font-mono text-xs">#{r.orden.id}</td>
-            <td class="px-4 py-2">
-              <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
-            </td>
-            <td class="px-4 py-2 text-slate-600">{r.activo?.codigo ?? "-"}</td>
-            <td class="px-4 py-2 capitalize">{r.orden.tipo}</td>
-            <td class="px-4 py-2"><span class={`badge ${prioColor[r.orden.prioridad]}`}>{r.orden.prioridad}</span></td>
-            <td class="px-4 py-2"><span class={`badge ${estadoColor[r.orden.estado]}`}>{r.orden.estado.replace("_"," ")}</span></td>
-            <td class="px-4 py-2 text-slate-600">{r.asignado?.nombre ?? "-"}</td>
-          </tr>
-        ))}
+        {rows.map((r) => {
+          const e = r.orden.estado as EstadoOT;
+          return (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">#{r.orden.id}</td>
+              <td class="px-4 py-2">
+                <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
+              </td>
+              <td class="px-4 py-2 text-slate-600">{r.activo?.codigo ?? <span class="text-slate-400">— sin equipo —</span>}</td>
+              <td class="px-4 py-2">
+                <span class={`badge ${TIPO_COLOR[r.orden.tipo]} capitalize`}>{r.orden.tipo}</span>
+              </td>
+              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.orden.prioridad]} capitalize`}>{r.orden.prioridad}</span></td>
+              <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[e]}`}>{ESTADO_LABEL[e]}</span></td>
+              <td class="px-4 py-2 text-slate-600">{r.asignado?.nombre ?? "—"}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   </div>

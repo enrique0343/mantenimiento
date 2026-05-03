@@ -101,11 +101,13 @@ export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
-  tipo: text("tipo", { enum: ["preventivo", "correctivo"] }).notNull().default("correctivo"),
+  tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo"] }).notNull().default("correctivo"),
   prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] })
     .notNull()
     .default("media"),
-  estado: text("estado", { enum: ["abierta", "en_proceso", "completada", "cancelada"] })
+  estado: text("estado", {
+    enum: ["abierta", "en_proceso", "completada", "verificada", "cerrada", "cancelada"],
+  })
     .notNull()
     .default("abierta"),
   activoId: integer("activo_id").references(() => activos.id),
@@ -114,6 +116,18 @@ export const ordenes = sqliteTable("ordenes", {
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
   vencimiento: text("vencimiento"),
   completadaEn: text("completada_en"),
+  // Ejecucion
+  trabajosRealizados: text("trabajos_realizados"),
+  causaRaiz: text("causa_raiz"),
+  solucionAplicada: text("solucion_aplicada"),
+  horasTrabajadas: real("horas_trabajadas"),
+  checklistEjecucion: text("checklist_ejecucion"), // JSON: [{texto,hecho,notas}]
+  // Verificacion + cierre
+  verificadoPor: integer("verificado_por").references(() => usuarios.id),
+  verificadoEn: text("verificado_en"),
+  verificacionNotas: text("verificacion_notas"),
+  cerradoPor: integer("cerrado_por").references(() => usuarios.id),
+  cerradoEn: text("cerrado_en"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -143,6 +157,9 @@ export const adjuntos = sqliteTable("adjuntos", {
   contentType: text("content_type").notNull(),
   tamano: integer("tamano").notNull(),
   r2Key: text("r2_key").notNull(),
+  categoria: text("categoria", { enum: ["antes", "despues", "documento", "general"] })
+    .notNull()
+    .default("general"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 

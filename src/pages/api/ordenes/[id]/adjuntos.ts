@@ -15,6 +15,11 @@ export const POST: APIRoute = async (ctx) => {
 
   const form = await ctx.request.formData().catch(() => null);
   const file = form?.get("file");
+  const categoriaRaw = String(form?.get("categoria") ?? "general");
+  const categoria = (["antes", "despues", "documento", "general"] as const).includes(categoriaRaw as any)
+    ? (categoriaRaw as "antes" | "despues" | "documento" | "general")
+    : "general";
+
   if (!(file instanceof File)) {
     return Response.json({ error: "Archivo requerido en campo 'file'" }, { status: 400 });
   }
@@ -23,7 +28,7 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const r2Key = `ordenes/${ordenId}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
+  const r2Key = `ordenes/${ordenId}/${categoria}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
   await env.R2.put(r2Key, file.stream(), {
     httpMetadata: { contentType: file.type || "application/octet-stream" },
   });
@@ -38,6 +43,7 @@ export const POST: APIRoute = async (ctx) => {
       contentType: file.type || "application/octet-stream",
       tamano: file.size,
       r2Key,
+      categoria,
     })
     .returning();
   return Response.json({ adjunto: row }, { status: 201 });

@@ -10,11 +10,12 @@ export const prerender = false;
 const createSchema = z.object({
   titulo: z.string().min(1),
   descripcion: z.string().optional().nullable(),
-  tipo: z.enum(["preventivo", "correctivo"]).optional(),
+  tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   activoId: z.number().int().positive().optional().nullable(),
   asignadoA: z.number().int().positive().optional().nullable(),
   vencimiento: z.string().optional().nullable(),
+  checklistEjecucion: z.string().optional().nullable(),
 });
 
 export const GET: APIRoute = async (ctx) => {

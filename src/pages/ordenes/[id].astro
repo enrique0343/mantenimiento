@@ -3,12 +3,20 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import {
+  ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
+  transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
+  parseChecklist, progresoChecklist,
+  type EstadoOT,
+} from "@/lib/ordenes";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
 if (!Number.isFinite(id)) return Astro.redirect("/ordenes");
 
+const user = Astro.locals.user!;
 const db = getDb(Astro);
+
 const [row] = await db
   .select({ orden: ordenes, activo: activos, asignado: usuarios })
   .from(ordenes)
@@ -19,6 +27,17 @@ const [row] = await db
 
 if (!row) return Astro.redirect("/ordenes");
 
+const o = row.orden;
+const estadoActual = o.estado as EstadoOT;
+const esAsignado = o.asignadoA === user.id;
+
+const [verifUsr] = o.verificadoPor
+  ? await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, o.verificadoPor)).limit(1)
+  : [null];
+const [cierraUsr] = o.cerradoPor
+  ? await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, o.cerradoPor)).limit(1)
+  : [null];
+
 const coms = await db
   .select({ c: comentarios, u: usuarios })
   .from(comentarios)
@@ -28,127 +47,371 @@ const coms = await db
 
 const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
 const tecnicos = await db
-  .select({ id: usuarios.id, nombre: usuarios.nombre })
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
   .where(eq(usuarios.activo, true));
 
-const o = row.orden;
+const checklistItems = parseChecklist(o.checklistEjecucion);
+const progreso = progresoChecklist(checklistItems);
+
+const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
+const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
+const puedeAsignar = puedeAsignarse(user.rol);
+
+const ESTADO_PROGRESO: Record<EstadoOT, number> = {
+  abierta: 1, en_proceso: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
+};
+const stepActual = ESTADO_PROGRESO[estadoActual];
+
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "-");
+
+const adjsAntes = adjs.filter((a) => a.categoria === "antes");
+const adjsDespues = adjs.filter((a) => a.categoria === "despues");
+const adjsDocumento = adjs.filter((a) => a.categoria === "documento");
+const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 ---
 
 <Layout title={`Orden #${o.id}`}>
   <a href="/ordenes" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
-  <div class="mt-2 flex items-start justify-between gap-4">
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-bold">{o.titulo}</h1>
-      <p class="text-sm text-slate-500">Orden #{o.id} - creada {fmt(o.createdAt)}</p>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{o.titulo}</h1>
+        <span class={`badge ${TIPO_COLOR[o.tipo]} capitalize`}>{o.tipo}</span>
+        <span class={`badge ${PRIO_COLOR[o.prioridad]} capitalize`}>{o.prioridad}</span>
+        <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
+      </div>
+      <p class="mt-1 text-sm text-slate-500">Orden #{o.id} - creada {fmt(o.createdAt)}</p>
     </div>
   </div>
+
+  <!-- Wizard de estados -->
+  {estadoActual !== "cancelada" && (
+    <div class="card mt-4 p-4">
+      <div class="flex items-center justify-between gap-2">
+        {(["abierta", "en_proceso", "completada", "verificada", "cerrada"] as EstadoOT[]).map((s, idx) => (
+          <div class="flex flex-1 items-center gap-2">
+            <div class:list={[
+              "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold",
+              ESTADO_PROGRESO[s] <= stepActual ? "bg-brand-600 text-white" : "bg-slate-200 text-slate-500",
+            ]}>{idx + 1}</div>
+            <span class:list={["text-xs font-medium", ESTADO_PROGRESO[s] <= stepActual ? "text-slate-900" : "text-slate-400"]}>
+              {ESTADO_LABEL[s]}
+            </span>
+            {idx < 4 && <div class:list={["h-0.5 flex-1", ESTADO_PROGRESO[s] < stepActual ? "bg-brand-600" : "bg-slate-200"]} />}
+          </div>
+        ))}
+      </div>
+      {proximas.length > 0 && (
+        <div class="mt-4 flex flex-wrap gap-2">
+          {proximas.map((s) => (
+            <button
+              data-transition={s}
+              class:list={[
+                "rounded-md px-3 py-1.5 text-sm font-medium",
+                s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
+                s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
+                s === "verificada" ? "bg-teal-600 text-white hover:bg-teal-700" :
+                "bg-brand-600 text-white hover:bg-brand-700",
+              ]}
+            >
+              {s === "abierta" ? "↺ Reabrir" :
+               s === "en_proceso" ? "▶ Iniciar / Reanudar" :
+               s === "completada" ? "✓ Marcar finalizada" :
+               s === "verificada" ? "✓✓ Verificar" :
+               s === "cerrada" ? "🔒 Cerrar definitivamente" :
+               s === "cancelada" ? "✕ Cancelar" : s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )}
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-    <div class="card lg:col-span-2 p-5">
-      <h2 class="font-semibold text-slate-900">Detalles</h2>
-      <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{o.descripcion || "Sin descripcion."}</p>
+    <!-- Detalles + ejecucion -->
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Descripción</h2>
+        <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{o.descripcion || "Sin descripción."}</p>
 
-      <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
-        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div class="capitalize">{o.tipo}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Prioridad</div><div class="capitalize">{o.prioridad}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Activo</div><div>{row.activo ? `${row.activo.codigo} - ${row.activo.nombre}` : "-"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Vencimiento</div><div>{fmt(o.vencimiento)}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Completada en</div><div>{fmt(o.completadaEn)}</div></div>
+        <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <div class="text-xs uppercase text-slate-500">Equipo</div>
+            <div>{row.activo ? <a class="text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>{row.activo.codigo} - {row.activo.nombre}</a> : <span class="text-slate-400">Trabajo sin equipo</span>}</div>
+          </div>
+          <div><div class="text-xs uppercase text-slate-500">Vencimiento</div><div>{fmtDate(o.vencimiento)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Asignado</div><div>{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Completada</div><div>{fmt(o.completadaEn)}</div></div>
+        </div>
       </div>
+
+      <!-- Checklist -->
+      {checklistItems.length > 0 && (
+        <div class="card p-5">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900">Checklist de ejecución</h2>
+            <span class="text-xs text-slate-500">{progreso.hechos} / {progreso.total} ({progreso.pct}%)</span>
+          </div>
+          <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
+            <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
+          </div>
+          <ul id="checklistList" class="mt-4 space-y-2">
+            {checklistItems.map((it, idx) => (
+              <li class="flex items-start gap-2 rounded bg-slate-50 p-2">
+                <input type="checkbox" class="ck-item mt-1" data-idx={idx} checked={it.hecho} disabled={!puedeEditar} />
+                <div class="flex-1">
+                  <div class="text-sm">{it.texto}</div>
+                  {it.notas && <div class="text-xs text-slate-500">{it.notas}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {puedeEditar && (
+            <button id="ckSave" class="btn-secondary mt-3 text-sm">Guardar checklist</button>
+          )}
+        </div>
+      )}
+
+      <!-- Trabajos realizados / causa raiz / solucion -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
+        <div class="mt-3 space-y-3 text-sm">
+          <div>
+            <label class="label">Trabajos realizados</label>
+            <textarea id="trabajosRealizados" class="input" rows="3" placeholder="Describe qué se hizo..." disabled={!puedeEditar}>{o.trabajosRealizados ?? ""}</textarea>
+          </div>
+          {o.tipo === "correctivo" && (
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label class="label">Causa raíz</label>
+                <textarea id="causaRaiz" class="input" rows="2" disabled={!puedeEditar}>{o.causaRaiz ?? ""}</textarea>
+              </div>
+              <div>
+                <label class="label">Solución aplicada</label>
+                <textarea id="solucionAplicada" class="input" rows="2" disabled={!puedeEditar}>{o.solucionAplicada ?? ""}</textarea>
+              </div>
+            </div>
+          )}
+          <div>
+            <label class="label">Horas trabajadas</label>
+            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32" value={o.horasTrabajadas ?? ""} disabled={!puedeEditar} />
+          </div>
+          {puedeEditar && (
+            <button id="ejecSave" class="btn-primary text-sm">Guardar ejecución</button>
+          )}
+          <p id="ejecMsg" class="hidden text-xs"></p>
+        </div>
+      </div>
+
+      <!-- Verificacion (cuando ya esta verificada o cerrada) -->
+      {(o.verificadoEn || o.verificacionNotas) && (
+        <div class="card p-5 border-l-4 border-teal-500">
+          <h2 class="font-semibold text-teal-700">Verificación</h2>
+          <div class="mt-2 text-sm">
+            {o.verificadoEn && (
+              <p class="text-slate-600">
+                Verificada por <strong>{verifUsr?.nombre ?? "—"}</strong> el {fmt(o.verificadoEn)}
+              </p>
+            )}
+            {o.verificacionNotas && (
+              <p class="mt-2 whitespace-pre-wrap rounded bg-teal-50 p-3 text-slate-700">{o.verificacionNotas}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {o.cerradoEn && (
+        <div class="card p-5 border-l-4 border-slate-700">
+          <h2 class="font-semibold text-slate-700">Cerrada</h2>
+          <p class="mt-2 text-sm text-slate-600">
+            Cerrada por <strong>{cierraUsr?.nombre ?? "—"}</strong> el {fmt(o.cerradoEn)}
+          </p>
+        </div>
+      )}
     </div>
 
-    <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Estado</h2>
-      <div class="mt-3 space-y-3 text-sm">
-        <div>
-          <label class="label">Estado</label>
-          <select class="input" id="estado">
-            <option value="abierta" selected={o.estado === "abierta"}>Abierta</option>
-            <option value="en_proceso" selected={o.estado === "en_proceso"}>En proceso</option>
-            <option value="completada" selected={o.estado === "completada"}>Completada</option>
-            <option value="cancelada" selected={o.estado === "cancelada"}>Cancelada</option>
-          </select>
+    <!-- Sidebar: Asignacion + Comentarios -->
+    <div class="space-y-4">
+      {puedeAsignar && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Asignación</h2>
+          <div class="mt-3 space-y-2 text-sm">
+            <select class="input" id="asignadoA">
+              <option value="">— Sin asignar —</option>
+              {tecnicos.map((t) => (
+                <option value={t.id} selected={o.asignadoA === t.id}>{t.nombre} ({t.rol})</option>
+              ))}
+            </select>
+            <button id="asignarBtn" class="btn-secondary w-full justify-center">Guardar asignación</button>
+          </div>
         </div>
-        <div>
-          <label class="label">Asignar a</label>
-          <select class="input" id="asignadoA">
-            <option value="">- Sin asignar -</option>
-            {tecnicos.map((t) => <option value={t.id} selected={o.asignadoA === t.id}>{t.nombre}</option>)}
-          </select>
-        </div>
-        <button id="saveBtn" class="btn-primary w-full justify-center">Guardar cambios</button>
-        <p id="saveMsg" class="hidden text-sm"></p>
+      )}
+
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Comentarios ({coms.length})</h2>
+        <ul class="mt-3 space-y-3 text-sm">
+          {coms.length === 0 && <li class="text-slate-500">Sin comentarios.</li>}
+          {coms.map((r) => (
+            <li class="rounded-md bg-slate-50 p-3">
+              <div class="text-xs text-slate-500">{r.u?.nombre} - {fmt(r.c.createdAt)}</div>
+              <div class="mt-1 whitespace-pre-wrap">{r.c.texto}</div>
+            </li>
+          ))}
+        </ul>
+        <form id="comForm" class="mt-3 space-y-2">
+          <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
+          <button class="btn-primary w-full justify-center" type="submit">Comentar</button>
+        </form>
       </div>
     </div>
   </div>
 
-  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-    <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Comentarios</h2>
-      <ul class="mt-3 space-y-3 text-sm">
-        {coms.length === 0 && <li class="text-slate-500">Sin comentarios.</li>}
-        {coms.map((r) => (
-          <li class="rounded-md bg-slate-50 p-3">
-            <div class="text-xs text-slate-500">{r.u?.nombre} - {fmt(r.c.createdAt)}</div>
-            <div class="mt-1 whitespace-pre-wrap">{r.c.texto}</div>
-          </li>
-        ))}
-      </ul>
-      <form id="comForm" class="mt-3 space-y-2">
-        <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
-        <button class="btn-primary" type="submit">Comentar</button>
-      </form>
+  <!-- Adjuntos categorizados -->
+  <div class="mt-6 card p-5">
+    <h2 class="font-semibold text-slate-900">Adjuntos ({adjs.length})</h2>
+    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {([
+        { key: "antes", label: "📷 Antes", color: "bg-blue-50", items: adjsAntes },
+        { key: "despues", label: "📸 Después", color: "bg-emerald-50", items: adjsDespues },
+        { key: "documento", label: "📄 Documentos", color: "bg-amber-50", items: adjsDocumento },
+        { key: "general", label: "📎 General", color: "bg-slate-50", items: adjsGeneral },
+      ] as const).map((cat) => (
+        <div class={`${cat.color} rounded-lg p-3`}>
+          <div class="mb-2 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-slate-700">{cat.label}</h3>
+            <span class="text-xs text-slate-500">{cat.items.length}</span>
+          </div>
+          <ul class="space-y-1">
+            {cat.items.length === 0 && <li class="text-xs text-slate-400">Vacío.</li>}
+            {cat.items.map((a) => (
+              <li class="rounded bg-white p-2 text-xs">
+                {a.contentType.startsWith("image/") && (
+                  <a href={`/api/adjuntos/${a.id}`} target="_blank">
+                    <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
+                  </a>
+                )}
+                <a href={`/api/adjuntos/${a.id}`} target="_blank" class="block truncate font-medium text-brand-700 hover:underline">
+                  {a.nombre}
+                </a>
+                <span class="text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
+              </li>
+            ))}
+          </ul>
+          <form class="upForm mt-2" data-categoria={cat.key}>
+            <input type="file" class="block w-full text-xs upFile" required />
+            <button type="submit" class="btn-secondary mt-1 w-full justify-center text-xs">Subir</button>
+          </form>
+        </div>
+      ))}
     </div>
+    <p id="upErr" class="mt-2 hidden text-sm text-red-600"></p>
+  </div>
 
-    <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Adjuntos</h2>
-      <ul class="mt-3 space-y-2 text-sm">
-        {adjs.length === 0 && <li class="text-slate-500">Sin adjuntos.</li>}
-        {adjs.map((a) => (
-          <li class="flex items-center justify-between rounded-md bg-slate-50 p-2">
-            <a href={`/api/adjuntos/${a.id}`} target="_blank" class="text-brand-700 hover:underline">{a.nombre}</a>
-            <span class="text-xs text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
-          </li>
-        ))}
-      </ul>
-      <form id="upForm" class="mt-3 space-y-2">
-        <input id="upFile" type="file" class="block text-sm" required />
-        <button class="btn-primary" type="submit">Subir archivo</button>
-        <p id="upErr" class="hidden text-sm text-red-600"></p>
-      </form>
+  <!-- Modal verificacion (capturar notas) -->
+  <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold text-slate-900">Verificar orden</h3>
+      <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. Puedes agregar observaciones.</p>
+      <textarea id="verifNotas" class="input mt-3" rows="3" placeholder="Notas de verificación (opcional)"></textarea>
+      <div class="mt-3 flex justify-end gap-2">
+        <button id="verifCancel" class="btn-secondary">Cancelar</button>
+        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Confirmar verificación</button>
+      </div>
     </div>
   </div>
 
-  <script define:vars={{ id }}>
+  <script define:vars={{ id, checklistJson: o.checklistEjecucion ?? null }}>
     const $ = (id) => document.getElementById(id);
+    let checklist = checklistJson ? JSON.parse(checklistJson) : [];
 
-    $("saveBtn").addEventListener("click", async () => {
-      const msg = $("saveMsg");
-      msg.classList.add("hidden");
-      const payload = {
-        estado: $("estado").value,
-        asignadoA: $("asignadoA").value ? Number($("asignadoA").value) : null,
-      };
+    async function patchOrden(payload) {
       const res = await fetch(`/api/ordenes/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        msg.textContent = "Error al guardar";
-        msg.className = "text-sm text-red-600";
-      } else {
-        msg.textContent = "Guardado.";
-        msg.className = "text-sm text-emerald-600";
-        setTimeout(() => location.reload(), 600);
+        const j = await res.json().catch(() => ({}));
+        alert(typeof j.error === "string" ? j.error : "Error");
+        return null;
       }
-      msg.classList.remove("hidden");
+      return await res.json();
+    }
+
+    // Transiciones
+    document.querySelectorAll("[data-transition]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const estado = btn.dataset.transition;
+        if (estado === "verificada") {
+          $("verifModal").classList.remove("hidden");
+          $("verifModal").classList.add("flex");
+          return;
+        }
+        if (estado === "cancelada" && !confirm("¿Cancelar esta orden?")) return;
+        if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
+        const r = await patchOrden({ estado });
+        if (r) location.reload();
+      });
     });
 
-    $("comForm").addEventListener("submit", async (e) => {
+    // Verificacion modal
+    $("verifCancel")?.addEventListener("click", () => {
+      $("verifModal").classList.add("hidden");
+      $("verifModal").classList.remove("flex");
+    });
+    $("verifConfirm")?.addEventListener("click", async () => {
+      const notas = $("verifNotas").value.trim();
+      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas || null });
+      if (r) location.reload();
+    });
+
+    // Asignacion
+    $("asignarBtn")?.addEventListener("click", async () => {
+      const v = $("asignadoA").value;
+      const r = await patchOrden({ asignadoA: v ? Number(v) : null });
+      if (r) location.reload();
+    });
+
+    // Checklist
+    document.querySelectorAll(".ck-item").forEach((el) => {
+      el.addEventListener("change", () => {
+        const idx = Number(el.dataset.idx);
+        if (checklist[idx]) checklist[idx].hecho = el.checked;
+      });
+    });
+    $("ckSave")?.addEventListener("click", async () => {
+      const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+      if (r) {
+        const btn = $("ckSave");
+        btn.textContent = "✓ Guardado";
+        setTimeout(() => (btn.textContent = "Guardar checklist"), 1500);
+      }
+    });
+
+    // Ejecucion
+    $("ejecSave")?.addEventListener("click", async () => {
+      const msg = $("ejecMsg");
+      msg.classList.add("hidden");
+      const horas = $("horasTrabajadas")?.value;
+      const payload = {
+        trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
+        causaRaiz: $("causaRaiz")?.value?.trim() || null,
+        solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
+        horasTrabajadas: horas ? Number(horas) : null,
+      };
+      const r = await patchOrden(payload);
+      if (r) {
+        msg.textContent = "✓ Guardado";
+        msg.className = "text-xs text-emerald-600";
+        msg.classList.remove("hidden");
+      }
+    });
+
+    // Comentarios
+    $("comForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const texto = $("comTexto").value.trim();
       if (!texto) return;
@@ -160,22 +423,26 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
       if (res.ok) location.reload();
     });
 
-    $("upForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const err = $("upErr");
-      err.classList.add("hidden");
-      const file = $("upFile").files[0];
-      if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/ordenes/${id}/adjuntos`, { method: "POST", body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        err.textContent = j.error || "Error al subir";
-        err.classList.remove("hidden");
-        return;
-      }
-      location.reload();
+    // Subida de adjuntos por categoria
+    document.querySelectorAll(".upForm").forEach((form) => {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const err = $("upErr");
+        err.classList.add("hidden");
+        const file = form.querySelector(".upFile").files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("categoria", form.dataset.categoria);
+        const res = await fetch(`/api/ordenes/${id}/adjuntos`, { method: "POST", body: fd });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          err.textContent = j.error || "Error al subir";
+          err.classList.remove("hidden");
+          return;
+        }
+        location.reload();
+      });
     });
   </script>
 </Layout>

@@ -53,6 +53,8 @@ export const POST: APIRoute = async (ctx) => {
         creadoPor: null,
         planId: p.id,
         vencimiento: venc.toISOString(),
+        // Copia el checklist del plan a la orden para que el tecnico lo marque
+        checklistEjecucion: p.checklist ?? null,
       })
       .returning({ id: ordenes.id });
 
