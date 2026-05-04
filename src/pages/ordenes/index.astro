@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios } from "@/lib/schema";
+import { ordenes, activos, usuarios, vehiculos, actividades } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 export const prerender = false;
@@ -12,9 +12,11 @@ const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
 
 const rowsRaw = await db
-  .select({ orden: ordenes, activo: activos, asignado: usuarios })
+  .select({ orden: ordenes, activo: activos, vehiculo: vehiculos, actividad: actividades, asignado: usuarios })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .leftJoin(vehiculos, eq(vehiculos.id, ordenes.vehiculoId))
+  .leftJoin(actividades, eq(actividades.id, ordenes.actividadId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
   .orderBy(desc(ordenes.id));
 
@@ -73,7 +75,12 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
               </td>
-              <td class="px-4 py-2 text-slate-600">{r.activo?.codigo ?? <span class="text-slate-400">— sin equipo —</span>}</td>
+              <td class="px-4 py-2 text-slate-600 text-xs">
+                {r.activo && <span>🛠 {r.activo.codigo}</span>}
+                {r.vehiculo && <span>🚗 {r.vehiculo.placa}</span>}
+                {r.actividad && <span>📋 {r.actividad.codigo}</span>}
+                {!r.activo && !r.vehiculo && !r.actividad && <span class="text-slate-400">— sin asociar —</span>}
+              </td>
               <td class="px-4 py-2">
                 <span class={`badge ${TIPO_COLOR[r.orden.tipo]} capitalize`}>{r.orden.tipo}</span>
               </td>

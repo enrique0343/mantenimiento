@@ -29,6 +29,7 @@ const links = isMotorista ? [
   { href: "/cronograma", label: "Cronograma" },
   { href: "/planificador", label: "Planificador", show: isOperativo },
   { href: "/activos", label: "Equipos" },
+  { href: "/actividades", label: "Actividades", show: !isMotorista && user?.rol !== "proveedor" },
   { href: "/seguridad", label: "Seguridad", show: !isMotorista && user?.rol !== "proveedor" },
   { href: "/tickets", label: "Tickets" },
   { href: "/inventario", label: "Inventario" },

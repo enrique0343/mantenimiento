@@ -1,0 +1,114 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { actividades, actividadCategorias, sucursales, usuarios } from "@/lib/schema";
+import { eq, asc } from "drizzle-orm";
+import { estadoFecha, ESTADO_FECHA_COLOR, FRECUENCIA_LABEL, diasParaFecha, puedeVerActividades, puedeAdministrarActividades } from "@/lib/actividades";
+import { PRIO_COLOR } from "@/lib/ordenes";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerActividades(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const sucursalFiltro = url.searchParams.get("sucursal");
+const categoriaFiltro = url.searchParams.get("categoria");
+
+const rowsRaw = await db
+  .select({ a: actividades, c: actividadCategorias, s: sucursales, u: usuarios })
+  .from(actividades)
+  .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
+  .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
+  .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
+  .where(eq(actividades.activo, true))
+  .orderBy(asc(actividades.proximaFecha));
+
+const rows = rowsRaw.filter((r) =>
+  (!sucursalFiltro || r.a.sucursalId === Number(sucursalFiltro)) &&
+  (!categoriaFiltro || r.a.categoriaId === Number(categoriaFiltro))
+);
+
+const sucursalesList = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+const categoriasList = await db.select().from(actividadCategorias).where(eq(actividadCategorias.activo, true)).orderBy(actividadCategorias.orden);
+
+const fmt = (s: string) => new Date(s + "T00:00:00").toLocaleDateString("es");
+const vencidas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes) === "vencido").length;
+const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes) === "proximo").length;
+---
+
+<Layout title="Actividades recurrentes">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Actividades recurrentes</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} activas · {vencidas} vencidas · {proximas} próximas</p>
+    </div>
+    {puedeAdministrarActividades(user.rol) && (
+      <a href="/actividades/nuevo" class="btn-primary">+ Nueva actividad</a>
+    )}
+  </div>
+
+  <!-- Filtros -->
+  <div class="card mt-4 p-3">
+    <form class="flex flex-wrap items-end gap-3" method="get">
+      <div>
+        <label class="label text-xs">Sucursal</label>
+        <select name="sucursal" class="input text-sm">
+          <option value="">Todas</option>
+          {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label text-xs">Categoría</label>
+        <select name="categoria" class="input text-sm">
+          <option value="">Todas</option>
+          {categoriasList.map((c) => <option value={c.id} selected={String(c.id) === categoriaFiltro}>{c.icono} {c.nombre}</option>)}
+        </select>
+      </div>
+      <button class="btn-primary text-sm">Filtrar</button>
+      {(sucursalFiltro || categoriaFiltro) && <a href="/actividades" class="btn-secondary text-sm">Limpiar</a>}
+    </form>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Actividad</th>
+          <th class="px-4 py-2">Categoría</th>
+          <th class="px-4 py-2">Sucursal</th>
+          <th class="px-4 py-2">Frecuencia</th>
+          <th class="px-4 py-2">Próxima fecha</th>
+          <th class="px-4 py-2">Prioridad</th>
+          <th class="px-4 py-2">Asignado</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin actividades aún.</td></tr>}
+        {rows.map((r) => {
+          const st = estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes);
+          const dias = diasParaFecha(r.a.proximaFecha);
+          return (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">
+                <a class="text-brand-700 hover:underline" href={`/actividades/${r.a.id}`}>{r.a.codigo}</a>
+              </td>
+              <td class="px-4 py-2">{r.a.titulo}</td>
+              <td class="px-4 py-2 text-sm">{r.c?.icono} {r.c?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-slate-600 capitalize">{FRECUENCIA_LABEL[r.a.frecuencia]}</td>
+              <td class:list={["px-4 py-2 text-xs", ESTADO_FECHA_COLOR[st]]}>
+                {fmt(r.a.proximaFecha)}
+                {dias != null && st === "vencido" && <span class="block text-[10px]">vencida hace {Math.abs(dias)}d</span>}
+                {dias != null && st === "proximo" && <span class="block text-[10px]">en {dias}d</span>}
+              </td>
+              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.a.prioridad]} capitalize`}>{r.a.prioridad}</span></td>
+              <td class="px-4 py-2 text-slate-600">{r.u?.nombre ?? "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Layout>

@@ -112,6 +112,7 @@ export const ordenes = sqliteTable("ordenes", {
     .default("abierta"),
   activoId: integer("activo_id").references(() => activos.id),
   vehiculoId: integer("vehiculo_id").references((): any => vehiculos.id),
+  actividadId: integer("actividad_id").references((): any => actividades.id),
   asignadoA: integer("asignado_a").references(() => usuarios.id),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
@@ -515,3 +516,41 @@ export const extintorEventos = sqliteTable("extintor_eventos", {
 
 export type Extintor = typeof extintores.$inferSelect;
 export type ExtintorEvento = typeof extintorEventos.$inferSelect;
+
+// ─── Actividades recurrentes ─────────────────────────────────────────────────
+export const actividadCategorias = sqliteTable("actividad_categorias", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull().unique(),
+  icono: text("icono"),
+  orden: integer("orden").notNull().default(0),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+});
+
+export const actividades = sqliteTable("actividades", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  categoriaId: integer("categoria_id").references(() => actividadCategorias.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  ubicacionDetalle: text("ubicacion_detalle"),
+  frecuencia: text("frecuencia", {
+    enum: ["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"],
+  }).notNull(),
+  proximaFecha: text("proxima_fecha").notNull(),
+  alertaDiasAntes: integer("alerta_dias_antes").notNull().default(7),
+  prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] }).notNull().default("media"),
+  horasEstimadas: real("horas_estimadas"),
+  checklist: text("checklist"),
+  asignadoA: integer("asignado_a").references(() => usuarios.id),
+  proveedorExternoId: integer("proveedor_externo_id").references(() => proveedores.id),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  ultimaGeneracion: text("ultima_generacion"),
+  ultimaEjecucion: text("ultima_ejecucion"),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
+export type Actividad = typeof actividades.$inferSelect;
