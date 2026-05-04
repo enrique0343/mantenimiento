@@ -33,7 +33,6 @@ const links = isMotorista ? [
   { href: "/seguridad", label: "Seguridad", show: !isMotorista && user?.rol !== "proveedor" },
   { href: "/tickets", label: "Tickets" },
   { href: "/inventario", label: "Inventario" },
-  { href: "/recepciones", label: "Recepciones", show: isOperativo },
   { href: "/flota", label: "Flota", show: verFlota },
   { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
   { href: "/usuarios", label: "Usuarios", show: isAdmin },

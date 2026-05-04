@@ -1,9 +1,10 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { proveedores } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { proveedores, items } from "@/lib/schema";
+import { eq, sql, like } from "drizzle-orm";
 import { UNIDADES } from "@/lib/inventario";
+import { CATEGORIAS_INVENTARIO } from "@/lib/categorias-inventario";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -15,6 +16,22 @@ const provRows = await db
   .from(proveedores)
   .where(eq(proveedores.activo, true))
   .orderBy(proveedores.nombre);
+
+// Auto-generación del código: busca el ultimo INV-XXXX y sugiere el siguiente
+const ultimosCodigos = await db
+  .select({ codigo: items.codigo })
+  .from(items)
+  .where(like(items.codigo, "INV-%"));
+
+let nextNum = 1;
+for (const { codigo } of ultimosCodigos) {
+  const m = codigo.match(/^INV-(\d+)$/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= nextNum) nextNum = n + 1;
+  }
+}
+const codigoSugerido = `INV-${String(nextNum).padStart(4, "0")}`;
 ---
 
 <Layout title="Nuevo item">
@@ -25,19 +42,29 @@ const provRows = await db
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div>
         <label class="label">Código *</label>
-        <input class="input" id="codigo" required placeholder="REP-001" />
+        <div class="flex gap-2">
+          <input class="input flex-1 font-mono" id="codigo" required value={codigoSugerido} />
+          <button type="button" id="autoCodeBtn" class="btn-secondary text-sm" title="Volver al código sugerido">↻</button>
+        </div>
+        <p class="mt-1 text-xs text-slate-500">Se sugiere automáticamente. Puedes cambiarlo si necesitas otro prefijo.</p>
       </div>
       <div>
         <label class="label">Categoría</label>
-        <input class="input" id="categoria" placeholder="Ej: Filtros, Lubricantes, Tornillería..." />
+        <input class="input" id="categoria" list="categoriasList" placeholder="Selecciona o escribe..." />
+        <datalist id="categoriasList">
+          {CATEGORIAS_INVENTARIO.map((g) => (
+            g.items.map((it) => <option value={`${g.icono} ${it}`}>{g.grupo}</option>)
+          ))}
+        </datalist>
+        <p class="mt-1 text-xs text-slate-500">Empieza a escribir o haz click para ver sugerencias.</p>
       </div>
       <div class="sm:col-span-2">
         <label class="label">Nombre *</label>
-        <input class="input" id="nombre" required />
+        <input class="input" id="nombre" required placeholder="Ej: Filtro de aire 12,000 BTU genérico" />
       </div>
       <div class="sm:col-span-2">
         <label class="label">Descripción</label>
-        <textarea class="input" id="descripcion" rows="2"></textarea>
+        <textarea class="input" id="descripcion" rows="2" placeholder="Marca, especificaciones, compatibilidad..."></textarea>
       </div>
       <div>
         <label class="label">Unidad de medida</label>
@@ -70,16 +97,19 @@ const provRows = await db
     </div>
   </form>
 
-  <script>
-    const form = document.getElementById("form") as HTMLFormElement;
-    const err = document.getElementById("err") as HTMLElement;
+  <script define:vars={{ codigoSugerido }}>
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
+    document.getElementById("autoCodeBtn")?.addEventListener("click", () => {
+      document.getElementById("codigo").value = codigoSugerido;
+    });
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       err.classList.add("hidden");
-      const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value.trim();
-      const sv = (id: string) => (document.getElementById(id) as HTMLInputElement)?.value;
-      const provEl = document.getElementById("proveedorPrincipalId") as HTMLSelectElement | null;
-      const payload: any = {
+      const v = (id) => document.getElementById(id).value.trim();
+      const sv = (id) => document.getElementById(id)?.value;
+      const provEl = document.getElementById("proveedorPrincipalId");
+      const payload = {
         codigo: v("codigo"),
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
