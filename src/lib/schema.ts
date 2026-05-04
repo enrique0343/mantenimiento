@@ -257,6 +257,7 @@ export const tickets = sqliteTable("tickets", {
   descripcion: text("descripcion").notNull(),
   prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] }).notNull().default("media"),
   sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
   ubicacion: text("ubicacion"),
   activoId: integer("activo_id").references(() => activos.id),
   estado: text("estado", { enum: ["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"] })

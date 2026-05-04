@@ -1,7 +1,7 @@
 ---
 import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
-import { sucursales, empresa } from "@/lib/schema";
+import { sucursales, ubicaciones, empresa } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 export const prerender = false;
 
@@ -9,6 +9,9 @@ const db = getDb(Astro);
 const [emp] = await db.select().from(empresa).limit(1);
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
   .from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+const ubRows = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, tipo: ubicaciones.tipo })
+  .from(ubicaciones).where(eq(ubicaciones.activa, true)).orderBy(ubicaciones.nombre);
+const ubJson = JSON.stringify(ubRows);
 ---
 
 <!doctype html>
@@ -73,17 +76,25 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
           </div>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {sucRows.length > 0 && (
-              <div>
-                <label class="label">Sucursal</label>
-                <select class="input" id="sucursalId">
-                  <option value="">— Seleccionar —</option>
-                  {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
-                </select>
-              </div>
+              <>
+                <div>
+                  <label class="label">Sucursal</label>
+                  <select class="input" id="sucursalId" required>
+                    <option value="">— Seleccionar —</option>
+                    {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label class="label">Ubicación</label>
+                  <select class="input" id="ubicacionId">
+                    <option value="">— Selecciona primero la sucursal —</option>
+                  </select>
+                </div>
+              </>
             )}
-            <div>
-              <label class="label">Ubicación específica</label>
-              <input class="input" id="ubicacion" placeholder="Ej: Sala 3, Piso 2 - Quirófano A" />
+            <div class="sm:col-span-2">
+              <label class="label">Detalle adicional de ubicación (opcional)</label>
+              <input class="input" id="ubicacion" placeholder="Ej: junto a la puerta, esquina noreste, mesa 4..." />
             </div>
           </div>
           <p id="err" class="hidden text-sm text-red-600"></p>
@@ -92,14 +103,30 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
       </div>
     </main>
 
-    <script>
+    <script define:vars={{ ubJson }}>
+      const allUbs = JSON.parse(ubJson);
+      const sucEl = document.getElementById("sucursalId");
+      const ubEl = document.getElementById("ubicacionId");
+      sucEl?.addEventListener("change", () => {
+        const sid = Number(sucEl.value);
+        const filtered = sid ? allUbs.filter((u) => u.sucursalId === sid) : [];
+        ubEl.innerHTML = sid
+          ? '<option value="">— Seleccionar ubicación —</option>'
+          : '<option value="">— Selecciona primero la sucursal —</option>';
+        filtered.forEach((u) => {
+          const o = document.createElement("option");
+          o.value = u.id;
+          o.textContent = u.nombre;
+          ubEl.appendChild(o);
+        });
+      });
+
       const form = document.getElementById("form");
       form?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const err = document.getElementById("err");
         err.classList.add("hidden");
         const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
-        const sucEl = document.getElementById("sucursalId");
         const payload = {
           solicitanteNombre: v("solicitanteNombre"),
           solicitanteEmail: v("solicitanteEmail"),
@@ -109,6 +136,7 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
           prioridad: v("prioridad"),
           ubicacion: v("ubicacion") || null,
           sucursalId: sucEl?.value ? Number(sucEl.value) : null,
+          ubicacionId: ubEl?.value ? Number(ubEl.value) : null,
         };
         const res = await fetch("/api/tickets/publico", {
           method: "POST",

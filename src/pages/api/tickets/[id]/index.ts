@@ -50,6 +50,7 @@ const updateSchema = z.object({
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   asignadoA: z.number().int().nullable().optional(),
   sucursalId: z.number().int().nullable().optional(),
+  ubicacionId: z.number().int().nullable().optional(),
   activoId: z.number().int().nullable().optional(),
   ubicacion: z.string().nullable().optional(),
   resolucionNotas: z.string().nullable().optional(),

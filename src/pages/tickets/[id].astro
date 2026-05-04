@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, activos, ticketComentarios } from "@/lib/schema";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
@@ -14,10 +14,11 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [r] = await db
-  .select({ t: tickets, a: usuarios, s: sucursales, act: activos })
+  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: activos })
   .from(tickets)
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, tickets.ubicacionId))
   .leftJoin(activos, eq(activos.id, tickets.activoId))
   .where(eq(tickets.id, id))
   .limit(1);
@@ -68,7 +69,7 @@ const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
         <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{t.ubicacion ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.ub?.nombre ?? "—"}{t.ubicacion && <span class="block text-xs text-slate-500">{t.ubicacion}</span>}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">SLA</div><div>{fmt(t.vencimientoSla)}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Creado</div><div>{fmt(t.createdAt)}</div></div>

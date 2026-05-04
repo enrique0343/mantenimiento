@@ -16,6 +16,7 @@ const createSchema = z.object({
   descripcion: z.string().min(10),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).default("media"),
   sucursalId: z.number().int().nullable().optional(),
+  ubicacionId: z.number().int().nullable().optional(),
   ubicacion: z.string().optional().nullable(),
   activoId: z.number().int().nullable().optional(),
 });
