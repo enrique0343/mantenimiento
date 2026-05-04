@@ -9,6 +9,7 @@ export const prerender = false;
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const sucursalFiltro = url.searchParams.get("sucursal");
+const ubicacionFiltro = url.searchParams.get("ubicacion");
 const tipoFiltro = url.searchParams.get("tipo");
 const catFiltro = url.searchParams.get("categoria");
 const vistaParam = url.searchParams.get("vista") ?? "tabla";
@@ -22,6 +23,7 @@ const rows = await db
 
 const filtered = rows.filter((r) =>
   (!sucursalFiltro || r.suc?.id === Number(sucursalFiltro)) &&
+  (!ubicacionFiltro || r.ub?.id === Number(ubicacionFiltro)) &&
   (!tipoFiltro || r.a.tipo === tipoFiltro) &&
   (!catFiltro || normalizarCategoria(r.a.categoria, r.a.tipo) === catFiltro)
 );
@@ -41,6 +43,13 @@ const sucursalesList = await db
   .from(sucursales)
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
+
+const ubicacionesList = await db
+  .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+  .from(ubicaciones)
+  .where(eq(ubicaciones.activa, true))
+  .orderBy(ubicaciones.nombre);
+const ubicacionesJson = JSON.stringify(ubicacionesList);
 
 // Conteo por categoría normalizada
 const conteoPorCategoria = new Map<string, { tipo: string; n: number }>();
@@ -72,6 +81,7 @@ const estadoColor: Record<string, string> = {
 function urlConVista(v: string) {
   const p = new URLSearchParams();
   if (sucursalFiltro) p.set("sucursal", sucursalFiltro);
+  if (ubicacionFiltro) p.set("ubicacion", ubicacionFiltro);
   if (tipoFiltro) p.set("tipo", tipoFiltro);
   if (catFiltro) p.set("categoria", catFiltro);
   p.set("vista", v);
@@ -83,20 +93,36 @@ function urlConVista(v: string) {
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold">Equipos / Activos</h1>
-      <p class="text-sm text-slate-500">{rows.length} equipos · mostrando {filtered.length}</p>
+      <p class="text-sm text-slate-500">{rows.length} equipos · mostrando <span id="visibleCount">{filtered.length}</span></p>
     </div>
     {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}
   </div>
 
+  <!-- Búsqueda en vivo -->
+  <div class="mt-4">
+    <input
+      id="searchBox"
+      class="input w-full"
+      type="search"
+      placeholder="🔍 Buscar por código, nombre, marca, modelo, ubicación, sucursal..."
+    />
+  </div>
+
   <!-- Filtros -->
-  <div class="card mt-4 p-3">
-    <form class="flex flex-wrap items-end gap-3" method="get">
+  <div class="card mt-3 p-3">
+    <form id="filterForm" class="flex flex-wrap items-end gap-3" method="get">
       <input type="hidden" name="vista" value={vistaParam} />
       <div>
         <label class="label text-xs">Sucursal</label>
-        <select name="sucursal" class="input text-sm">
+        <select name="sucursal" id="sucursalSel" class="input text-sm">
           <option value="">Todas</option>
           {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label text-xs">Ubicación</label>
+        <select name="ubicacion" id="ubicacionSel" class="input text-sm" disabled={!sucursalFiltro}>
+          <option value="">{sucursalFiltro ? "Todas las de la sucursal" : "Selecciona una sucursal primero"}</option>
         </select>
       </div>
       <div>
@@ -117,7 +143,7 @@ function urlConVista(v: string) {
         </select>
       </div>
       <button class="btn-primary text-sm">Filtrar</button>
-      {(sucursalFiltro || tipoFiltro || catFiltro) && <a href={`/activos?vista=${vistaParam}`} class="btn-secondary text-sm">Limpiar</a>}
+      {(sucursalFiltro || ubicacionFiltro || tipoFiltro || catFiltro) && <a href={`/activos?vista=${vistaParam}`} class="btn-secondary text-sm">Limpiar</a>}
       <div class="ml-auto flex gap-1 text-xs">
         <a href={urlConVista("tabla")} class:list={["rounded px-3 py-1.5", vistaParam === "tabla" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📋 Tabla</a>
         <a href={urlConVista("grupos")} class:list={["rounded px-3 py-1.5", vistaParam === "grupos" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📂 Por categoría</a>
@@ -126,17 +152,17 @@ function urlConVista(v: string) {
   </div>
 
   {vistaParam === "grupos" ? (
-    <div class="mt-4 space-y-4">
+    <div class="mt-4 space-y-4" id="resultsContainer">
       {gruposOrdenados.length === 0 && (
         <div class="card p-6 text-center text-slate-400">Sin equipos con esos filtros.</div>
       )}
       {gruposOrdenados.map(([categoria, items]) => (
-        <div class="card overflow-hidden">
+        <div class="card overflow-hidden grupo-card" data-search={`${categoria}`.toLowerCase()}>
           <div class="flex items-center justify-between bg-slate-50 px-4 py-2.5">
             <h3 class="font-semibold text-slate-700">
               {items[0]?.a.tipo === "biomedico" ? "🩺" : "🔧"} {categoria}
             </h3>
-            <span class="text-xs font-medium text-slate-500">{items.length} equipos</span>
+            <span class="text-xs font-medium text-slate-500"><span class="grupo-count">{items.length}</span> equipos</span>
           </div>
           <table class="w-full text-left text-sm">
             <thead class="bg-white text-xs uppercase text-slate-500">
@@ -151,7 +177,7 @@ function urlConVista(v: string) {
             </thead>
             <tbody class="divide-y divide-slate-100">
               {items.map((r) => (
-                <tr class="hover:bg-slate-50">
+                <tr class="hover:bg-slate-50 row-search" data-search={`${r.a.codigo} ${r.a.nombre} ${r.a.marca ?? ""} ${r.a.modelo ?? ""} ${r.suc?.nombre ?? ""} ${r.ub?.nombre ?? ""} ${r.a.ubicacion ?? ""}`.toLowerCase()}>
                   <td class="px-4 py-1.5 font-mono text-xs">{r.a.codigo}</td>
                   <td class="px-4 py-1.5">
                     <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
@@ -168,7 +194,7 @@ function urlConVista(v: string) {
       ))}
     </div>
   ) : (
-    <div class="card mt-4 overflow-hidden">
+    <div class="card mt-4 overflow-hidden" id="resultsContainer">
       <table class="w-full text-left text-sm">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
@@ -182,12 +208,12 @@ function urlConVista(v: string) {
             <th class="px-4 py-2">Cronograma</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-100">
+        <tbody class="divide-y divide-slate-100" id="tableBody">
           {filtered.length === 0 && (
             <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">Sin equipos con esos filtros.</td></tr>
           )}
           {filtered.map((r) => (
-            <tr class="hover:bg-slate-50">
+            <tr class="hover:bg-slate-50 row-search" data-search={`${r.a.codigo} ${r.a.nombre} ${r.a.marca ?? ""} ${r.a.modelo ?? ""} ${r.suc?.nombre ?? ""} ${r.ub?.nombre ?? ""} ${r.a.ubicacion ?? ""}`.toLowerCase()}>
               <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
               <td class="px-4 py-2">
                 <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
@@ -215,4 +241,66 @@ function urlConVista(v: string) {
       </table>
     </div>
   )}
+
+  <script define:vars={{ ubicacionesJson, sucursalActualId: sucursalFiltro ? Number(sucursalFiltro) : null, ubicacionActualId: ubicacionFiltro ? Number(ubicacionFiltro) : null }}>
+    // ── Filtro ubicación dependiente de sucursal ─────────────────────────────
+    const ubs = JSON.parse(ubicacionesJson);
+    const sucEl = document.getElementById("sucursalSel");
+    const ubEl = document.getElementById("ubicacionSel");
+
+    function poblarUbicaciones(sucId, seleccionarId) {
+      ubEl.innerHTML = "";
+      if (!sucId) {
+        const o = document.createElement("option");
+        o.value = ""; o.textContent = "Selecciona una sucursal primero";
+        ubEl.appendChild(o);
+        ubEl.disabled = true;
+        return;
+      }
+      ubEl.disabled = false;
+      const todasOpt = document.createElement("option");
+      todasOpt.value = ""; todasOpt.textContent = "Todas las de la sucursal";
+      ubEl.appendChild(todasOpt);
+      const filtradas = ubs.filter((u) => u.sucursalId === sucId);
+      filtradas.forEach((u) => {
+        const o = document.createElement("option");
+        o.value = u.id;
+        o.textContent = `${u.nombre} (${u.tipo})`;
+        if (u.id === seleccionarId) o.selected = true;
+        ubEl.appendChild(o);
+      });
+    }
+
+    if (sucursalActualId) poblarUbicaciones(sucursalActualId, ubicacionActualId);
+
+    sucEl?.addEventListener("change", () => {
+      const sid = Number(sucEl.value) || null;
+      poblarUbicaciones(sid, null);
+    });
+
+    // ── Búsqueda en vivo ─────────────────────────────────────────────────────
+    const searchBox = document.getElementById("searchBox");
+    const visibleCount = document.getElementById("visibleCount");
+
+    function aplicarBusqueda() {
+      const q = searchBox.value.trim().toLowerCase();
+      let visibles = 0;
+      document.querySelectorAll(".row-search").forEach((tr) => {
+        const txt = tr.dataset.search ?? "";
+        const match = !q || txt.includes(q);
+        tr.style.display = match ? "" : "none";
+        if (match) visibles++;
+      });
+      // En vista grupos, oculta cards con 0 filas visibles
+      document.querySelectorAll(".grupo-card").forEach((card) => {
+        const filasVisibles = Array.from(card.querySelectorAll(".row-search")).filter((tr) => tr.style.display !== "none").length;
+        const countEl = card.querySelector(".grupo-count");
+        if (countEl) countEl.textContent = filasVisibles;
+        card.style.display = filasVisibles > 0 || !q ? "" : "none";
+      });
+      if (visibleCount) visibleCount.textContent = visibles;
+    }
+
+    searchBox?.addEventListener("input", aplicarBusqueda);
+  </script>
 </Layout>
