@@ -15,28 +15,52 @@ const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol =
 const isMotorista = user?.rol === "motorista";
 const verFlota = isAdminOrJefe || isMotorista;
 
-const homeHref = user?.rol === "tecnico" || user?.rol === "motorista" ? "/mi-panel" : "/";
+interface Link { href: string; label: string; show?: boolean }
 
-// Motoristas: solo Mi panel, Flota y Tickets (para reportar problemas)
-const links = isMotorista ? [
+// Motoristas: menú reducido
+const motoLinks: Link[] = [
   { href: "/mi-panel", label: "Mi panel" },
   { href: "/flota", label: "Flota" },
   { href: "/tickets", label: "Reportes" },
-] : [
-  { href: user?.rol === "tecnico" ? "/mi-panel" : "/", label: user?.rol === "tecnico" ? "Mi panel" : "Dashboard" },
-  { href: "/kpis", label: "KPIs", show: isAdminOrJefe },
-  { href: "/ordenes", label: "Ordenes" },
+];
+
+// Resto: 4-5 primarios visibles + dropdown "Más" para los demás
+const homeHref = user?.rol === "tecnico" ? "/mi-panel" : "/";
+const homeLabel = user?.rol === "tecnico" ? "Mi panel" : "Dashboard";
+
+const primarios: Link[] = [
+  { href: homeHref, label: homeLabel },
+  { href: "/ordenes", label: "Órdenes" },
   { href: "/cronograma", label: "Cronograma" },
-  { href: "/planificador", label: "Planificador", show: isOperativo },
   { href: "/activos", label: "Equipos" },
-  { href: "/actividades", label: "Actividades", show: !isMotorista && user?.rol !== "proveedor" },
-  { href: "/seguridad", label: "Seguridad", show: !isMotorista && user?.rol !== "proveedor" },
   { href: "/tickets", label: "Tickets" },
-  { href: "/inventario", label: "Inventario" },
-  { href: "/flota", label: "Flota", show: verFlota },
-  { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
-  { href: "/usuarios", label: "Usuarios", show: isAdmin },
-  { href: "/configuracion", label: "Configuracion", show: isAdmin },
+];
+
+const masGrupos: { titulo: string; items: Link[] }[] = [
+  {
+    titulo: "Recursos",
+    items: [
+      { href: "/actividades", label: "Actividades", show: !isMotorista && user?.rol !== "proveedor" },
+      { href: "/seguridad", label: "Extintores y seguridad", show: !isMotorista && user?.rol !== "proveedor" },
+      { href: "/flota", label: "Flota", show: verFlota },
+      { href: "/inventario", label: "Inventario" },
+    ],
+  },
+  {
+    titulo: "Análisis",
+    items: [
+      { href: "/kpis", label: "KPIs", show: isAdminOrJefe },
+      { href: "/planificador", label: "Planificador", show: isOperativo },
+    ],
+  },
+  {
+    titulo: "Administración",
+    items: [
+      { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
+      { href: "/usuarios", label: "Usuarios", show: isAdmin },
+      { href: "/configuracion", label: "Configuración", show: isAdmin },
+    ],
+  },
 ];
 
 const ROL_LABEL: Record<string, string> = {
@@ -48,6 +72,9 @@ const ROL_LABEL: Record<string, string> = {
   visualizador: "Visualizador",
   motorista: "Motorista",
 };
+
+const isActive = (href: string) =>
+  path === href || (href !== "/" && href.length > 1 && path.startsWith(href));
 ---
 
 <!doctype html>
@@ -61,26 +88,47 @@ const ROL_LABEL: Record<string, string> = {
     {
       !hideNav && user && (
         <header class="border-b border-slate-200 bg-white">
-          <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-            <a href="/" class="text-lg font-bold text-brand-600">Mantenimiento</a>
-            <nav class="flex items-center gap-1">
-              {links
-                .filter((l) => l.show === undefined || l.show)
-                .map((l) => (
-                  <a
-                    href={l.href}
-                    class:list={[
-                      "rounded-md px-3 py-1.5 text-sm font-medium",
-                      path === l.href || (l.href !== "/" && path.startsWith(l.href))
-                        ? "bg-brand-50 text-brand-700"
-                        : "text-slate-700 hover:bg-slate-100",
-                    ]}
-                  >
-                    {l.label}
-                  </a>
-                ))}
+          <div class="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
+            <a href="/" class="text-lg font-bold text-brand-600 whitespace-nowrap">Mantenimiento</a>
+
+            <nav class="flex flex-1 items-center gap-1 overflow-x-auto">
+              {isMotorista
+                ? motoLinks.map((l) => (
+                    <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
+                      isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
+                  ))
+                : (
+                  <>
+                    {primarios.map((l) => (
+                      <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
+                        isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
+                    ))}
+                    <details class="relative ml-1">
+                      <summary class="cursor-pointer list-none rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
+                        Más ▾
+                      </summary>
+                      <div class="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
+                        {masGrupos.map((g) => {
+                          const visibles = g.items.filter((it) => it.show === undefined || it.show);
+                          if (visibles.length === 0) return null;
+                          return (
+                            <div class="py-1">
+                              <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{g.titulo}</div>
+                              {visibles.map((it) => (
+                                <a href={it.href} class:list={["block px-4 py-1.5 text-sm",
+                                  isActive(it.href) ? "bg-brand-50 text-brand-700 font-medium" : "text-slate-700 hover:bg-slate-50"]}>{it.label}</a>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </>
+                )
+              }
             </nav>
-            <div class="flex items-center gap-3">
+
+            <div class="flex items-center gap-3 whitespace-nowrap">
               <span class="text-sm text-slate-600">
                 {user.nombre}
                 <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
@@ -93,7 +141,7 @@ const ROL_LABEL: Record<string, string> = {
         </header>
       )
     }
-    <main class="mx-auto max-w-6xl px-4 py-6">
+    <main class="mx-auto max-w-7xl px-4 py-6">
       <slot />
     </main>
     <script>
@@ -101,6 +149,12 @@ const ROL_LABEL: Record<string, string> = {
       btn?.addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/login";
+      });
+      // Cierra dropdown "Más" al click fuera
+      document.addEventListener("click", (e) => {
+        document.querySelectorAll<HTMLDetailsElement>("details").forEach((d) => {
+          if (!d.contains(e.target as Node)) d.open = false;
+        });
       });
     </script>
   </body>

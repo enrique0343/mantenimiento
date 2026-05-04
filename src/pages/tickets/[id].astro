@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, inArray } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
 export const prerender = false;
@@ -35,7 +35,8 @@ const coms = await db
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);

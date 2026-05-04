@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { actividadCategorias, sucursales, ubicaciones, usuarios, proveedores } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, inArray } from "drizzle-orm";
 import { puedeAdministrarActividades } from "@/lib/actividades";
 export const prerender = false;
 
@@ -13,7 +13,7 @@ const db = getDb(Astro);
 const cats = await db.select().from(actividadCategorias).where(eq(actividadCategorias.activo, true)).orderBy(asc(actividadCategorias.orden));
 const sucs = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).where(eq(ubicaciones.activa, true));
-const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.activo, true));
+const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol }).from(usuarios).where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"]))).orderBy(asc(usuarios.nombre));
 const provs = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
 const ubJson = JSON.stringify(ubRows);
 const hoy = new Date().toISOString().slice(0, 10);

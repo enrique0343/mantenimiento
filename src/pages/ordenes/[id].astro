@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock, empresa } from "@/lib/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
   transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
@@ -50,7 +50,8 @@ const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
 // Repuestos consumidos en esta OT
 const repuestosRows = await db

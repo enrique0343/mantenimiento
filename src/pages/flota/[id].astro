@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { vehiculos, vehiculoDocumentos, viajes, cargasCombustible, planesVehiculo, usuarios } from "@/lib/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_VEHICULO_LABEL, ESTADO_VEHICULO_COLOR, TIPO_DOCUMENTO_LABEL,
   fmtKm, fmtDuracion, diasParaVencer, puedeVerFlota, puedeAdministrarFlota,
@@ -36,9 +36,10 @@ const ultimasCargas = await db
   .limit(15);
 const planes = await db.select().from(planesVehiculo).where(eq(planesVehiculo.vehiculoId, id));
 const tecnicos = await db
-  .select({ id: usuarios.id, nombre: usuarios.nombre })
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
 const admin = puedeAdministrarFlota(user.rol);
 

@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog } from "@/lib/schema";
-import { eq, asc, desc, and } from "drizzle-orm";
+import { eq, asc, desc, and, inArray } from "drizzle-orm";
 import { FRECUENCIAS } from "@/lib/frecuencias";
 import { labelCampo } from "@/lib/audit";
 export const prerender = false;
@@ -50,9 +50,10 @@ const ordsRel = await db
   .limit(10);
 
 const tecnicos = await db
-  .select({ id: usuarios.id, nombre: usuarios.nombre })
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
 // Historial de cambios (audit log) — solo de este equipo
 const auditRows = await db

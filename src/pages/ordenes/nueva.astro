@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, usuarios } from "@/lib/schema";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, and, inArray } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
@@ -10,7 +10,8 @@ const activosList = await db.select().from(activos).orderBy(asc(activos.codigo))
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 ---
 
 <Layout title="Nueva orden">
