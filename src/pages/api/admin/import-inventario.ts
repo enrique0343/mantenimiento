@@ -12,6 +12,15 @@ export const prerender = false;
 // - Inserta con .values([...]) en chunks
 // Total subrequests: ~10 (vs 700+ en la version naive)
 export const POST: APIRoute = async (ctx) => {
+  const stats = {
+    sucursalesCreadas: 0, sucursalesExistentes: 0,
+    ubicacionesCreadas: 0, ubicacionesExistentes: 0,
+    equiposCreados: 0, equiposExistentes: 0,
+    planesCreados: 0,
+    errores: [] as string[],
+  };
+  let etapa = "init";
+
   try {
     const { user, response } = await requireUser(ctx, ["admin"]);
     if (!user) return response;
@@ -31,22 +40,13 @@ export const POST: APIRoute = async (ctx) => {
     const frecuencia = (url.searchParams.get("frecuencia") ?? "trimestral") as
       "diaria" | "semanal" | "quincenal" | "mensual" | "bimestral" | "trimestral" | "semestral" | "anual";
 
-    const stats = {
-      sucursalesCreadas: 0, sucursalesExistentes: 0,
-      ubicacionesCreadas: 0, ubicacionesExistentes: 0,
-      equiposCreados: 0, equiposExistentes: 0,
-      planesCreados: 0,
-      errores: [] as string[],
-    };
-
-    // D1 limita a 100 placeholders por query. Calculamos chunks por columnas.
-    // sucursales: 2 cols → 50 filas; ubicaciones: 3 cols → 30; activos: 12 cols → 8;
-    // planes: 6 cols → 16. IN(): max 80 items por seguridad.
-    const CHUNK_IN = 80;
-    const CHUNK_SUC = 50;
-    const CHUNK_UB = 30;
-    const CHUNK_EQ = 8;
-    const CHUNK_PLAN = 16;
+    // D1 tiene un limite estricto de placeholders por query. Usamos chunks
+    // que aseguren <= 50 placeholders por seguridad (el limite docu es 100).
+    const CHUNK_IN = 40;
+    const CHUNK_SUC = 20;     // 20 * 2 cols = 40
+    const CHUNK_UB = 15;      // 15 * 3 cols = 45
+    const CHUNK_EQ = 4;       // 4 * 12 cols = 48
+    const CHUNK_PLAN = 8;     // 8 * 6 cols = 48
 
     async function chunkSelectIn<T>(items: string[], fn: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
       const out: T[] = [];
@@ -58,6 +58,7 @@ export const POST: APIRoute = async (ctx) => {
       return out;
     }
 
+    etapa = "sucursales:select";
     // ── 1) SUCURSALES ─────────────────────────────────────────────────────────
     const sucNombres = data.sucursales.map((s) => s.nombre);
     const sucExistentes = await chunkSelectIn(sucNombres, (chunk) =>
@@ -69,6 +70,7 @@ export const POST: APIRoute = async (ctx) => {
     for (const s of sucExistentes) sucIdMap.set(s.nombre, s.id);
     stats.sucursalesExistentes = sucExistentes.length;
 
+    etapa = "sucursales:insert";
     const sucPorCrear = data.sucursales.filter((s) => !sucIdMap.has(s.nombre));
     if (sucPorCrear.length > 0) {
       if (!dryRun) {
@@ -85,6 +87,7 @@ export const POST: APIRoute = async (ctx) => {
       stats.sucursalesCreadas = sucPorCrear.length;
     }
 
+    etapa = "ubicaciones:select";
     // ── 2) UBICACIONES (1-4 queries) ─────────────────────────────────────────
     const ubsNeeded: Array<{ sucursalId: number; nombre: string }> = [];
     for (const s of data.sucursales) {
@@ -106,6 +109,7 @@ export const POST: APIRoute = async (ctx) => {
     for (const u of ubExistentes) ubIdMap.set(`${u.sucursalId}::${u.nombre}`, u.id);
     stats.ubicacionesExistentes = ubExistentes.length;
 
+    etapa = "ubicaciones:insert";
     const ubPorCrear = ubsNeeded.filter((u) => !ubIdMap.has(`${u.sucursalId}::${u.nombre}`));
     if (ubPorCrear.length > 0) {
       if (!dryRun) {
@@ -121,6 +125,7 @@ export const POST: APIRoute = async (ctx) => {
       stats.ubicacionesCreadas = ubPorCrear.length;
     }
 
+    etapa = "equipos:select";
     // ── 3) EQUIPOS + PLANES ───────────────────────────────────────────────────
     const codigos = data.equipos.map((e) => e.codigo);
     const eqExistentes = await chunkSelectIn(codigos, (chunk) =>
@@ -148,6 +153,7 @@ export const POST: APIRoute = async (ctx) => {
     if (equiposPorCrear.length > 0) {
       if (!dryRun) {
         for (let i = 0; i < equiposPorCrear.length; i += CHUNK_EQ) {
+          etapa = `equipos:insert chunk ${i / CHUNK_EQ + 1}/${Math.ceil(equiposPorCrear.length / CHUNK_EQ)}`;
           const chunk = equiposPorCrear.slice(i, i + CHUNK_EQ);
           const valuesEquipos = chunk.map((e) => {
             const sucId = sucIdMap.get(e.sucursal);
@@ -185,6 +191,7 @@ export const POST: APIRoute = async (ctx) => {
           });
           if (valuesPlanes.length > 0) {
             for (let j = 0; j < valuesPlanes.length; j += CHUNK_PLAN) {
+              etapa = `planes:insert para chunk ${i / CHUNK_EQ + 1}, sub ${j / CHUNK_PLAN + 1}`;
               await db.insert(planesMantenimiento).values(valuesPlanes.slice(j, j + CHUNK_PLAN));
             }
             stats.planesCreados += valuesPlanes.length;
@@ -200,7 +207,13 @@ export const POST: APIRoute = async (ctx) => {
     return Response.json({ ok: true, dryRun, stats });
   } catch (e: any) {
     return Response.json(
-      { ok: false, error: String(e?.message ?? e), stack: String(e?.stack ?? "").slice(0, 800) },
+      {
+        ok: false,
+        etapa,
+        statsParcial: stats,
+        error: String(e?.message ?? e),
+        stack: String(e?.stack ?? "").slice(0, 600),
+      },
       { status: 500 }
     );
   }

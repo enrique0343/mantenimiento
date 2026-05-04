@@ -107,7 +107,17 @@ const totalEq = data.equipos.length;
 
       if (!res.ok || !j?.ok) {
         title.textContent = `❌ Error (HTTP ${res.status})`;
-        body.innerHTML = `<pre class="text-xs text-red-600 whitespace-pre-wrap">${j?.error ?? txt ?? "Sin respuesta"}\n\n${j?.stack ?? ""}</pre>`;
+        const partialStats = j?.statsParcial ? `<div class="mt-3 rounded bg-amber-50 p-3 text-xs">Estado parcial al fallar:<ul class="ml-4 list-disc">
+          <li>Sucursales creadas: ${fmt(j.statsParcial.sucursalesCreadas)}</li>
+          <li>Ubicaciones creadas: ${fmt(j.statsParcial.ubicacionesCreadas)}</li>
+          <li>Equipos creados: ${fmt(j.statsParcial.equiposCreados)}</li>
+          <li>Planes creados: ${fmt(j.statsParcial.planesCreados)}</li>
+        </ul></div>` : "";
+        body.innerHTML = `
+          ${j?.etapa ? `<p class="text-sm"><strong>Etapa:</strong> <code>${j.etapa}</code></p>` : ""}
+          ${partialStats}
+          <pre class="mt-3 text-xs text-red-600 whitespace-pre-wrap">${j?.error ?? txt ?? "Sin respuesta"}\n\n${j?.stack ?? ""}</pre>
+        `;
       } else {
         title.textContent = dry ? "🔍 Simulación completa" : "✅ Import completo";
         const s = j.stats;
