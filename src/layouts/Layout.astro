@@ -17,14 +17,12 @@ const verFlota = isAdminOrJefe || isMotorista;
 
 interface Link { href: string; label: string; show?: boolean }
 
-// Motoristas: menú reducido
 const motoLinks: Link[] = [
   { href: "/mi-panel", label: "Mi panel" },
   { href: "/flota", label: "Flota" },
   { href: "/tickets", label: "Reportes" },
 ];
 
-// Resto: 4-5 primarios visibles + dropdown "Más" para los demás
 const homeHref = user?.rol === "tecnico" ? "/mi-panel" : "/";
 const homeLabel = user?.rol === "tecnico" ? "Mi panel" : "Dashboard";
 
@@ -103,11 +101,12 @@ const isActive = (href: string) =>
                       <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
                         isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
                     ))}
-                    <details class="relative ml-1">
-                      <summary class="cursor-pointer list-none rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
+                    <div id="moreMenu" class="relative ml-1">
+                      <button id="moreBtn" type="button" aria-haspopup="true" aria-expanded="false"
+                        class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
                         Más ▾
-                      </summary>
-                      <div class="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
+                      </button>
+                      <div id="moreDropdown" class="hidden absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
                         {masGrupos.map((g) => {
                           const visibles = g.items.filter((it) => it.show === undefined || it.show);
                           if (visibles.length === 0) return null;
@@ -122,7 +121,7 @@ const isActive = (href: string) =>
                           );
                         })}
                       </div>
-                    </details>
+                    </div>
                   </>
                 )
               }
@@ -144,18 +143,43 @@ const isActive = (href: string) =>
     <main class="mx-auto max-w-7xl px-4 py-6">
       <slot />
     </main>
-    <script>
-      const btn = document.getElementById("logoutBtn");
-      btn?.addEventListener("click", async () => {
+    <script is:inline>
+      // Logout
+      document.getElementById("logoutBtn")?.addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/login";
       });
-      // Cierra dropdown "Más" al click fuera
-      document.addEventListener("click", (e) => {
-        document.querySelectorAll<HTMLDetailsElement>("details").forEach((d) => {
-          if (!d.contains(e.target as Node)) d.open = false;
+
+      // Dropdown "Más" (toggle JS plano)
+      (function () {
+        var btn = document.getElementById("moreBtn");
+        var dd = document.getElementById("moreDropdown");
+        if (!btn || !dd) return;
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var open = !dd.classList.contains("hidden");
+          if (open) {
+            dd.classList.add("hidden");
+            btn.setAttribute("aria-expanded", "false");
+          } else {
+            dd.classList.remove("hidden");
+            btn.setAttribute("aria-expanded", "true");
+          }
         });
-      });
+        document.addEventListener("click", function (e) {
+          if (!btn.contains(e.target) && !dd.contains(e.target)) {
+            dd.classList.add("hidden");
+            btn.setAttribute("aria-expanded", "false");
+          }
+        });
+        // Cierra al presionar Escape
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") {
+            dd.classList.add("hidden");
+            btn.setAttribute("aria-expanded", "false");
+          }
+        });
+      })();
     </script>
   </body>
 </html>

@@ -556,6 +556,23 @@ export const actividades = sqliteTable("actividades", {
 export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
 export type Actividad = typeof actividades.$inferSelect;
 
+// ─── Encuestas de satisfacción ───────────────────────────────────────────────
+export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").references(() => ordenes.id, { onDelete: "cascade" }),
+  ticketId: integer("ticket_id").references(() => tickets.id, { onDelete: "set null" }),
+  token: text("token").notNull().unique(),
+  destinatarioEmail: text("destinatario_email").notNull(),
+  destinatarioNombre: text("destinatario_nombre"),
+  calificacion: integer("calificacion"),
+  comentario: text("comentario"),
+  respondidaEn: text("respondida_en"),
+  enviadaEn: text("enviada_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+  recordatorioEnviadoEn: text("recordatorio_enviado_en"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type EncuestaSatisfaccion = typeof encuestasSatisfaccion.$inferSelect;
+
 // ─── Audit log ───────────────────────────────────────────────────────────────
 export const auditLog = sqliteTable("audit_log", {
   id: integer("id").primaryKey({ autoIncrement: true }),
