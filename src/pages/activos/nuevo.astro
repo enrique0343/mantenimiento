@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, proveedores } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -32,8 +33,10 @@ const ubJson = JSON.stringify(ubRows);
         </select>
       </div>
       <div>
-        <label class="label">Categoria</label>
-        <input class="input" id="categoria" placeholder="Ej: Refrigeracion, Quirofano..." />
+        <label class="label">Categoría</label>
+        <input class="input" id="categoria" list="categoriasList" placeholder="Selecciona o escribe..." />
+        <datalist id="categoriasList"></datalist>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo (general / biomédico).</p>
       </div>
       <div>
         <label class="label">Codigo interno *</label>
@@ -187,15 +190,24 @@ const ubJson = JSON.stringify(ubRows);
     </div>
   </form>
 
-  <script define:vars={{ ubJson }}>
+  <script define:vars={{ ubJson, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
     const allUbs = JSON.parse(ubJson);
 
     // Biomedico toggle
     const tipoSel = document.getElementById("tipo");
     const bioFields = document.getElementById("bioFields");
     const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
-    tipoSel?.addEventListener("change", toggleBio);
+
+    // Categorías dinámicas según tipo
+    const catList = document.getElementById("categoriasList");
+    const refreshCategorias = () => {
+      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
+      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
+    };
+
+    tipoSel?.addEventListener("change", () => { toggleBio(); refreshCategorias(); });
     toggleBio();
+    refreshCategorias();
 
     // Sucursal → ubicacion filter
     const sucursalSel = document.getElementById("sucursalSel");

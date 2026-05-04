@@ -3,11 +3,15 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
 import { desc, sql, eq } from "drizzle-orm";
+import { normalizarCategoria } from "@/lib/categorias-equipos";
 export const prerender = false;
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const sucursalFiltro = url.searchParams.get("sucursal");
+const tipoFiltro = url.searchParams.get("tipo");
+const catFiltro = url.searchParams.get("categoria");
+const vistaParam = url.searchParams.get("vista") ?? "tabla";
 
 const rows = await db
   .select({ a: activos, ub: ubicaciones, suc: sucursales })
@@ -16,9 +20,11 @@ const rows = await db
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .orderBy(desc(activos.id));
 
-const filtered = sucursalFiltro
-  ? rows.filter((r) => r.suc?.id === Number(sucursalFiltro))
-  : rows;
+const filtered = rows.filter((r) =>
+  (!sucursalFiltro || r.suc?.id === Number(sucursalFiltro)) &&
+  (!tipoFiltro || r.a.tipo === tipoFiltro) &&
+  (!catFiltro || normalizarCategoria(r.a.categoria, r.a.tipo) === catFiltro)
+);
 
 const user = Astro.locals.user!;
 const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
@@ -36,12 +42,41 @@ const sucursalesList = await db
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
 
+// Conteo por categoría normalizada
+const conteoPorCategoria = new Map<string, { tipo: string; n: number }>();
+for (const r of rows) {
+  const cat = normalizarCategoria(r.a.categoria, r.a.tipo);
+  const cur = conteoPorCategoria.get(cat) ?? { tipo: r.a.tipo, n: 0 };
+  cur.n++;
+  conteoPorCategoria.set(cat, cur);
+}
+const categoriasOrdenadas = Array.from(conteoPorCategoria.entries())
+  .sort((a, b) => b[1].n - a[1].n);
+
+// Vista agrupada
+const grupos = new Map<string, typeof filtered>();
+for (const r of filtered) {
+  const cat = normalizarCategoria(r.a.categoria, r.a.tipo);
+  if (!grupos.has(cat)) grupos.set(cat, []);
+  grupos.get(cat)!.push(r);
+}
+const gruposOrdenados = Array.from(grupos.entries()).sort((a, b) => b[1].length - a[1].length);
+
 const estadoColor: Record<string, string> = {
   operativo: "bg-emerald-100 text-emerald-700",
   averiado: "bg-red-100 text-red-700",
   mantenimiento: "bg-amber-100 text-amber-700",
   baja: "bg-slate-200 text-slate-600",
 };
+
+function urlConVista(v: string) {
+  const p = new URLSearchParams();
+  if (sucursalFiltro) p.set("sucursal", sucursalFiltro);
+  if (tipoFiltro) p.set("tipo", tipoFiltro);
+  if (catFiltro) p.set("categoria", catFiltro);
+  p.set("vista", v);
+  return `?${p.toString()}`;
+}
 ---
 
 <Layout title="Equipos">
@@ -53,68 +88,131 @@ const estadoColor: Record<string, string> = {
     {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}
   </div>
 
-  <!-- Filtro por sucursal -->
-  {sucursalesList.length > 0 && (
-    <div class="card mt-4 p-3">
-      <form class="flex flex-wrap items-end gap-3" method="get">
-        <div>
-          <label class="label text-xs">Sucursal</label>
-          <select name="sucursal" class="input text-sm">
-            <option value="">Todas</option>
-            {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
-          </select>
+  <!-- Filtros -->
+  <div class="card mt-4 p-3">
+    <form class="flex flex-wrap items-end gap-3" method="get">
+      <input type="hidden" name="vista" value={vistaParam} />
+      <div>
+        <label class="label text-xs">Sucursal</label>
+        <select name="sucursal" class="input text-sm">
+          <option value="">Todas</option>
+          {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label text-xs">Tipo</label>
+        <select name="tipo" class="input text-sm">
+          <option value="">Todos</option>
+          <option value="general" selected={tipoFiltro === "general"}>🔧 General</option>
+          <option value="biomedico" selected={tipoFiltro === "biomedico"}>🩺 Biomédico</option>
+        </select>
+      </div>
+      <div>
+        <label class="label text-xs">Categoría</label>
+        <select name="categoria" class="input text-sm">
+          <option value="">Todas</option>
+          {categoriasOrdenadas.map(([cat, info]) => (
+            <option value={cat} selected={cat === catFiltro}>{info.tipo === "biomedico" ? "🩺" : "🔧"} {cat} ({info.n})</option>
+          ))}
+        </select>
+      </div>
+      <button class="btn-primary text-sm">Filtrar</button>
+      {(sucursalFiltro || tipoFiltro || catFiltro) && <a href={`/activos?vista=${vistaParam}`} class="btn-secondary text-sm">Limpiar</a>}
+      <div class="ml-auto flex gap-1 text-xs">
+        <a href={urlConVista("tabla")} class:list={["rounded px-3 py-1.5", vistaParam === "tabla" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📋 Tabla</a>
+        <a href={urlConVista("grupos")} class:list={["rounded px-3 py-1.5", vistaParam === "grupos" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📂 Por categoría</a>
+      </div>
+    </form>
+  </div>
+
+  {vistaParam === "grupos" ? (
+    <div class="mt-4 space-y-4">
+      {gruposOrdenados.length === 0 && (
+        <div class="card p-6 text-center text-slate-400">Sin equipos con esos filtros.</div>
+      )}
+      {gruposOrdenados.map(([categoria, items]) => (
+        <div class="card overflow-hidden">
+          <div class="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+            <h3 class="font-semibold text-slate-700">
+              {items[0]?.a.tipo === "biomedico" ? "🩺" : "🔧"} {categoria}
+            </h3>
+            <span class="text-xs font-medium text-slate-500">{items.length} equipos</span>
+          </div>
+          <table class="w-full text-left text-sm">
+            <thead class="bg-white text-xs uppercase text-slate-500">
+              <tr class="border-t border-slate-100">
+                <th class="px-4 py-1.5">Código</th>
+                <th class="px-4 py-1.5">Nombre</th>
+                <th class="px-4 py-1.5">Marca / Modelo</th>
+                <th class="px-4 py-1.5">Sucursal</th>
+                <th class="px-4 py-1.5">Ubicación</th>
+                <th class="px-4 py-1.5">Estado</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {items.map((r) => (
+                <tr class="hover:bg-slate-50">
+                  <td class="px-4 py-1.5 font-mono text-xs">{r.a.codigo}</td>
+                  <td class="px-4 py-1.5">
+                    <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
+                  </td>
+                  <td class="px-4 py-1.5 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
+                  <td class="px-4 py-1.5 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
+                  <td class="px-4 py-1.5 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+                  <td class="px-4 py-1.5"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <button class="btn-primary text-sm">Filtrar</button>
-        {sucursalFiltro && <a href="/activos" class="btn-secondary text-sm">Limpiar</a>}
-      </form>
+      ))}
+    </div>
+  ) : (
+    <div class="card mt-4 overflow-hidden">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">Código</th>
+            <th class="px-4 py-2">Nombre</th>
+            <th class="px-4 py-2">Tipo / Categoría</th>
+            <th class="px-4 py-2">Marca / Modelo</th>
+            <th class="px-4 py-2">Sucursal</th>
+            <th class="px-4 py-2">Ubicación</th>
+            <th class="px-4 py-2">Estado</th>
+            <th class="px-4 py-2">Cronograma</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {filtered.length === 0 && (
+            <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">Sin equipos con esos filtros.</td></tr>
+          )}
+          {filtered.map((r) => (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
+              <td class="px-4 py-2">
+                <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
+              </td>
+              <td class="px-4 py-2 text-xs">
+                {r.a.tipo === "biomedico"
+                  ? <span class="badge bg-purple-100 text-purple-700">🩺 Biomédico</span>
+                  : <span class="badge bg-slate-100 text-slate-600">🔧 General</span>}
+                {r.a.categoria && <div class="mt-0.5 text-slate-500">{normalizarCategoria(r.a.categoria, r.a.tipo)}</div>}
+              </td>
+              <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+              <td class="px-4 py-2"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
+              <td class="px-4 py-2">
+                {planesByActivo.get(r.a.id) ? (
+                  <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(r.a.id)} plan(es)</span>
+                ) : (
+                  <span class="text-xs text-slate-400">sin cronograma</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )}
-
-  <div class="card mt-4 overflow-hidden">
-    <table class="w-full text-left text-sm">
-      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-        <tr>
-          <th class="px-4 py-2">Codigo</th>
-          <th class="px-4 py-2">Nombre</th>
-          <th class="px-4 py-2">Tipo</th>
-          <th class="px-4 py-2">Marca / Modelo</th>
-          <th class="px-4 py-2">Sucursal</th>
-          <th class="px-4 py-2">Ubicación</th>
-          <th class="px-4 py-2">Estado</th>
-          <th class="px-4 py-2">Cronograma</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {filtered.length === 0 && (
-          <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">Sin equipos con esos filtros.</td></tr>
-        )}
-        {filtered.map((r) => (
-          <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
-            <td class="px-4 py-2">
-              <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
-            </td>
-            <td class="px-4 py-2">
-              {r.a.tipo === "biomedico" ? (
-                <span class="badge bg-purple-100 text-purple-700">Biomedico</span>
-              ) : (
-                <span class="badge bg-slate-100 text-slate-600">General</span>
-              )}
-            </td>
-            <td class="px-4 py-2 text-slate-600 text-xs">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
-            <td class="px-4 py-2 text-slate-600 text-xs">{r.suc?.nombre ?? "-"}</td>
-            <td class="px-4 py-2 text-slate-600 text-xs">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
-            <td class="px-4 py-2"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
-            <td class="px-4 py-2">
-              {planesByActivo.get(r.a.id) ? (
-                <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(r.a.id)} plan(es)</span>
-              ) : (
-                <span class="text-xs text-slate-400">sin cronograma</span>
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
 </Layout>

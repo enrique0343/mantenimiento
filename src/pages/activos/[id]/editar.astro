@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, sucursales, ubicaciones, proveedores } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -45,7 +46,9 @@ const ubJson = JSON.stringify(ubRows);
       </div>
       <div>
         <label class="label">Categoría</label>
-        <input class="input" id="categoria" value={a.categoria ?? ""} />
+        <input class="input" id="categoria" list="categoriasList" value={a.categoria ?? ""} />
+        <datalist id="categoriasList"></datalist>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo.</p>
       </div>
       <div>
         <label class="label">Código *</label>
@@ -159,13 +162,22 @@ const ubJson = JSON.stringify(ubRows);
     </div>
   </form>
 
-  <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId }}>
+  <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
     const allUbs = JSON.parse(ubJson);
 
     // Tipo biomédico toggle
     const tipoSel = document.getElementById("tipo");
     const bioFields = document.getElementById("bioFields");
     const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
+
+    // Categorías dinámicas
+    const catList = document.getElementById("categoriasList");
+    const refreshCategorias = () => {
+      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
+      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
+    };
+    refreshCategorias();
+    tipoSel?.addEventListener("change", refreshCategorias);
     tipoSel?.addEventListener("change", toggleBio);
 
     // Sucursal → ubicación
