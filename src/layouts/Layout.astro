@@ -95,37 +95,36 @@ const isActive = (href: string) =>
                     <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
                       isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
                   ))
-                : (
-                  <>
-                    {primarios.map((l) => (
-                      <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
-                        isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
-                    ))}
-                    <div id="moreMenu" class="relative ml-1">
-                      <button id="moreBtn" type="button" aria-haspopup="true" aria-expanded="false"
-                        class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
-                        Más ▾
-                      </button>
-                      <div id="moreDropdown" class="hidden absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
-                        {masGrupos.map((g) => {
-                          const visibles = g.items.filter((it) => it.show === undefined || it.show);
-                          if (visibles.length === 0) return null;
-                          return (
-                            <div class="py-1">
-                              <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{g.titulo}</div>
-                              {visibles.map((it) => (
-                                <a href={it.href} class:list={["block px-4 py-1.5 text-sm",
-                                  isActive(it.href) ? "bg-brand-50 text-brand-700 font-medium" : "text-slate-700 hover:bg-slate-50"]}>{it.label}</a>
-                              ))}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </>
-                )
+                : primarios.map((l) => (
+                    <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
+                      isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-700 hover:bg-slate-100"]}>{l.label}</a>
+                  ))
               }
             </nav>
+
+            {!isMotorista && (
+              <div id="moreMenu" class="relative">
+                <button id="moreBtn" type="button" aria-haspopup="true" aria-expanded="false" onclick="event.stopPropagation();var d=document.getElementById('moreDropdown');if(d){var open=!d.classList.contains('hidden');d.classList.toggle('hidden');this.setAttribute('aria-expanded', open?'false':'true');}"
+                  class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
+                  Más ▾
+                </button>
+                <div id="moreDropdown" class="hidden absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
+                  {masGrupos.map((g) => {
+                    const visibles = g.items.filter((it) => it.show === undefined || it.show);
+                    if (visibles.length === 0) return null;
+                    return (
+                      <div class="py-1">
+                        <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{g.titulo}</div>
+                        {visibles.map((it) => (
+                          <a href={it.href} class:list={["block px-4 py-1.5 text-sm",
+                            isActive(it.href) ? "bg-brand-50 text-brand-700 font-medium" : "text-slate-700 hover:bg-slate-50"]}>{it.label}</a>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div class="flex items-center gap-3 whitespace-nowrap">
               <span class="text-sm text-slate-600">
