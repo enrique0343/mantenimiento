@@ -16,46 +16,46 @@ const isMotorista = user?.rol === "motorista";
 const verFlota = isAdminOrJefe || isMotorista;
 const esProveedor = user?.rol === "proveedor";
 
-interface Link { href: string; label: string; show?: boolean }
+interface Link { href: string; label: string; icon: string; show?: boolean }
 
 const motoLinks: Link[] = [
-  { href: "/mi-panel", label: "Mi panel" },
-  { href: "/flota", label: "Flota" },
-  { href: "/tickets", label: "Reportes" },
+  { href: "/mi-panel", label: "Mi panel",  icon: "🏠" },
+  { href: "/flota",    label: "Flota",     icon: "🚗" },
+  { href: "/tickets",  label: "Reportes",  icon: "🎫" },
 ];
 
-const homeHref = user?.rol === "tecnico" ? "/mi-panel" : "/";
-const homeLabel = user?.rol === "tecnico" ? "Mi panel" : "Dashboard";
+const homeHref  = user?.rol === "tecnico" ? "/mi-panel" : "/";
+const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
 
-const navLinks: Link[] = [
-  { href: homeHref,        label: homeLabel },
-  { href: "/ordenes",      label: "Órdenes",            show: !isMotorista && !esProveedor },
-  { href: "/cronograma",   label: "Cronograma",          show: !isMotorista && !esProveedor },
-  { href: "/activos",      label: "Equipos",             show: !isMotorista },
-  { href: "/tickets",      label: "Tickets",             show: !isMotorista },
-  { href: "/actividades",  label: "Actividades",         show: isOperativo },
-  { href: "/seguridad",    label: "Extintores",          show: isOperativo },
-  { href: "/flota",        label: "Flota",               show: verFlota },
-  { href: "/inventario",   label: "Inventario",          show: !isMotorista },
-  { href: "/kpis",         label: "KPIs",                show: isAdminOrJefe },
-  { href: "/planificador", label: "Planificador",        show: isAdminOrJefe },
-  { href: "/proveedores",  label: "Proveedores",         show: isAdminOrJefe },
-  { href: "/usuarios",     label: "Usuarios",            show: isAdmin },
-  { href: "/configuracion",label: "Configuración",       show: isAdmin },
+const allLinks: Link[] = [
+  { href: homeHref,         label: homeLabel,       icon: "🏠" },
+  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
+  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
+  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
+  { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
+  { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
+  { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
+  { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
+  { href: "/inventario",    label: "Inventario",    icon: "📦", show: !isMotorista },
+  { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
+  { href: "/planificador",  label: "Planificador",  icon: "🗓", show: isAdminOrJefe },
+  { href: "/proveedores",   label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
+  { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
+  { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
 ];
 
-const linksVisibles = isMotorista
+const navLinks = isMotorista
   ? motoLinks
-  : navLinks.filter((l) => l.show === undefined || l.show);
+  : allLinks.filter((l) => l.show === undefined || l.show);
 
 const ROL_LABEL: Record<string, string> = {
-  admin: "Admin",
-  jefe: "Jefe",
-  tecnico: "Técnico",
-  proveedor: "Proveedor",
-  solicitante: "Solicitante",
+  admin:        "Admin",
+  jefe:         "Jefe",
+  tecnico:      "Técnico",
+  proveedor:    "Proveedor",
+  solicitante:  "Solicitante",
   visualizador: "Visualizador",
-  motorista: "Motorista",
+  motorista:    "Motorista",
 };
 
 const isActive = (href: string) =>
@@ -68,47 +68,90 @@ const isActive = (href: string) =>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <style>
+      body { margin: 0; }
+      .sidebar { width: 220px; min-width: 220px; }
+      @media (max-width: 768px) {
+        .sidebar { display: none; }
+        .sidebar.open { display: flex; position: fixed; inset: 0; z-index: 50; }
+        .main-content { margin-left: 0 !important; }
+      }
+    </style>
   </head>
-  <body class="min-h-screen">
-    {
-      !hideNav && user && (
-        <header class="border-b border-slate-200 bg-white">
-          <!-- Fila 1: Logo + usuario + salir -->
-          <div class="mx-auto flex max-w-7xl items-center justify-between px-4 pt-3 pb-1">
-            <a href="/" class="text-lg font-bold text-brand-600">Mantenimiento</a>
-            <div class="flex items-center gap-3">
-              <span class="text-sm text-slate-600">
-                {user.nombre}
-                <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
-                  {ROL_LABEL[user.rol] ?? user.rol}
-                </span>
-              </span>
-              <button id="logoutBtn" class="btn-secondary text-sm">Salir</button>
-            </div>
+  <body class="min-h-screen bg-slate-50">
+    {!hideNav && user ? (
+      <div class="flex min-h-screen">
+        <!-- Sidebar -->
+        <aside class="sidebar flex flex-col bg-slate-900 text-white" id="sidebar">
+          <!-- Logo -->
+          <div class="flex items-center gap-2 px-4 py-4 border-b border-slate-700">
+            <span class="text-xl">⚙️</span>
+            <a href="/" class="font-bold text-white text-sm leading-tight">Avante<br/><span class="text-slate-400 font-normal text-xs">Mantenimiento</span></a>
           </div>
 
-          <!-- Fila 2: Navegación horizontal deslizable -->
-          <nav class="mx-auto max-w-7xl overflow-x-auto px-4 pb-2">
-            <div class="flex items-center gap-0.5 w-max">
-              {linksVisibles.map((l) => (
-                <a href={l.href} class:list={["rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
-                  isActive(l.href) ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-800"]}>
-                  {l.label}
-                </a>
-              ))}
-            </div>
+          <!-- Nav links -->
+          <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+            {navLinks.map((l) => (
+              <a
+                href={l.href}
+                class:list={[
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  isActive(l.href)
+                    ? "bg-brand-600 text-white"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                ]}
+              >
+                <span class="text-base w-5 text-center">{l.icon}</span>
+                <span>{l.label}</span>
+              </a>
+            ))}
           </nav>
-        </header>
-      )
-    }
-    <main class="mx-auto max-w-7xl px-4 py-6">
-      <slot />
-    </main>
+
+          <!-- Usuario + Salir -->
+          <div class="border-t border-slate-700 p-3">
+            <div class="text-xs text-slate-400 mb-1 px-1 truncate">{user.nombre}</div>
+            <div class="text-xs text-slate-500 px-1 mb-2">
+              <span class="rounded bg-slate-700 px-1.5 py-0.5">{ROL_LABEL[user.rol] ?? user.rol}</span>
+            </div>
+            <button id="logoutBtn" class="w-full rounded-lg px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors">
+              Cerrar sesión
+            </button>
+          </div>
+        </aside>
+
+        <!-- Contenido principal -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <!-- Topbar móvil -->
+          <header class="flex items-center justify-between bg-white border-b border-slate-200 px-4 py-3 md:hidden">
+            <button id="menuToggle" class="text-slate-600 text-xl">☰</button>
+            <span class="font-bold text-brand-600 text-sm">Mantenimiento</span>
+            <span class="text-xs text-slate-500">{user.nombre}</span>
+          </header>
+
+          <main class="flex-1 p-6">
+            <slot />
+          </main>
+        </div>
+      </div>
+    ) : (
+      <main class="mx-auto max-w-7xl px-4 py-6">
+        <slot />
+      </main>
+    )}
+
     <script is:inline>
       document.getElementById("logoutBtn")?.addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/login";
       });
+      // Toggle sidebar en móvil
+      var toggle = document.getElementById("menuToggle");
+      var sidebar = document.getElementById("sidebar");
+      if (toggle && sidebar) {
+        toggle.addEventListener("click", function () {
+          sidebar.classList.toggle("open");
+        });
+      }
     </script>
   </body>
 </html>
