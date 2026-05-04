@@ -4,6 +4,7 @@ import { eq, asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -48,7 +49,7 @@ const createSchema = z.object({
 });
 
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe", "tecnico"]);
   if (!user) return response;
   const activoId = Number(ctx.params.id);
   const body = await ctx.request.json().catch(() => null);
@@ -70,5 +71,15 @@ export const POST: APIRoute = async (ctx) => {
       asignadoA: parsed.data.asignadoA ?? null,
     })
     .returning();
+
+  await logAudit(ctx, {
+    entidad: "plan", entidadId: row.id, accion: "create",
+    resumen: `Plan "${row.titulo}" creado (${row.frecuencia}, próx: ${row.proximaFecha})`,
+  });
+  await logAudit(ctx, {
+    entidad: "activo", entidadId: activoId, accion: "create",
+    resumen: `Plan "${row.titulo}" agregado al cronograma (${row.frecuencia})`,
+  });
+
   return Response.json({ plan: row }, { status: 201 });
 };

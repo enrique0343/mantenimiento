@@ -555,3 +555,16 @@ export const actividades = sqliteTable("actividades", {
 
 export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
 export type Actividad = typeof actividades.$inferSelect;
+
+// ─── Audit log ───────────────────────────────────────────────────────────────
+export const auditLog = sqliteTable("audit_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  entidad: text("entidad").notNull(),
+  entidadId: integer("entidad_id").notNull(),
+  accion: text("accion").notNull(),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  cambios: text("cambios"),
+  resumen: text("resumen"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type AuditLog = typeof auditLog.$inferSelect;

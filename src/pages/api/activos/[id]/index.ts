@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { logAudit, calcularDiff } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -46,8 +47,19 @@ export const PATCH: APIRoute = async (ctx) => {
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
+
+  // Estado anterior para diff
+  const [actual] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
+  if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
+
   const [row] = await db.update(activos).set(parsed.data).where(eq(activos.id, id)).returning();
-  if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
+
+  // Audit
+  const diff = calcularDiff(actual as any, parsed.data as any);
+  if (Object.keys(diff).length > 0) {
+    await logAudit(ctx, { entidad: "activo", entidadId: id, accion: "update", cambios: diff });
+  }
+
   return Response.json({ activo: row });
 };
 
@@ -57,5 +69,6 @@ export const DELETE: APIRoute = async (ctx) => {
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
   await db.delete(activos).where(eq(activos.id, id));
+  await logAudit(ctx, { entidad: "activo", entidadId: id, accion: "delete", resumen: "Equipo eliminado" });
   return Response.json({ ok: true });
 };
