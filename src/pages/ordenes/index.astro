@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, vehiculos, actividades } from "@/lib/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 export const prerender = false;
 
@@ -11,14 +11,50 @@ const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
 
-const rowsRaw = await db
-  .select({ orden: ordenes, activo: activos, vehiculo: vehiculos, actividad: actividades, asignado: usuarios })
-  .from(ordenes)
-  .leftJoin(activos, eq(activos.id, ordenes.activoId))
-  .leftJoin(vehiculos, eq(vehiculos.id, ordenes.vehiculoId))
-  .leftJoin(actividades, eq(actividades.id, ordenes.actividadId))
-  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .orderBy(desc(ordenes.id));
+let errorMsg: string | null = null;
+let rowsRaw: any[] = [];
+
+try {
+  // Query simple sin joins para evitar problemas de schema
+  const ots = await db.select().from(ordenes).orderBy(desc(ordenes.id)).limit(500);
+
+  // Cargo entidades relacionadas en queries separados (en lote)
+  const activoIds = Array.from(new Set(ots.map((o) => o.activoId).filter((x): x is number => !!x)));
+  const vehiculoIds = Array.from(new Set(ots.map((o: any) => o.vehiculoId).filter((x: any): x is number => !!x)));
+  const actividadIds = Array.from(new Set(ots.map((o: any) => o.actividadId).filter((x: any): x is number => !!x)));
+  const userIds = Array.from(new Set(ots.map((o) => o.asignadoA).filter((x): x is number => !!x)));
+
+  const actMap = new Map<number, any>();
+  if (activoIds.length > 0) {
+    const ws = await db.select().from(activos).where(inArray(activos.id, activoIds));
+    for (const a of ws) actMap.set(a.id, a);
+  }
+  const vehMap = new Map<number, any>();
+  if (vehiculoIds.length > 0) {
+    const ws = await db.select().from(vehiculos).where(inArray(vehiculos.id, vehiculoIds));
+    for (const v of ws) vehMap.set(v.id, v);
+  }
+  const actiMap = new Map<number, any>();
+  if (actividadIds.length > 0) {
+    const ws = await db.select().from(actividades).where(inArray(actividades.id, actividadIds));
+    for (const a of ws) actiMap.set(a.id, a);
+  }
+  const userMap = new Map<number, any>();
+  if (userIds.length > 0) {
+    const ws = await db.select().from(usuarios).where(inArray(usuarios.id, userIds));
+    for (const u of ws) userMap.set(u.id, u);
+  }
+
+  rowsRaw = ots.map((o: any) => ({
+    orden: o,
+    activo: o.activoId ? actMap.get(o.activoId) ?? null : null,
+    vehiculo: o.vehiculoId ? vehMap.get(o.vehiculoId) ?? null : null,
+    actividad: o.actividadId ? actiMap.get(o.actividadId) ?? null : null,
+    asignado: o.asignadoA ? userMap.get(o.asignadoA) ?? null : null,
+  }));
+} catch (e: any) {
+  errorMsg = String(e?.message ?? e);
+}
 
 const rows = rowsRaw.filter((r) =>
   (!filtroEstado || r.orden.estado === filtroEstado) &&
@@ -40,6 +76,13 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
     <a href="/ordenes/nueva" class="btn-primary">+ Nueva orden</a>
   </div>
 
+  {errorMsg && (
+    <div class="card mt-4 border-l-4 border-red-500 p-4">
+      <h2 class="font-semibold text-red-700">Error al cargar órdenes</h2>
+      <pre class="mt-2 whitespace-pre-wrap text-xs text-red-600">{errorMsg}</pre>
+    </div>
+  )}
+
   <!-- Filtros rapidos por estado -->
   <div class="mt-4 flex flex-wrap gap-1 text-xs">
     <a href="/ordenes" class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>Todas ({rowsRaw.length})</a>
@@ -56,7 +99,7 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
         <tr>
           <th class="px-4 py-2">#</th>
           <th class="px-4 py-2">Título</th>
-          <th class="px-4 py-2">Equipo</th>
+          <th class="px-4 py-2">Equipo / Vehículo / Actividad</th>
           <th class="px-4 py-2">Tipo</th>
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
@@ -64,11 +107,13 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && (
+        {rows.length === 0 && !errorMsg && (
           <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
         )}
         {rows.map((r) => {
-          const e = r.orden.estado as EstadoOT;
+          const e = (r.orden.estado ?? "abierta") as EstadoOT;
+          const tipo = (r.orden.tipo ?? "correctivo") as keyof typeof TIPO_COLOR;
+          const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
           return (
             <tr class="hover:bg-slate-50">
               <td class="px-4 py-2 font-mono text-xs">#{r.orden.id}</td>
@@ -82,10 +127,10 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
                 {!r.activo && !r.vehiculo && !r.actividad && <span class="text-slate-400">— sin asociar —</span>}
               </td>
               <td class="px-4 py-2">
-                <span class={`badge ${TIPO_COLOR[r.orden.tipo]} capitalize`}>{r.orden.tipo}</span>
+                <span class={`badge ${TIPO_COLOR[tipo] ?? "bg-slate-100 text-slate-600"} capitalize`}>{r.orden.tipo}</span>
               </td>
-              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.orden.prioridad]} capitalize`}>{r.orden.prioridad}</span></td>
-              <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[e]}`}>{ESTADO_LABEL[e]}</span></td>
+              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[prio] ?? "bg-slate-100 text-slate-600"} capitalize`}>{r.orden.prioridad}</span></td>
+              <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[e] ?? "bg-slate-100 text-slate-600"}`}>{ESTADO_LABEL[e] ?? r.orden.estado}</span></td>
               <td class="px-4 py-2 text-slate-600">{r.asignado?.nombre ?? "—"}</td>
             </tr>
           );
