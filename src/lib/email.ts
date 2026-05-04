@@ -1,30 +1,36 @@
-// Email helpers — soporta múltiples proveedores: Microsoft 365 (Graph),
-// Resend, SendGrid, Brevo, y SMTP via SMTP2GO.
+// Email helpers — soporta SMTP directo (genérico) y proveedores REST.
 //
-// Cloudflare Workers NO permite SMTP TCP directo (no hay sockets crudos).
-// Por eso usamos APIs REST de proveedores. Para "SMTP genérico" usamos
-// SMTP2GO que ofrece un endpoint REST que detrás envía por SMTP.
+// Cloudflare Workers soporta TCP real via cloudflare:sockets, por lo que
+// SMTP con host/usuario/contraseña funciona nativamente (port 587 STARTTLS
+// o port 465 SSL).
 //
 // El proveedor activo se decide por la presencia de variables de entorno:
-//   1. EMAIL_PROVIDER (opcional): fuerza un proveedor especifico
-//      ('m365' | 'resend' | 'sendgrid' | 'brevo' | 'smtp2go')
+//   1. EMAIL_PROVIDER (opcional): fuerza proveedor
+//      ('smtp' | 'm365' | 'resend' | 'sendgrid' | 'brevo')
 //   2. Si no, autodetecta por presencia de credenciales
 //
-// Variables soportadas:
-//   M365: M365_TENANT_ID, M365_CLIENT_ID, M365_CLIENT_SECRET, M365_FROM_ADDRESS
-//   Resend: RESEND_API_KEY, EMAIL_FROM
-//   SendGrid: SENDGRID_API_KEY, EMAIL_FROM
-//   Brevo: BREVO_API_KEY, EMAIL_FROM, [EMAIL_FROM_NAME]
-//   SMTP2GO (cualquier SMTP): SMTP2GO_API_KEY, EMAIL_FROM, [EMAIL_FROM_NAME]
+// Variables SMTP (recomendado — genérico):
+//   SMTP_HOST        e.g. mail.tudominio.com  o  smtp.office365.com
+//   SMTP_PORT        587 (STARTTLS) o 465 (SSL) — por defecto 587
+//   SMTP_USER        cuenta@tudominio.com
+//   SMTP_PASS        contraseña
+//   EMAIL_FROM       dirección remitente (puede ser igual a SMTP_USER)
+//   EMAIL_FROM_NAME  (opcional) nombre visible
 
 import type { APIContext } from "astro";
 import { getDb, getEnv } from "./db";
 import { emailLog } from "./schema";
+import { sendSmtpWorker } from "./smtp-worker";
 
 interface EmailEnv {
   EMAIL_PROVIDER?: string;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
+  // SMTP genérico
+  SMTP_HOST?: string;
+  SMTP_PORT?: string;
+  SMTP_USER?: string;
+  SMTP_PASS?: string;
   // M365
   M365_TENANT_ID?: string;
   M365_CLIENT_ID?: string;
@@ -36,32 +42,30 @@ interface EmailEnv {
   SENDGRID_API_KEY?: string;
   // Brevo
   BREVO_API_KEY?: string;
-  // SMTP2GO (REST API que envía por SMTP)
-  SMTP2GO_API_KEY?: string;
 }
 
-export type Proveedor = "m365" | "resend" | "sendgrid" | "brevo" | "smtp2go" | "ninguno";
+export type Proveedor = "smtp" | "m365" | "resend" | "sendgrid" | "brevo" | "ninguno";
 
 export function detectarProveedor(env: EmailEnv): Proveedor {
   const forced = env.EMAIL_PROVIDER?.toLowerCase();
-  if (forced === "m365" || forced === "resend" || forced === "sendgrid" || forced === "brevo" || forced === "smtp2go") {
+  if (forced === "smtp" || forced === "m365" || forced === "resend" || forced === "sendgrid" || forced === "brevo") {
     return forced as Proveedor;
   }
+  if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) return "smtp";
   if (env.M365_TENANT_ID && env.M365_CLIENT_ID && env.M365_CLIENT_SECRET && env.M365_FROM_ADDRESS) return "m365";
   if (env.RESEND_API_KEY && env.EMAIL_FROM) return "resend";
   if (env.SENDGRID_API_KEY && env.EMAIL_FROM) return "sendgrid";
   if (env.BREVO_API_KEY && env.EMAIL_FROM) return "brevo";
-  if (env.SMTP2GO_API_KEY && env.EMAIL_FROM) return "smtp2go";
   return "ninguno";
 }
 
 export function nombreProveedor(p: Proveedor): string {
   const labels: Record<Proveedor, string> = {
+    smtp: "SMTP (genérico)",
     m365: "Microsoft 365 (Graph API)",
     resend: "Resend",
     sendgrid: "SendGrid",
     brevo: "Brevo (Sendinblue)",
-    smtp2go: "SMTP2GO (SMTP via API)",
     ninguno: "Sin configurar",
   };
   return labels[p];
@@ -168,26 +172,6 @@ async function sendViaBrevo(env: EmailEnv, p: SendMailParams) {
   if (!res.ok) throw new Error(`Brevo ${res.status}: ${(await res.text()).slice(0, 400)}`);
 }
 
-async function sendViaSmtp2go(env: EmailEnv, p: SendMailParams) {
-  const toList = Array.isArray(p.to) ? p.to : [p.to];
-  const fromStr = env.EMAIL_FROM_NAME ? `"${env.EMAIL_FROM_NAME}" <${env.EMAIL_FROM}>` : env.EMAIL_FROM;
-  const body = {
-    api_key: env.SMTP2GO_API_KEY,
-    sender: fromStr,
-    to: toList,
-    cc: p.cc,
-    subject: p.subject,
-    html_body: p.html,
-  };
-  const res = await fetch("https://api.smtp2go.com/v3/email/send", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`SMTP2GO ${res.status}: ${(await res.text()).slice(0, 400)}`);
-  const j = (await res.json()) as any;
-  if (j?.data?.error) throw new Error(`SMTP2GO: ${j.data.error}`);
-}
 
 export async function sendMail(ctx: APIContext, params: SendMailParams): Promise<{ ok: boolean; error?: string; proveedor?: Proveedor }> {
   const env = getEnv(ctx) as unknown as EmailEnv;
@@ -205,11 +189,22 @@ export async function sendMail(ctx: APIContext, params: SendMailParams): Promise
   }
 
   try {
-    if (proveedor === "m365") await sendViaM365(env, params);
+    if (proveedor === "smtp") {
+      await sendSmtpWorker(
+        {
+          host: env.SMTP_HOST!,
+          port: parseInt(env.SMTP_PORT ?? "587", 10),
+          user: env.SMTP_USER!,
+          pass: env.SMTP_PASS!,
+          from: env.EMAIL_FROM ?? env.SMTP_USER!,
+          fromName: env.EMAIL_FROM_NAME,
+        },
+        { to: toList, subject: params.subject, html: params.html }
+      );
+    } else if (proveedor === "m365") await sendViaM365(env, params);
     else if (proveedor === "resend") await sendViaResend(env, params);
     else if (proveedor === "sendgrid") await sendViaSendGrid(env, params);
     else if (proveedor === "brevo") await sendViaBrevo(env, params);
-    else if (proveedor === "smtp2go") await sendViaSmtp2go(env, params);
 
     await db.insert(emailLog).values({
       destinatario: toList.join(","), asunto: params.subject, tipo: params.tipo,
