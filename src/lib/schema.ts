@@ -464,3 +464,54 @@ export type ViajePropozito = typeof viajePropositos.$inferSelect;
 export type Viaje = typeof viajes.$inferSelect;
 export type CargaCombustible = typeof cargasCombustible.$inferSelect;
 export type PlanVehiculo = typeof planesVehiculo.$inferSelect;
+
+// ─── Seguridad: Extintores ────────────────────────────────────────────────────
+export const extintores = sqliteTable("extintores", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  numeroSerie: text("numero_serie"),
+  marca: text("marca"),
+  modelo: text("modelo"),
+  fotoR2: text("foto_r2"),
+  tipoAgente: text("tipo_agente", { enum: ["pqs", "co2", "agua", "espuma", "k", "d"] }).notNull(),
+  capacidad: real("capacidad"),
+  capacidadUnidad: text("capacidad_unidad", { enum: ["kg", "lb"] }).default("kg"),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  ubicacionDetalle: text("ubicacion_detalle"),
+  zona: text("zona"),
+  fechaFabricacion: text("fecha_fabricacion"),
+  fechaCompra: text("fecha_compra"),
+  ultimaRecarga: text("ultima_recarga"),
+  proximaRecarga: text("proxima_recarga"),
+  ultimaPruebaHidrostatica: text("ultima_prueba_hidrostatica"),
+  proximaPruebaHidrostatica: text("proxima_prueba_hidrostatica"),
+  ultimaInspeccion: text("ultima_inspeccion"),
+  proximaInspeccion: text("proxima_inspeccion"),
+  diasInspeccion: integer("dias_inspeccion").notNull().default(30),
+  mesesRecarga: integer("meses_recarga").notNull().default(12),
+  aniosPrueba: integer("anios_prueba").notNull().default(5),
+  estado: text("estado", { enum: ["activo", "mantenimiento", "baja"] }).notNull().default("activo"),
+  qrToken: text("qr_token").notNull().unique(),
+  notas: text("notas"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const extintorEventos = sqliteTable("extintor_eventos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  extintorId: integer("extintor_id").notNull().references(() => extintores.id, { onDelete: "cascade" }),
+  tipo: text("tipo", { enum: ["inspeccion", "recarga", "prueba_hidrostatica", "reemplazo", "baja", "otro"] }).notNull(),
+  fecha: text("fecha").notNull(),
+  proximaFecha: text("proxima_fecha"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
+  costo: real("costo"),
+  notas: text("notas"),
+  evidenciaR2: text("evidencia_r2"),
+  otId: integer("ot_id").references(() => ordenes.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type Extintor = typeof extintores.$inferSelect;
+export type ExtintorEvento = typeof extintorEventos.$inferSelect;

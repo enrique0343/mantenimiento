@@ -1,0 +1,138 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { extintores, sucursales } from "@/lib/schema";
+import { eq, and } from "drizzle-orm";
+import { TIPO_AGENTE_LABEL, TIPO_AGENTE_COLOR, estadoVencimiento, diasParaFecha, puedeVerSeguridad, puedeAdministrarSeguridad } from "@/lib/extintores";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerSeguridad(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const rows = await db
+  .select({ e: extintores, s: sucursales })
+  .from(extintores)
+  .leftJoin(sucursales, eq(sucursales.id, extintores.sucursalId))
+  .where(eq(extintores.activo, true));
+
+const totales = rows.length;
+
+// Vencimientos próximos por tipo de fecha
+function clasificar(fecha: string | null) {
+  return estadoVencimiento(fecha);
+}
+const vencidosInsp = rows.filter((r) => clasificar(r.e.proximaInspeccion) === "vencido");
+const proximosInsp = rows.filter((r) => clasificar(r.e.proximaInspeccion) === "proximo");
+const vencidosRec = rows.filter((r) => clasificar(r.e.proximaRecarga) === "vencido");
+const proximosRec = rows.filter((r) => clasificar(r.e.proximaRecarga) === "proximo");
+const vencidosPrueba = rows.filter((r) => clasificar(r.e.proximaPruebaHidrostatica) === "vencido");
+const proximosPrueba = rows.filter((r) => clasificar(r.e.proximaPruebaHidrostatica) === "proximo");
+
+// Conteo por tipo
+const porTipo = rows.reduce<Record<string, number>>((acc, r) => {
+  acc[r.e.tipoAgente] = (acc[r.e.tipoAgente] ?? 0) + 1;
+  return acc;
+}, {});
+
+// Por sucursal
+const porSucursal = rows.reduce<Record<string, number>>((acc, r) => {
+  const k = r.s?.nombre ?? "Sin sucursal";
+  acc[k] = (acc[k] ?? 0) + 1;
+  return acc;
+}, {});
+---
+
+<Layout title="Seguridad / Extintores">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Seguridad</h1>
+      <p class="text-sm text-slate-500">{totales} extintores activos</p>
+    </div>
+    {puedeAdministrarSeguridad(user.rol) && (
+      <a href="/seguridad/extintores/nuevo" class="btn-primary">+ Nuevo extintor</a>
+    )}
+  </div>
+
+  <!-- KPIs de vencimientos -->
+  <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Inspección visual</div>
+      <div class="mt-1 flex items-baseline gap-3">
+        <span class="text-2xl font-bold text-red-600">{vencidosInsp.length}</span>
+        <span class="text-xs text-red-600">vencidos</span>
+        <span class="text-2xl font-bold text-amber-600">{proximosInsp.length}</span>
+        <span class="text-xs text-amber-600">próximos</span>
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Recarga (anual)</div>
+      <div class="mt-1 flex items-baseline gap-3">
+        <span class="text-2xl font-bold text-red-600">{vencidosRec.length}</span>
+        <span class="text-xs text-red-600">vencidos</span>
+        <span class="text-2xl font-bold text-amber-600">{proximosRec.length}</span>
+        <span class="text-xs text-amber-600">próximos</span>
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Prueba hidrostática</div>
+      <div class="mt-1 flex items-baseline gap-3">
+        <span class="text-2xl font-bold text-red-600">{vencidosPrueba.length}</span>
+        <span class="text-xs text-red-600">vencidos</span>
+        <span class="text-2xl font-bold text-amber-600">{proximosPrueba.length}</span>
+        <span class="text-xs text-amber-600">próximos</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distribuciones -->
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Por tipo de agente</h2>
+      <ul class="mt-3 space-y-1 text-sm">
+        {Object.entries(porTipo).map(([tipo, n]) => (
+          <li class="flex items-center justify-between">
+            <span class={`badge ${TIPO_AGENTE_COLOR[tipo]}`}>{TIPO_AGENTE_LABEL[tipo] ?? tipo}</span>
+            <span class="font-mono">{n}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Por sucursal</h2>
+      <ul class="mt-3 space-y-1 text-sm">
+        {Object.entries(porSucursal).map(([s, n]) => (
+          <li class="flex items-center justify-between">
+            <span>{s}</span>
+            <span class="font-mono">{n}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+
+  <!-- Lista de pendientes urgentes -->
+  {(vencidosInsp.length + vencidosRec.length + vencidosPrueba.length) > 0 && (
+    <div class="card mt-6 p-5 border-l-4 border-red-500">
+      <h2 class="font-semibold text-red-700">⚠ Vencimientos urgentes</h2>
+      <ul class="mt-2 space-y-1 text-sm">
+        {[...vencidosInsp.map((r) => ({ r, tipo: "Inspección", fecha: r.e.proximaInspeccion })),
+          ...vencidosRec.map((r) => ({ r, tipo: "Recarga", fecha: r.e.proximaRecarga })),
+          ...vencidosPrueba.map((r) => ({ r, tipo: "Prueba hidrostática", fecha: r.e.proximaPruebaHidrostatica })),
+        ].slice(0, 20).map(({ r, tipo, fecha }) => (
+          <li>
+            <a href={`/seguridad/extintores/${r.e.id}`} class="text-brand-700 hover:underline font-medium">
+              {r.e.codigo}
+            </a>
+            <span class="text-slate-500"> · {r.s?.nombre ?? "—"}</span>
+            · <span class="text-red-600 font-medium">{tipo} vencida hace {Math.abs(diasParaFecha(fecha) ?? 0)} días</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+
+  <div class="mt-6 text-center">
+    <a href="/seguridad/extintores" class="btn-secondary">Ver todos los extintores →</a>
+  </div>
+</Layout>

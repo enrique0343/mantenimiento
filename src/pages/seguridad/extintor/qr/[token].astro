@@ -1,0 +1,142 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { extintores, sucursales, ubicaciones } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { TIPO_AGENTE_LABEL, TIPO_AGENTE_COLOR, ESTADO_EXT_LABEL, ESTADO_EXT_COLOR, estadoVencimiento, ESTADO_VENC_COLOR, diasParaFecha, puedeVerSeguridad, puedeAdministrarSeguridad } from "@/lib/extintores";
+export const prerender = false;
+
+const token = String(Astro.params.token ?? "").toUpperCase();
+const user = Astro.locals.user!;
+if (!puedeVerSeguridad(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const [r] = await db
+  .select({ e: extintores, s: sucursales, u: ubicaciones })
+  .from(extintores)
+  .leftJoin(sucursales, eq(sucursales.id, extintores.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, extintores.ubicacionId))
+  .where(eq(extintores.qrToken, token))
+  .limit(1);
+if (!r) {
+  return new Response(`Extintor no encontrado para token ${token}`, { status: 404 });
+}
+const e = r.e;
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es") : "—");
+
+const stInsp = estadoVencimiento(e.proximaInspeccion);
+const stRec = estadoVencimiento(e.proximaRecarga);
+const stPrueba = estadoVencimiento(e.proximaPruebaHidrostatica);
+const dInsp = diasParaFecha(e.proximaInspeccion);
+const admin = puedeAdministrarSeguridad(user.rol);
+---
+
+<Layout title={`Extintor ${e.codigo}`}>
+  <div class="flex items-center justify-between">
+    <a href="/seguridad/extintores" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    <a href={`/seguridad/extintores/${e.id}`} class="text-sm text-brand-700 hover:underline">Ver detalle completo →</a>
+  </div>
+
+  <div class="mt-4 card p-5 text-center">
+    <h1 class="text-2xl font-bold">{e.codigo}</h1>
+    <div class="mt-2 flex flex-wrap justify-center gap-2">
+      <span class={`badge ${TIPO_AGENTE_COLOR[e.tipoAgente]}`}>{TIPO_AGENTE_LABEL[e.tipoAgente]}</span>
+      <span class={`badge ${ESTADO_EXT_COLOR[e.estado]}`}>{ESTADO_EXT_LABEL[e.estado]}</span>
+    </div>
+    <p class="mt-2 text-sm text-slate-600">
+      {e.capacidad ? `${e.capacidad} ${e.capacidadUnidad}` : ""}
+      {e.marca && <span> · {e.marca} {e.modelo}</span>}
+    </p>
+    <p class="mt-1 text-sm text-slate-500">
+      {r.s?.nombre ?? "—"}
+      {r.u?.nombre && <span> · {r.u.nombre}</span>}
+      {e.zona && <span> · {e.zona}</span>}
+    </p>
+    {e.ubicacionDetalle && <p class="text-xs text-slate-400">{e.ubicacionDetalle}</p>}
+  </div>
+
+  <div class="mt-4 space-y-2">
+    <div class:list={["card p-3 flex items-center justify-between", stInsp === "vencido" && "border-l-4 border-red-500", stInsp === "proximo" && "border-l-4 border-amber-500"]}>
+      <div>
+        <div class="text-xs uppercase text-slate-500">👁 Inspección visual</div>
+        <div class:list={["text-sm", ESTADO_VENC_COLOR[stInsp]]}>
+          Próxima: {fmt(e.proximaInspeccion)}
+          {dInsp != null && stInsp === "vencido" && <span> · vencida hace {Math.abs(dInsp)}d</span>}
+          {dInsp != null && stInsp === "proximo" && <span> · en {dInsp}d</span>}
+        </div>
+      </div>
+    </div>
+    <div class:list={["card p-3", stRec === "vencido" && "border-l-4 border-red-500", stRec === "proximo" && "border-l-4 border-amber-500"]}>
+      <div class="text-xs uppercase text-slate-500">🔋 Recarga</div>
+      <div class:list={["text-sm", ESTADO_VENC_COLOR[stRec]]}>Próxima: {fmt(e.proximaRecarga)}</div>
+    </div>
+    <div class:list={["card p-3", stPrueba === "vencido" && "border-l-4 border-red-500", stPrueba === "proximo" && "border-l-4 border-amber-500"]}>
+      <div class="text-xs uppercase text-slate-500">💧 Prueba hidrostática</div>
+      <div class:list={["text-sm", ESTADO_VENC_COLOR[stPrueba]]}>Próxima: {fmt(e.proximaPruebaHidrostatica)}</div>
+    </div>
+  </div>
+
+  {admin && e.estado === "activo" && (
+    <div class="mt-6 grid grid-cols-1 gap-2">
+      <button id="inspBtn" class="btn-primary w-full justify-center">👁 Registrar inspección visual ahora</button>
+      <a href={`/seguridad/extintores/${e.id}`} class="btn-secondary w-full justify-center text-sm">Ver historial completo / otros eventos</a>
+    </div>
+  )}
+
+  <!-- Modal inspección rápida -->
+  <div id="inspModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Inspección visual</h3>
+      <p class="mt-1 text-xs text-slate-500">Confirma que el extintor está en buen estado.</p>
+      <div class="mt-3 space-y-3 text-sm">
+        <div>
+          <label class="label">Foto (opcional pero recomendada)</label>
+          <input id="i_foto" type="file" accept="image/*" capture="environment" class="block w-full text-sm" />
+        </div>
+        <div>
+          <label class="label">Notas (si encontraste algo anómalo)</label>
+          <textarea id="i_notas" class="input" rows="2" placeholder="Ej: presión OK, sin daños visibles"></textarea>
+        </div>
+        <p id="i_err" class="hidden text-sm text-red-600"></p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="iCancel" class="btn-secondary">Cancelar</button>
+        <button id="iSave" class="btn-primary">✓ Confirmar inspección</button>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ id: e.id }}>
+    document.getElementById("inspBtn")?.addEventListener("click", () => {
+      document.getElementById("inspModal").classList.remove("hidden");
+      document.getElementById("inspModal").classList.add("flex");
+    });
+    document.getElementById("iCancel")?.addEventListener("click", () => {
+      document.getElementById("inspModal").classList.add("hidden");
+      document.getElementById("inspModal").classList.remove("flex");
+    });
+
+    function fileToDataUrl(f) {
+      return new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+    }
+
+    document.getElementById("iSave")?.addEventListener("click", async () => {
+      const err = document.getElementById("i_err");
+      err.classList.add("hidden");
+      const file = document.getElementById("i_foto").files[0];
+      const evidenciaBase64 = file ? await fileToDataUrl(file) : null;
+      const payload = {
+        tipo: "inspeccion",
+        fecha: new Date().toISOString().slice(0, 10),
+        notas: document.getElementById("i_notas").value.trim() || null,
+        evidenciaBase64,
+      };
+      const res = await fetch(`/api/seguridad/extintores/${id}/evento`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      if (!res.ok) { err.textContent = "Error al registrar"; err.classList.remove("hidden"); return; }
+      alert("✓ Inspección registrada");
+      location.reload();
+    });
+  </script>
+</Layout>

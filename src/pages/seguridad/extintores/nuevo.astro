@@ -1,0 +1,217 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { sucursales, ubicaciones } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { TIPOS_AGENTE, ZONAS_SUGERIDAS, puedeAdministrarSeguridad } from "@/lib/extintores";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeAdministrarSeguridad(user.rol)) return Astro.redirect("/seguridad/extintores");
+
+const db = getDb(Astro);
+const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+const ubRows = await db.select().from(ubicaciones).where(eq(ubicaciones.activa, true));
+const ubJson = JSON.stringify(ubRows);
+---
+
+<Layout title="Nuevo extintor">
+  <a href="/seguridad/extintores" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nuevo extintor</h1>
+
+  <form id="form" class="card mt-4 space-y-5 p-5">
+    <div>
+      <h2 class="font-semibold text-slate-900">Identificación</h2>
+      <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label">Código interno *</label>
+          <input class="input" id="codigo" required placeholder="EXT-001" />
+        </div>
+        <div>
+          <label class="label">Número de serie</label>
+          <input class="input" id="numeroSerie" />
+        </div>
+        <div>
+          <label class="label">Marca</label>
+          <input class="input" id="marca" />
+        </div>
+        <div>
+          <label class="label">Modelo</label>
+          <input class="input" id="modelo" />
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="font-semibold text-slate-900">Tipo y capacidad</h2>
+      <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div class="sm:col-span-3">
+          <label class="label">Tipo de agente *</label>
+          <select class="input" id="tipoAgente" required>
+            <option value="">— Seleccionar —</option>
+            {TIPOS_AGENTE.map((t) => <option value={t.value}>{t.label}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label">Capacidad</label>
+          <input class="input" id="capacidad" type="number" min="0" step="0.5" placeholder="5" />
+        </div>
+        <div>
+          <label class="label">Unidad</label>
+          <select class="input" id="capacidadUnidad">
+            <option value="kg">kg</option>
+            <option value="lb">lb</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="font-semibold text-slate-900">Ubicación</h2>
+      <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label">Sucursal *</label>
+          <select class="input" id="sucursalId" required>
+            <option value="">— Seleccionar —</option>
+            {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Ubicación específica</label>
+          <select class="input" id="ubicacionId">
+            <option value="">— Seleccionar —</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Zona</label>
+          <select class="input" id="zona">
+            <option value="">— Seleccionar —</option>
+            {ZONAS_SUGERIDAS.map((z) => <option value={z}>{z}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Detalle de ubicación</label>
+          <input class="input" id="ubicacionDetalle" placeholder="Pasillo A, junto a la puerta..." />
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="font-semibold text-slate-900">Fechas regulatorias</h2>
+      <p class="text-xs text-slate-500">Las fechas próximas se calculan automáticamente con base en las frecuencias.</p>
+      <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label">Fecha de fabricación</label>
+          <input class="input" id="fechaFabricacion" type="date" />
+        </div>
+        <div>
+          <label class="label">Fecha de compra</label>
+          <input class="input" id="fechaCompra" type="date" />
+        </div>
+        <div>
+          <label class="label">Última inspección</label>
+          <input class="input" id="ultimaInspeccion" type="date" />
+        </div>
+        <div>
+          <label class="label">Última recarga</label>
+          <input class="input" id="ultimaRecarga" type="date" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label">Última prueba hidrostática</label>
+          <input class="input" id="ultimaPruebaHidrostatica" type="date" />
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="font-semibold text-slate-900">Frecuencias</h2>
+      <p class="text-xs text-slate-500">Ajusta solo si necesitas algo distinto al estándar.</p>
+      <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label class="label">Inspección visual cada (días)</label>
+          <input class="input" id="diasInspeccion" type="number" min="1" value="30" />
+        </div>
+        <div>
+          <label class="label">Recarga cada (meses)</label>
+          <input class="input" id="mesesRecarga" type="number" min="1" value="12" />
+        </div>
+        <div>
+          <label class="label">Prueba hidrostática cada (años)</label>
+          <input class="input" id="aniosPrueba" type="number" min="1" value="5" />
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <label class="label">Notas</label>
+      <textarea class="input" id="notas" rows="2"></textarea>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Crear extintor</button>
+      <a class="btn-secondary" href="/seguridad/extintores">Cancelar</a>
+    </div>
+  </form>
+
+  <script define:vars={{ ubJson }}>
+    const allUbs = JSON.parse(ubJson);
+    const sucEl = document.getElementById("sucursalId");
+    const ubEl = document.getElementById("ubicacionId");
+    sucEl?.addEventListener("change", () => {
+      const sid = Number(sucEl.value);
+      const filtered = sid ? allUbs.filter((u) => u.sucursalId === sid) : [];
+      ubEl.innerHTML = '<option value="">— Seleccionar —</option>';
+      filtered.forEach((u) => {
+        const o = document.createElement("option");
+        o.value = u.id; o.textContent = `${u.nombre} (${u.tipo})`;
+        ubEl.appendChild(o);
+      });
+    });
+
+    document.getElementById("form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      err.classList.add("hidden");
+      const v = (id) => document.getElementById(id).value.trim();
+      const num = (id) => { const x = document.getElementById(id).value; return x === "" ? null : Number(x); };
+      const ubV = document.getElementById("ubicacionId").value;
+      const payload = {
+        codigo: v("codigo"),
+        numeroSerie: v("numeroSerie") || null,
+        marca: v("marca") || null,
+        modelo: v("modelo") || null,
+        tipoAgente: document.getElementById("tipoAgente").value,
+        capacidad: num("capacidad"),
+        capacidadUnidad: document.getElementById("capacidadUnidad").value,
+        sucursalId: Number(sucEl.value),
+        ubicacionId: ubV ? Number(ubV) : null,
+        ubicacionDetalle: v("ubicacionDetalle") || null,
+        zona: document.getElementById("zona").value || null,
+        fechaFabricacion: v("fechaFabricacion") || null,
+        fechaCompra: v("fechaCompra") || null,
+        ultimaInspeccion: v("ultimaInspeccion") || null,
+        ultimaRecarga: v("ultimaRecarga") || null,
+        ultimaPruebaHidrostatica: v("ultimaPruebaHidrostatica") || null,
+        diasInspeccion: num("diasInspeccion") ?? 30,
+        mesesRecarga: num("mesesRecarga") ?? 12,
+        aniosPrueba: num("aniosPrueba") ?? 5,
+        notas: v("notas") || null,
+      };
+      if (!payload.codigo || !payload.tipoAgente || !payload.sucursalId) {
+        err.textContent = "Código, tipo y sucursal son obligatorios";
+        err.classList.remove("hidden");
+        return;
+      }
+      const res = await fetch("/api/seguridad/extintores", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await res.json();
+      location.href = `/seguridad/extintores/${j.extintor.id}`;
+    });
+  </script>
+</Layout>
