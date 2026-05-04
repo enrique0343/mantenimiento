@@ -32,7 +32,7 @@ const updateSchema = z.object({
 });
 
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe", "tecnico"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
   const body = await ctx.request.json().catch(() => null);
@@ -47,7 +47,7 @@ export const PATCH: APIRoute = async (ctx) => {
 };
 
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
