@@ -103,12 +103,11 @@ const isActive = (href: string) =>
             </nav>
 
             {!isMotorista && (
-              <div id="moreMenu" class="relative">
-                <button id="moreBtn" type="button" aria-haspopup="true" aria-expanded="false"
-                  class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap">
+              <details id="moreMenu" class="relative group">
+                <summary class="list-none cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap select-none [&::-webkit-details-marker]:hidden">
                   Más ▾
-                </button>
-                <div id="moreDropdown" class="hidden absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
+                </summary>
+                <div class="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-slate-200 bg-white shadow-lg">
                   {masGrupos.map((g) => {
                     const visibles = g.items.filter((it) => it.show === undefined || it.show);
                     if (visibles.length === 0) return null;
@@ -123,7 +122,7 @@ const isActive = (href: string) =>
                     );
                   })}
                 </div>
-              </div>
+              </details>
             )}
 
             <div class="flex items-center gap-3 whitespace-nowrap">
@@ -149,34 +148,15 @@ const isActive = (href: string) =>
         location.href = "/login";
       });
 
-      // Dropdown "Más" (toggle JS plano)
+      // Cierra <details id="moreMenu"> al hacer clic fuera o ESC
       (function () {
-        var btn = document.getElementById("moreBtn");
-        var dd = document.getElementById("moreDropdown");
-        if (!btn || !dd) return;
-        btn.addEventListener("click", function (e) {
-          e.stopPropagation();
-          var open = !dd.classList.contains("hidden");
-          if (open) {
-            dd.classList.add("hidden");
-            btn.setAttribute("aria-expanded", "false");
-          } else {
-            dd.classList.remove("hidden");
-            btn.setAttribute("aria-expanded", "true");
-          }
-        });
+        var menu = document.getElementById("moreMenu");
+        if (!menu) return;
         document.addEventListener("click", function (e) {
-          if (!btn.contains(e.target) && !dd.contains(e.target)) {
-            dd.classList.add("hidden");
-            btn.setAttribute("aria-expanded", "false");
-          }
+          if (menu.open && !menu.contains(e.target)) menu.open = false;
         });
-        // Cierra al presionar Escape
         document.addEventListener("keydown", function (e) {
-          if (e.key === "Escape") {
-            dd.classList.add("hidden");
-            btn.setAttribute("aria-expanded", "false");
-          }
+          if (e.key === "Escape" && menu.open) menu.open = false;
         });
       })();
     </script>
