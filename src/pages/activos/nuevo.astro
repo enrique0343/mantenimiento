@@ -113,6 +113,45 @@ const ubJson = JSON.stringify(ubRows);
       )}
     </div>
 
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-emerald-700">🛡️ Mantenimiento preventivo automático</h2>
+      <p class="text-xs text-slate-500 mb-3">Si configuras la frecuencia, el sistema generará automáticamente las órdenes preventivas en cada ciclo. Si después se hace un correctivo, el contador se reinicia automáticamente.</p>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Frecuencia de mantenimiento</label>
+          <select class="input" id="mantenimientoFrecuencia">
+            <option value="">— Sin programación automática —</option>
+            <option value="diaria">Diaria</option>
+            <option value="semanal">Semanal</option>
+            <option value="quincenal">Quincenal</option>
+            <option value="mensual">Mensual</option>
+            <option value="bimestral">Bimestral (2 meses)</option>
+            <option value="trimestral" selected>Trimestral (3 meses)</option>
+            <option value="semestral">Semestral (6 meses)</option>
+            <option value="anual">Anual</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Primera ejecución (próxima fecha)</label>
+          <input class="input" id="mantenimientoProximaFecha" type="date" />
+          <p class="text-xs text-slate-400 mt-1">Si lo dejas vacío, se calcula automáticamente desde hoy.</p>
+        </div>
+        <div>
+          <label class="label">Prioridad de la OT</label>
+          <select class="input" id="mantenimientoPrioridad">
+            <option value="baja">Baja</option>
+            <option value="media" selected>Media</option>
+            <option value="alta">Alta</option>
+            <option value="urgente">Urgente</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Título del plan (opcional)</label>
+          <input class="input" id="mantenimientoTitulo" placeholder="Ej: Limpieza filtros y revisión general" />
+        </div>
+      </div>
+    </div>
+
     <div id="bioFields" class="hidden border-t border-slate-200 pt-5">
       <h2 class="mb-3 font-semibold text-purple-700">Datos biomedicos</h2>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -205,6 +244,15 @@ const ubJson = JSON.stringify(ubRows);
         payload.claseRiesgo = sv("claseRiesgo") || null;
         payload.ultimaCalibracion = v("ultimaCalibracion") || null;
         payload.proximaCalibracion = v("proximaCalibracion") || null;
+      }
+
+      // Mantenimiento preventivo auto
+      const frec = sv("mantenimientoFrecuencia");
+      if (frec) {
+        payload.mantenimientoFrecuencia = frec;
+        payload.mantenimientoProximaFecha = v("mantenimientoProximaFecha") || null;
+        payload.mantenimientoTitulo = v("mantenimientoTitulo") || null;
+        payload.mantenimientoPrioridad = sv("mantenimientoPrioridad") || "media";
       }
       const res = await fetch("/api/activos", {
         method: "POST",

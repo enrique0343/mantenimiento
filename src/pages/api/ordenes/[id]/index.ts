@@ -2,9 +2,11 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento } from "@/lib/schema";
+import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
+import { siguienteFecha } from "@/lib/frecuencias";
 import { sendMail, emailLayout } from "@/lib/email";
 
 export const prerender = false;
@@ -26,6 +28,9 @@ const updateSchema = z.object({
   checklistEjecucion: z.string().nullable().optional(),
   // Verificacion (solo se setea via accion explicita; aqui aceptamos notas)
   verificacionNotas: z.string().nullable().optional(),
+  // Si es correctivo y se cierra, reprogramar planes preventivos del activo
+  // (default true; el técnico puede desmarcar si fue trivial)
+  reprogramarPreventivos: z.boolean().optional(),
 });
 
 export const GET: APIRoute = async (ctx) => {
@@ -78,7 +83,8 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const data: Record<string, unknown> = { ...parsed.data };
+  const { reprogramarPreventivos, ...rest } = parsed.data;
+  const data: Record<string, unknown> = { ...rest };
   const now = new Date().toISOString();
 
   // Validar transicion de estado segun rol
@@ -117,6 +123,31 @@ export const PATCH: APIRoute = async (ctx) => {
   }
 
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
+
+  // Reprogramación: si se completó una OT correctiva sobre un activo,
+  // reiniciar el contador de los planes preventivos del activo.
+  // Por defecto sí; el cliente puede mandar reprogramarPreventivos:false para opt-out.
+  const seCompleto = parsed.data.estado === "completada" && actual.estado !== "completada";
+  if (
+    seCompleto &&
+    actual.tipo === "correctivo" &&
+    actual.activoId &&
+    reprogramarPreventivos !== false
+  ) {
+    try {
+      const planes = await db
+        .select()
+        .from(planesMantenimiento)
+        .where(and(eq(planesMantenimiento.activoId, actual.activoId), eq(planesMantenimiento.activo, true)));
+      for (const p of planes) {
+        const nuevaProxima = siguienteFecha(now.slice(0, 10), p.frecuencia as any);
+        await db
+          .update(planesMantenimiento)
+          .set({ proximaFecha: nuevaProxima })
+          .where(eq(planesMantenimiento.id, p.id));
+      }
+    } catch {}
+  }
 
   // Notifica al tecnico cuando se le asigna una OT
   if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
