@@ -15,7 +15,11 @@ export const prerender = false;
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
-  nombre: z.string().min(2).optional(),
+  // Acepta undefined o string vacío (form lo manda vacío cuando bootstrap está oculto)
+  nombre: z.preprocess(
+    (v) => (typeof v === "string" && v.trim().length === 0 ? undefined : v),
+    z.string().min(2).optional()
+  ),
 });
 
 export const POST: APIRoute = async (ctx) => {
