@@ -33,7 +33,8 @@ const tecnicos = await db
   .where(eq(usuarios.activo, true));
 
 const user = Astro.locals.user!;
-const canEdit = user.rol === "admin" || user.rol === "tecnico";
+const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
+const canDelete = user.rol === "admin";
 
 const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleDateString("es") : "-");
 const isBio = a.tipo === "biomedico";
@@ -54,6 +55,12 @@ const isBio = a.tipo === "biomedico";
       </div>
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
+    {canEdit && (
+      <div class="flex gap-2">
+        <a href={`/activos/${a.id}/editar`} class="btn-primary">✎ Editar</a>
+        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
+      </div>
+    )}
   </div>
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -250,6 +257,14 @@ const isBio = a.tipo === "biomedico";
         await fetch(`/api/planes/${id}`, { method: "DELETE" });
         location.reload();
       });
+    });
+
+    // Eliminar equipo (solo admin)
+    document.getElementById("deleteBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este equipo? Esta acción borra también sus planes de mantenimiento, OTs no se borran.")) return;
+      const res = await fetch(`/api/activos/${activoId}`, { method: "DELETE" });
+      if (res.ok) location.href = "/activos";
+      else alert("Error al eliminar");
     });
   </script>
 </Layout>

@@ -39,7 +39,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe", "tecnico"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
   const body = await ctx.request.json().catch(() => null);
