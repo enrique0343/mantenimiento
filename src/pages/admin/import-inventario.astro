@@ -90,17 +90,24 @@ const totalEq = data.equipos.length;
 
       const frec = (document.getElementById("frecuencia")).value;
       const url = `/api/admin/import-inventario?frecuencia=${frec}${dry ? "&dryRun=1" : ""}`;
-      const res = await fetch(url, { method: "POST" });
-      const j = await res.json().catch(() => ({}));
+      let res, j, txt;
+      try {
+        res = await fetch(url, { method: "POST" });
+        txt = await res.text();
+        try { j = JSON.parse(txt); } catch { j = null; }
+      } catch (e) {
+        res = { ok: false, status: 0 };
+        txt = String(e);
+      }
 
       const box = document.getElementById("resultBox");
       const body = document.getElementById("resultBody");
       const title = document.getElementById("resultTitle");
       box.classList.remove("hidden");
 
-      if (!res.ok) {
-        title.textContent = "❌ Error";
-        body.innerHTML = `<pre class="text-xs text-red-600">${JSON.stringify(j, null, 2)}</pre>`;
+      if (!res.ok || !j?.ok) {
+        title.textContent = `❌ Error (HTTP ${res.status})`;
+        body.innerHTML = `<pre class="text-xs text-red-600 whitespace-pre-wrap">${j?.error ?? txt ?? "Sin respuesta"}\n\n${j?.stack ?? ""}</pre>`;
       } else {
         title.textContent = dry ? "🔍 Simulación completa" : "✅ Import completo";
         const s = j.stats;
