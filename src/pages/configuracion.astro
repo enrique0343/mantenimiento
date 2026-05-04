@@ -160,8 +160,8 @@ const TIPOS_UB = [
     <h2 class="mb-2 font-semibold text-slate-900">Correo electrónico</h2>
     <p class="text-sm text-slate-500">El sistema soporta varios proveedores. Configura el que prefieras (solo uno activo a la vez). Los secretos van como variables de entorno en Cloudflare Pages.</p>
 
-    <div class="mt-3 rounded-lg border-l-4 border-blue-400 bg-blue-50 p-3 text-xs text-blue-800">
-      <strong>⚠ Importante:</strong> Cloudflare Workers no permite SMTP TCP directo. Por eso usamos APIs REST de proveedores. La opción "SMTP genérico" usa SMTP2GO que recibe por API y reenvía por SMTP detrás.
+    <div class="mt-3 rounded-lg border-l-4 border-emerald-400 bg-emerald-50 p-3 text-xs text-emerald-800">
+      <strong>✓ SMTP nativo:</strong> Cloudflare Workers ahora soporta TCP directo via <code>cloudflare:sockets</code>, por lo que puedes usar SMTP de cualquier proveedor (Office 365, Gmail, hosting con cPanel, etc.) sin necesidad de API ni registro de aplicaciones.
     </div>
 
     <p class="mt-4 text-sm">Estado actual del proveedor:</p>
@@ -169,17 +169,32 @@ const TIPOS_UB = [
 
     <!-- Tabs de proveedor -->
     <div class="mt-5 flex flex-wrap gap-1 text-xs">
-      {["m365", "resend", "sendgrid", "brevo", "smtp2go"].map((p, i) => (
+      {["smtp", "m365", "resend", "sendgrid", "brevo"].map((p, i) => (
         <button data-prov-tab={p} class:list={["prov-tab rounded px-3 py-1.5 font-medium", i === 0 ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-          {p === "m365" ? "Microsoft 365" : p === "resend" ? "Resend" : p === "sendgrid" ? "SendGrid" : p === "brevo" ? "Brevo" : "SMTP genérico"}
+          {p === "smtp" ? "SMTP genérico ★" : p === "m365" ? "Microsoft 365" : p === "resend" ? "Resend" : p === "sendgrid" ? "SendGrid" : "Brevo"}
         </button>
       ))}
     </div>
 
+    <!-- SMTP genérico -->
+    <div data-prov-panel="smtp" class="prov-panel mt-3 rounded-lg bg-slate-900 p-4 font-mono text-xs text-emerald-200">
+      <div class="text-amber-200"># SMTP genérico (host / usuario / contraseña / port 587)</div>
+      <div class="text-slate-400 mt-1"># Recomendado. Funciona con cualquier servidor SMTP:</div>
+      <div class="text-slate-400 ml-2"># Office 365, Gmail (con app password), cPanel, Plesk, hosting compartido, etc.</div>
+      <div class="mt-3 text-amber-200"># Variables a configurar en Cloudflare Pages → Settings → Environment variables:</div>
+      <div>SMTP_HOST       = mail.tudominio.com         # o smtp.office365.com / smtp.gmail.com</div>
+      <div>SMTP_PORT       = 587                        # 587 (STARTTLS) o 465 (SSL)</div>
+      <div>SMTP_USER       = no-reply@tudominio.com</div>
+      <div>SMTP_PASS       = tu_contraseña</div>
+      <div>EMAIL_FROM      = no-reply@tudominio.com     # remitente visible</div>
+      <div>EMAIL_FROM_NAME = Mantenimiento Avante       # opcional</div>
+      <div class="mt-3 text-slate-400"># Tras agregar las variables, redeploy y prueba abajo.</div>
+    </div>
+
     <!-- M365 -->
-    <div data-prov-panel="m365" class="prov-panel mt-3 rounded-lg bg-slate-900 p-4 font-mono text-xs text-emerald-200">
-      <div class="text-amber-200"># Microsoft 365 / Graph API</div>
-      <div class="text-slate-400 mt-1"># Mejor para empresas con buzón M365 propio.</div>
+    <div data-prov-panel="m365" class="prov-panel mt-3 hidden rounded-lg bg-slate-900 p-4 font-mono text-xs text-emerald-200">
+      <div class="text-amber-200"># Microsoft 365 / Graph API (alternativa con app registrada)</div>
+      <div class="text-slate-400 mt-1"># Solo necesario si NO quieres usar SMTP. Requiere registrar app en Azure.</div>
       <div class="mt-3 text-amber-200"># Setup Azure AD:</div>
       <div class="text-slate-400 ml-2"># 1. Azure → App registrations → New registration</div>
       <div class="text-slate-400 ml-2"># 2. API permissions → Mail.Send (Application + admin consent)</div>
@@ -231,25 +246,9 @@ const TIPOS_UB = [
       <div>npx wrangler pages secret put BREVO_API_KEY --project-name=mantenimiento</div>
       <div>npx wrangler pages secret put EMAIL_FROM --project-name=mantenimiento</div>
       <div>npx wrangler pages secret put EMAIL_FROM_NAME --project-name=mantenimiento  # opcional</div>
-    </div>
-
-    <!-- SMTP2GO -->
-    <div data-prov-panel="smtp2go" class="prov-panel mt-3 hidden rounded-lg bg-slate-900 p-4 font-mono text-xs text-emerald-200">
-      <div class="text-amber-200"># SMTP genérico via SMTP2GO</div>
-      <div class="text-slate-400 mt-1"># Si tu proveedor de email solo expone SMTP (no API REST), SMTP2GO</div>
-      <div class="text-slate-400"># envía vía API REST y por debajo se conecta a tu SMTP. Gratis 1000 emails/mes.</div>
-      <div class="mt-3 text-amber-200"># Setup:</div>
-      <div class="text-slate-400 ml-2"># 1. Cuenta en smtp2go.com</div>
-      <div class="text-slate-400 ml-2"># 2. Sender Domains → verifica el dominio</div>
-      <div class="text-slate-400 ml-2"># 3. Settings → API Keys → Create</div>
-      <div class="mt-2 text-amber-200"># Setear secrets:</div>
-      <div>npx wrangler pages secret put SMTP2GO_API_KEY --project-name=mantenimiento</div>
-      <div>npx wrangler pages secret put EMAIL_FROM --project-name=mantenimiento</div>
-      <div>npx wrangler pages secret put EMAIL_FROM_NAME --project-name=mantenimiento  # opcional</div>
-      <div class="mt-3 text-slate-400"># Si configuras varios proveedores a la vez, el orden de</div>
-      <div class="text-slate-400"># prioridad es: M365 → Resend → SendGrid → Brevo → SMTP2GO.</div>
+      <div class="mt-3 text-slate-400"># Prioridad si hay varios configurados: SMTP → M365 → Resend → SendGrid → Brevo.</div>
       <div class="text-slate-400"># Forzar uno especifico:</div>
-      <div>npx wrangler pages secret put EMAIL_PROVIDER --project-name=mantenimiento  # ej: "resend"</div>
+      <div>npx wrangler pages secret put EMAIL_PROVIDER --project-name=mantenimiento  # ej: "smtp"</div>
     </div>
 
     <div class="mt-5 rounded-lg border border-slate-200 p-4">
