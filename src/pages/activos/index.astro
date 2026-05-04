@@ -1,14 +1,27 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento } from "@/lib/schema";
-import { desc, sql } from "drizzle-orm";
+import { activos, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
+import { desc, sql, eq } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
-const rows = await db.select().from(activos).orderBy(desc(activos.id));
+const url = new URL(Astro.request.url);
+const sucursalFiltro = url.searchParams.get("sucursal");
+
+const rows = await db
+  .select({ a: activos, ub: ubicaciones, suc: sucursales })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .orderBy(desc(activos.id));
+
+const filtered = sucursalFiltro
+  ? rows.filter((r) => r.suc?.id === Number(sucursalFiltro))
+  : rows;
+
 const user = Astro.locals.user!;
-const canEdit = user.rol === "admin" || user.rol === "tecnico";
+const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
 
 const planesCount = await db
   .select({ activoId: planesMantenimiento.activoId, n: sql<number>`count(*)` })
@@ -16,6 +29,12 @@ const planesCount = await db
   .where(sql`${planesMantenimiento.activo} = 1`)
   .groupBy(planesMantenimiento.activoId);
 const planesByActivo = new Map(planesCount.map((r) => [r.activoId, Number(r.n)]));
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
 
 const estadoColor: Record<string, string> = {
   operativo: "bg-emerald-100 text-emerald-700",
@@ -29,10 +48,27 @@ const estadoColor: Record<string, string> = {
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold">Equipos / Activos</h1>
-      <p class="text-sm text-slate-500">{rows.length} equipos registrados</p>
+      <p class="text-sm text-slate-500">{rows.length} equipos · mostrando {filtered.length}</p>
     </div>
     {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}
   </div>
+
+  <!-- Filtro por sucursal -->
+  {sucursalesList.length > 0 && (
+    <div class="card mt-4 p-3">
+      <form class="flex flex-wrap items-end gap-3" method="get">
+        <div>
+          <label class="label text-xs">Sucursal</label>
+          <select name="sucursal" class="input text-sm">
+            <option value="">Todas</option>
+            {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <button class="btn-primary text-sm">Filtrar</button>
+        {sucursalFiltro && <a href="/activos" class="btn-secondary text-sm">Limpiar</a>}
+      </form>
+    </div>
+  )}
 
   <div class="card mt-4 overflow-hidden">
     <table class="w-full text-left text-sm">
@@ -42,34 +78,36 @@ const estadoColor: Record<string, string> = {
           <th class="px-4 py-2">Nombre</th>
           <th class="px-4 py-2">Tipo</th>
           <th class="px-4 py-2">Marca / Modelo</th>
-          <th class="px-4 py-2">Ubicacion</th>
+          <th class="px-4 py-2">Sucursal</th>
+          <th class="px-4 py-2">Ubicación</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2">Cronograma</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && (
-          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Aun no hay equipos.</td></tr>
+        {filtered.length === 0 && (
+          <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">Sin equipos con esos filtros.</td></tr>
         )}
-        {rows.map((a) => (
+        {filtered.map((r) => (
           <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2 font-mono text-xs">{a.codigo}</td>
+            <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
             <td class="px-4 py-2">
-              <a href={`/activos/${a.id}`} class="font-medium text-brand-700 hover:underline">{a.nombre}</a>
+              <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
             </td>
             <td class="px-4 py-2">
-              {a.tipo === "biomedico" ? (
+              {r.a.tipo === "biomedico" ? (
                 <span class="badge bg-purple-100 text-purple-700">Biomedico</span>
               ) : (
                 <span class="badge bg-slate-100 text-slate-600">General</span>
               )}
             </td>
-            <td class="px-4 py-2 text-slate-600">{[a.marca, a.modelo].filter(Boolean).join(" / ") || "-"}</td>
-            <td class="px-4 py-2 text-slate-600">{a.ubicacion ?? "-"}</td>
-            <td class="px-4 py-2"><span class={`badge ${estadoColor[a.estado]}`}>{a.estado}</span></td>
+            <td class="px-4 py-2 text-slate-600 text-xs">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
+            <td class="px-4 py-2 text-slate-600 text-xs">{r.suc?.nombre ?? "-"}</td>
+            <td class="px-4 py-2 text-slate-600 text-xs">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+            <td class="px-4 py-2"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
             <td class="px-4 py-2">
-              {planesByActivo.get(a.id) ? (
-                <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(a.id)} plan(es)</span>
+              {planesByActivo.get(r.a.id) ? (
+                <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(r.a.id)} plan(es)</span>
               ) : (
                 <span class="text-xs text-slate-400">sin cronograma</span>
               )}

@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento, ordenes, usuarios } from "@/lib/schema";
+import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores } from "@/lib/schema";
 import { eq, asc, desc } from "drizzle-orm";
 import { FRECUENCIAS } from "@/lib/frecuencias";
 export const prerender = false;
@@ -12,6 +12,27 @@ if (!Number.isFinite(id)) return Astro.redirect("/activos");
 const db = getDb(Astro);
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
 if (!a) return Astro.redirect("/activos");
+
+// Sucursal + ubicación + proveedor (vía FKs)
+let sucursalInfo: { id: number; nombre: string } | null = null;
+let ubicacionInfo: { id: number; nombre: string; tipo: string } | null = null;
+let proveedorInfo: { id: number; nombre: string } | null = null;
+if (a.ubicacionId) {
+  const [u] = await db
+    .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+    .from(ubicaciones).where(eq(ubicaciones.id, a.ubicacionId)).limit(1);
+  if (u) {
+    ubicacionInfo = { id: u.id, nombre: u.nombre, tipo: u.tipo };
+    const [s] = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
+      .from(sucursales).where(eq(sucursales.id, u.sucursalId)).limit(1);
+    if (s) sucursalInfo = s;
+  }
+}
+if (a.proveedorId) {
+  const [p] = await db.select({ id: proveedores.id, nombre: proveedores.nombre })
+    .from(proveedores).where(eq(proveedores.id, a.proveedorId)).limit(1);
+  if (p) proveedorInfo = p;
+}
 
 const planes = await db
   .select({ p: planesMantenimiento, u: usuarios })
@@ -71,7 +92,20 @@ const isBio = a.tipo === "biomedico";
         <div><div class="text-xs uppercase text-slate-500">Serie</div><div class="font-mono text-xs">{a.serial ?? "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Año</div><div>{a.anio ?? "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Categoria</div><div>{a.categoria ?? "-"}</div></div>
-        <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Ubicacion</div><div>{a.ubicacion ?? "-"}</div></div>
+        <div>
+          <div class="text-xs uppercase text-slate-500">Sucursal</div>
+          <div>{sucursalInfo ? <span class="font-medium">🏢 {sucursalInfo.nombre}</span> : "-"}</div>
+        </div>
+        <div>
+          <div class="text-xs uppercase text-slate-500">Ubicación</div>
+          <div>
+            {ubicacionInfo ? <span><span class="font-medium">📍 {ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
+            {a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
+          </div>
+        </div>
+        {proveedorInfo && (
+          <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Proveedor</div><div>{proveedorInfo.nombre}</div></div>
+        )}
         <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Descripcion</div><div class="whitespace-pre-wrap">{a.descripcion ?? "-"}</div></div>
       </div>
 
