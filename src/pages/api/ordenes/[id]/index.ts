@@ -25,7 +25,7 @@ const updateSchema = z.object({
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
-  estado: z.enum(["abierta", "en_proceso", "completada", "verificada", "cerrada", "cancelada"]).optional(),
+  estado: z.enum(["abierta", "en_proceso", "en_espera", "completada", "verificada", "cerrada", "cancelada"]).optional(),
   activoId: z.number().int().positive().nullable().optional(),
   asignadoA: z.number().int().positive().nullable().optional(),
   vencimiento: z.string().nullable().optional(),
@@ -131,11 +131,21 @@ export const PATCH: APIRoute = async (ctx) => {
 
     // Timestamps automaticos por estado de destino
     switch (parsed.data.estado) {
+      case "en_espera":
+        // Guardar momento en que se pausa
+        data.pausadaEn = now;
+        break;
       case "en_proceso":
+        // Si venía de en_espera, acumular el tiempo pausado
+        if (actual.estado === "en_espera" && actual.pausadaEn) {
+          const minPausados = Math.round((new Date(now).getTime() - new Date(actual.pausadaEn).getTime()) / 60_000);
+          data.tiempoPausadoMin = (actual.tiempoPausadoMin ?? 0) + minPausados;
+          data.pausadaEn = null;
+        }
         // Si nunca se había iniciado, marcar inicio (para calcular horas)
         if (!actual.iniciadaEn) data.iniciadaEn = now;
         // Si venía de un estado posterior (rollback), limpiar timestamps post
-        if (actual.estado !== "abierta") {
+        if (actual.estado !== "abierta" && actual.estado !== "en_espera") {
           data.completadaEn = null;
           data.verificadoPor = null;
           data.verificadoEn = null;
@@ -144,11 +154,12 @@ export const PATCH: APIRoute = async (ctx) => {
       case "completada":
         data.completadaEn = now;
         // Auto-calcular horas trabajadas si hay inicio y el técnico no las
-        // proporcionó manualmente en este PATCH.
+        // proporcionó manualmente en este PATCH. Descuenta tiempo pausado.
         if (actual.iniciadaEn && parsed.data.horasTrabajadas == null) {
           const inicio = new Date(actual.iniciadaEn).getTime();
           const fin = new Date(now).getTime();
-          const horas = Math.max(0, (fin - inicio) / 3_600_000);
+          const pausadoMs = (actual.tiempoPausadoMin ?? 0) * 60_000;
+          const horas = Math.max(0, (fin - inicio - pausadoMs) / 3_600_000);
           data.horasTrabajadas = Math.round(horas * 100) / 100;
         }
         break;

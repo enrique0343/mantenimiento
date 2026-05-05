@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra } from "@/lib/schema";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
@@ -109,6 +109,14 @@ const sucursalesLista = puedeAsignarActivo
 const checklistItems = parseChecklist(o.checklistEjecucion);
 const progreso = progresoChecklist(checklistItems);
 
+// Solicitudes de compra vinculadas a esta OT
+const solicitudesVinculadas = await db
+  .select({ id: solicitudesCompra.id, codigo: solicitudesCompra.codigo, titulo: solicitudesCompra.titulo, estado: solicitudesCompra.estado })
+  .from(solicitudesCompra)
+  .where(eq(solicitudesCompra.ordenId, id));
+const puedeSolicitarCompra = (estadoActual === "en_proceso" || estadoActual === "en_espera") &&
+  ["admin", "jefe", "tecnico"].includes(user.rol);
+
 const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
 const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
 
@@ -121,7 +129,7 @@ const puedeSubirAntes =
 const puedeAsignar = puedeAsignarse(user.rol);
 
 const ESTADO_PROGRESO: Record<EstadoOT, number> = {
-  abierta: 1, en_proceso: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
+  abierta: 1, en_proceso: 2, en_espera: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
 };
 const stepActual = ESTADO_PROGRESO[estadoActual];
 
@@ -157,6 +165,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <strong>⚠ OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
     </div>
   )}
+  {estadoActual === "en_espera" && (
+    <div class="card mt-4 border-l-4 border-purple-500 bg-purple-50 p-4 text-sm text-purple-800">
+      <strong>⏸ OT en espera.</strong> La OT está pausada pendiente de compra u otro insumo.
+      {solicitudesVinculadas.length > 0 && (
+        <span> Solicitudes vinculadas: {solicitudesVinculadas.map((s) => (
+          <a href={`/solicitudes-compra/${s.id}`} class="ml-1 font-medium underline">{s.codigo} ({s.estado})</a>
+        ))}</span>
+      )}
+      {" "}Cuando tengas los materiales, pulsa <strong>"Reanudar"</strong> para continuar.
+    </div>
+  )}
 
   <!-- Wizard de estados -->
   {estadoActual !== "cancelada" && (
@@ -185,11 +204,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
                 s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
                 s === "verificada" ? "bg-teal-600 text-white hover:bg-teal-700" :
+                s === "en_espera" ? "bg-purple-600 text-white hover:bg-purple-700" :
                 "bg-brand-600 text-white hover:bg-brand-700",
               ]}
             >
               {s === "abierta" ? "↺ Reabrir" :
-               s === "en_proceso" ? "▶ Iniciar / Reanudar" :
+               s === "en_proceso" ? (estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
+               s === "en_espera" ? "⏸ Poner en espera" :
                s === "completada" ? "✓ Marcar finalizada" :
                s === "verificada" ? "✓✓ Verificar" :
                s === "cerrada" ? "🔒 Cerrar definitivamente" :
@@ -381,12 +402,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </div>
         </div>
         {o.iniciadaEn && (
-          <div class="mt-3 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          <div class:list={["mt-3 rounded px-3 py-2 text-xs", estadoActual === "en_espera" ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700"]}>
             {o.completadaEn ? (
               <>
                 ⏱ Duración real: <strong>{((new Date(o.completadaEn).getTime() - new Date(o.iniciadaEn).getTime()) / 3600_000).toFixed(2)} h</strong>
+                {(o.tiempoPausadoMin ?? 0) > 0 && <> · Pausado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>}
                 {o.horasTrabajadas != null && <> · Registradas: <strong>{Number(o.horasTrabajadas).toFixed(2)} h</strong></>}
               </>
+            ) : estadoActual === "en_espera" ? (
+              <>⏸ OT pausada{o.pausadaEn ? ` desde ${fmt(o.pausadaEn)}` : ""}. Tiempo pausado acumulado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>
             ) : (
               <>⏱ En proceso desde {fmt(o.iniciadaEn)} — el cronómetro corre.</>
             )}
@@ -637,6 +661,48 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </select>
             <button id="asignarBtn" class="btn-secondary w-full justify-center">Guardar asignación</button>
           </div>
+        </div>
+      )}
+
+      <!-- Solicitudes de compra vinculadas -->
+      {(solicitudesVinculadas.length > 0 || puedeSolicitarCompra) && (
+        <div class="card p-5">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="font-semibold text-slate-900">🛒 Compras</h2>
+            {puedeSolicitarCompra && (
+              <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`} class="text-xs text-brand-600 hover:underline font-medium">
+                + Nueva solicitud
+              </a>
+            )}
+          </div>
+          {solicitudesVinculadas.length === 0 && (
+            <p class="text-xs text-slate-400">Sin solicitudes de compra aún.</p>
+          )}
+          {solicitudesVinculadas.map((s) => {
+            const sc: Record<string, string> = {
+              borrador: "bg-slate-100 text-slate-600", enviada: "bg-blue-100 text-blue-700",
+              comprada: "bg-emerald-100 text-emerald-700", rechazada: "bg-red-100 text-red-700",
+              cancelada: "bg-slate-200 text-slate-500",
+            };
+            const sl: Record<string, string> = {
+              borrador: "Borrador", enviada: "Enviada", comprada: "Comprada", rechazada: "Rechazada", cancelada: "Cancelada",
+            };
+            return (
+              <a href={`/solicitudes-compra/${s.id}`} class="mt-2 flex items-center justify-between rounded-lg bg-slate-50 p-2 text-sm hover:bg-slate-100 no-underline block">
+                <div>
+                  <span class="font-mono text-xs text-slate-400">{s.codigo}</span>
+                  <p class="text-sm font-medium text-slate-800 truncate">{s.titulo}</p>
+                </div>
+                <span class:list={["ml-2 shrink-0 text-xs px-2 py-0.5 rounded-full font-medium", sc[s.estado]]}>{sl[s.estado]}</span>
+              </a>
+            );
+          })}
+          {puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
+            <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`}
+               class="mt-2 flex items-center justify-center gap-2 rounded-lg border border-dashed border-purple-300 p-3 text-sm text-purple-600 hover:bg-purple-50 no-underline">
+              🛒 Solicitar compra de contingencia
+            </a>
+          )}
         </div>
       )}
 

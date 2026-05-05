@@ -6,6 +6,7 @@ export type TipoOT = (typeof TIPOS_OT)[number];
 export const ESTADOS_OT = [
   "abierta",
   "en_proceso",
+  "en_espera",
   "completada",
   "verificada",
   "cerrada",
@@ -16,6 +17,7 @@ export type EstadoOT = (typeof ESTADOS_OT)[number];
 export const ESTADO_LABEL: Record<EstadoOT, string> = {
   abierta: "Abierta",
   en_proceso: "En proceso",
+  en_espera: "En espera",
   completada: "Completada",
   verificada: "Verificada",
   cerrada: "Cerrada",
@@ -25,6 +27,7 @@ export const ESTADO_LABEL: Record<EstadoOT, string> = {
 export const ESTADO_COLOR: Record<EstadoOT, string> = {
   abierta: "bg-blue-100 text-blue-700",
   en_proceso: "bg-amber-100 text-amber-700",
+  en_espera: "bg-purple-100 text-purple-700",
   completada: "bg-emerald-100 text-emerald-700",
   verificada: "bg-teal-100 text-teal-700",
   cerrada: "bg-slate-200 text-slate-700",
@@ -47,7 +50,8 @@ export const PRIO_COLOR: Record<string, string> = {
 // Transiciones permitidas: { from: [...allowedTo] }. Aparte: cancelada por admin/jefe en cualquier momento.
 const TRANSICIONES: Record<EstadoOT, EstadoOT[]> = {
   abierta: ["en_proceso", "cancelada"],
-  en_proceso: ["completada", "abierta", "cancelada"],
+  en_proceso: ["en_espera", "completada", "abierta", "cancelada"],
+  en_espera: ["en_proceso", "cancelada"],
   completada: ["verificada", "en_proceso", "cancelada"],
   verificada: ["cerrada", "completada"],
   cerrada: [],
@@ -87,13 +91,10 @@ export function puedeAsignarse(rol: Rol): boolean {
 }
 
 export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: EstadoOT): boolean {
-  // Solo se puede editar la ejecución cuando la OT ya está iniciada.
-  // Estado "abierta" es solo lectura: el técnico debe darle "Iniciar" primero
-  // para empezar a registrar trabajos, repuestos, comentarios, etc.
   if (estado === "abierta" || estado === "cancelada" || estado === "cerrada") return false;
   if (rol === "admin" || rol === "jefe") return true;
   if (rol === "tecnico" && esAsignado) {
-    return estado === "en_proceso" || estado === "completada" || estado === "verificada";
+    return estado === "en_proceso" || estado === "en_espera" || estado === "completada" || estado === "verificada";
   }
   return false;
 }

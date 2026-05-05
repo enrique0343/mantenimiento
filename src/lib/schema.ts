@@ -120,7 +120,7 @@ export const ordenes = sqliteTable("ordenes", {
     .notNull()
     .default("media"),
   estado: text("estado", {
-    enum: ["abierta", "en_proceso", "completada", "verificada", "cerrada", "cancelada"],
+    enum: ["abierta", "en_proceso", "en_espera", "completada", "verificada", "cerrada", "cancelada"],
   })
     .notNull()
     .default("abierta"),
@@ -132,6 +132,8 @@ export const ordenes = sqliteTable("ordenes", {
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
   vencimiento: text("vencimiento"),
   iniciadaEn: text("iniciada_en"),
+  pausadaEn: text("pausada_en"),
+  tiempoPausadoMin: integer("tiempo_pausado_min").default(0),
   completadaEn: text("completada_en"),
   // Ejecucion
   trabajosRealizados: text("trabajos_realizados"),
@@ -645,3 +647,78 @@ export const auditLog = sqliteTable("audit_log", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type AuditLog = typeof auditLog.$inferSelect;
+
+// ─── Solicitudes de Compra (Fase 26) ─────────────────────────────────────────
+export const comprasDestinatarios = sqliteTable("compras_destinatarios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull(),
+  email: text("email").notNull(),
+  telefono: text("telefono"),
+  cargo: text("cargo"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ComprasDestinatario = typeof comprasDestinatarios.$inferSelect;
+
+export const solicitudesCompra = sqliteTable("solicitudes_compra", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  estado: text("estado", {
+    enum: ["borrador", "enviada", "comprada", "rechazada", "cancelada"],
+  }).notNull().default("borrador"),
+  ordenId: integer("orden_id").references(() => ordenes.id, { onDelete: "set null" }),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  autorizadoPor: integer("autorizado_por").references(() => usuarios.id),
+  autorizadoEn: text("autorizado_en"),
+  completadoPor: integer("completado_por").references(() => usuarios.id),
+  completadoEn: text("completado_en"),
+  notasAutorizacion: text("notas_autorizacion"),
+  notasResultado: text("notas_resultado"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type SolicitudCompra = typeof solicitudesCompra.$inferSelect;
+
+export const solicitudCompraItems = sqliteTable("solicitud_compra_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  solicitudId: integer("solicitud_id").notNull().references(() => solicitudesCompra.id, { onDelete: "cascade" }),
+  descripcion: text("descripcion").notNull(),
+  cantidad: real("cantidad").notNull().default(1),
+  unidad: text("unidad"),
+  notas: text("notas"),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type SolicitudCompraItem = typeof solicitudCompraItems.$inferSelect;
+
+export const solicitudCompraAdjuntos = sqliteTable("solicitud_compra_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  solicitudId: integer("solicitud_id").notNull().references(() => solicitudesCompra.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type SolicitudCompraAdjunto = typeof solicitudCompraAdjuntos.$inferSelect;
+
+export const solicitudCompraEnvios = sqliteTable("solicitud_compra_envios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  solicitudId: integer("solicitud_id").notNull().references(() => solicitudesCompra.id, { onDelete: "cascade" }),
+  destinatarioId: integer("destinatario_id").references(() => comprasDestinatarios.id),
+  destinatarioEmail: text("destinatario_email").notNull(),
+  destinatarioNombre: text("destinatario_nombre"),
+  token: text("token").notNull().unique(),
+  enviadoEn: text("enviado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type SolicitudCompraEnvio = typeof solicitudCompraEnvios.$inferSelect;
+
+export const solicitudCompraDescargas = sqliteTable("solicitud_compra_descargas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  envioId: integer("envio_id").notNull().references(() => solicitudCompraEnvios.id, { onDelete: "cascade" }),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  descargadoEn: text("descargado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type SolicitudCompraDescarga = typeof solicitudCompraDescargas.$inferSelect;

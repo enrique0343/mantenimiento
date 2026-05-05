@@ -1,0 +1,213 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos } from "@/lib/schema";
+import { eq, and, inArray } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+
+// OT en proceso vinculable (precarga si viene ?ordenId=X)
+const ordenIdParam = Number(Astro.url.searchParams.get("ordenId") ?? 0) || null;
+const otsEnProceso = await db
+  .select({ id: ordenes.id, titulo: ordenes.titulo, estado: ordenes.estado })
+  .from(ordenes)
+  .where(inArray(ordenes.estado, ["en_proceso", "en_espera"]))
+  .orderBy(ordenes.id);
+---
+
+<Layout title="Nueva solicitud de compra">
+  <a href="/solicitudes-compra" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nueva solicitud de compra</h1>
+
+  <form id="form" class="mt-4 space-y-5">
+    <div class="card p-5 space-y-4">
+      <h2 class="font-semibold text-slate-900">Información general</h2>
+      <div>
+        <label class="label">Título *</label>
+        <input class="input" id="titulo" required placeholder="Ej: Repuesto bomba de agua cocina principal" />
+      </div>
+      <div>
+        <label class="label">Descripción / justificación</label>
+        <textarea class="input" id="descripcion" rows="3" placeholder="Contexto de la necesidad, urgencia, etc."></textarea>
+      </div>
+      <div>
+        <label class="label">OT vinculada (opcional)</label>
+        <select class="input" id="ordenId">
+          <option value="">— Sin vincular —</option>
+          {otsEnProceso.map((o) => (
+            <option value={o.id} selected={o.id === ordenIdParam}>#{o.id} — {o.titulo} [{o.estado}]</option>
+          ))}
+        </select>
+        <p class="mt-1 text-xs text-slate-400">Solo OTs en proceso o en espera pueden vincularse.</p>
+      </div>
+    </div>
+
+    <!-- Items -->
+    <div class="card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-slate-900">Ítems a solicitar</h2>
+        <button type="button" id="btn-agregar" class="btn-secondary text-xs">+ Agregar ítem</button>
+      </div>
+      <div id="items-container" class="space-y-3">
+        <!-- items se agregan dinámicamente -->
+      </div>
+      <p id="items-empty" class="text-sm text-slate-400 py-4 text-center">Usa el botón para agregar ítems.</p>
+    </div>
+
+    <!-- Fotos de referencia -->
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900 mb-1">Fotos de referencia <span class="text-slate-400 font-normal text-sm">(opcional)</span></h2>
+      <p class="text-xs text-slate-500 mb-3">Puedes adjuntar imágenes del componente o área para orientar al proveedor.</p>
+      <label class="flex items-center gap-2 cursor-pointer text-sm text-brand-600 hover:underline w-fit">
+        <input type="file" id="fileInput" accept="image/*,application/pdf" multiple class="hidden" />
+        📎 Seleccionar archivos
+      </label>
+      <div id="fotos-preview" class="mt-3 flex flex-wrap gap-3"></div>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit" id="btnGuardar">Crear solicitud</button>
+      <a class="btn-secondary" href="/solicitudes-compra">Cancelar</a>
+    </div>
+  </form>
+</Layout>
+
+<script>
+  // ─── Items dinámicos ───────────────────────────────────────────────────────
+  const container = document.getElementById("items-container")!;
+  const emptyMsg  = document.getElementById("items-empty")!;
+  let itemCount = 0;
+
+  function addItem(desc = "", cant = "1", unit = "", notas = "") {
+    itemCount++;
+    const div = document.createElement("div");
+    div.className = "grid grid-cols-12 gap-2 items-start border border-slate-200 rounded-lg p-3 bg-slate-50";
+    div.dataset.item = String(itemCount);
+    div.innerHTML = `
+      <div class="col-span-12 sm:col-span-5">
+        <label class="label text-xs">Descripción *</label>
+        <input class="input text-sm item-desc" required placeholder="Ej: Sello mecánico bomba 1.5&quot;" value="${desc}" />
+      </div>
+      <div class="col-span-4 sm:col-span-2">
+        <label class="label text-xs">Cantidad</label>
+        <input class="input text-sm item-cant" type="number" min="0.01" step="any" value="${cant}" />
+      </div>
+      <div class="col-span-4 sm:col-span-2">
+        <label class="label text-xs">Unidad</label>
+        <input class="input text-sm item-unit" placeholder="pcs, kg..." value="${unit}" />
+      </div>
+      <div class="col-span-3 sm:col-span-2">
+        <label class="label text-xs">Notas</label>
+        <input class="input text-sm item-notas" placeholder="Marca, ref..." value="${notas}" />
+      </div>
+      <div class="col-span-1 flex items-end justify-end pb-0.5">
+        <button type="button" class="btn-remove text-slate-400 hover:text-red-500 text-lg leading-none mt-5">×</button>
+      </div>`;
+    div.querySelector(".btn-remove")!.addEventListener("click", () => {
+      div.remove();
+      emptyMsg.style.display = container.children.length === 0 ? "" : "none";
+    });
+    container.appendChild(div);
+    emptyMsg.style.display = "none";
+  }
+
+  document.getElementById("btn-agregar")!.addEventListener("click", () => addItem());
+  // Empezar con 1 ítem vacío
+  addItem();
+
+  // ─── Fotos ────────────────────────────────────────────────────────────────
+  const pendingFiles: File[] = [];
+  const fileInput = document.getElementById("fileInput") as HTMLInputElement;
+  const preview   = document.getElementById("fotos-preview")!;
+
+  fileInput.addEventListener("change", () => {
+    for (const f of Array.from(fileInput.files ?? [])) {
+      pendingFiles.push(f);
+      const thumb = document.createElement("div");
+      thumb.className = "relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center text-xs text-slate-500";
+      if (f.type.startsWith("image/")) {
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(f);
+        img.className = "w-full h-full object-cover";
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = f.name.slice(0, 12);
+      }
+      const rmBtn = document.createElement("button");
+      rmBtn.type = "button";
+      rmBtn.className = "absolute top-0.5 right-0.5 bg-black/50 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center";
+      rmBtn.textContent = "×";
+      rmBtn.addEventListener("click", () => {
+        const idx = pendingFiles.indexOf(f);
+        if (idx >= 0) pendingFiles.splice(idx, 1);
+        thumb.remove();
+      });
+      thumb.appendChild(rmBtn);
+      preview.appendChild(thumb);
+    }
+    fileInput.value = "";
+  });
+
+  // ─── Submit ───────────────────────────────────────────────────────────────
+  document.getElementById("form")!.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("err")!;
+    err.classList.add("hidden");
+    const btn = document.getElementById("btnGuardar") as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = "Guardando...";
+
+    // Recolectar ítems
+    const itemDivs = Array.from(container.querySelectorAll<HTMLElement>("[data-item]"));
+    const items = itemDivs.map((d) => ({
+      descripcion: (d.querySelector(".item-desc") as HTMLInputElement).value.trim(),
+      cantidad: parseFloat((d.querySelector(".item-cant") as HTMLInputElement).value) || 1,
+      unidad: (d.querySelector(".item-unit") as HTMLInputElement).value.trim() || null,
+      notas: (d.querySelector(".item-notas") as HTMLInputElement).value.trim() || null,
+    })).filter((i) => i.descripcion);
+
+    if (!items.length) {
+      err.textContent = "Agrega al menos un ítem.";
+      err.classList.remove("hidden");
+      btn.disabled = false; btn.textContent = "Crear solicitud";
+      return;
+    }
+
+    const ordenVal = (document.getElementById("ordenId") as HTMLSelectElement).value;
+    const payload = {
+      titulo: (document.getElementById("titulo") as HTMLInputElement).value.trim(),
+      descripcion: (document.getElementById("descripcion") as HTMLTextAreaElement).value.trim() || null,
+      ordenId: ordenVal ? Number(ordenVal) : null,
+      items,
+    };
+
+    const res = await fetch("/api/solicitudes-compra", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+      err.classList.remove("hidden");
+      btn.disabled = false; btn.textContent = "Crear solicitud";
+      return;
+    }
+    const j = await res.json();
+    const solId = j.solicitud.id;
+
+    // Subir fotos pendientes
+    for (const f of pendingFiles) {
+      const fd = new FormData();
+      fd.append("file", f);
+      await fetch(`/api/solicitudes-compra/${solId}/adjuntos`, { method: "POST", body: fd }).catch(() => {});
+    }
+
+    location.href = `/solicitudes-compra/${solId}`;
+  });
+</script>

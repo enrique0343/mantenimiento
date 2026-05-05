@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { empresa, sucursales, ubicaciones } from "@/lib/schema";
+import { empresa, sucursales, ubicaciones, comprasDestinatarios } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 export const prerender = false;
 
@@ -13,6 +13,7 @@ const db = getDb(Astro);
 const [emp] = await db.select().from(empresa).limit(1);
 const sucRows = await db.select().from(sucursales).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
+const destRows = await db.select().from(comprasDestinatarios).orderBy(comprasDestinatarios.nombre);
 
 const ubPorSucursal = (id: number) => ubRows.filter((u) => u.sucursalId === id);
 
@@ -33,13 +34,13 @@ const TIPOS_UB = [
   </div>
 
   <!-- Tabs -->
-  <div class="mt-4 flex gap-1 border-b border-slate-200">
-    {["empresa", "sucursales", "correo"].map((t) => (
+  <div class="mt-4 flex gap-1 border-b border-slate-200 flex-wrap">
+    {["empresa", "sucursales", "correo", "compras"].map((t) => (
       <button
         data-tab={t}
         class:list={["tab-btn px-4 py-2 text-sm font-medium rounded-t-md", t === "empresa" ? "bg-brand-50 text-brand-700 border border-b-white border-slate-200" : "text-slate-600 hover:bg-slate-100"]}
       >
-        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : "Correo electrónico"}
+        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : t === "correo" ? "Correo electrónico" : "🛒 Destinatarios compras"}
       </button>
     ))}
   </div>
@@ -270,6 +271,67 @@ const TIPOS_UB = [
     </div>
   </div>
 
+  <!-- Tab: Destinatarios de compras -->
+  <div id="tab-compras" class="tab-panel mt-4 hidden">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900">Destinatarios de solicitudes de compra</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Estas personas recibirán el email con enlace de descarga cuando se envíe una solicitud.</p>
+      </div>
+      <button id="dest_newBtn" class="btn-primary">+ Agregar destinatario</button>
+    </div>
+
+    <div id="dest_form" class="card mt-3 hidden p-4">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <input type="hidden" id="dest_id" value="" />
+        <div><label class="label">Nombre *</label><input class="input" id="dest_nombre" placeholder="Ej: María Compras" /></div>
+        <div><label class="label">Email *</label><input class="input" id="dest_email" type="email" placeholder="compras@empresa.com" /></div>
+        <div><label class="label">Cargo</label><input class="input" id="dest_cargo" placeholder="Jefa de compras" /></div>
+        <div><label class="label">Teléfono</label><input class="input" id="dest_tel" placeholder="+503 7000-0000" /></div>
+      </div>
+      <p id="dest_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-3 flex gap-2">
+        <button id="dest_save" class="btn-primary">Guardar</button>
+        <button id="dest_cancel" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+
+    <div class="mt-4 card overflow-hidden">
+      {destRows.length === 0 && (
+        <div class="p-6 text-center text-slate-400">
+          <p>No hay destinatarios configurados.</p>
+          <p class="text-xs mt-1">Agrega el primer destinatario para poder enviar solicitudes de compra.</p>
+        </div>
+      )}
+      <ul id="dest_list" class="divide-y divide-slate-100">
+        {destRows.map((d) => (
+          <li class="flex items-center justify-between px-4 py-3" data-dest-id={d.id}>
+            <div>
+              <span class:list={["font-medium", !d.activo && "text-slate-400 line-through"]}>{d.nombre}</span>
+              {d.cargo && <span class="ml-2 text-xs text-slate-400">{d.cargo}</span>}
+              <div class="text-xs text-slate-500">{d.email}{d.telefono ? ` · ${d.telefono}` : ""}</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                class="dest-toggle-btn text-xs font-medium"
+                class:list={[d.activo ? "text-amber-600 hover:underline" : "text-emerald-600 hover:underline"]}
+                data-id={d.id} data-activo={String(d.activo)}
+              >
+                {d.activo ? "Desactivar" : "Activar"}
+              </button>
+              <button class="dest-edit-btn text-xs text-brand-600 hover:underline"
+                data-id={d.id} data-nombre={d.nombre} data-email={d.email}
+                data-cargo={d.cargo ?? ""} data-tel={d.telefono ?? ""}>
+                Editar
+              </button>
+              <button class="dest-del-btn text-xs text-red-500 hover:underline" data-id={d.id}>Eliminar</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+
   <script>
     // Tabs de proveedor
     document.querySelectorAll(".prov-tab").forEach((btn) => {
@@ -418,6 +480,65 @@ const TIPOS_UB = [
       if (!confirm("¿Eliminar esta ubicación?")) return;
       await fetch(`/api/ubicaciones/${btn.dataset.id!}`, { method: "DELETE" });
       document.getElementById(`ub-row-${btn.dataset.id!}`)?.remove();
+    });
+  });
+
+  // ── Destinatarios de compras CRUD ────────────────────────────────────────
+  const destForm = document.getElementById("dest_form")!;
+  const destIdEl = document.getElementById("dest_id") as HTMLInputElement;
+  const dg = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+
+  document.getElementById("dest_newBtn")?.addEventListener("click", () => {
+    destIdEl.value = "";
+    (["dest_nombre","dest_email","dest_cargo","dest_tel"] as const).forEach((id) => (document.getElementById(id) as HTMLInputElement).value = "");
+    destForm.classList.remove("hidden");
+  });
+  document.getElementById("dest_cancel")?.addEventListener("click", () => destForm.classList.add("hidden"));
+
+  document.querySelectorAll<HTMLButtonElement>(".dest-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      destIdEl.value = btn.dataset.id!;
+      (document.getElementById("dest_nombre") as HTMLInputElement).value = btn.dataset.nombre!;
+      (document.getElementById("dest_email") as HTMLInputElement).value = btn.dataset.email!;
+      (document.getElementById("dest_cargo") as HTMLInputElement).value = btn.dataset.cargo!;
+      (document.getElementById("dest_tel") as HTMLInputElement).value = btn.dataset.tel!;
+      destForm.classList.remove("hidden");
+      destForm.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+
+  document.getElementById("dest_save")?.addEventListener("click", async () => {
+    const err = document.getElementById("dest_err")!;
+    err.classList.add("hidden");
+    const payload = { nombre: dg("dest_nombre"), email: dg("dest_email"), cargo: dg("dest_cargo") || null, telefono: dg("dest_tel") || null };
+    if (!payload.nombre || !payload.email) { err.textContent = "Nombre y email son requeridos"; err.classList.remove("hidden"); return; }
+    const id = destIdEl.value;
+    const res = await fetch(id ? `/api/compras-destinatarios/${id}` : "/api/compras-destinatarios", {
+      method: id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); return; }
+    location.reload();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".dest-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const activo = btn.dataset.activo !== "true";
+      await fetch(`/api/compras-destinatarios/${btn.dataset.id!}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ activo }),
+      });
+      location.reload();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".dest-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este destinatario?")) return;
+      await fetch(`/api/compras-destinatarios/${btn.dataset.id!}`, { method: "DELETE" });
+      document.querySelector(`[data-dest-id="${btn.dataset.id!}"]`)?.remove();
     });
   });
 </script>
