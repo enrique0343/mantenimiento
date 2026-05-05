@@ -1,6 +1,6 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { items, stock, proveedores } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
@@ -12,10 +12,7 @@ export const GET: APIRoute = async (ctx) => {
   if (!user) return response;
   const db = getDb(ctx);
 
-  const url = new URL(ctx.request.url);
-  const sucursalId = url.searchParams.get("sucursal_id");
-
-  // Items + stock total (suma todas las sucursales) o stock de una sucursal
+  // Items + stock (bodega única, una sola fila por item)
   const baseRows = await db
     .select({
       item: items,
@@ -25,17 +22,9 @@ export const GET: APIRoute = async (ctx) => {
     .leftJoin(proveedores, eq(proveedores.id, items.proveedorPrincipalId))
     .orderBy(desc(items.id));
 
-  // Stock por item: si hay sucursal especifica, filtra; sino agrega todas
-  const stockRows = sucursalId
-    ? await db
-        .select({ itemId: stock.itemId, cantidad: stock.cantidad })
-        .from(stock)
-        .where(eq(stock.sucursalId, Number(sucursalId)))
-    : await db
-        .select({ itemId: stock.itemId, cantidad: sql<number>`SUM(${stock.cantidad})` })
-        .from(stock)
-        .groupBy(stock.itemId);
-
+  const stockRows = await db
+    .select({ itemId: stock.itemId, cantidad: stock.cantidad })
+    .from(stock);
   const stockMap = new Map<number, number>();
   for (const s of stockRows) stockMap.set(s.itemId, Number(s.cantidad ?? 0));
 
@@ -55,6 +44,9 @@ const createSchema = z.object({
   categoria: z.string().nullable().optional(),
   unidad: z.string().min(1).default("unidad"),
   stockMinimo: z.number().nonnegative().default(0),
+  stockMaximo: z.number().nonnegative().default(0),
+  presentacion: z.string().nullable().optional(),
+  factorPresentacion: z.number().positive().default(1),
   proveedorPrincipalId: z.number().int().nullable().optional(),
   precioReferencia: z.number().nullable().optional(),
 });

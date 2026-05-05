@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { recepciones, recepcionItems, items as itemsTable, proveedores, sucursales, usuarios } from "@/lib/schema";
+import { recepciones, recepcionItems, items as itemsTable, proveedores, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
 export const prerender = false;
@@ -13,10 +13,9 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   const [r] = await db
-    .select({ rec: recepciones, p: proveedores, s: sucursales, u: usuarios })
+    .select({ rec: recepciones, p: proveedores, u: usuarios })
     .from(recepciones)
     .leftJoin(proveedores, eq(proveedores.id, recepciones.proveedorId))
-    .leftJoin(sucursales, eq(sucursales.id, recepciones.sucursalId))
     .leftJoin(usuarios, eq(usuarios.id, recepciones.recibidoPor))
     .where(eq(recepciones.id, id))
     .limit(1);
@@ -32,7 +31,6 @@ export const GET: APIRoute = async (ctx) => {
     recepcion: {
       ...r.rec,
       proveedor: r.p ? { id: r.p.id, nombre: r.p.nombre } : null,
-      sucursal: r.s ? { id: r.s.id, nombre: r.s.nombre } : null,
       recibido: r.u ? { id: r.u.id, nombre: r.u.nombre } : null,
     },
     items: lineas.map((l) => ({

@@ -75,6 +75,22 @@ const codigoSugerido = `INV-${String(nextNum).padStart(4, "0")}`;
       <div>
         <label class="label">Stock mínimo (alerta)</label>
         <input class="input" id="stockMinimo" type="number" min="0" step="0.01" value="0" />
+        <p class="mt-1 text-xs text-slate-500">Si el stock cae por debajo, se sugiere comprar.</p>
+      </div>
+      <div>
+        <label class="label">Stock máximo (objetivo)</label>
+        <input class="input" id="stockMaximo" type="number" min="0" step="0.01" value="0" />
+        <p class="mt-1 text-xs text-slate-500">Cantidad meta a tener en bodega. Define cuánto comprar al llegar al mínimo.</p>
+      </div>
+      <div>
+        <label class="label">Presentación de compra (opcional)</label>
+        <input class="input" id="presentacion" placeholder="Ej: Galón, Caja x 12, Saco 25 kg" />
+        <p class="mt-1 text-xs text-slate-500">Cómo se compra al proveedor.</p>
+      </div>
+      <div>
+        <label class="label">Factor de presentación</label>
+        <input class="input" id="factorPresentacion" type="number" min="0.01" step="0.01" value="1" />
+        <p class="mt-1 text-xs text-slate-500">¿Cuántas <em>unidades de medida</em> trae la presentación? Ej: galón = 3.785 L.</p>
       </div>
       <div>
         <label class="label">Precio de referencia</label>
@@ -116,6 +132,9 @@ const codigoSugerido = `INV-${String(nextNum).padStart(4, "0")}`;
         categoria: v("categoria") || null,
         unidad: v("unidad"),
         stockMinimo: Number(sv("stockMinimo") || 0),
+        stockMaximo: Number(sv("stockMaximo") || 0),
+        presentacion: v("presentacion") || null,
+        factorPresentacion: Number(sv("factorPresentacion") || 1),
         precioReferencia: sv("precioReferencia") ? Number(sv("precioReferencia")) : null,
         proveedorPrincipalId: provEl?.value ? Number(provEl.value) : null,
       };

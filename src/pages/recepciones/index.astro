@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { recepciones, proveedores, sucursales, usuarios } from "@/lib/schema";
+import { recepciones, proveedores, usuarios } from "@/lib/schema";
 import { eq, desc } from "drizzle-orm";
 export const prerender = false;
 
@@ -9,10 +9,9 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const rows = await db
-  .select({ r: recepciones, p: proveedores, s: sucursales, u: usuarios })
+  .select({ r: recepciones, p: proveedores, u: usuarios })
   .from(recepciones)
   .leftJoin(proveedores, eq(proveedores.id, recepciones.proveedorId))
-  .leftJoin(sucursales, eq(sucursales.id, recepciones.sucursalId))
   .leftJoin(usuarios, eq(usuarios.id, recepciones.recibidoPor))
   .orderBy(desc(recepciones.id));
 
@@ -38,14 +37,13 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
           <th class="px-4 py-2">Fecha</th>
           <th class="px-4 py-2">Factura</th>
           <th class="px-4 py-2">Proveedor</th>
-          <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2 text-right">Total</th>
           <th class="px-4 py-2">Recibió</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && (
-          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin recepciones aún.</td></tr>
+          <tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Sin recepciones aún.</td></tr>
         )}
         {rows.map((r) => (
           <tr class="hover:bg-slate-50">
@@ -53,7 +51,6 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
             <td class="px-4 py-2">{fmt(r.r.fecha)}</td>
             <td class="px-4 py-2 text-slate-600">{r.r.numeroFactura ?? "—"}</td>
             <td class="px-4 py-2">{r.p?.nombre ?? <span class="text-slate-400">Sin proveedor</span>}</td>
-            <td class="px-4 py-2">{r.s?.nombre ?? "—"}</td>
             <td class="px-4 py-2 text-right font-mono">{r.r.total != null ? `$${r.r.total.toFixed(2)}` : "—"}</td>
             <td class="px-4 py-2 text-slate-600">{r.u?.nombre ?? "—"}</td>
           </tr>

@@ -53,12 +53,11 @@ const tecnicos = await db
   .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
   .orderBy(asc(usuarios.nombre));
 
-// Repuestos consumidos en esta OT
+// Repuestos consumidos en esta OT (bodega única)
 const repuestosRows = await db
-  .select({ rep: ordenRepuestos, it: itemsTable, suc: sucursales })
+  .select({ rep: ordenRepuestos, it: itemsTable })
   .from(ordenRepuestos)
   .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
-  .leftJoin(sucursales, eq(sucursales.id, ordenRepuestos.sucursalId))
   .where(eq(ordenRepuestos.ordenId, id))
   .orderBy(desc(ordenRepuestos.id));
 
@@ -73,12 +72,6 @@ const itemsActivos = await db
   .from(itemsTable)
   .where(eq(itemsTable.activo, true))
   .orderBy(itemsTable.nombre);
-
-const sucursalesActivas = await db
-  .select({ id: sucursales.id, nombre: sucursales.nombre })
-  .from(sucursales)
-  .where(eq(sucursales.activa, true))
-  .orderBy(sucursales.nombre);
 
 const itemsRepJson = JSON.stringify(itemsActivos);
 
@@ -286,16 +279,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>
           )}
 
-          {puedeEditar && itemsActivos.length > 0 && sucursalesActivas.length > 0 && (
+          {puedeEditar && itemsActivos.length > 0 && (
             <div class="mt-4 rounded border border-dashed border-slate-300 p-3">
               <h3 class="mb-2 text-sm font-semibold text-slate-700">+ Registrar consumo</h3>
-              <div class="grid grid-cols-1 gap-2 sm:grid-cols-5">
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-4">
                 <select id="rep_item" class="input text-sm sm:col-span-2">
                   <option value="">— Item —</option>
                   {itemsActivos.map((it) => <option value={it.id} data-precio={it.precio ?? ""} data-unidad={it.unidad}>{it.codigo} · {it.nombre}</option>)}
-                </select>
-                <select id="rep_suc" class="input text-sm">
-                  {sucursalesActivas.map((s) => <option value={s.id}>{s.nombre}</option>)}
                 </select>
                 <input id="rep_cant" type="number" min="0" step="0.01" placeholder="Cantidad" class="input text-sm" />
                 <input id="rep_precio" type="number" min="0" step="0.01" placeholder="Precio unit. (opcional)" class="input text-sm" />
@@ -589,18 +579,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const msg = $("rep_msg");
       msg.classList.add("hidden");
       const itemId = Number($("rep_item").value);
-      const sucursalId = Number($("rep_suc").value);
       const cantidad = Number($("rep_cant").value);
       const precio = $("rep_precio").value;
-      if (!itemId || !sucursalId || !cantidad || cantidad <= 0) {
-        msg.textContent = "Completa item, sucursal y cantidad.";
+      if (!itemId || !cantidad || cantidad <= 0) {
+        msg.textContent = "Completa item y cantidad.";
         msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return;
       }
       const res = await fetch(`/api/ordenes/${id}/repuestos`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          itemId, sucursalId, cantidad,
+          itemId, cantidad,
           precioUnitario: precio ? Number(precio) : null,
           notas: $("rep_notas").value.trim() || null,
         }),
@@ -645,7 +634,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   </script>
 
   <!-- Firmas + PDF -->
-  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, sucursal: r.suc?.nombre, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
+  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
     const $ = (s) => document.getElementById(s);
     const modal = $("firmaModal");
     const canvas = $("firmaCanvas");
@@ -838,12 +827,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           if (y > 240) { doc.addPage(); y = M; }
           doc.setFont("helvetica", "bold"); doc.text("Repuestos consumidos", M, y); y += 5;
           doc.setFontSize(8);
-          doc.text("Item", M, y); doc.text("Sucursal", 90, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
+          doc.text("Item", M, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
           doc.setLineWidth(0.2); doc.line(M, y - 2, W - M, y - 2);
           doc.setFont("helvetica", "normal");
           repuestos.forEach((r) => {
-            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 40), M, y);
-            doc.text(String(r.sucursal ?? "—").slice(0, 25), 90, y);
+            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 60), M, y);
             doc.text(String(r.cantidad), 140, y);
             doc.text(r.precio != null ? `$${r.precio.toFixed(2)}` : "—", 160, y);
             doc.text(r.precio != null ? `$${(r.precio * r.cantidad).toFixed(2)}` : "—", 185, y);

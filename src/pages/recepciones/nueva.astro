@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { items, sucursales, proveedores } from "@/lib/schema";
+import { items, proveedores } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 export const prerender = false;
 
@@ -9,11 +9,6 @@ const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/recepciones");
 
 const db = getDb(Astro);
-const sucRows = await db
-  .select({ id: sucursales.id, nombre: sucursales.nombre })
-  .from(sucursales)
-  .where(eq(sucursales.activa, true))
-  .orderBy(sucursales.nombre);
 
 const provRows = await db
   .select({ id: proveedores.id, nombre: proveedores.nombre })
@@ -35,29 +30,18 @@ const hoy = new Date().toISOString().slice(0, 10);
   <a href="/recepciones" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
   <h1 class="mt-2 text-2xl font-bold">Nueva recepción de proveedor</h1>
 
-  {sucRows.length === 0 && (
-    <div class="card mt-4 border-l-4 border-amber-500 p-4 text-sm">
-      Necesitas crear al menos una <a class="text-brand-700 hover:underline" href="/configuracion">sucursal</a> antes de registrar recepciones.
-    </div>
-  )}
   {itRows.length === 0 && (
     <div class="card mt-4 border-l-4 border-amber-500 p-4 text-sm">
       Necesitas crear items en el <a class="text-brand-700 hover:underline" href="/inventario">inventario</a> antes de registrar recepciones.
     </div>
   )}
 
-  {sucRows.length > 0 && itRows.length > 0 && (
+  {itRows.length > 0 && (
     <form id="form" class="card mt-4 space-y-4 p-5">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label class="label">Fecha *</label>
           <input class="input" id="fecha" type="date" value={hoy} required />
-        </div>
-        <div>
-          <label class="label">Sucursal destino *</label>
-          <select class="input" id="sucursalId" required>
-            {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
-          </select>
         </div>
         <div>
           <label class="label">Proveedor</label>
@@ -70,7 +54,7 @@ const hoy = new Date().toISOString().slice(0, 10);
           <label class="label">Número de factura</label>
           <input class="input" id="numeroFactura" placeholder="FACT-001" />
         </div>
-        <div class="sm:col-span-3">
+        <div class="sm:col-span-2">
           <label class="label">Notas</label>
           <textarea class="input" id="notas" rows="2"></textarea>
         </div>
@@ -188,7 +172,6 @@ const hoy = new Date().toISOString().slice(0, 10);
       const provV = document.getElementById("proveedorId").value;
       const payload = {
         proveedorId: provV ? Number(provV) : null,
-        sucursalId: Number(document.getElementById("sucursalId").value),
         numeroFactura: document.getElementById("numeroFactura").value.trim() || null,
         fecha: document.getElementById("fecha").value,
         notas: document.getElementById("notas").value.trim() || null,

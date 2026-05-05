@@ -184,6 +184,9 @@ export const items = sqliteTable("items", {
   categoria: text("categoria"),
   unidad: text("unidad").notNull().default("unidad"),
   stockMinimo: real("stock_minimo").notNull().default(0),
+  stockMaximo: real("stock_maximo").notNull().default(0),
+  presentacion: text("presentacion"),
+  factorPresentacion: real("factor_presentacion").notNull().default(1),
   proveedorPrincipalId: integer("proveedor_principal_id").references(() => proveedores.id),
   precioReferencia: real("precio_referencia"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
@@ -192,8 +195,7 @@ export const items = sqliteTable("items", {
 
 export const stock = sqliteTable("stock", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  itemId: integer("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
-  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().unique().references(() => items.id, { onDelete: "cascade" }),
   cantidad: real("cantidad").notNull().default(0),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -201,7 +203,7 @@ export const stock = sqliteTable("stock", {
 export const movimientosInventario = sqliteTable("movimientos_inventario", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   itemId: integer("item_id").notNull().references(() => items.id),
-  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
   tipo: text("tipo", { enum: ["entrada", "salida", "ajuste"] }).notNull(),
   cantidad: real("cantidad").notNull(),
   motivo: text("motivo"),
@@ -216,7 +218,7 @@ export const movimientosInventario = sqliteTable("movimientos_inventario", {
 export const recepciones = sqliteTable("recepciones", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   proveedorId: integer("proveedor_id").references(() => proveedores.id),
-  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
   numeroFactura: text("numero_factura"),
   fecha: text("fecha").notNull(),
   total: real("total"),
@@ -237,7 +239,7 @@ export const ordenRepuestos = sqliteTable("orden_repuestos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
   itemId: integer("item_id").notNull().references(() => items.id),
-  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
   cantidad: real("cantidad").notNull(),
   precioUnitario: real("precio_unitario"),
   notas: text("notas"),

@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
-  items, stock, sucursales, movimientosInventario, usuarios, proveedores,
+  items, stock, movimientosInventario, usuarios, proveedores,
 } from "@/lib/schema";
 import { eq, desc } from "drizzle-orm";
 import { fmtCantidad, TIPO_MOV_LABEL, TIPO_MOV_COLOR, MOTIVO_MOV } from "@/lib/inventario";
@@ -23,31 +23,22 @@ const [row] = await db
 if (!row) return Astro.redirect("/inventario");
 const it = row.item;
 
-const stockRows = await db
-  .select({ s: stock, suc: sucursales })
-  .from(stock)
-  .leftJoin(sucursales, eq(sucursales.id, stock.sucursalId))
-  .where(eq(stock.itemId, id))
-  .orderBy(sucursales.nombre);
-
-const sucRows = await db
-  .select({ id: sucursales.id, nombre: sucursales.nombre })
-  .from(sucursales)
-  .where(eq(sucursales.activa, true))
-  .orderBy(sucursales.nombre);
+const [stockRow] = await db.select().from(stock).where(eq(stock.itemId, id)).limit(1);
+const stockTotal = stockRow?.cantidad ?? 0;
 
 const movRows = await db
-  .select({ m: movimientosInventario, u: usuarios, suc: sucursales })
+  .select({ m: movimientosInventario, u: usuarios })
   .from(movimientosInventario)
   .leftJoin(usuarios, eq(usuarios.id, movimientosInventario.usuarioId))
-  .leftJoin(sucursales, eq(sucursales.id, movimientosInventario.sucursalId))
   .where(eq(movimientosInventario.itemId, id))
   .orderBy(desc(movimientosInventario.id))
   .limit(50);
 
-const stockTotal = stockRows.reduce((s, r) => s + r.s.cantidad, 0);
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
 const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
+
+const bajoMinimo = stockTotal < it.stockMinimo;
+const sugerenciaCompra = bajoMinimo && it.stockMaximo > 0 ? Math.max(0, it.stockMaximo - stockTotal) : 0;
 ---
 
 <Layout title={it.nombre}>
@@ -61,48 +52,54 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
       </div>
       <p class="mt-1 text-sm text-slate-500">
         {it.categoria && <span>{it.categoria} · </span>}
-        Unidad: {it.unidad}
+        Unidad: <strong>{it.unidad}</strong>
+        {it.presentacion && <span> · Presentación: <strong>{it.presentacion}</strong> ({it.factorPresentacion} {it.unidad})</span>}
         {row.prov && <span> · Proveedor: {row.prov.nombre}</span>}
       </p>
       {it.descripcion && <p class="mt-2 text-sm text-slate-700">{it.descripcion}</p>}
     </div>
     <div class="text-right">
-      <div class="text-xs uppercase text-slate-500">Stock total</div>
-      <div class:list={["text-3xl font-bold", stockTotal < it.stockMinimo ? "text-red-600" : "text-brand-600"]}>
+      <div class="text-xs uppercase text-slate-500">Stock en bodega</div>
+      <div class:list={["text-3xl font-bold", bajoMinimo ? "text-red-600" : "text-brand-600"]}>
         {fmtCantidad(stockTotal, it.unidad)}
       </div>
-      <div class="text-xs text-slate-500">Mínimo: {fmtCantidad(it.stockMinimo, it.unidad)}</div>
+      <div class="text-xs text-slate-500">Mínimo {fmtCantidad(it.stockMinimo, it.unidad)} · Máximo {fmtCantidad(it.stockMaximo, it.unidad)}</div>
+      {sugerenciaCompra > 0 && (
+        <div class="mt-2 rounded bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-700">
+          ⚠ Comprar {fmtCantidad(sugerenciaCompra, it.unidad)} para llegar al máximo
+        </div>
+      )}
     </div>
   </div>
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-    <!-- Stock por sucursal -->
+    <!-- Stock & resumen -->
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Stock por sucursal</h2>
-      <ul class="mt-3 divide-y divide-slate-100">
-        {stockRows.length === 0 && <li class="py-2 text-sm text-slate-500">Sin stock registrado.</li>}
-        {stockRows.map((r) => (
-          <li class="flex items-center justify-between py-2 text-sm">
-            <span>{r.suc?.nombre ?? "—"}</span>
-            <span class:list={["font-mono", r.s.cantidad < it.stockMinimo ? "text-red-600" : "text-slate-700"]}>
-              {fmtCantidad(r.s.cantidad, it.unidad)}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <h2 class="font-semibold text-slate-900">Resumen de stock</h2>
+      <dl class="mt-3 space-y-2 text-sm">
+        <div class="flex justify-between"><dt class="text-slate-500">Disponible</dt><dd class:list={["font-mono", bajoMinimo ? "text-red-600" : "text-slate-700"]}>{fmtCantidad(stockTotal, it.unidad)}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Mínimo (alerta)</dt><dd class="font-mono text-slate-700">{fmtCantidad(it.stockMinimo, it.unidad)}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Máximo (objetivo)</dt><dd class="font-mono text-slate-700">{fmtCantidad(it.stockMaximo, it.unidad)}</dd></div>
+        {it.presentacion && (
+          <div class="flex justify-between border-t border-slate-100 pt-2">
+            <dt class="text-slate-500">Presentación de compra</dt>
+            <dd class="font-mono text-slate-700">{it.presentacion} = {it.factorPresentacion} {it.unidad}</dd>
+          </div>
+        )}
+        {sugerenciaCompra > 0 && it.factorPresentacion > 0 && it.presentacion && (
+          <div class="flex justify-between rounded bg-orange-50 px-2 py-2 text-orange-700">
+            <dt>Comprar (en presentación)</dt>
+            <dd class="font-mono font-semibold">≈ {Math.ceil(sugerenciaCompra / it.factorPresentacion)} {it.presentacion}</dd>
+          </div>
+        )}
+      </dl>
     </div>
 
-    <!-- Movimiento manual -->
-    {puedeMover && sucRows.length > 0 && (
+    <!-- Movimiento manual (sin sucursal) -->
+    {puedeMover && (
       <div class="card p-5">
         <h2 class="font-semibold text-slate-900">Registrar movimiento</h2>
         <div class="mt-3 grid grid-cols-1 gap-3 text-sm">
-          <div>
-            <label class="label">Sucursal</label>
-            <select class="input" id="m_sucursal">
-              {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
-            </select>
-          </div>
           <div>
             <label class="label">Tipo</label>
             <select class="input" id="m_tipo">
@@ -112,7 +109,7 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
             </select>
           </div>
           <div>
-            <label class="label">Cantidad</label>
+            <label class="label">Cantidad ({it.unidad})</label>
             <input class="input" id="m_cantidad" type="number" min="0" step="0.01" required />
           </div>
           <div>
@@ -121,6 +118,8 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
               <option value="ajuste_manual">Ajuste manual</option>
               <option value="inicial">Inventario inicial</option>
               <option value="devolucion">Devolución</option>
+              <option value="consumo">Consumo en OT</option>
+              <option value="merma">Merma / pérdida</option>
             </select>
           </div>
           <div>
@@ -141,7 +140,6 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
           <th class="px-4 py-2">Fecha</th>
-          <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Tipo</th>
           <th class="px-4 py-2 text-right">Cantidad</th>
           <th class="px-4 py-2">Motivo</th>
@@ -150,12 +148,11 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
       </thead>
       <tbody class="divide-y divide-slate-100">
         {movRows.length === 0 && (
-          <tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Sin movimientos.</td></tr>
+          <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Sin movimientos.</td></tr>
         )}
         {movRows.map((r) => (
           <tr>
             <td class="px-4 py-2 text-xs text-slate-500">{fmt(r.m.createdAt)}</td>
-            <td class="px-4 py-2">{r.suc?.nombre ?? "—"}</td>
             <td class="px-4 py-2">
               <span class={`badge ${TIPO_MOV_COLOR[r.m.tipo]}`}>{TIPO_MOV_LABEL[r.m.tipo]}</span>
             </td>
@@ -175,7 +172,6 @@ const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
       const msg = document.getElementById("m_msg");
       msg.classList.add("hidden");
       const payload = {
-        sucursalId: Number(document.getElementById("m_sucursal").value),
         tipo: document.getElementById("m_tipo").value,
         cantidad: Number(document.getElementById("m_cantidad").value),
         motivo: document.getElementById("m_motivo").value,
