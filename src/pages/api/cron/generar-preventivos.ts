@@ -26,6 +26,9 @@ export const POST: APIRoute = async (ctx) => {
   const detalles: Array<{ origen: string; refId: number; ordenId: number; descripcion: string }> = [];
 
   // ── 1) Planes de mantenimiento de equipos ──────────────────────────────────
+  // Generamos OT solo si proximaFecha <= hoy AND no hay aún OT generada para
+  // este ciclo (ultimaGeneracion < proximaFecha). NO avanzamos proximaFecha
+  // aquí: se avanza al cerrar la OT (lógica en PATCH /api/ordenes/[id]).
   const planesRows = await db
     .select({ p: planesMantenimiento, a: activos })
     .from(planesMantenimiento)
@@ -34,6 +37,9 @@ export const POST: APIRoute = async (ctx) => {
 
   for (const r of planesRows) {
     const p = r.p;
+    // Si ya generamos OT para este ciclo, saltar.
+    if (p.ultimaGeneracion && p.ultimaGeneracion.slice(0, 10) >= p.proximaFecha) continue;
+
     const codigoActivo = r.a?.codigo ?? `Activo #${p.activoId}`;
     const titulo = `[Preventivo] ${p.titulo} - ${codigoActivo}`;
     const venc = new Date(p.proximaFecha);
@@ -48,7 +54,7 @@ export const POST: APIRoute = async (ctx) => {
         prioridad: p.prioridad,
         estado: "abierta",
         activoId: p.activoId,
-        asignadoA: null,
+        asignadoA: p.asignadoA,
         creadoPor: null,
         planId: p.id,
         vencimiento: venc.toISOString(),
@@ -56,10 +62,10 @@ export const POST: APIRoute = async (ctx) => {
       })
       .returning({ id: ordenes.id });
 
-    const proxima = siguienteFecha(p.proximaFecha, p.frecuencia as any);
+    // Solo marcar que ya se generó OT de este ciclo. proximaFecha avanza al cerrar.
     await db
       .update(planesMantenimiento)
-      .set({ proximaFecha: proxima, ultimaGeneracion: now })
+      .set({ ultimaGeneracion: now })
       .where(eq(planesMantenimiento.id, p.id));
 
     creadas++;
@@ -67,6 +73,7 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   // ── 2) Actividades recurrentes ─────────────────────────────────────────────
+  // Mismo patrón: solo generar si no hay OT abierta del ciclo actual.
   const actRows = await db
     .select({ a: actividades, c: actividadCategorias })
     .from(actividades)
@@ -75,6 +82,8 @@ export const POST: APIRoute = async (ctx) => {
 
   for (const r of actRows) {
     const a = r.a;
+    if (a.ultimaGeneracion && a.ultimaGeneracion.slice(0, 10) >= a.proximaFecha) continue;
+
     const cat = r.c;
     const titulo = `[Actividad${cat ? ` · ${cat.icono ?? ""} ${cat.nombre}` : ""}] ${a.titulo}`;
     const venc = new Date(a.proximaFecha);
@@ -96,10 +105,10 @@ export const POST: APIRoute = async (ctx) => {
       })
       .returning({ id: ordenes.id });
 
-    const proxima = siguienteFecha(a.proximaFecha, a.frecuencia as any);
+    // Solo marcar generación. proximaFecha avanza al cerrar OT.
     await db
       .update(actividades)
-      .set({ proximaFecha: proxima, ultimaGeneracion: now })
+      .set({ ultimaGeneracion: now })
       .where(eq(actividades.id, a.id));
 
     creadas++;

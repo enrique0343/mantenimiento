@@ -169,20 +169,34 @@ export const PATCH: APIRoute = async (ctx) => {
     } catch {}
   }
 
-  // Si la OT está vinculada a una actividad recurrente y se completa,
-  // reprogramar la actividad al siguiente ciclo desde HOY (no desde la fecha
-  // teórica), de modo que la cadencia siga al ritmo real de ejecución.
-  const seCompletoActividad = parsed.data.estado === "completada" && actual.estado !== "completada";
-  if (seCompletoActividad && actual.actividadId) {
-    try {
-      const [act] = await db.select().from(actividades).where(eq(actividades.id, actual.actividadId)).limit(1);
-      if (act) {
-        const nueva = siguienteFecha(now.slice(0, 10), act.frecuencia as any);
-        await db.update(actividades)
-          .set({ proximaFecha: nueva, ultimaEjecucion: now })
-          .where(eq(actividades.id, act.id));
-      }
-    } catch {}
+  // Al CERRAR una OT vinculada a un plan preventivo o a una actividad
+  // recurrente, avanzar proximaFecha al siguiente ciclo desde HOY. Esto
+  // mantiene la programación al ritmo real (no teórico) y evita que se
+  // generen OTs duplicadas mientras la actual sigue abierta.
+  const seCerro = parsed.data.estado === "cerrada" && actual.estado !== "cerrada";
+  if (seCerro) {
+    if (actual.planId) {
+      try {
+        const [pl] = await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, actual.planId)).limit(1);
+        if (pl) {
+          const nueva = siguienteFecha(now.slice(0, 10), pl.frecuencia as any);
+          await db.update(planesMantenimiento)
+            .set({ proximaFecha: nueva })
+            .where(eq(planesMantenimiento.id, pl.id));
+        }
+      } catch {}
+    }
+    if (actual.actividadId) {
+      try {
+        const [act] = await db.select().from(actividades).where(eq(actividades.id, actual.actividadId)).limit(1);
+        if (act) {
+          const nueva = siguienteFecha(now.slice(0, 10), act.frecuencia as any);
+          await db.update(actividades)
+            .set({ proximaFecha: nueva, ultimaEjecucion: now })
+            .where(eq(actividades.id, act.id));
+        }
+      } catch {}
+    }
   }
 
   // Sync con ticket vinculado: si la OT cambió de estado, propagar al ticket
@@ -272,6 +286,16 @@ export const DELETE: APIRoute = async (ctx) => {
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
+  // Recuperar la OT antes de borrar para resetear plan/actividad si aplica
+  const [ot] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   await db.delete(ordenes).where(eq(ordenes.id, id));
+  // Si la OT venía de un plan o actividad, resetear ultimaGeneracion para
+  // que el cron pueda generar una nueva en el siguiente ciclo.
+  if (ot?.planId) {
+    try { await db.update(planesMantenimiento).set({ ultimaGeneracion: null }).where(eq(planesMantenimiento.id, ot.planId)); } catch {}
+  }
+  if (ot?.actividadId) {
+    try { await db.update(actividades).set({ ultimaGeneracion: null }).where(eq(actividades.id, ot.actividadId)); } catch {}
+  }
   return Response.json({ ok: true });
 };
