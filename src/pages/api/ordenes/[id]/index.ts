@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades } from "@/lib/schema";
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
@@ -145,6 +145,22 @@ export const PATCH: APIRoute = async (ctx) => {
           .update(planesMantenimiento)
           .set({ proximaFecha: nuevaProxima })
           .where(eq(planesMantenimiento.id, p.id));
+      }
+    } catch {}
+  }
+
+  // Si la OT está vinculada a una actividad recurrente y se completa,
+  // reprogramar la actividad al siguiente ciclo desde HOY (no desde la fecha
+  // teórica), de modo que la cadencia siga al ritmo real de ejecución.
+  const seCompletoActividad = parsed.data.estado === "completada" && actual.estado !== "completada";
+  if (seCompletoActividad && actual.actividadId) {
+    try {
+      const [act] = await db.select().from(actividades).where(eq(actividades.id, actual.actividadId)).limit(1);
+      if (act) {
+        const nueva = siguienteFecha(now.slice(0, 10), act.frecuencia as any);
+        await db.update(actividades)
+          .set({ proximaFecha: nueva, ultimaEjecucion: now })
+          .where(eq(actividades.id, act.id));
       }
     } catch {}
   }
