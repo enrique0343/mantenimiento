@@ -1,0 +1,122 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, ubicaciones, sucursales } from "@/lib/schema";
+import { eq, asc } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/activos");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const sucursalFiltro = url.searchParams.get("sucursal");
+const tipoFiltro = url.searchParams.get("tipo");
+
+const all = await db
+  .select({ a: activos, ub: ubicaciones, s: sucursales })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .orderBy(asc(activos.codigo));
+
+const filtered = all.filter((r) =>
+  (!sucursalFiltro || r.s?.id === Number(sucursalFiltro)) &&
+  (!tipoFiltro || r.a.tipo === tipoFiltro)
+);
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
+
+// Origen para construir el URL del QR. Astro.url sirve.
+const origin = Astro.url.origin;
+---
+
+<Layout title="Imprimir códigos QR">
+  <div class="flex flex-wrap items-center justify-between gap-2 print:hidden">
+    <div>
+      <h1 class="text-2xl font-bold">Códigos QR de equipos</h1>
+      <p class="text-sm text-slate-500">Imprime para pegar en cada equipo. Al escanear con cualquier celular, abre la ficha del equipo.</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/activos" class="btn-secondary">← Volver</a>
+      <button onclick="window.print()" class="btn-primary">🖨 Imprimir</button>
+    </div>
+  </div>
+
+  <form class="card mt-3 flex flex-wrap items-end gap-3 p-3 print:hidden" method="get">
+    <div>
+      <label class="label text-xs">Sucursal</label>
+      <select name="sucursal" class="input text-sm">
+        <option value="">Todas</option>
+        {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Tipo</label>
+      <select name="tipo" class="input text-sm">
+        <option value="">Todos</option>
+        <option value="general" selected={tipoFiltro === "general"}>🔧 General</option>
+        <option value="biomedico" selected={tipoFiltro === "biomedico"}>🩺 Biomédico</option>
+      </select>
+    </div>
+    <button class="btn-primary text-sm">Filtrar</button>
+    <span class="text-xs text-slate-500 ml-auto">{filtered.length} de {all.length} equipos</span>
+  </form>
+
+  <div class="qr-grid mt-4">
+    {filtered.map((r) => {
+      const target = `${origin}/activos/${r.a.id}`;
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(target)}`;
+      return (
+        <div class="qr-tag">
+          <img src={qrUrl} alt={r.a.codigo} loading="lazy" />
+          <div class="qr-info">
+            <div class="qr-code">{r.a.codigo}</div>
+            <div class="qr-name">{r.a.nombre}</div>
+            <div class="qr-meta">
+              {r.a.tipo === "biomedico" ? "🩺" : "🔧"}
+              {r.s && <span> · 🏢 {r.s.nombre}</span>}
+              {r.ub && <span> · 📍 {r.ub.nombre}</span>}
+            </div>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+
+  <style>
+    .qr-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    @media (min-width: 640px) {
+      .qr-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (min-width: 1024px) {
+      .qr-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+    .qr-tag {
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+      background: white;
+      page-break-inside: avoid;
+    }
+    .qr-tag img { width: 100%; height: auto; max-width: 240px; margin: 0 auto; display: block; }
+    .qr-info { margin-top: 8px; }
+    .qr-code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; }
+    .qr-name { font-size: 12px; margin-top: 2px; }
+    .qr-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+    @media print {
+      .qr-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      .qr-tag { border: 1px dashed #999; box-shadow: none; }
+      body { background: white !important; }
+    }
+  </style>
+</Layout>
