@@ -1,0 +1,219 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, ubicaciones, sucursales } from "@/lib/schema";
+import { eq, and, isNotNull, asc } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
+const filtroEspBio = user.rol === "jefe" && user.especialidad === "general"; // jefe general no debería ver
+
+const db = getDb(Astro);
+const rows = await db
+  .select({ a: activos, ub: ubicaciones, s: sucursales })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(eq(activos.tipo, "biomedico"))
+  .orderBy(asc(activos.proximaCalibracion));
+
+const hoy = new Date().toISOString().slice(0, 10);
+const en30 = new Date(); en30.setDate(en30.getDate() + 30);
+const en30Str = en30.toISOString().slice(0, 10);
+const en60 = new Date(); en60.setDate(en60.getDate() + 60);
+const en60Str = en60.toISOString().slice(0, 10);
+
+interface Item { a: any; ub: any; s: any; }
+const vencidas: Item[] = [];
+const proximas30: Item[] = [];
+const proximas60: Item[] = [];
+const conCalOk: Item[] = [];
+const sinCal: Item[] = [];
+
+for (const r of rows) {
+  if (!r.a.proximaCalibracion) {
+    sinCal.push(r);
+  } else if (r.a.proximaCalibracion < hoy) {
+    vencidas.push(r);
+  } else if (r.a.proximaCalibracion <= en30Str) {
+    proximas30.push(r);
+  } else if (r.a.proximaCalibracion <= en60Str) {
+    proximas60.push(r);
+  } else {
+    conCalOk.push(r);
+  }
+}
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "—");
+const claseColor: Record<string, string> = {
+  I: "bg-green-100 text-green-700",
+  IIa: "bg-blue-100 text-blue-700",
+  IIb: "bg-amber-100 text-amber-700",
+  III: "bg-red-100 text-red-700",
+};
+---
+
+<Layout title="Calibraciones biomédicas">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">🩺 Calibraciones biomédicas</h1>
+      <p class="text-sm text-slate-500">{rows.length} equipos biomédicos · {vencidas.length} vencidas · {proximas30.length} próximos 30 días</p>
+    </div>
+    <a href="/activos?tipo=biomedico" class="btn-secondary">Ver equipos biomédicos →</a>
+  </div>
+
+  <!-- Resumen -->
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+    <div class="card p-4 border-l-4 border-red-500">
+      <div class="text-xs uppercase text-slate-500">Vencidas</div>
+      <div class="mt-1 text-3xl font-bold text-red-600">{vencidas.length}</div>
+    </div>
+    <div class="card p-4 border-l-4 border-amber-500">
+      <div class="text-xs uppercase text-slate-500">Próximos 30 días</div>
+      <div class="mt-1 text-3xl font-bold text-amber-600">{proximas30.length}</div>
+    </div>
+    <div class="card p-4 border-l-4 border-blue-400">
+      <div class="text-xs uppercase text-slate-500">Próximos 60 días</div>
+      <div class="mt-1 text-3xl font-bold text-blue-600">{proximas60.length}</div>
+    </div>
+    <div class="card p-4 border-l-4 border-emerald-500">
+      <div class="text-xs uppercase text-slate-500">Al día</div>
+      <div class="mt-1 text-3xl font-bold text-emerald-600">{conCalOk.length}</div>
+    </div>
+    <div class="card p-4 border-l-4 border-slate-400">
+      <div class="text-xs uppercase text-slate-500">Sin calibración</div>
+      <div class="mt-1 text-3xl font-bold text-slate-500">{sinCal.length}</div>
+    </div>
+  </div>
+
+  {[
+    { titulo: "🚨 Calibraciones vencidas", items: vencidas, color: "border-red-300", textColor: "text-red-700" },
+    { titulo: "⚠ Próximas 30 días", items: proximas30, color: "border-amber-300", textColor: "text-amber-700" },
+    { titulo: "📅 Próximas 60 días", items: proximas60, color: "border-blue-200", textColor: "text-blue-700" },
+    { titulo: "🩺 Sin calibración registrada", items: sinCal, color: "border-slate-200", textColor: "text-slate-700" },
+    { titulo: "✓ Al día (más de 60 días)", items: conCalOk, color: "border-emerald-200", textColor: "text-emerald-700" },
+  ].map((g) => g.items.length > 0 && (
+    <div class={`card mt-6 overflow-hidden border-l-4 ${g.color}`}>
+      <div class="px-5 pt-4 pb-2"><h2 class={`font-semibold ${g.textColor}`}>{g.titulo} ({g.items.length})</h2></div>
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">Código</th>
+            <th class="px-4 py-2">Equipo</th>
+            <th class="px-4 py-2">Marca / Modelo</th>
+            <th class="px-4 py-2">Clase</th>
+            <th class="px-4 py-2">Sucursal</th>
+            <th class="px-4 py-2">Última</th>
+            <th class="px-4 py-2">Próxima</th>
+            <th class="px-4 py-2 text-right">Acción</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {g.items.map((r) => (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
+              <td class="px-4 py-2"><a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a></td>
+              <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "—"}</td>
+              <td class="px-4 py-2">
+                {r.a.claseRiesgo ? <span class={`badge ${claseColor[r.a.claseRiesgo]}`}>Clase {r.a.claseRiesgo}</span> : <span class="text-slate-400 text-xs">—</span>}
+              </td>
+              <td class="px-4 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs">{fmt(r.a.ultimaCalibracion)}</td>
+              <td class:list={["px-4 py-2 text-xs font-mono", r.a.proximaCalibracion && r.a.proximaCalibracion < hoy ? "text-red-600 font-bold" : ""]}>
+                {fmt(r.a.proximaCalibracion)}
+              </td>
+              <td class="px-4 py-2 text-right">
+                <button class="cal-btn text-xs text-brand-600 hover:underline" data-id={r.a.id} data-codigo={r.a.codigo} data-nombre={r.a.nombre}>📝 Registrar</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ))}
+
+  <!-- Modal registrar calibración -->
+  <div id="calModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Registrar calibración</h3>
+      <p id="cal_equipo" class="mt-1 text-sm text-slate-500"></p>
+      <input type="hidden" id="cal_id" />
+      <div class="mt-3 space-y-3 text-sm">
+        <div>
+          <label class="label">Fecha de calibración *</label>
+          <input id="cal_fecha" type="date" class="input" required />
+        </div>
+        <div>
+          <label class="label">Próxima calibración *</label>
+          <input id="cal_proxima" type="date" class="input" required />
+          <p class="mt-1 text-xs text-slate-500">Por defecto, 1 año después.</p>
+        </div>
+      </div>
+      <p id="cal_msg" class="mt-2 hidden text-sm"></p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="cal_cancel" class="btn-secondary">Cancelar</button>
+        <button id="cal_save" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const modal = document.getElementById("calModal")!;
+    const fechaIn = document.getElementById("cal_fecha") as HTMLInputElement;
+    const proxIn = document.getElementById("cal_proxima") as HTMLInputElement;
+    const idIn = document.getElementById("cal_id") as HTMLInputElement;
+    const eqLbl = document.getElementById("cal_equipo")!;
+    const msg = document.getElementById("cal_msg")!;
+
+    document.querySelectorAll<HTMLButtonElement>(".cal-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        idIn.value = btn.dataset.id!;
+        eqLbl.textContent = `${btn.dataset.codigo} · ${btn.dataset.nombre}`;
+        const today = new Date().toISOString().slice(0, 10);
+        fechaIn.value = today;
+        const next = new Date();
+        next.setFullYear(next.getFullYear() + 1);
+        proxIn.value = next.toISOString().slice(0, 10);
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+      });
+    });
+    document.getElementById("cal_cancel")?.addEventListener("click", () => {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    });
+    fechaIn.addEventListener("change", () => {
+      // Si se cambia la fecha de calibración, sumar 1 año a la próxima
+      if (!fechaIn.value) return;
+      const d = new Date(fechaIn.value);
+      d.setFullYear(d.getFullYear() + 1);
+      proxIn.value = d.toISOString().slice(0, 10);
+    });
+    document.getElementById("cal_save")?.addEventListener("click", async () => {
+      msg.classList.add("hidden");
+      if (!fechaIn.value || !proxIn.value) {
+        msg.textContent = "Completa ambas fechas.";
+        msg.className = "text-sm text-red-600 mt-2";
+        msg.classList.remove("hidden");
+        return;
+      }
+      const r = await fetch(`/api/activos/${idIn.value}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ultimaCalibracion: fechaIn.value,
+          proximaCalibracion: proxIn.value,
+        }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        msg.textContent = "Error: " + (typeof j.error === "string" ? j.error : "no se pudo guardar");
+        msg.className = "text-sm text-red-600 mt-2";
+        msg.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+  </script>
+</Layout>
