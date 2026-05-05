@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets } from "@/lib/schema";
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
@@ -145,6 +145,34 @@ export const PATCH: APIRoute = async (ctx) => {
           .update(planesMantenimiento)
           .set({ proximaFecha: nuevaProxima })
           .where(eq(planesMantenimiento.id, p.id));
+      }
+    } catch {}
+  }
+
+  // Sync con ticket vinculado: si la OT cambió de estado, propagar al ticket
+  if (parsed.data.estado && parsed.data.estado !== actual.estado) {
+    try {
+      const mapeo: Record<string, string> = {
+        abierta: "asignado",
+        en_proceso: "en_proceso",
+        completada: "resuelto",
+        verificada: "resuelto",
+        cerrada: "cerrado",
+        cancelada: "descartado",
+      };
+      const nuevoEstadoTicket = mapeo[parsed.data.estado];
+      if (nuevoEstadoTicket) {
+        const updateTicket: Record<string, unknown> = {
+          estado: nuevoEstadoTicket,
+          updatedAt: now,
+        };
+        if (parsed.data.estado === "completada" || parsed.data.estado === "verificada") {
+          updateTicket.resueltoEn = now;
+          if (actual.solucionAplicada || parsed.data.solucionAplicada) {
+            updateTicket.resolucionNotas = parsed.data.solucionAplicada ?? actual.solucionAplicada;
+          }
+        }
+        await db.update(tickets).set(updateTicket).where(eq(tickets.otId, id));
       }
     } catch {}
   }

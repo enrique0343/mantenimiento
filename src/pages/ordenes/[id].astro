@@ -75,6 +75,15 @@ const itemsActivos = await db
 
 const itemsRepJson = JSON.stringify(itemsActivos);
 
+// Activos para el selector (solo si admin/jefe pueden cambiar)
+const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol);
+const activosLista = puedeAsignarActivo
+  ? await db
+      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+      .from(activos)
+      .orderBy(asc(activos.codigo))
+  : [];
+
 const checklistItems = parseChecklist(o.checklistEjecucion);
 const progreso = progresoChecklist(checklistItems);
 
@@ -163,8 +172,34 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
         <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
           <div>
-            <div class="text-xs uppercase text-slate-500">Equipo</div>
-            <div>{row.activo ? <a class="text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>{row.activo.codigo} - {row.activo.nombre}</a> : <span class="text-slate-400">Trabajo sin equipo</span>}</div>
+            <div class="flex items-center justify-between">
+              <div class="text-xs uppercase text-slate-500">Equipo</div>
+              {puedeAsignarActivo && (
+                <button id="editActivoBtn" type="button" class="text-xs text-brand-600 hover:underline">
+                  {row.activo ? "Cambiar" : "Asignar"}
+                </button>
+              )}
+            </div>
+            <div id="activoLabel">
+              {row.activo
+                ? <a class="text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>{row.activo.codigo} - {row.activo.nombre}</a>
+                : <span class="text-slate-400">Trabajo sin equipo</span>}
+            </div>
+            {puedeAsignarActivo && (
+              <div id="activoEditor" class="hidden mt-2">
+                <div class="flex gap-1">
+                  <select id="activoSelect" class="input flex-1 text-sm">
+                    <option value="">— Sin equipo —</option>
+                    {activosLista.map((a) => (
+                      <option value={a.id} selected={a.id === o.activoId}>{a.codigo} · {a.nombre}</option>
+                    ))}
+                  </select>
+                  <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+                  <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
+                </div>
+                <p id="activoMsg" class="hidden mt-1 text-xs"></p>
+              </div>
+            )}
           </div>
           <div><div class="text-xs uppercase text-slate-500">Vencimiento</div><div>{fmtDate(o.vencimiento)}</div></div>
           <div><div class="text-xs uppercase text-slate-500">Asignado</div><div>{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div></div>
@@ -483,6 +518,24 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
       return await res.json();
     }
+
+    // Asignar / cambiar equipo
+    $("editActivoBtn")?.addEventListener("click", () => {
+      $("activoEditor")?.classList.remove("hidden");
+      $("editActivoBtn").classList.add("hidden");
+    });
+    $("activoCancel")?.addEventListener("click", () => {
+      $("activoEditor")?.classList.add("hidden");
+      $("editActivoBtn").classList.remove("hidden");
+    });
+    $("activoSave")?.addEventListener("click", async () => {
+      const sel = $("activoSelect");
+      const msg = $("activoMsg");
+      msg.classList.add("hidden");
+      const newId = sel.value ? Number(sel.value) : null;
+      const r = await patchOrden({ activoId: newId });
+      if (r) location.reload();
+    });
 
     // Transiciones
     document.querySelectorAll("[data-transition]").forEach((btn) => {
