@@ -83,13 +83,27 @@ const itemsActivos = await db
 
 const itemsRepJson = JSON.stringify(itemsActivos);
 
-// Activos para el selector (solo si admin/jefe pueden cambiar)
+// Selectores en cascada: sucursal → ubicación → equipo
 const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol);
 const activosLista = puedeAsignarActivo
   ? await db
-      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
       .from(activos)
       .orderBy(asc(activos.codigo))
+  : [];
+const ubicacionesLista = puedeAsignarActivo
+  ? await db
+      .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+      .from(ubicaciones)
+      .where(eq(ubicaciones.activa, true))
+      .orderBy(asc(ubicaciones.nombre))
+  : [];
+const sucursalesLista = puedeAsignarActivo
+  ? await db
+      .select({ id: sucursales.id, nombre: sucursales.nombre })
+      .from(sucursales)
+      .where(eq(sucursales.activa, true))
+      .orderBy(asc(sucursales.nombre))
   : [];
 
 const checklistItems = parseChecklist(o.checklistEjecucion);
@@ -130,6 +144,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
     )}
   </div>
+
+  {estadoActual === "abierta" && (
+    <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
+      <strong>⚠ OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
+    </div>
+  )}
 
   <!-- Wizard de estados -->
   {estadoActual !== "cancelada" && (
@@ -224,18 +244,31 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>
           </div>
           {puedeAsignarActivo && (
-            <div id="activoEditor" class="hidden mt-3">
-              <div class="flex gap-1">
-                <select id="activoSelect" class="input flex-1 text-sm">
-                  <option value="">— Sin equipo —</option>
-                  {activosLista.map((a) => (
-                    <option value={a.id} selected={a.id === o.activoId}>{a.codigo} · {a.nombre}</option>
-                  ))}
+            <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div>
+                <label class="label text-xs">1️⃣ Sucursal</label>
+                <select id="sucSel" class="input text-sm">
+                  <option value="">— Selecciona —</option>
+                  {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
                 </select>
-                <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
-                <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
               </div>
-              <p id="activoMsg" class="hidden mt-1 text-xs"></p>
+              <div>
+                <label class="label text-xs">2️⃣ Ubicación</label>
+                <select id="ubSel" class="input text-sm" disabled>
+                  <option value="">Selecciona la sucursal</option>
+                </select>
+              </div>
+              <div>
+                <label class="label text-xs">3️⃣ Equipo</label>
+                <select id="activoSelect" class="input text-sm" disabled>
+                  <option value="">Selecciona la ubicación</option>
+                </select>
+              </div>
+              <div class="sm:col-span-3 flex items-center justify-end gap-2">
+                <p id="activoMsg" class="hidden mr-auto text-xs"></p>
+                <button id="activoCancel" type="button" class="btn-secondary text-sm">Cancelar</button>
+                <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+              </div>
             </div>
           )}
         </div>
@@ -250,16 +283,31 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>
             <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
           </div>
-          <div id="activoEditor" class="hidden mt-3">
-            <div class="flex gap-1">
-              <select id="activoSelect" class="input flex-1 text-sm">
-                <option value="">— Sin equipo —</option>
-                {activosLista.map((a) => <option value={a.id}>{a.codigo} · {a.nombre}</option>)}
+          <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <label class="label text-xs">1️⃣ Sucursal</label>
+              <select id="sucSel" class="input text-sm">
+                <option value="">— Selecciona —</option>
+                {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
               </select>
-              <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
-              <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
             </div>
-            <p id="activoMsg" class="hidden mt-1 text-xs"></p>
+            <div>
+              <label class="label text-xs">2️⃣ Ubicación</label>
+              <select id="ubSel" class="input text-sm" disabled>
+                <option value="">Selecciona la sucursal</option>
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">3️⃣ Equipo</label>
+              <select id="activoSelect" class="input text-sm" disabled>
+                <option value="">Selecciona la ubicación</option>
+              </select>
+            </div>
+            <div class="sm:col-span-3 flex items-center justify-end gap-2">
+              <p id="activoMsg" class="hidden mr-auto text-xs"></p>
+              <button id="activoCancel" type="button" class="btn-secondary text-sm">Cancelar</button>
+              <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+            </div>
           </div>
         </div>
       )}
@@ -513,10 +561,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </li>
           ))}
         </ul>
-        <form id="comForm" class="mt-3 space-y-2">
-          <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
-          <button class="btn-primary w-full justify-center" type="submit">Comentar</button>
-        </form>
+        {puedeEditar ? (
+          <form id="comForm" class="mt-3 space-y-2">
+            <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
+            <button class="btn-primary w-full justify-center" type="submit">Comentar</button>
+          </form>
+        ) : (
+          <p class="mt-3 text-xs text-slate-400">
+            {estadoActual === "abierta" ? "⚠ Inicia la OT para agregar comentarios" : "Comentarios bloqueados en este estado"}
+          </p>
+        )}
       </div>
     </div>
   </div>
@@ -552,13 +606,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </li>
             ))}
           </ul>
-          <form class="upForm mt-2 space-y-1" data-categoria={cat.key}>
-            <label class="block">
-              <span class="sr-only">Tomar foto</span>
-              <input type="file" accept="image/*,application/pdf" capture="environment" class="block w-full text-xs upFile" required />
-            </label>
-            <button type="submit" class="btn-secondary w-full justify-center py-2 text-xs">📷 Subir / Tomar foto</button>
-          </form>
+          {puedeEditar && (
+            <form class="upForm mt-2 space-y-1" data-categoria={cat.key}>
+              <label class="block">
+                <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+                <span class="btn-secondary w-full justify-center py-2 text-xs cursor-pointer block text-center">📷 Tomar foto / subir archivo</span>
+              </label>
+              <button type="submit" class="hidden">Subir</button>
+            </form>
+          )}
         </div>
       ))}
     </div>
@@ -627,7 +683,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <script define:vars={{ id, checklistJson: o.checklistEjecucion ?? null, itemsRepJson }}>
+  <script define:vars={{
+    id,
+    checklistJson: o.checklistEjecucion ?? null,
+    itemsRepJson,
+    ubicacionesData: ubicacionesLista,
+    activosData: activosLista,
+    sucursalActualId: row.sucursal?.id ?? null,
+    ubicacionActualId: row.ubicacion?.id ?? null,
+    activoActualId: row.activo?.id ?? null,
+  }}>
     const $ = (id) => document.getElementById(id);
     let checklist = checklistJson ? JSON.parse(checklistJson) : [];
 
@@ -645,23 +710,79 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       return await res.json();
     }
 
-    // Asignar / cambiar equipo
-    $("editActivoBtn")?.addEventListener("click", () => {
-      $("activoEditor")?.classList.remove("hidden");
-      $("editActivoBtn").classList.add("hidden");
-    });
-    $("activoCancel")?.addEventListener("click", () => {
-      $("activoEditor")?.classList.add("hidden");
-      $("editActivoBtn").classList.remove("hidden");
-    });
-    $("activoSave")?.addEventListener("click", async () => {
-      const sel = $("activoSelect");
-      const msg = $("activoMsg");
-      msg.classList.add("hidden");
-      const newId = sel.value ? Number(sel.value) : null;
-      const r = await patchOrden({ activoId: newId });
-      if (r) location.reload();
-    });
+    // ── Asignar / cambiar equipo (en cascada: sucursal → ubicación → equipo)
+    (function () {
+      const sucSel = $("sucSel");
+      const ubSel = $("ubSel");
+      const acSel = $("activoSelect");
+      if (!sucSel || !ubSel || !acSel) return;
+
+      function poblarUbicaciones(sucId, preselectUbId) {
+        ubSel.innerHTML = "";
+        if (!sucId) {
+          ubSel.disabled = true;
+          ubSel.appendChild(new Option("Selecciona la sucursal", ""));
+          poblarActivos(null, null);
+          return;
+        }
+        const ubs = (ubicacionesData || []).filter((u) => u.sucursalId === sucId);
+        ubSel.disabled = ubs.length === 0;
+        ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones" : "— Selecciona —", ""));
+        ubs.forEach((u) => {
+          const opt = new Option(`${u.nombre} (${u.tipo})`, String(u.id));
+          if (u.id === preselectUbId) opt.selected = true;
+          ubSel.appendChild(opt);
+        });
+        poblarActivos(preselectUbId ?? null, activoActualId);
+      }
+
+      function poblarActivos(ubId, preselectActivoId) {
+        acSel.innerHTML = "";
+        if (!ubId) {
+          acSel.disabled = true;
+          acSel.appendChild(new Option("Selecciona la ubicación", ""));
+          return;
+        }
+        const eqs = (activosData || []).filter((a) => a.ubicacionId === ubId);
+        acSel.disabled = eqs.length === 0;
+        acSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Sin equipo —", ""));
+        eqs.forEach((a) => {
+          const opt = new Option(`${a.codigo} · ${a.nombre}`, String(a.id));
+          if (a.id === preselectActivoId) opt.selected = true;
+          acSel.appendChild(opt);
+        });
+      }
+
+      sucSel.addEventListener("change", () => {
+        const sid = Number(sucSel.value) || null;
+        poblarUbicaciones(sid, null);
+      });
+      ubSel.addEventListener("change", () => {
+        const uid = Number(ubSel.value) || null;
+        poblarActivos(uid, null);
+      });
+
+      $("editActivoBtn")?.addEventListener("click", () => {
+        $("activoEditor")?.classList.remove("hidden");
+        $("editActivoBtn").classList.add("hidden");
+        // Pre-seleccionar el actual si lo hay
+        if (sucursalActualId) {
+          sucSel.value = String(sucursalActualId);
+          poblarUbicaciones(sucursalActualId, ubicacionActualId);
+        }
+      });
+      $("activoCancel")?.addEventListener("click", () => {
+        $("activoEditor")?.classList.add("hidden");
+        $("editActivoBtn").classList.remove("hidden");
+      });
+      $("activoSave")?.addEventListener("click", async () => {
+        const newId = acSel.value ? Number(acSel.value) : null;
+        const msg = $("activoMsg");
+        msg.classList.add("hidden");
+        const r = await patchOrden({ activoId: newId });
+        if (r) location.reload();
+      });
+    })();
 
     // Eliminar OT (solo admin)
     $("deleteOtBtn")?.addEventListener("click", async () => {
@@ -825,14 +946,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
     });
 
-    // Subida de adjuntos por categoria
-    document.querySelectorAll(".upForm").forEach((form) => {
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const err = $("upErr");
-        err.classList.add("hidden");
-        const file = form.querySelector(".upFile").files[0];
-        if (!file) return;
+    // Subida de adjuntos por categoría — auto-upload al seleccionar archivo
+    async function subirAdjunto(form, file) {
+      const err = $("upErr");
+      err.classList.add("hidden");
+      const btn = form.querySelector("button[type=submit]");
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ Subiendo…"; }
+      try {
         const fd = new FormData();
         fd.append("file", file);
         fd.append("categoria", form.dataset.categoria);
@@ -841,9 +961,29 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           const j = await res.json().catch(() => ({}));
           err.textContent = j.error || "Error al subir";
           err.classList.remove("hidden");
+          if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
           return;
         }
         location.reload();
+      } catch (e) {
+        err.textContent = "Error de red al subir";
+        err.classList.remove("hidden");
+        if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
+      }
+    }
+
+    document.querySelectorAll(".upForm").forEach((form) => {
+      const fileInput = form.querySelector(".upFile");
+      // Submit manual (botón) — opcional
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const file = fileInput.files[0];
+        if (file) subirAdjunto(form, file);
+      });
+      // Auto-upload al seleccionar archivo (cámara o explorador)
+      fileInput?.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        if (file) subirAdjunto(form, file);
       });
     });
   </script>

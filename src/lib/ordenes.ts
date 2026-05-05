@@ -87,9 +87,13 @@ export function puedeAsignarse(rol: Rol): boolean {
 }
 
 export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: EstadoOT): boolean {
+  // Solo se puede editar la ejecución cuando la OT ya está iniciada.
+  // Estado "abierta" es solo lectura: el técnico debe darle "Iniciar" primero
+  // para empezar a registrar trabajos, repuestos, comentarios, etc.
+  if (estado === "abierta" || estado === "cancelada" || estado === "cerrada") return false;
   if (rol === "admin" || rol === "jefe") return true;
   if (rol === "tecnico" && esAsignado) {
-    return estado === "abierta" || estado === "en_proceso" || estado === "completada";
+    return estado === "en_proceso" || estado === "completada" || estado === "verificada";
   }
   return false;
 }

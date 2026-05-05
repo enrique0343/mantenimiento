@@ -1,17 +1,42 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, usuarios } from "@/lib/schema";
+import { activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
 import { asc, eq, and, inArray } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
-const activosList = await db.select().from(activos).orderBy(asc(activos.codigo));
+
+const activosList = await db
+  .select({
+    id: activos.id,
+    codigo: activos.codigo,
+    nombre: activos.nombre,
+    ubicacionId: activos.ubicacionId,
+  })
+  .from(activos)
+  .orderBy(asc(activos.codigo));
+
+const ubicacionesList = await db
+  .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+  .from(ubicaciones)
+  .where(eq(ubicaciones.activa, true))
+  .orderBy(asc(ubicaciones.nombre));
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
   .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
   .orderBy(asc(usuarios.nombre));
+
+const ubicacionesJson = JSON.stringify(ubicacionesList);
+const activosJson = JSON.stringify(activosList);
 ---
 
 <Layout title="Nueva orden">
@@ -49,6 +74,7 @@ const tecnicos = await db
       <div>
         <label class="label">Vencimiento</label>
         <input class="input" id="vencimiento" type="datetime-local" />
+        <p class="mt-1 text-xs text-slate-500">Se calcula desde el SLA del equipo si lo dejas vacío.</p>
       </div>
     </div>
 
@@ -58,12 +84,26 @@ const tecnicos = await db
         <label for="conEquipo" class="text-sm font-medium text-slate-700">Asociar a un equipo</label>
         <span class="text-xs text-slate-500">(desmarca para trabajos generales: limpieza, instalación, etc.)</span>
       </div>
-      <div id="equipoBox" class="mt-3">
-        <label class="label">Equipo</label>
-        <select class="input" id="activoId">
-          <option value="">— Selecciona un equipo —</option>
-          {activosList.map((a) => <option value={a.id}>{a.codigo} - {a.nombre}</option>)}
-        </select>
+      <div id="equipoBox" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label class="label text-xs">1️⃣ Sucursal *</label>
+          <select class="input text-sm" id="sucursalSel" required>
+            <option value="">— Selecciona —</option>
+            {sucursalesList.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label text-xs">2️⃣ Ubicación *</label>
+          <select class="input text-sm" id="ubicacionSel" disabled required>
+            <option value="">Selecciona la sucursal primero</option>
+          </select>
+        </div>
+        <div>
+          <label class="label text-xs">3️⃣ Equipo *</label>
+          <select class="input text-sm" id="activoId" disabled required>
+            <option value="">Selecciona la ubicación primero</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -89,33 +129,85 @@ const tecnicos = await db
     </div>
   </form>
 
-  <script>
-    const conEquipoCk = document.getElementById("conEquipo") as HTMLInputElement;
-    const equipoBox = document.getElementById("equipoBox") as HTMLElement;
-    const activoSel = document.getElementById("activoId") as HTMLSelectElement;
+  <script define:vars={{ ubicacionesJson, activosJson }}>
+    const UBICACIONES = JSON.parse(ubicacionesJson);
+    const ACTIVOS = JSON.parse(activosJson);
+
+    const conEquipoCk = document.getElementById("conEquipo");
+    const equipoBox = document.getElementById("equipoBox");
+    const sucSel = document.getElementById("sucursalSel");
+    const ubSel = document.getElementById("ubicacionSel");
+    const activoSel = document.getElementById("activoId");
+
     conEquipoCk.addEventListener("change", () => {
       equipoBox.classList.toggle("hidden", !conEquipoCk.checked);
-      if (!conEquipoCk.checked) activoSel.value = "";
+      if (!conEquipoCk.checked) {
+        sucSel.value = ""; ubSel.value = ""; activoSel.value = "";
+        sucSel.required = false; ubSel.required = false; activoSel.required = false;
+      } else {
+        sucSel.required = true; ubSel.required = true; activoSel.required = true;
+      }
     });
 
-    const form = document.getElementById("form") as HTMLFormElement;
-    const err = document.getElementById("err") as HTMLElement;
+    // Sucursal → puebla ubicaciones
+    sucSel.addEventListener("change", () => {
+      const sid = Number(sucSel.value);
+      ubSel.innerHTML = "";
+      activoSel.innerHTML = "";
+      if (!sid) {
+        ubSel.disabled = true;
+        ubSel.appendChild(new Option("Selecciona la sucursal primero", ""));
+        activoSel.disabled = true;
+        activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+        return;
+      }
+      const ubs = UBICACIONES.filter((u) => u.sucursalId === sid);
+      ubSel.disabled = ubs.length === 0;
+      ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones" : "— Selecciona —", ""));
+      ubs.forEach((u) => ubSel.appendChild(new Option(`${u.nombre} (${u.tipo})`, String(u.id))));
+      activoSel.disabled = true;
+      activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+    });
+
+    // Ubicación → puebla equipos
+    ubSel.addEventListener("change", () => {
+      const ubid = Number(ubSel.value);
+      activoSel.innerHTML = "";
+      if (!ubid) {
+        activoSel.disabled = true;
+        activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+        return;
+      }
+      const eqs = ACTIVOS.filter((a) => a.ubicacionId === ubid);
+      activoSel.disabled = eqs.length === 0;
+      activoSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Selecciona el equipo —", ""));
+      eqs.forEach((a) => activoSel.appendChild(new Option(`${a.codigo} · ${a.nombre}`, String(a.id))));
+    });
+
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       err.classList.add("hidden");
-      const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
+      const v = (id) => document.getElementById(id).value;
       const venc = v("vencimiento");
       const activoId = v("activoId");
       const asignadoA = v("asignadoA");
       const checklistRaw = v("checklistRaw").trim();
 
-      let checklistEjecucion: string | null = null;
+      if (conEquipoCk.checked && !activoId) {
+        err.textContent = "Selecciona sucursal, ubicación y equipo, o desmarca 'Asociar a un equipo'.";
+        err.classList.remove("hidden");
+        return;
+      }
+
+      let checklistEjecucion = null;
       if (checklistRaw) {
         const items = checklistRaw.split("\n").map((l) => l.trim()).filter(Boolean).map((texto) => ({ texto, hecho: false }));
         if (items.length > 0) checklistEjecucion = JSON.stringify(items);
       }
 
-      const payload: any = {
+      const payload = {
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
         tipo: v("tipo"),
