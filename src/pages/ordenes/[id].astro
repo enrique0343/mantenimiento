@@ -219,10 +219,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </div>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => (
-              <li class="flex items-start gap-2 rounded bg-slate-50 p-2">
-                <input type="checkbox" class="ck-item mt-1" data-idx={idx} checked={it.hecho} disabled={!puedeEditar} />
+              <li class:list={["ck-row flex items-start gap-3 rounded-lg p-3 transition", it.hecho ? "bg-emerald-50" : "bg-slate-50", puedeEditar && "cursor-pointer active:bg-slate-200"]} data-idx={idx}>
+                <input type="checkbox" class="ck-item mt-0.5 h-5 w-5 cursor-pointer" data-idx={idx} checked={it.hecho} disabled={!puedeEditar} />
                 <div class="flex-1">
-                  <div class="text-sm">{it.texto}</div>
+                  <div class:list={["text-sm", it.hecho && "text-slate-500 line-through"]}>{it.texto}</div>
                   {it.notas && <div class="text-xs text-slate-500">{it.notas}</div>}
                 </div>
               </li>
@@ -429,9 +429,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </li>
             ))}
           </ul>
-          <form class="upForm mt-2" data-categoria={cat.key}>
-            <input type="file" class="block w-full text-xs upFile" required />
-            <button type="submit" class="btn-secondary mt-1 w-full justify-center text-xs">Subir</button>
+          <form class="upForm mt-2 space-y-1" data-categoria={cat.key}>
+            <label class="block">
+              <span class="sr-only">Tomar foto</span>
+              <input type="file" accept="image/*,application/pdf" capture="environment" class="block w-full text-xs upFile" required />
+            </label>
+            <button type="submit" class="btn-secondary w-full justify-center py-2 text-xs">📷 Subir / Tomar foto</button>
           </form>
         </div>
       ))}
@@ -571,11 +574,36 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (r) location.reload();
     });
 
-    // Checklist
+    // Checklist: el checkbox y la fila completa son tap-targets
+    function actualizarFila(idx, hecho) {
+      const row = document.querySelector(`.ck-row[data-idx="${idx}"]`);
+      if (!row) return;
+      const txt = row.querySelector(".text-sm");
+      if (hecho) {
+        row.classList.remove("bg-slate-50");
+        row.classList.add("bg-emerald-50");
+        txt?.classList.add("text-slate-500", "line-through");
+      } else {
+        row.classList.add("bg-slate-50");
+        row.classList.remove("bg-emerald-50");
+        txt?.classList.remove("text-slate-500", "line-through");
+      }
+    }
     document.querySelectorAll(".ck-item").forEach((el) => {
       el.addEventListener("change", () => {
         const idx = Number(el.dataset.idx);
         if (checklist[idx]) checklist[idx].hecho = el.checked;
+        actualizarFila(idx, el.checked);
+      });
+    });
+    document.querySelectorAll(".ck-row").forEach((row) => {
+      row.addEventListener("click", (e) => {
+        if (e.target.tagName === "INPUT") return;
+        const cb = row.querySelector(".ck-item");
+        if (cb && !cb.disabled) {
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event("change"));
+        }
       });
     });
     $("ckSave")?.addEventListener("click", async () => {

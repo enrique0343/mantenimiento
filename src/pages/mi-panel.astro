@@ -185,33 +185,56 @@ if (!esMotorista) {
         </ul>
       </div>
 
-      <div class="card mt-6 overflow-hidden">
-        <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Mis últimos viajes</h2></div>
-        <table class="w-full text-left text-sm">
-          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th class="px-4 py-2">Inicio</th>
-              <th class="px-4 py-2">Vehículo</th>
-              <th class="px-4 py-2">Destino</th>
-              <th class="px-4 py-2 text-right">Km</th>
-              <th class="px-4 py-2 text-right">Duración</th>
-              <th class="px-4 py-2">Estado</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            {misViajes.length === 0 && <tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Sin viajes aún.</td></tr>}
-            {misViajes.map((r: any) => (
-              <tr>
-                <td class="px-4 py-2 text-xs">{fmtFull(r.v.inicio)}</td>
-                <td class="px-4 py-2">{r.veh?.placa}</td>
-                <td class="px-4 py-2 text-slate-600">{r.v.destino ?? "—"}</td>
-                <td class="px-4 py-2 text-right font-mono">{r.v.kmRecorrido ? r.v.kmRecorrido.toFixed(1) : "—"}</td>
-                <td class="px-4 py-2 text-right font-mono">{fmtDuracion(r.v.duracionMin)}</td>
-                <td class="px-4 py-2"><span class:list={["badge", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div class="mt-6">
+        <h2 class="mb-2 font-semibold">Mis últimos viajes</h2>
+        {misViajes.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">Sin viajes aún.</div>
+        ) : (
+          <>
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misViajes.map((r: any) => (
+                <div class="card p-3">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="font-semibold">{r.veh?.placa}</div>
+                    <span class:list={["badge text-[10px]", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span>
+                  </div>
+                  <div class="mt-1 text-xs text-slate-500">{fmtFull(r.v.inicio)}</div>
+                  {r.v.destino && <div class="mt-0.5 text-sm text-slate-700">📍 {r.v.destino}</div>}
+                  <div class="mt-2 flex items-center justify-between text-xs">
+                    <span class="font-mono text-slate-600">🛣 {r.v.kmRecorrido ? `${r.v.kmRecorrido.toFixed(1)} km` : "—"}</span>
+                    <span class="font-mono text-slate-600">⏱ {fmtDuracion(r.v.duracionMin)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">Inicio</th>
+                    <th class="px-4 py-2">Vehículo</th>
+                    <th class="px-4 py-2">Destino</th>
+                    <th class="px-4 py-2 text-right">Km</th>
+                    <th class="px-4 py-2 text-right">Duración</th>
+                    <th class="px-4 py-2">Estado</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misViajes.map((r: any) => (
+                    <tr>
+                      <td class="px-4 py-2 text-xs">{fmtFull(r.v.inicio)}</td>
+                      <td class="px-4 py-2">{r.veh?.placa}</td>
+                      <td class="px-4 py-2 text-slate-600">{r.v.destino ?? "—"}</td>
+                      <td class="px-4 py-2 text-right font-mono">{r.v.kmRecorrido ? r.v.kmRecorrido.toFixed(1) : "—"}</td>
+                      <td class="px-4 py-2 text-right font-mono">{fmtDuracion(r.v.duracionMin)}</td>
+                      <td class="px-4 py-2"><span class:list={["badge", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </>
   ) : (
@@ -264,60 +287,109 @@ if (!esMotorista) {
         </div>
       )}
 
-      <div class="mt-6 card overflow-hidden">
-        <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Mis OTs activas ({misActivas.length})</h2></div>
-        <table class="w-full text-left text-sm">
-          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th class="px-4 py-2">#</th>
-              <th class="px-4 py-2">Título</th>
-              <th class="px-4 py-2">Equipo</th>
-              <th class="px-4 py-2">Tipo</th>
-              <th class="px-4 py-2">Prioridad</th>
-              <th class="px-4 py-2">Estado</th>
-              <th class="px-4 py-2">Vence</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            {misActivas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No tienes OTs activas.</td></tr>}
-            {misActivas.map((r: any) => (
-              <tr class="hover:bg-slate-50">
-                <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
-                <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
-                <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
-                <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span></td>
-                <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize`}>{r.o.prioridad}</span></td>
-                <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span></td>
-                <td class="px-4 py-2 text-xs text-slate-600">{fmt(r.o.vencimiento)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div class="mt-6">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Mis OTs activas ({misActivas.length})</h2>
+        </div>
+        {misActivas.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">No tienes OTs activas.</div>
+        ) : (
+          <>
+            {/* Cards en móvil */}
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misActivas.map((r: any) => (
+                <a href={`/ordenes/${r.o.id}`} class="card block p-4 hover:bg-slate-50 active:bg-slate-100">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="font-mono text-xs text-slate-400">#{r.o.id}</div>
+                    <span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize text-[10px]`}>{r.o.prioridad}</span>
+                  </div>
+                  <div class="mt-1 text-base font-semibold text-brand-700">{r.o.titulo}</div>
+                  {r.a && <div class="mt-1 text-xs text-slate-500">🛠 {r.a.codigo} · {r.a.nombre}</div>}
+                  <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span>
+                    <span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span>
+                    {r.o.vencimiento && (
+                      <span class="text-xs text-slate-500">⏱ {fmt(r.o.vencimiento)}</span>
+                    )}
+                  </div>
+                </a>
+              ))}
+            </div>
+            {/* Tabla en desktop */}
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">#</th>
+                    <th class="px-4 py-2">Título</th>
+                    <th class="px-4 py-2">Equipo</th>
+                    <th class="px-4 py-2">Tipo</th>
+                    <th class="px-4 py-2">Prioridad</th>
+                    <th class="px-4 py-2">Estado</th>
+                    <th class="px-4 py-2">Vence</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misActivas.map((r: any) => (
+                    <tr class="hover:bg-slate-50">
+                      <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
+                      <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
+                      <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
+                      <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span></td>
+                      <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize`}>{r.o.prioridad}</span></td>
+                      <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span></td>
+                      <td class="px-4 py-2 text-xs text-slate-600">{fmt(r.o.vencimiento)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
 
-      <div class="mt-6 card overflow-hidden">
-        <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2></div>
-        <table class="w-full text-left text-sm">
-          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-            <tr>
-              <th class="px-4 py-2">Plan</th>
-              <th class="px-4 py-2">Equipo</th>
-              <th class="px-4 py-2">Frecuencia</th>
-              <th class="px-4 py-2">Próxima fecha</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            {misPlanes.length === 0 && <tr><td colspan="4" class="px-4 py-6 text-center text-slate-400">Sin planes asignados.</td></tr>}
-            {misPlanes.map((r: any) => (
-              <tr class="hover:bg-slate-50">
-                <td class="px-4 py-2">{r.p.titulo}</td>
-                <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/activos/${r.a?.id}`}>{r.a?.codigo}</a></td>
-                <td class="px-4 py-2 capitalize text-slate-600">{r.p.frecuencia}</td>
-                <td class="px-4 py-2 text-slate-700">{fmt(r.p.proximaFecha)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div class="mt-6">
+        <h2 class="mb-2 font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2>
+        {misPlanes.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">Sin planes asignados.</div>
+        ) : (
+          <>
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misPlanes.map((r: any) => (
+                <a href={`/activos/${r.a?.id}`} class="card block p-4 hover:bg-slate-50">
+                  <div class="text-base font-semibold text-brand-700">{r.p.titulo}</div>
+                  <div class="mt-1 text-xs text-slate-500">{r.a?.codigo} · {r.a?.nombre}</div>
+                  <div class="mt-2 flex items-center justify-between text-xs">
+                    <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600 capitalize">{r.p.frecuencia}</span>
+                    <span class="text-slate-700">📅 {fmt(r.p.proximaFecha)}</span>
+                  </div>
+                </a>
+              ))}
+            </div>
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">Plan</th>
+                    <th class="px-4 py-2">Equipo</th>
+                    <th class="px-4 py-2">Frecuencia</th>
+                    <th class="px-4 py-2">Próxima fecha</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misPlanes.map((r: any) => (
+                    <tr class="hover:bg-slate-50">
+                      <td class="px-4 py-2">{r.p.titulo}</td>
+                      <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/activos/${r.a?.id}`}>{r.a?.codigo}</a></td>
+                      <td class="px-4 py-2 capitalize text-slate-600">{r.p.frecuencia}</td>
+                      <td class="px-4 py-2 text-slate-700">{fmt(r.p.proximaFecha)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </>
   )}
