@@ -6,6 +6,8 @@ import { ordenes, activos, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { calcularVencimiento, type Prioridad } from "@/lib/sla";
 import { sendMail, emailLayout } from "@/lib/email";
+import { sendTelegram } from "@/lib/telegram";
+import { crearNotificacion } from "@/lib/notif-app";
 
 export const prerender = false;
 
@@ -74,14 +76,18 @@ export const POST: APIRoute = async (ctx) => {
     .values({ ...parsed.data, vencimiento, creadoPor: user.id })
     .returning();
 
-  // Si la OT se crea con un técnico ya asignado, notificarle
+  // Si la OT se crea con un técnico ya asignado, notificarle (email + Telegram + in-app)
   if (row.asignadoA) {
     try {
       const [u] = await db
-        .select({ email: usuarios.email, nombre: usuarios.nombre })
+        .select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, row.asignadoA)).limit(1);
+      const env = (ctx.locals as any)?.runtime?.env ?? {};
+      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const otUrl = `${baseUrl}/ordenes/${row.id}`;
+      const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
+
       if (u?.email) {
-        const baseUrl = (ctx.locals as any)?.runtime?.env?.APP_URL || "https://mantenimiento-49c.pages.dev";
         const p = sendMail(ctx, {
           to: u.email,
           subject: `[OT #${row.id}] Nueva orden asignada: ${row.titulo}`,
@@ -91,14 +97,28 @@ export const POST: APIRoute = async (ctx) => {
              <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
              <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
              ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
-             <p><a href="${baseUrl}/ordenes/${row.id}">Abrir orden →</a></p>`
+             <p><a href="${otUrl}">Abrir orden →</a></p>`
           ),
           tipo: "ot_asignada",
           referencia: `orden:${row.id}`,
         }).catch(() => {});
-        const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
         if (wait) wait(p); else await p;
       }
+
+      if (u?.telegramChatId) {
+        const p = sendTelegram(env, u.telegramChatId,
+          `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}`,
+          { linkUrl: otUrl, linkLabel: "Abrir orden" }
+        );
+        if (wait) wait(p); else await p;
+      }
+
+      await crearNotificacion(ctx, {
+        usuarioId: row.asignadoA, tipo: "ot_asignada",
+        titulo: `Nueva OT #${row.id}: ${row.titulo}`,
+        mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${new Date(row.vencimiento).toLocaleDateString("es")}` : ""}`,
+        link: `/ordenes/${row.id}`,
+      });
     } catch {}
   }
 

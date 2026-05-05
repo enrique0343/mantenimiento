@@ -1,0 +1,125 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { usuarios } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const sessionUser = Astro.locals.user!;
+const db = getDb(Astro);
+const [u] = await db.select().from(usuarios).where(eq(usuarios.id, sessionUser.id)).limit(1);
+
+const baseUrl = Astro.url.origin;
+const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken}.ics` : null;
+---
+
+<Layout title="Mi perfil">
+  <h1 class="text-2xl font-bold">Mi perfil</h1>
+  <p class="text-sm text-slate-500">{u.email} · {u.rol}</p>
+
+  <!-- Telegram -->
+  <div class="card mt-6 p-5">
+    <h2 class="font-semibold text-slate-900">📱 Notificaciones por Telegram</h2>
+    <p class="mt-1 text-sm text-slate-600">Recibe en Telegram las notificaciones de OTs asignadas, cambios de estado y vencimientos.</p>
+
+    {u.telegramChatId ? (
+      <div class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-semibold text-emerald-700">✓ Telegram enlazado</div>
+            <div class="text-xs text-slate-500">Chat ID: <code>{u.telegramChatId}</code></div>
+          </div>
+          <button id="tgUnlink" class="btn-secondary text-sm">🔕 Desenlazar</button>
+        </div>
+      </div>
+    ) : (
+      <div class="mt-4 space-y-3 rounded-lg border border-slate-200 p-4 text-sm">
+        <p class="text-slate-700"><strong>Para enlazar tu cuenta:</strong></p>
+        <ol class="list-decimal pl-5 text-slate-600 space-y-1">
+          <li>Abre Telegram y busca el bot <code class="rounded bg-slate-100 px-1">@MantenimientoAvanteBot</code> (o el nombre que configure tu admin)</li>
+          <li>Envía <code class="rounded bg-slate-100 px-1">/start</code> para iniciar</li>
+          <li>Envía <code class="rounded bg-slate-100 px-1">/enlazar {u.email}</code></li>
+          <li>El bot confirmará el enlace. Vuelve aquí y refresca esta página.</li>
+        </ol>
+        <p class="rounded bg-amber-50 p-2 text-xs text-amber-700">
+          ⚠ Para que esto funcione, el admin debe configurar la variable <code>TELEGRAM_BOT_TOKEN</code> en Cloudflare Pages y el webhook del bot apuntando a <code>{baseUrl}/api/telegram/webhook</code>.
+        </p>
+      </div>
+    )}
+  </div>
+
+  <!-- Calendario .ics -->
+  <div class="card mt-6 p-5">
+    <h2 class="font-semibold text-slate-900">📅 Suscribir mi calendario</h2>
+    <p class="mt-1 text-sm text-slate-600">Sincroniza tus OTs, planes preventivos y actividades con Google Calendar, Outlook o Apple Calendar.</p>
+
+    {calendarUrl ? (
+      <div class="mt-4 space-y-3 rounded-lg border border-slate-200 p-4">
+        <div>
+          <label class="label text-xs">URL de suscripción (privada — no la compartas)</label>
+          <div class="mt-1 flex gap-2">
+            <input id="calUrl" class="input flex-1 font-mono text-xs" readonly value={calendarUrl} />
+            <button id="calCopy" class="btn-secondary text-sm">📋 Copiar</button>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3 text-xs text-slate-600">
+          <a href={`https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(calendarUrl)}`} target="_blank" class="rounded border border-slate-200 p-2 text-center hover:bg-slate-50">
+            <div class="font-semibold">Google Calendar</div>
+            <div class="text-slate-500">+ Agregar</div>
+          </a>
+          <a href={calendarUrl.replace("https://", "webcal://")} class="rounded border border-slate-200 p-2 text-center hover:bg-slate-50">
+            <div class="font-semibold">Apple Calendar</div>
+            <div class="text-slate-500">webcal://</div>
+          </a>
+          <div class="rounded border border-slate-200 p-2 text-center">
+            <div class="font-semibold">Outlook</div>
+            <div class="text-slate-500">Pegar URL en "+ Agregar calendario"</div>
+          </div>
+        </div>
+        <button id="calRegen" class="btn-secondary text-xs">🔄 Regenerar URL (invalida la actual)</button>
+      </div>
+    ) : (
+      <div class="mt-4 rounded-lg border border-slate-200 p-4">
+        <p class="text-sm text-slate-700">Genera una URL privada para suscribirte:</p>
+        <button id="calGen" class="btn-primary mt-3 text-sm">Generar URL de calendario</button>
+      </div>
+    )}
+  </div>
+
+  <script>
+    // Telegram desenlazar
+    document.getElementById("tgUnlink")?.addEventListener("click", async () => {
+      if (!confirm("¿Desenlazar Telegram?")) return;
+      const r = await fetch("/api/perfil", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ telegramChatId: null }),
+      });
+      if (r.ok) location.reload();
+    });
+
+    // Calendario: copiar
+    document.getElementById("calCopy")?.addEventListener("click", () => {
+      const inp = document.getElementById("calUrl") as HTMLInputElement;
+      navigator.clipboard.writeText(inp.value);
+      const btn = document.getElementById("calCopy")!;
+      btn.textContent = "✓ Copiado";
+      setTimeout(() => (btn.textContent = "📋 Copiar"), 2000);
+    });
+
+    // Calendario: generar / regenerar
+    async function regenCal() {
+      const r = await fetch("/api/perfil", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ regenerarCalendarToken: true }),
+      });
+      if (r.ok) location.reload();
+    }
+    document.getElementById("calGen")?.addEventListener("click", regenCal);
+    document.getElementById("calRegen")?.addEventListener("click", () => {
+      if (!confirm("¿Regenerar URL? La actual dejará de funcionar.")) return;
+      regenCal();
+    });
+  </script>
+</Layout>

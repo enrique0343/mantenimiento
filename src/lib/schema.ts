@@ -66,6 +66,10 @@ export const usuarios = sqliteTable("usuarios", {
   especialidad: text("especialidad", { enum: ["general", "biomedico", "ambos"] }),
   // Tarifa horaria para cálculo de costo de OT (mano de obra)
   tarifaHora: real("tarifa_hora").notNull().default(0),
+  // Chat ID de Telegram para notificaciones (NULL = no enlazado)
+  telegramChatId: text("telegram_chat_id"),
+  // Token único para suscripción de calendario (.ics)
+  calendarToken: text("calendar_token"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   sucursalId: integer("sucursal_id").references(() => sucursales.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -615,6 +619,18 @@ export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type EncuestaSatisfaccion = typeof encuestasSatisfaccion.$inferSelect;
+
+// ─── Notificaciones in-app (Fase 23) ─────────────────────────────────────────
+export const notificaciones = sqliteTable("notificaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id, { onDelete: "cascade" }),
+  tipo: text("tipo").notNull(),
+  titulo: text("titulo").notNull(),
+  mensaje: text("mensaje"),
+  link: text("link"),
+  leida: integer("leida", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
 
 // ─── Audit log ───────────────────────────────────────────────────────────────
 export const auditLog = sqliteTable("audit_log", {

@@ -26,6 +26,15 @@ interface Env {
   SENDGRID_API_KEY?: string;
   BREVO_API_KEY?: string;
   SMTP2GO_API_KEY?: string;
+  // SMTP genérico
+  SMTP_HOST?: string;
+  SMTP_PORT?: string;
+  SMTP_USER?: string;
+  SMTP_PASS?: string;
+  // Telegram bot
+  TELEGRAM_BOT_TOKEN?: string;
+  // URL pública de la app (para links en emails y .ics)
+  APP_URL?: string;
 }
 
 declare namespace App {

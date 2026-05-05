@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { ordenes, usuarios, tickets, encuestasSatisfaccion } from "./schema";
 import { sendMail, emailLayout } from "./email";
+import { sendTelegram } from "./telegram";
+import { crearNotificacion } from "./notif-app";
 
 // URL base del despliegue. Se puede sobrescribir por env APP_URL.
 function appUrl(ctx: APIContext): string {
@@ -26,27 +28,37 @@ interface OrdenLite {
   trabajosRealizados?: string | null;
 }
 
-async function obtenerSolicitante(ctx: APIContext, orden: OrdenLite): Promise<{ email: string; nombre: string } | null> {
+interface SolicitanteData { email: string; nombre: string; usuarioId?: number | null; telegramChatId?: string | null }
+
+async function obtenerSolicitante(ctx: APIContext, orden: OrdenLite): Promise<SolicitanteData | null> {
   const db = getDb(ctx);
   // Si hay ticket vinculado, usar email del solicitante del ticket
   const [t] = await db.select().from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
-  if (t) return { email: t.solicitanteEmail, nombre: t.solicitanteNombre };
+  if (t) {
+    // Si el solicitante también es usuario del sistema, traer chat_id de Telegram
+    let telegramChatId: string | null = null;
+    if (t.solicitanteUsuarioId) {
+      const [u] = await db.select({ tg: usuarios.telegramChatId }).from(usuarios).where(eq(usuarios.id, t.solicitanteUsuarioId)).limit(1);
+      telegramChatId = u?.tg ?? null;
+    }
+    return { email: t.solicitanteEmail, nombre: t.solicitanteNombre, usuarioId: t.solicitanteUsuarioId, telegramChatId };
+  }
 
   // Fallback: usuario que creó la OT
   if (orden.creadoPor) {
-    const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre })
+    const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
       .from(usuarios).where(eq(usuarios.id, orden.creadoPor)).limit(1);
-    if (u?.email) return { email: u.email, nombre: u.nombre };
+    if (u?.email) return { email: u.email, nombre: u.nombre, usuarioId: orden.creadoPor, telegramChatId: u.telegramChatId };
   }
   return null;
 }
 
-async function obtenerAsignado(ctx: APIContext, orden: OrdenLite): Promise<{ email: string; nombre: string } | null> {
+async function obtenerAsignado(ctx: APIContext, orden: OrdenLite): Promise<{ email: string; nombre: string; telegramChatId: string | null } | null> {
   if (!orden.asignadoA) return null;
   const db = getDb(ctx);
-  const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre })
+  const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
     .from(usuarios).where(eq(usuarios.id, orden.asignadoA)).limit(1);
-  return u?.email ? { email: u.email, nombre: u.nombre } : null;
+  return u?.email ? { email: u.email, nombre: u.nombre, telegramChatId: u.telegramChatId ?? null } : null;
 }
 
 // Token aleatorio para encuestas (32 hex)
@@ -70,6 +82,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
   const sol = await obtenerSolicitante(ctx, orden);
   const asg = await obtenerAsignado(ctx, orden);
   if (!sol) return;
+  const env = (ctx.locals as any)?.runtime?.env ?? {};
   const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
   await sendMail(ctx, {
     to: sol.email,
@@ -85,12 +98,28 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
     tipo: "ot_iniciada",
     referencia: `orden:${orden.id}`,
   }).catch(() => {});
+
+  if (sol.telegramChatId) {
+    await sendTelegram(env, sol.telegramChatId,
+      `🛠 <b>Iniciado:</b> OT #${orden.id} - ${orden.titulo}\n${asg ? `Técnico: ${asg.nombre}` : ""}`,
+      { linkUrl: url, linkLabel: "Ver orden" }
+    );
+  }
+  if (sol.usuarioId) {
+    await crearNotificacion(ctx, {
+      usuarioId: sol.usuarioId, tipo: "ot_iniciada",
+      titulo: `OT #${orden.id} en proceso`,
+      mensaje: `${orden.titulo}${asg ? ` · Técnico: ${asg.nombre}` : ""}`,
+      link: `/ordenes/${orden.id}`,
+    });
+  }
 }
 
 // ─── Notificación: OT completada por técnico ─────────────────────────────────
 export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
   const sol = await obtenerSolicitante(ctx, orden);
   if (!sol) return;
+  const env = (ctx.locals as any)?.runtime?.env ?? {};
   const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
   await sendMail(ctx, {
     to: sol.email,
@@ -106,6 +135,21 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
     tipo: "ot_completada",
     referencia: `orden:${orden.id}`,
   }).catch(() => {});
+
+  if (sol.telegramChatId) {
+    await sendTelegram(env, sol.telegramChatId,
+      `✅ <b>Completada:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
+      { linkUrl: url, linkLabel: "Ver orden" }
+    );
+  }
+  if (sol.usuarioId) {
+    await crearNotificacion(ctx, {
+      usuarioId: sol.usuarioId, tipo: "ot_completada",
+      titulo: `OT #${orden.id} completada`,
+      mensaje: orden.titulo,
+      link: `/ordenes/${orden.id}`,
+    });
+  }
 }
 
 // ─── Notificación: OT cerrada + crear encuesta de satisfacción ───────────────

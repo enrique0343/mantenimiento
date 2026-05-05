@@ -9,6 +9,8 @@ import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
 import { siguienteFecha } from "@/lib/frecuencias";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
+import { sendTelegram } from "@/lib/telegram";
+import { crearNotificacion } from "@/lib/notif-app";
 
 export const prerender = false;
 
@@ -197,8 +199,12 @@ export const PATCH: APIRoute = async (ctx) => {
   // Notifica al tecnico cuando se le asigna una OT
   if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
     try {
-      const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre })
+      const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
+      const env = (ctx.locals as any)?.runtime?.env ?? {};
+      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const otUrl = `${baseUrl}/ordenes/${row.id}`;
+
       if (u?.email) {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
@@ -210,13 +216,27 @@ export const PATCH: APIRoute = async (ctx) => {
                <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
                <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
                ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
-               <p><a href="https://mantenimiento-49c.pages.dev/ordenes/${row.id}">Abrir orden →</a></p>`
+               <p><a href="${otUrl}">Abrir orden →</a></p>`
             ),
             tipo: "ot_asignada",
             referencia: `orden:${row.id}`,
           }).catch(() => {})
         );
       }
+      if (u?.telegramChatId) {
+        ctx.locals.runtime.ctx.waitUntil(
+          sendTelegram(env, u.telegramChatId,
+            `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}`,
+            { linkUrl: otUrl, linkLabel: "Abrir orden" }
+          )
+        );
+      }
+      await crearNotificacion(ctx, {
+        usuarioId: parsed.data.asignadoA, tipo: "ot_asignada",
+        titulo: `Te asignaron OT #${row.id}: ${row.titulo}`,
+        mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${new Date(row.vencimiento).toLocaleDateString("es")}` : ""}`,
+        link: `/ordenes/${row.id}`,
+      });
     } catch {}
   }
 
