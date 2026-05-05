@@ -332,7 +332,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         {adjsAntes.length > 0 && (
           <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {adjsAntes.map((a) => (
-              <div class="rounded bg-slate-50 p-2 text-xs">
+              <div class="relative group rounded bg-slate-50 p-2 text-xs">
+                {puedeSubirAntes && (
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                )}
                 {a.contentType.startsWith("image/") && (
                   <a href={`/api/adjuntos/${a.id}`} target="_blank">
                     <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
@@ -349,7 +352,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <form class="upForm mt-3" data-categoria="antes">
             <label class="block">
               <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
-              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">📷 Tomar foto / subir archivo</span>
+              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">📷 {adjsAntes.length === 0 ? "Tomar foto del estado inicial" : "Agregar otra foto"}</span>
             </label>
             <button type="submit" class="hidden">Subir</button>
           </form>
@@ -551,6 +554,48 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
       )}
 
+      <!-- Foto DESPUÉS (estado final) — visible cuando OT está en proceso o más allá -->
+      {estadoActual !== "abierta" && estadoActual !== "cancelada" && (
+        <div class="card p-5 border-l-4 border-emerald-300">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="font-semibold text-slate-900">📸 Foto del estado final (después)</h2>
+              <p class="mt-1 text-xs text-slate-500">Toma foto antes de pulsar "Completar". Es obligatoria para cerrar el trabajo.</p>
+            </div>
+            <span class="text-xs text-slate-500">{adjsDespues.length} foto(s)</span>
+          </div>
+
+          {adjsDespues.length > 0 && (
+            <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {adjsDespues.map((a) => (
+                <div class="relative group rounded bg-slate-50 p-2 text-xs">
+                  {puedeEditar && (
+                    <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                  )}
+                  {a.contentType.startsWith("image/") && (
+                    <a href={`/api/adjuntos/${a.id}`} target="_blank">
+                      <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
+                    </a>
+                  )}
+                  <a href={`/api/adjuntos/${a.id}`} target="_blank" class="block truncate font-medium text-brand-700 hover:underline">{a.nombre}</a>
+                  <span class="text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {puedeEditar && (
+            <form class="upForm mt-3" data-categoria="despues">
+              <label class="block">
+                <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+                <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center bg-emerald-600 hover:bg-emerald-700">📸 {adjsDespues.length === 0 ? "Tomar foto del estado final" : "Agregar otra foto"}</span>
+              </label>
+              <button type="submit" class="hidden">Subir</button>
+            </form>
+          )}
+        </div>
+      )}
+
       <!-- Verificacion (cuando ya esta verificada o cerrada) -->
       {(o.verificadoEn || o.verificacionNotas) && (
         <div class="card p-5 border-l-4 border-teal-500">
@@ -620,13 +665,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <!-- Adjuntos categorizados (durante/después/docs) — el "antes" está arriba -->
+  <!-- Documentos y archivos generales (las fotos antes/después están en sus tarjetas) -->
   <div class="mt-6 card p-5">
-    <h2 class="font-semibold text-slate-900">Adjuntos ({adjsDespues.length + adjsDocumento.length + adjsGeneral.length})</h2>
-    <p class="text-xs text-slate-500">La foto del estado inicial está al inicio de la OT.</p>
-    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+    <h2 class="font-semibold text-slate-900">Documentos y archivos ({adjsDocumento.length + adjsGeneral.length})</h2>
+    <p class="text-xs text-slate-500">Para subir manuales, facturas u otros archivos. Las fotos antes/después están en sus secciones correspondientes.</p>
+    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
       {([
-        { key: "despues", label: "📸 Después", color: "bg-emerald-50", items: adjsDespues },
         { key: "documento", label: "📄 Documentos", color: "bg-amber-50", items: adjsDocumento },
         { key: "general", label: "📎 General", color: "bg-slate-50", items: adjsGeneral },
       ] as const).map((cat) => (
@@ -638,7 +682,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <ul class="space-y-1">
             {cat.items.length === 0 && <li class="text-xs text-slate-400">Vacío.</li>}
             {cat.items.map((a) => (
-              <li class="rounded bg-white p-2 text-xs">
+              <li class="relative group rounded bg-white p-2 text-xs">
+                {puedeEditar && (
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                )}
                 {a.contentType.startsWith("image/") && (
                   <a href={`/api/adjuntos/${a.id}`} target="_blank">
                     <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
@@ -1029,6 +1076,19 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       fileInput?.addEventListener("change", () => {
         const file = fileInput.files[0];
         if (file) subirAdjunto(form, file);
+      });
+    });
+
+    // Eliminar adjuntos individuales
+    document.querySelectorAll(".adj-del-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm("¿Eliminar esta foto/archivo? Esta acción no se puede deshacer.")) return;
+        const adjId = btn.dataset.id;
+        const r = await fetch(`/api/adjuntos/${adjId}`, { method: "DELETE" });
+        if (r.ok) location.reload();
+        else alert("Error al eliminar el archivo");
       });
     });
   </script>
