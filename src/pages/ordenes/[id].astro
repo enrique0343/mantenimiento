@@ -111,6 +111,13 @@ const progreso = progresoChecklist(checklistItems);
 
 const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
 const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
+
+// Las fotos "antes" SÍ se pueden subir desde el estado "abierta" (no requiere
+// haber pulsado Iniciar). El flujo correcto es: verificar lugar → foto antes
+// → Iniciar → trabajar → foto después. Bloqueadas solo en cerrada/cancelada.
+const puedeSubirAntes =
+  estadoActual !== "cerrada" && estadoActual !== "cancelada" &&
+  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && esAsignado));
 const puedeAsignar = puedeAsignarse(user.rol);
 
 const ESTADO_PROGRESO: Record<EstadoOT, number> = {
@@ -312,6 +319,43 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
       )}
 
+      <!-- Foto ANTES de la OT (verificación del estado inicial) -->
+      <div class="card p-5 border-l-4 border-blue-300">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-semibold text-slate-900">📷 Foto del estado inicial (antes)</h2>
+            <p class="mt-1 text-xs text-slate-500">Toma esta foto al llegar al sitio, antes de pulsar "Iniciar". Sirve como evidencia del estado en que se recibió el equipo.</p>
+          </div>
+          <span class="text-xs text-slate-500">{adjsAntes.length} foto(s)</span>
+        </div>
+
+        {adjsAntes.length > 0 && (
+          <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {adjsAntes.map((a) => (
+              <div class="rounded bg-slate-50 p-2 text-xs">
+                {a.contentType.startsWith("image/") && (
+                  <a href={`/api/adjuntos/${a.id}`} target="_blank">
+                    <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
+                  </a>
+                )}
+                <a href={`/api/adjuntos/${a.id}`} target="_blank" class="block truncate font-medium text-brand-700 hover:underline">{a.nombre}</a>
+                <span class="text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {puedeSubirAntes && (
+          <form class="upForm mt-3" data-categoria="antes">
+            <label class="block">
+              <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">📷 Tomar foto / subir archivo</span>
+            </label>
+            <button type="submit" class="hidden">Subir</button>
+          </form>
+        )}
+      </div>
+
       <!-- Línea de tiempo de la OT -->
       <div class="card p-5">
         <h2 class="font-semibold text-slate-900">⏱ Tiempos</h2>
@@ -475,7 +519,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       )}
 
       <!-- Costo total estimado de la OT -->
-      {(costoManoObra > 0 || totalRepuestos > 0) && (
+      {/* Costo solo visible para admin/jefe (técnicos no lo ven) */}
+      {(user.rol === "admin" || user.rol === "jefe") && (costoManoObra > 0 || totalRepuestos > 0) && (
         <div class="card p-5 border-l-4 border-emerald-500">
           <div class="flex items-center justify-between">
             <h2 class="font-semibold text-slate-900">💰 Costo de la OT</h2>
@@ -575,12 +620,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <!-- Adjuntos categorizados -->
+  <!-- Adjuntos categorizados (durante/después/docs) — el "antes" está arriba -->
   <div class="mt-6 card p-5">
-    <h2 class="font-semibold text-slate-900">Adjuntos ({adjs.length})</h2>
-    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <h2 class="font-semibold text-slate-900">Adjuntos ({adjsDespues.length + adjsDocumento.length + adjsGeneral.length})</h2>
+    <p class="text-xs text-slate-500">La foto del estado inicial está al inicio de la OT.</p>
+    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
       {([
-        { key: "antes", label: "📷 Antes", color: "bg-blue-50", items: adjsAntes },
         { key: "despues", label: "📸 Después", color: "bg-emerald-50", items: adjsDespues },
         { key: "documento", label: "📄 Documentos", color: "bg-amber-50", items: adjsDocumento },
         { key: "general", label: "📎 General", color: "bg-slate-50", items: adjsGeneral },

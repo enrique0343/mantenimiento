@@ -24,10 +24,11 @@ const hoy = new Date().toISOString().slice(0, 10);
   <h1 class="mt-2 text-2xl font-bold">Nueva actividad recurrente</h1>
 
   <form id="form" class="card mt-4 space-y-5 p-5">
+    <p class="text-xs text-slate-500">El código se genera automáticamente (ACT-XXXX).</p>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div>
-        <label class="label">Código *</label>
-        <input class="input" id="codigo" required placeholder="ACT-001" />
+      <div class="sm:col-span-2">
+        <label class="label">Título *</label>
+        <input class="input" id="titulo" required placeholder="Ej: Limpieza trampa de grasa cocina" />
       </div>
       <div>
         <label class="label">Categoría</label>
@@ -35,10 +36,6 @@ const hoy = new Date().toISOString().slice(0, 10);
           <option value="">— Seleccionar —</option>
           {cats.map((c) => <option value={c.id}>{c.icono} {c.nombre}</option>)}
         </select>
-      </div>
-      <div class="sm:col-span-2">
-        <label class="label">Título *</label>
-        <input class="input" id="titulo" required placeholder="Ej: Limpieza trampa de grasa cocina" />
       </div>
       <div class="sm:col-span-2">
         <label class="label">Descripción / instrucciones</label>
@@ -180,7 +177,6 @@ const hoy = new Date().toISOString().slice(0, 10);
       const asignV = document.getElementById("asignadoA").value;
       const provV = document.getElementById("proveedorExternoId").value;
       const payload = {
-        codigo: v("codigo"),
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
         categoriaId: catV ? Number(catV) : null,

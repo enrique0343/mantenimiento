@@ -1,6 +1,6 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, like } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { actividades, actividadCategorias, sucursales, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
@@ -31,7 +31,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 const createSchema = z.object({
-  codigo: z.string().min(1),
+  codigo: z.string().min(1).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().nullable().optional(),
   categoriaId: z.number().int().nullable().optional(),
@@ -57,8 +57,21 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
+
+  // Auto-generar código ACT-XXXX si no viene en el payload
+  let codigo = parsed.data.codigo;
+  if (!codigo) {
+    const ultimas = await db.select({ codigo: actividades.codigo }).from(actividades).where(like(actividades.codigo, "ACT-%"));
+    let max = 0;
+    for (const { codigo: c } of ultimas) {
+      const m = c.match(/^ACT-(\d+)$/);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    codigo = `ACT-${String(max + 1).padStart(4, "0")}`;
+  }
+
   try {
-    const [row] = await db.insert(actividades).values(parsed.data).returning();
+    const [row] = await db.insert(actividades).values({ ...parsed.data, codigo }).returning();
     return Response.json({ actividad: row }, { status: 201 });
   } catch (e: any) {
     if (String(e?.message ?? "").includes("UNIQUE")) {
