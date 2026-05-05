@@ -679,14 +679,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <p class="text-xs text-slate-400">Sin solicitudes de compra aún.</p>
           )}
           {solicitudesVinculadas.map((s) => {
-            const sc: Record<string, string> = {
+            const sc = {
               borrador: "bg-slate-100 text-slate-600", enviada: "bg-blue-100 text-blue-700",
               comprada: "bg-emerald-100 text-emerald-700", rechazada: "bg-red-100 text-red-700",
               cancelada: "bg-slate-200 text-slate-500",
-            };
-            const sl: Record<string, string> = {
+            } as const;
+            const sl = {
               borrador: "Borrador", enviada: "Enviada", comprada: "Comprada", rechazada: "Rechazada", cancelada: "Cancelada",
-            };
+            } as const;
             return (
               <a href={`/solicitudes-compra/${s.id}`} class="mt-2 flex items-center justify-between rounded-lg bg-slate-50 p-2 text-sm hover:bg-slate-100 no-underline block">
                 <div>
