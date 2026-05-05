@@ -1,0 +1,186 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/cronograma");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const fSucursal = url.searchParams.get("sucursal");
+const fFrecuencia = url.searchParams.get("frecuencia");
+const fEstado = url.searchParams.get("estado") ?? "activos";
+
+const rows = await db
+  .select({ p: planesMantenimiento, a: activos, u: usuarios, ub: ubicaciones, s: sucursales })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .orderBy(desc(planesMantenimiento.id));
+
+const filtered = rows.filter((r) =>
+  (!fSucursal || r.s?.id === Number(fSucursal)) &&
+  (!fFrecuencia || r.p.frecuencia === fFrecuencia) &&
+  (fEstado === "todos" || (fEstado === "activos" ? r.p.activo : !r.p.activo))
+);
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
+
+const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const FREC_LABEL: Record<string, string> = {
+  diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal",
+  mensual: "Mensual", bimestral: "Bimestral", trimestral: "Trimestral",
+  semestral: "Semestral", anual: "Anual",
+};
+---
+
+<Layout title="Planes de mantenimiento">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">Planes de mantenimiento preventivo</h1>
+      <p class="text-sm text-slate-500">{rows.length} en total · mostrando {filtered.length}</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/cronograma" class="btn-secondary">📅 Cronograma</a>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <form class="card mt-3 flex flex-wrap items-end gap-3 p-3" method="get">
+    <div>
+      <label class="label text-xs">Sucursal</label>
+      <select name="sucursal" class="input text-sm">
+        <option value="">Todas</option>
+        {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === fSucursal}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Frecuencia</label>
+      <select name="frecuencia" class="input text-sm">
+        <option value="">Todas</option>
+        {Object.entries(FREC_LABEL).map(([k, v]) => <option value={k} selected={k === fFrecuencia}>{v}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Estado</label>
+      <select name="estado" class="input text-sm">
+        <option value="activos" selected={fEstado === "activos"}>Activos</option>
+        <option value="inactivos" selected={fEstado === "inactivos"}>Inactivos</option>
+        <option value="todos" selected={fEstado === "todos"}>Todos</option>
+      </select>
+    </div>
+    <button class="btn-primary text-sm">Filtrar</button>
+    {(fSucursal || fFrecuencia || fEstado !== "activos") && <a href="/planes" class="btn-secondary text-sm">Limpiar</a>}
+  </form>
+
+  <!-- Barra de acciones bulk (aparece cuando hay seleccionados) -->
+  <div id="bulkBar" class="hidden mt-3 flex items-center justify-between gap-3 rounded-lg border border-brand-200 bg-brand-50 p-3 text-sm">
+    <span class="text-brand-800"><span id="bulkCount">0</span> seleccionados</span>
+    <div class="flex gap-2">
+      <button id="bulkActivar" class="btn-secondary text-sm">✓ Activar</button>
+      <button id="bulkDesactivar" class="btn-secondary text-sm">⏸ Desactivar</button>
+      <button id="bulkEliminar" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar</button>
+    </div>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-3 py-2 w-8"><input type="checkbox" id="selAll" /></th>
+          <th class="px-3 py-2">Plan</th>
+          <th class="px-3 py-2">Equipo</th>
+          <th class="px-3 py-2">Sucursal</th>
+          <th class="px-3 py-2">Frecuencia</th>
+          <th class="px-3 py-2">Próxima fecha</th>
+          <th class="px-3 py-2">Asignado</th>
+          <th class="px-3 py-2">Estado</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {filtered.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
+        {filtered.map((r) => (
+          <tr class:list={["hover:bg-slate-50", !r.p.activo && "opacity-60"]}>
+            <td class="px-3 py-2"><input type="checkbox" class="row-chk" data-id={r.p.id} /></td>
+            <td class="px-3 py-2">
+              <div class="font-medium">{r.p.titulo}</div>
+              {r.p.descripcion && <div class="text-xs text-slate-500 truncate max-w-md">{r.p.descripcion}</div>}
+            </td>
+            <td class="px-3 py-2 text-xs">
+              {r.a ? <a href={`/activos/${r.a.id}`} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
+            </td>
+            <td class="px-3 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
+            <td class="px-3 py-2 capitalize text-xs">{FREC_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
+            <td class="px-3 py-2 text-xs">{fmt(r.p.proximaFecha)}</td>
+            <td class="px-3 py-2 text-xs text-slate-600">{r.u?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</td>
+            <td class="px-3 py-2">
+              {r.p.activo
+                ? <span class="badge bg-emerald-100 text-emerald-700">activo</span>
+                : <span class="badge bg-slate-200 text-slate-600">inactivo</span>}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const selAll = document.getElementById("selAll") as HTMLInputElement;
+    const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>(".row-chk"));
+    const bulkBar = document.getElementById("bulkBar")!;
+    const bulkCount = document.getElementById("bulkCount")!;
+
+    function refresh() {
+      const sel = checks().filter((c) => c.checked);
+      bulkCount.textContent = String(sel.length);
+      bulkBar.classList.toggle("hidden", sel.length === 0);
+      // Estado del checkbox "todos"
+      if (selAll) {
+        const total = checks().length;
+        selAll.checked = sel.length > 0 && sel.length === total;
+        selAll.indeterminate = sel.length > 0 && sel.length < total;
+      }
+    }
+
+    selAll?.addEventListener("change", () => {
+      checks().forEach((c) => (c.checked = selAll.checked));
+      refresh();
+    });
+    checks().forEach((c) => c.addEventListener("change", refresh));
+
+    async function bulkAction(accion: "eliminar" | "desactivar" | "activar") {
+      const ids = checks().filter((c) => c.checked).map((c) => Number(c.dataset.id));
+      if (ids.length === 0) return;
+
+      const verbo = accion === "eliminar" ? "ELIMINAR" : accion === "desactivar" ? "desactivar" : "activar";
+      const msg = accion === "eliminar"
+        ? `¿${verbo} permanentemente ${ids.length} plan(es)? Esto NO se puede deshacer.`
+        : `¿${verbo} ${ids.length} plan(es)?`;
+      if (!confirm(msg)) return;
+
+      const r = await fetch("/api/planes/bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accion, ids }),
+      });
+      if (r.ok) location.reload();
+      else {
+        const j = await r.json().catch(() => ({}));
+        alert("Error: " + (j.error ?? "no se pudo completar la acción"));
+      }
+    }
+
+    document.getElementById("bulkEliminar")?.addEventListener("click", () => bulkAction("eliminar"));
+    document.getElementById("bulkDesactivar")?.addEventListener("click", () => bulkAction("desactivar"));
+    document.getElementById("bulkActivar")?.addEventListener("click", () => bulkAction("activar"));
+  </script>
+</Layout>

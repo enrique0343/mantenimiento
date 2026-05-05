@@ -5,6 +5,7 @@ import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, activi
 import { eq, asc } from "drizzle-orm";
 export const prerender = false;
 
+const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 // 1) Planes preventivos por equipo
@@ -93,9 +94,12 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es");
       <h1 class="text-2xl font-bold">Cronograma de mantenimiento</h1>
       <p class="mt-1 text-sm text-slate-500">{planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)</p>
     </div>
-    <div class="flex gap-2 text-sm">
+    <div class="flex flex-wrap gap-2 text-sm">
       <a href="/actividades" class="btn-secondary">📌 Actividades</a>
       <a href="/planificador" class="btn-secondary">📊 Planificador</a>
+      {(user.rol === "admin" || user.rol === "jefe") && (
+        <a href="/planes" class="btn-secondary">🛠 Gestionar planes</a>
+      )}
     </div>
   </div>
 
