@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios } from "@/lib/schema";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos } from "@/lib/schema";
 import { eq, asc, and, inArray } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
@@ -31,6 +31,8 @@ const coms = await db
   .leftJoin(usuarios, eq(usuarios.id, ticketComentarios.usuarioId))
   .where(eq(ticketComentarios.ticketId, id))
   .orderBy(asc(ticketComentarios.id));
+
+const adjs = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
 
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
@@ -86,6 +88,7 @@ const esAdmin = user.rol === "admin";
       <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div>{t.tipoMantenimiento === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.ub?.nombre ?? "—"}{t.ubicacion && <span class="block text-xs text-slate-500">{t.ubicacion}</span>}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
@@ -93,6 +96,21 @@ const esAdmin = user.rol === "admin";
         <div><div class="text-xs uppercase text-slate-500">Creado</div><div>{fmt(t.createdAt)}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Resuelto</div><div>{fmt(t.resueltoEn)}</div></div>
       </div>
+
+      {adjs.length > 0 && (
+        <div class="mt-4">
+          <h3 class="text-sm font-semibold text-slate-900 mb-2">📷 Fotos adjuntas ({adjs.length})</h3>
+          <div class="flex flex-wrap gap-2">
+            {adjs.map((a) => (
+              <a href={`/api/tickets/adjunto/${a.id}`} target="_blank" rel="noopener"
+                 class="block w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 hover:opacity-80">
+                <img src={`/api/tickets/adjunto/${a.id}`} alt={a.nombre} class="w-full h-full object-cover" loading="lazy" />
+              </a>
+            ))}
+          </div>
+          <p class="mt-1 text-xs text-slate-400">Estas fotos se copiarán como evidencia "antes" al convertir el ticket en OT.</p>
+        </div>
+      )}
 
       {t.resolucionNotas && (
         <div class="mt-4 rounded-lg border-l-4 border-emerald-500 bg-emerald-50 p-3 text-sm">

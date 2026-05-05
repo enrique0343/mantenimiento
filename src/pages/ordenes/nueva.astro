@@ -122,6 +122,23 @@ const activosJson = JSON.stringify(activosList);
       <textarea id="checklistRaw" class="input mt-2" rows="4" placeholder="Limpiar filtros&#10;Verificar tensión de bandas&#10;Revisar nivel de aceite"></textarea>
     </details>
 
+    <!-- Fotos del estado inicial (antes) -->
+    <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
+      <h2 class="text-sm font-semibold text-slate-900">📷 Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
+      <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área antes de iniciar. Se guardarán como evidencia "antes" en la OT.</p>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
+          <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
+          📎 Seleccionar fotos
+        </label>
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
+          <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
+          📸 Cámara
+        </label>
+      </div>
+      <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
+    </div>
+
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit">Crear orden</button>
@@ -184,6 +201,35 @@ const activosJson = JSON.stringify(activosList);
       eqs.forEach((a) => activoSel.appendChild(new Option(`${a.codigo} · ${a.nombre}`, String(a.id))));
     });
 
+    // ─── Fotos pendientes (se suben tras crear la OT) ──────────────────────
+    const pendingFotos = [];
+    const fotoFile = document.getElementById("fotoFile");
+    const fotoCamara = document.getElementById("fotoCamara");
+    const fotosPreview = document.getElementById("fotosPreview");
+    function addFotos(files) {
+      for (const f of Array.from(files)) {
+        pendingFotos.push(f);
+        const thumb = document.createElement("div");
+        thumb.className = "relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-white";
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(f);
+        img.className = "w-full h-full object-cover";
+        thumb.appendChild(img);
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.textContent = "×";
+        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+        rm.addEventListener("click", () => {
+          const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
+          thumb.remove();
+        });
+        thumb.appendChild(rm);
+        fotosPreview.appendChild(thumb);
+      }
+    }
+    fotoFile?.addEventListener("change", () => { addFotos(fotoFile.files); fotoFile.value = ""; });
+    fotoCamara?.addEventListener("change", () => { addFotos(fotoCamara.files); fotoCamara.value = ""; });
+
     const form = document.getElementById("form");
     const err = document.getElementById("err");
     form.addEventListener("submit", async (e) => {
@@ -229,7 +275,17 @@ const activosJson = JSON.stringify(activosList);
         return;
       }
       const j = await res.json();
-      location.href = `/ordenes/${j.orden.id}`;
+      const otId = j.orden.id;
+
+      // Subir fotos pendientes como categoría "antes"
+      for (const f of pendingFotos) {
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("categoria", "antes");
+        await fetch(`/api/ordenes/${otId}/adjuntos`, { method: "POST", body: fd }).catch(() => {});
+      }
+
+      location.href = `/ordenes/${otId}`;
     });
   </script>
 </Layout>

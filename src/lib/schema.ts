@@ -318,9 +318,21 @@ export const tickets = sqliteTable("tickets", {
   otId: integer("ot_id").references(() => ordenes.id),
   resueltoEn: text("resuelto_en"),
   resolucionNotas: text("resolucion_notas"),
+  tipoMantenimiento: text("tipo_mantenimiento", { enum: ["general", "biomedico"] }).default("general"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const ticketAdjuntos = sqliteTable("ticket_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ticketId: integer("ticket_id").notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type TicketAdjunto = typeof ticketAdjuntos.$inferSelect;
 
 // ─── Predictivo ──────────────────────────────────────────────────────────────
 export const variablesPredictivas = sqliteTable("variables_predictivas", {

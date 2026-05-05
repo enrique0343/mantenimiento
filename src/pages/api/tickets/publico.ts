@@ -16,7 +16,8 @@ const createSchema = z.object({
   asunto: z.string().min(3),
   descripcion: z.string().min(10),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).default("media"),
-  sucursalId: z.number().int().nullable().optional(),
+  tipoMantenimiento: z.enum(["general", "biomedico"]).default("general"),
+  sucursalId: z.number().int().positive(), // ahora obligatorio
   ubicacionId: z.number().int().nullable().optional(),
   ubicacion: z.string().optional().nullable(),
   activoId: z.number().int().nullable().optional(),
@@ -45,9 +46,9 @@ export const POST: APIRoute = async (ctx) => {
 
   // Notifica al jefe correcto según el tipo de equipo del ticket
   try {
-    // Determina tipo de equipo (general/biomedico) si hay activo asignado
-    let tipoEquipo: "general" | "biomedico" | null = null;
-    if (row.activoId) {
+    // Tipo: usa el seleccionado por el solicitante, o deriva del activo si lo hay
+    let tipoEquipo: "general" | "biomedico" | null = (row.tipoMantenimiento as any) ?? null;
+    if (!tipoEquipo && row.activoId) {
       const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, row.activoId)).limit(1);
       tipoEquipo = a?.tipo as any ?? null;
     }

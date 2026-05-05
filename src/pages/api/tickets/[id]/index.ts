@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq, asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, activos, ticketComentarios } from "@/lib/schema";
+import { tickets, usuarios, sucursales, activos, ticketComentarios, ticketAdjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { calcularVencimientoSla } from "@/lib/tickets";
 
@@ -31,6 +31,8 @@ export const GET: APIRoute = async (ctx) => {
     .where(eq(ticketComentarios.ticketId, id))
     .orderBy(asc(ticketComentarios.id));
 
+  const adjs = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
+
   return Response.json({
     ticket: {
       ...r.t,
@@ -42,6 +44,7 @@ export const GET: APIRoute = async (ctx) => {
       ...c.c,
       autor: c.u ? { id: c.u.id, nombre: c.u.nombre } : null,
     })),
+    adjuntos: adjs,
   });
 };
 
