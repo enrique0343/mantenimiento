@@ -41,10 +41,27 @@ const tecnicos = await db
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
 const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
+const esAdmin = user.rol === "admin";
 ---
 
 <Layout title={`Ticket #${t.id}`}>
-  <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <div class="flex items-center justify-between">
+    <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    {esAdmin && (
+      <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
+    )}
+  </div>
+
+  {esAdmin && (
+    <script define:vars={{ ticketId: t.id }}>
+      document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
+        if (!confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")) return;
+        const res = await fetch(`/api/tickets/${ticketId}`, { method: "DELETE" });
+        if (res.ok) { location.href = "/tickets"; }
+        else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "desconocido")); }
+      });
+    </script>
+  )}
 
   <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
     <div>

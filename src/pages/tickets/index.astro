@@ -38,6 +38,7 @@ const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
 const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"];
+const esAdmin = user.rol === "admin";
 ---
 
 <Layout title="Tickets de soporte">
@@ -46,7 +47,14 @@ const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", 
       <h1 class="text-2xl font-bold">Tickets de soporte</h1>
       <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
     </div>
-    <a href="/soporte" target="_blank" class="btn-secondary">Ver formulario público ↗</a>
+    <div class="flex gap-2">
+      {esAdmin && (
+        <button id="bulkDelBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">
+          🗑 Eliminar seleccionados (<span id="selCount">0</span>)
+        </button>
+      )}
+      <a href="/soporte" target="_blank" class="btn-secondary">Ver formulario público ↗</a>
+    </div>
   </div>
 
   <div class="mt-4 flex flex-wrap gap-1 text-xs">
@@ -62,6 +70,7 @@ const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", 
     <table class="w-full text-left text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
+          {esAdmin && <th class="px-3 py-2 w-8"><input type="checkbox" id="selAll" class="cursor-pointer" /></th>}
           <th class="px-4 py-2">#</th>
           <th class="px-4 py-2">Asunto</th>
           <th class="px-4 py-2">Solicitante</th>
@@ -73,11 +82,12 @@ const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", 
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
+        {rows.length === 0 && <tr><td colspan={esAdmin ? 9 : 8} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
         {rows.map((r) => {
           const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           return (
             <tr class="hover:bg-slate-50">
+              {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="tk-cb cursor-pointer" data-id={r.t.id} /></td>}
               <td class="px-4 py-2 font-mono text-xs">#{r.t.id}</td>
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
@@ -103,4 +113,44 @@ const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", 
       </tbody>
     </table>
   </div>
+
+  {esAdmin && (
+    <script>
+      const cbs = document.querySelectorAll<HTMLInputElement>(".tk-cb");
+      const selAll = document.getElementById("selAll") as HTMLInputElement | null;
+      const bulkBtn = document.getElementById("bulkDelBtn");
+      const countEl = document.getElementById("selCount");
+
+      function refresh() {
+        const sel = Array.from(cbs).filter((cb) => cb.checked);
+        if (countEl) countEl.textContent = String(sel.length);
+        if (bulkBtn) bulkBtn.classList.toggle("hidden", sel.length === 0);
+      }
+      selAll?.addEventListener("change", () => { cbs.forEach((cb) => (cb.checked = selAll.checked)); refresh(); });
+      cbs.forEach((cb) => cb.addEventListener("change", refresh));
+
+      bulkBtn?.addEventListener("click", async () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length) return;
+        const txt = ids.length === 1 ? "este ticket" : `estos ${ids.length} tickets`;
+        if (!confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`)) return;
+        if (ids.length > 5 && !confirm(`Vas a borrar ${ids.length} tickets. ¿Confirmas?`)) return;
+        bulkBtn.setAttribute("disabled", "true");
+        bulkBtn.textContent = "Borrando...";
+        const res = await fetch("/api/tickets/bulk-delete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) {
+          alert(`✓ ${j.borrados} ticket(s) eliminados`);
+          location.reload();
+        } else {
+          alert("✗ Error: " + (j.error ?? "desconocido"));
+          bulkBtn.removeAttribute("disabled");
+        }
+      });
+    </script>
+  )}
 </Layout>

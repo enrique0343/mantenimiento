@@ -90,3 +90,17 @@ export const PATCH: APIRoute = async (ctx) => {
   const [row] = await db.update(tickets).set(data).where(eq(tickets.id, id)).returning();
   return Response.json({ ticket: row });
 };
+
+export const DELETE: APIRoute = async (ctx) => {
+  const { user, response } = await requireUser(ctx, ["admin"]);
+  if (!user) return response;
+  const id = Number(ctx.params.id);
+  const db = getDb(ctx);
+  // ticket_comentarios tiene cascade delete; encuestas tiene set null
+  try {
+    await db.delete(tickets).where(eq(tickets.id, id));
+  } catch (e: any) {
+    return Response.json({ error: `No se pudo borrar: ${e?.message ?? e}` }, { status: 500 });
+  }
+  return Response.json({ ok: true });
+};
