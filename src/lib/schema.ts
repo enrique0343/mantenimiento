@@ -131,6 +131,7 @@ export const ordenes = sqliteTable("ordenes", {
   creadoPor: integer("creado_por").references(() => usuarios.id),
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
   vencimiento: text("vencimiento"),
+  iniciadaEn: text("iniciada_en"),
   completadaEn: text("completada_en"),
   // Ejecucion
   trabajosRealizados: text("trabajos_realizados"),

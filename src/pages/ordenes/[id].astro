@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock, empresa } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa } from "@/lib/schema";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
@@ -19,10 +19,12 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [row] = await db
-  .select({ orden: ordenes, activo: activos, asignado: usuarios })
+  .select({ orden: ordenes, activo: activos, asignado: usuarios, ubicacion: ubicaciones, sucursal: sucursales })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .where(eq(ordenes.id, id))
   .limit(1);
 
@@ -175,42 +177,123 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <div class="card p-5">
         <h2 class="font-semibold text-slate-900">Descripción</h2>
         <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{o.descripcion || "Sin descripción."}</p>
+      </div>
 
-        <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div class="flex items-center justify-between">
-              <div class="text-xs uppercase text-slate-500">Equipo</div>
-              {puedeAsignarActivo && (
-                <button id="editActivoBtn" type="button" class="text-xs text-brand-600 hover:underline">
-                  {row.activo ? "Cambiar" : "Asignar"}
-                </button>
-              )}
-            </div>
-            <div id="activoLabel">
-              {row.activo
-                ? <a class="text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>{row.activo.codigo} - {row.activo.nombre}</a>
-                : <span class="text-slate-400">Trabajo sin equipo</span>}
-            </div>
+      <!-- Tarjeta de identificación del equipo (verifica el lugar de intervención) -->
+      {row.activo && (
+        <div class="card p-5 border-l-4 border-blue-400">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir</h2>
             {puedeAsignarActivo && (
-              <div id="activoEditor" class="hidden mt-2">
-                <div class="flex gap-1">
-                  <select id="activoSelect" class="input flex-1 text-sm">
-                    <option value="">— Sin equipo —</option>
-                    {activosLista.map((a) => (
-                      <option value={a.id} selected={a.id === o.activoId}>{a.codigo} · {a.nombre}</option>
-                    ))}
-                  </select>
-                  <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
-                  <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
-                </div>
-                <p id="activoMsg" class="hidden mt-1 text-xs"></p>
-              </div>
+              <button id="editActivoBtn" type="button" class="text-xs text-brand-600 hover:underline">Cambiar equipo</button>
             )}
           </div>
-          <div><div class="text-xs uppercase text-slate-500">Vencimiento</div><div>{fmtDate(o.vencimiento)}</div></div>
-          <div><div class="text-xs uppercase text-slate-500">Asignado</div><div>{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div></div>
-          <div><div class="text-xs uppercase text-slate-500">Completada</div><div>{fmt(o.completadaEn)}</div></div>
+          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div class="col-span-2">
+              <div class="text-xs uppercase text-slate-500">Equipo</div>
+              <div id="activoLabel" class="mt-0.5">
+                <a class="font-medium text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>
+                  {row.activo.codigo} · {row.activo.nombre}
+                </a>
+                <span class="ml-2 text-xs text-slate-500">
+                  {row.activo.tipo === "biomedico" ? "🩺 Biomédico" : "🔧 General"}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+              <div class="mt-0.5">{row.sucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+              <div class="mt-0.5">
+                {row.ubicacion?.nombre ?? row.activo.ubicacion ?? <span class="text-slate-400">—</span>}
+                {row.ubicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({row.ubicacion.tipo})</span>}
+              </div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">N° de serie</div>
+              <div class="mt-0.5 font-mono text-xs">{row.activo.serial ?? <span class="text-slate-400 font-sans">—</span>}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">Marca / Modelo</div>
+              <div class="mt-0.5">{[row.activo.marca, row.activo.modelo].filter(Boolean).join(" / ") || <span class="text-slate-400">—</span>}</div>
+            </div>
+          </div>
+          {puedeAsignarActivo && (
+            <div id="activoEditor" class="hidden mt-3">
+              <div class="flex gap-1">
+                <select id="activoSelect" class="input flex-1 text-sm">
+                  <option value="">— Sin equipo —</option>
+                  {activosLista.map((a) => (
+                    <option value={a.id} selected={a.id === o.activoId}>{a.codigo} · {a.nombre}</option>
+                  ))}
+                </select>
+                <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+                <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
+              </div>
+              <p id="activoMsg" class="hidden mt-1 text-xs"></p>
+            </div>
+          )}
         </div>
+      )}
+
+      {!row.activo && puedeAsignarActivo && (
+        <div class="card p-5 border-l-4 border-slate-300">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs uppercase text-slate-500">Equipo</div>
+              <div class="text-slate-400 italic">Trabajo sin equipo asignado</div>
+            </div>
+            <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+          </div>
+          <div id="activoEditor" class="hidden mt-3">
+            <div class="flex gap-1">
+              <select id="activoSelect" class="input flex-1 text-sm">
+                <option value="">— Sin equipo —</option>
+                {activosLista.map((a) => <option value={a.id}>{a.codigo} · {a.nombre}</option>)}
+              </select>
+              <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+              <button id="activoCancel" type="button" class="btn-secondary text-sm">×</button>
+            </div>
+            <p id="activoMsg" class="hidden mt-1 text-xs"></p>
+          </div>
+        </div>
+      )}
+
+      <!-- Línea de tiempo de la OT -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">⏱ Tiempos</h2>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div>
+            <div class="text-xs uppercase text-slate-500">Asignado</div>
+            <div class="mt-0.5">{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Vencimiento</div>
+            <div class="mt-0.5">{fmtDate(o.vencimiento)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Iniciada</div>
+            <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Completada</div>
+            <div class="mt-0.5">{fmt(o.completadaEn)}</div>
+          </div>
+        </div>
+        {o.iniciadaEn && (
+          <div class="mt-3 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            {o.completadaEn ? (
+              <>
+                ⏱ Duración real: <strong>{((new Date(o.completadaEn).getTime() - new Date(o.iniciadaEn).getTime()) / 3600_000).toFixed(2)} h</strong>
+                {o.horasTrabajadas != null && <> · Registradas: <strong>{Number(o.horasTrabajadas).toFixed(2)} h</strong></>}
+              </>
+            ) : (
+              <>⏱ En proceso desde {fmt(o.iniciadaEn)} — el cronómetro corre.</>
+            )}
+          </div>
+        )}
       </div>
 
       <!-- Checklist -->
@@ -263,6 +346,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div>
             <label class="label">Horas trabajadas</label>
             <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32" value={o.horasTrabajadas ?? ""} disabled={!puedeEditar} />
+            <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente al completar (de "iniciada" a "completada"). Puedes ajustarlo si hubo pausas.</p>
           </div>
           {puedeEditar && (
             <button id="ejecSave" class="btn-primary text-sm">Guardar ejecución</button>

@@ -103,8 +103,26 @@ export const PATCH: APIRoute = async (ctx) => {
 
     // Timestamps automaticos por estado de destino
     switch (parsed.data.estado) {
+      case "en_proceso":
+        // Si nunca se había iniciado, marcar inicio (para calcular horas)
+        if (!actual.iniciadaEn) data.iniciadaEn = now;
+        // Si venía de un estado posterior (rollback), limpiar timestamps post
+        if (actual.estado !== "abierta") {
+          data.completadaEn = null;
+          data.verificadoPor = null;
+          data.verificadoEn = null;
+        }
+        break;
       case "completada":
         data.completadaEn = now;
+        // Auto-calcular horas trabajadas si hay inicio y el técnico no las
+        // proporcionó manualmente en este PATCH.
+        if (actual.iniciadaEn && parsed.data.horasTrabajadas == null) {
+          const inicio = new Date(actual.iniciadaEn).getTime();
+          const fin = new Date(now).getTime();
+          const horas = Math.max(0, (fin - inicio) / 3_600_000);
+          data.horasTrabajadas = Math.round(horas * 100) / 100;
+        }
         break;
       case "verificada":
         data.verificadoPor = user.id;
@@ -116,8 +134,7 @@ export const PATCH: APIRoute = async (ctx) => {
         data.cerradoEn = now;
         break;
       case "abierta":
-      case "en_proceso":
-        // Rollback: limpiar timestamps de fases posteriores
+        // Rollback total: limpiar todos los timestamps
         data.completadaEn = null;
         data.verificadoPor = null;
         data.verificadoEn = null;
