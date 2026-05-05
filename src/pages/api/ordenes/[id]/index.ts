@@ -17,6 +17,7 @@ import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
+import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -183,6 +184,44 @@ export const PATCH: APIRoute = async (ctx) => {
 
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
 
+  // Audit: cambio de estado (con resumen legible)
+  if (parsed.data.estado && parsed.data.estado !== actual.estado) {
+    await logAudit(ctx, {
+      entidad: "orden", entidadId: id, accion: "estado",
+      resumen: `Estado: ${actual.estado} → ${parsed.data.estado}`,
+      cambios: { estado: { antes: actual.estado, despues: parsed.data.estado } },
+    });
+  }
+  // Audit: cambio de asignación
+  if (parsed.data.asignadoA !== undefined && parsed.data.asignadoA !== actual.asignadoA) {
+    let nombreNuevo: string | null = null;
+    if (parsed.data.asignadoA) {
+      const [u] = await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
+      nombreNuevo = u?.nombre ?? `id ${parsed.data.asignadoA}`;
+    }
+    await logAudit(ctx, {
+      entidad: "orden", entidadId: id, accion: "asignacion",
+      resumen: parsed.data.asignadoA
+        ? `Asignada a ${nombreNuevo}`
+        : "Asignación removida",
+      cambios: { asignadoA: { antes: actual.asignadoA, despues: parsed.data.asignadoA } },
+    });
+  }
+  // Audit: otros cambios (campos de ejecución, prioridad, etc.)
+  const camposEditables = ["titulo", "descripcion", "prioridad", "tipo", "vencimiento", "trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas"];
+  const otrosCambios: any = {};
+  for (const c of camposEditables) {
+    if ((parsed.data as any)[c] !== undefined && (parsed.data as any)[c] !== (actual as any)[c]) {
+      otrosCambios[c] = { antes: (actual as any)[c], despues: (parsed.data as any)[c] };
+    }
+  }
+  if (Object.keys(otrosCambios).length > 0) {
+    await logAudit(ctx, {
+      entidad: "orden", entidadId: id, accion: "update",
+      cambios: otrosCambios,
+    });
+  }
+
   // Reprogramación: si se completó una OT correctiva sobre un activo,
   // reiniciar el contador de los planes preventivos del activo.
   // Por defecto sí; el cliente puede mandar reprogramarPreventivos:false para opt-out.
@@ -339,6 +378,8 @@ export const DELETE: APIRoute = async (ctx) => {
   try { await db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)); } catch {}
   try { await db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)); } catch {}
   try { await db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)); } catch {}
+
+  await logAudit(ctx, { entidad: "orden", entidadId: id, accion: "delete", resumen: `OT eliminada: "${ot.titulo}"` });
 
   try {
     await db.delete(ordenes).where(eq(ordenes.id, id));

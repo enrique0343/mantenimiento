@@ -8,6 +8,7 @@ import { calcularVencimiento, type Prioridad } from "@/lib/sla";
 import { sendMail, emailLayout } from "@/lib/email";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
+import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -75,6 +76,18 @@ export const POST: APIRoute = async (ctx) => {
     .insert(ordenes)
     .values({ ...parsed.data, vencimiento, creadoPor: user.id })
     .returning();
+
+  // Audit: creación de OT
+  await logAudit(ctx, {
+    entidad: "orden", entidadId: row.id, accion: "create",
+    resumen: `OT creada: "${row.titulo}"${row.asignadoA ? ` (asignada al inicio)` : ""}`,
+  });
+  if (row.asignadoA) {
+    await logAudit(ctx, {
+      entidad: "orden", entidadId: row.id, accion: "asignacion",
+      resumen: `Asignada al técnico (id: ${row.asignadoA})`,
+    });
+  }
 
   // Si la OT se crea con un técnico ya asignado, notificarle (email + Telegram + in-app)
   if (row.asignadoA) {

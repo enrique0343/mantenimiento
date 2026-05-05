@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { tickets, ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -50,6 +51,18 @@ export const POST: APIRoute = async (ctx) => {
       updatedAt: new Date().toISOString(),
     })
     .where(eq(tickets.id, id));
+
+  // Audit con info del solicitante original
+  await logAudit(ctx, {
+    entidad: "orden", entidadId: orden.id, accion: "create",
+    resumen: `OT generada desde Ticket #${t.id} de ${t.solicitanteNombre} <${t.solicitanteEmail}>`,
+  });
+  if (orden.asignadoA) {
+    await logAudit(ctx, {
+      entidad: "orden", entidadId: orden.id, accion: "asignacion",
+      resumen: `Asignada al técnico (id: ${orden.asignadoA}) en la conversión`,
+    });
+  }
 
   return Response.json({ orden, ticketId: id }, { status: 201 });
 };
