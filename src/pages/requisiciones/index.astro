@@ -1,0 +1,89 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { requisiciones, proveedores, usuarios } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import { REQ_LABEL, REQ_COLOR, type EstadoReq } from "@/lib/requisiciones";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const rows = await db
+  .select({ r: requisiciones, p: proveedores, u: usuarios })
+  .from(requisiciones)
+  .leftJoin(proveedores, eq(proveedores.id, requisiciones.proveedorId))
+  .leftJoin(usuarios, eq(usuarios.id, requisiciones.creadoPor))
+  .orderBy(desc(requisiciones.id));
+
+const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
+
+const conteos = rows.reduce<Record<string, number>>((acc, r) => {
+  acc[r.r.estado] = (acc[r.r.estado] ?? 0) + 1;
+  return acc;
+}, {});
+---
+
+<Layout title="Requisiciones de compra">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Requisiciones de compra</h1>
+      <p class="text-sm text-slate-500">{rows.length} en total</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/inventario" class="btn-secondary">📦 Inventario</a>
+      {puedeCrear && <a href="/requisiciones/nueva" class="btn-primary">+ Nueva requisición</a>}
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+    {(["borrador", "enviada", "aprobada", "rechazada", "recibida_parcial", "recibida", "cancelada"] as EstadoReq[]).map((s) => (
+      <div class="card p-3 text-center">
+        <div class={`text-xs font-medium ${REQ_COLOR[s]} rounded-md py-1`}>{REQ_LABEL[s]}</div>
+        <div class="mt-1 text-2xl font-bold">{conteos[s] ?? 0}</div>
+      </div>
+    ))}
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Número</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Solicitada</th>
+          <th class="px-4 py-2">Necesidad</th>
+          <th class="px-4 py-2">Proveedor</th>
+          <th class="px-4 py-2 text-right">Total</th>
+          <th class="px-4 py-2">Origen</th>
+          <th class="px-4 py-2">Creó</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && (
+          <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin requisiciones aún.</td></tr>
+        )}
+        {rows.map((r) => {
+          const e = r.r.estado as EstadoReq;
+          return (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2"><a class="font-mono font-medium text-brand-700 hover:underline" href={`/requisiciones/${r.r.id}`}>{r.r.numero}</a></td>
+              <td class="px-4 py-2"><span class={`badge ${REQ_COLOR[e]}`}>{REQ_LABEL[e]}</span></td>
+              <td class="px-4 py-2 text-xs text-slate-500">{fmt(r.r.fechaSolicitud)}</td>
+              <td class="px-4 py-2 text-xs text-slate-500">{r.r.fechaNecesidad ? fmt(r.r.fechaNecesidad) : "—"}</td>
+              <td class="px-4 py-2">{r.p?.nombre ?? <span class="text-slate-400">—</span>}</td>
+              <td class="px-4 py-2 text-right font-mono">{r.r.total != null ? `$${r.r.total.toFixed(2)}` : "—"}</td>
+              <td class="px-4 py-2 text-xs">
+                {r.r.origen === "auto_stock_minimo"
+                  ? <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">⚠ Auto</span>
+                  : <span class="text-slate-500">Manual</span>}
+              </td>
+              <td class="px-4 py-2 text-slate-600">{r.u?.nombre ?? "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Layout>

@@ -49,9 +49,13 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
       <p class="text-sm text-slate-500">{activos.length} items activos · {bajos.length} bajo stock mínimo · {sinStock.length} sin stock</p>
     </div>
     <div class="flex flex-wrap gap-2">
+      <a href="/requisiciones" class="btn-secondary">🛒 Requisiciones</a>
       <a href="/recepciones" class="btn-secondary">📋 Recepciones</a>
       {puedeCrear && (
         <>
+          {aReabastecer.length > 0 && (
+            <a href="/requisiciones/nueva" class="btn-secondary !bg-orange-100 !text-orange-700">⚠ Reabastecer ({aReabastecer.length})</a>
+          )}
           <a href="/recepciones/nueva" class="btn-secondary">📦 Nueva recepción</a>
           <a href="/inventario/nuevo" class="btn-primary">+ Nuevo item</a>
         </>

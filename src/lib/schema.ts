@@ -252,6 +252,37 @@ export const ordenRepuestos = sqliteTable("orden_repuestos", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Requisiciones de compra (Fase 20) ───────────────────────────────────────
+export const requisiciones = sqliteTable("requisiciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  numero: text("numero").notNull().unique(),
+  estado: text("estado", {
+    enum: ["borrador", "enviada", "aprobada", "rechazada", "recibida_parcial", "recibida", "cancelada"],
+  }).notNull().default("borrador"),
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
+  fechaSolicitud: text("fecha_solicitud").notNull().default(sql`CURRENT_TIMESTAMP`),
+  fechaNecesidad: text("fecha_necesidad"),
+  total: real("total"),
+  notas: text("notas"),
+  origen: text("origen", { enum: ["manual", "auto_stock_minimo"] }).notNull().default("manual"),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  aprobadoPor: integer("aprobado_por").references(() => usuarios.id),
+  aprobadoEn: text("aprobado_en"),
+  rechazadoMotivo: text("rechazado_motivo"),
+  recepcionId: integer("recepcion_id").references(() => recepciones.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const requisicionItems = sqliteTable("requisicion_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requisicionId: integer("requisicion_id").notNull().references(() => requisiciones.id, { onDelete: "cascade" }),
+  itemId: integer("item_id").notNull().references(() => items.id),
+  cantidad: real("cantidad").notNull(),
+  precioUnitario: real("precio_unitario"),
+  notas: text("notas"),
+  cantidadRecibida: real("cantidad_recibida").notNull().default(0),
+});
+
 // ─── Helpdesk ────────────────────────────────────────────────────────────────
 export const tickets = sqliteTable("tickets", {
   id: integer("id").primaryKey({ autoIncrement: true }),
