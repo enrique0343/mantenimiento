@@ -127,6 +127,33 @@ const ubJson = JSON.stringify(ubRows);
       )}
     </div>
 
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-amber-700">⏱ SLA del equipo (horas para completar OT)</h2>
+      <p class="text-xs text-slate-500 mb-3">Define el tiempo máximo según la prioridad. Usado para calcular vencimientos automáticos en nuevas OT.</p>
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div>
+          <label class="label">🔴 Urgente</label>
+          <input class="input" id="slaUrgenteHoras" type="number" min="0" value={a.slaUrgenteHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟠 Alta</label>
+          <input class="input" id="slaAltaHoras" type="number" min="0" value={a.slaAltaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟡 Media</label>
+          <input class="input" id="slaMediaHoras" type="number" min="0" value={a.slaMediaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟢 Baja</label>
+          <input class="input" id="slaBajaHoras" type="number" min="0" value={a.slaBajaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+      </div>
+    </div>
+
     <div id="bioFields" class:list={["border-t border-slate-200 pt-5", a.tipo !== "biomedico" && "hidden"]}>
       <h2 class="mb-3 font-semibold text-purple-700">Datos biomédicos</h2>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -231,6 +258,10 @@ const ubJson = JSON.stringify(ubRows);
         anio: num("anio"),
         ubicacionId: ubVal ? Number(ubVal) : null,
         proveedorId: provVal ? Number(provVal) : null,
+        slaUrgenteHoras: Number(sv("slaUrgenteHoras") || 4),
+        slaAltaHoras: Number(sv("slaAltaHoras") || 24),
+        slaMediaHoras: Number(sv("slaMediaHoras") || 72),
+        slaBajaHoras: Number(sv("slaBajaHoras") || 168),
       };
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;

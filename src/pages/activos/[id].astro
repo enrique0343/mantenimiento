@@ -133,6 +133,16 @@ const isBio = a.tipo === "biomedico";
         <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Descripcion</div><div class="whitespace-pre-wrap">{a.descripcion ?? "-"}</div></div>
       </div>
 
+      <div class="mt-5 border-t border-slate-200 pt-4">
+        <h3 class="font-semibold text-amber-700">⏱ SLA del equipo</h3>
+        <div class="mt-2 grid grid-cols-4 gap-3 text-sm">
+          <div><div class="text-xs uppercase text-slate-500">🔴 Urgente</div><div class="font-mono">{a.slaUrgenteHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">🟠 Alta</div><div class="font-mono">{a.slaAltaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">🟡 Media</div><div class="font-mono">{a.slaMediaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">🟢 Baja</div><div class="font-mono">{a.slaBajaHoras} h</div></div>
+        </div>
+      </div>
+
       {isBio && (
         <div class="mt-5 border-t border-slate-200 pt-4">
           <h3 class="font-semibold text-purple-700">Datos biomedicos</h3>

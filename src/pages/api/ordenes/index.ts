@@ -4,6 +4,7 @@ import { desc, eq, and } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { calcularVencimiento, type Prioridad } from "@/lib/sla";
 
 export const prerender = false;
 
@@ -58,9 +59,18 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
+
+  // Si no se proporcionó vencimiento explícito y hay equipo, calcular desde SLA
+  let vencimiento = parsed.data.vencimiento ?? null;
+  if (!vencimiento && parsed.data.activoId) {
+    const [eq_row] = await db.select().from(activos).where(eq(activos.id, parsed.data.activoId)).limit(1);
+    const prioridad = (parsed.data.prioridad ?? "media") as Prioridad;
+    vencimiento = calcularVencimiento(new Date().toISOString(), eq_row, prioridad);
+  }
+
   const [row] = await db
     .insert(ordenes)
-    .values({ ...parsed.data, creadoPor: user.id })
+    .values({ ...parsed.data, vencimiento, creadoPor: user.id })
     .returning();
   return Response.json({ orden: row }, { status: 201 });
 };

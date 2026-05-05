@@ -93,6 +93,11 @@ export const activos = sqliteTable("activos", {
   claseRiesgo: text("clase_riesgo", { enum: ["I", "IIa", "IIb", "III"] }),
   ultimaCalibracion: text("ultima_calibracion"),
   proximaCalibracion: text("proxima_calibracion"),
+  // SLA por prioridad (horas para completar la OT)
+  slaUrgenteHoras: integer("sla_urgente_horas").notNull().default(4),
+  slaAltaHoras: integer("sla_alta_horas").notNull().default(24),
+  slaMediaHoras: integer("sla_media_horas").notNull().default(72),
+  slaBajaHoras: integer("sla_baja_horas").notNull().default(168),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 

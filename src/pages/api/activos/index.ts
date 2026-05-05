@@ -35,6 +35,10 @@ const baseSchema = {
   proximaCalibracion: z.string().nullable().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),
+  slaUrgenteHoras: z.number().int().nonnegative().optional(),
+  slaAltaHoras: z.number().int().nonnegative().optional(),
+  slaMediaHoras: z.number().int().nonnegative().optional(),
+  slaBajaHoras: z.number().int().nonnegative().optional(),
 };
 
 const createSchema = z.object({
