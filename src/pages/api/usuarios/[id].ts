@@ -11,6 +11,7 @@ const updateSchema = z.object({
   nombre: z.string().min(2).optional(),
   email: z.string().email().optional(),
   rol: z.enum(ROLES).optional(),
+  especialidad: z.enum(["general", "biomedico", "ambos"]).nullable().optional(),
   sucursalId: z.number().int().nullable().optional(),
   activo: z.boolean().optional(),
   password: z.string().min(6).optional(), // si viene, resetea la contraseña
@@ -44,7 +45,7 @@ export const PATCH: APIRoute = async (ctx) => {
       .update(usuarios)
       .set(data)
       .where(eq(usuarios.id, id))
-      .returning({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo });
+      .returning({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, especialidad: usuarios.especialidad, activo: usuarios.activo });
     if (!row) return Response.json({ error: "Usuario no encontrado" }, { status: 404 });
     return Response.json({ usuario: row });
   } catch (e: any) {

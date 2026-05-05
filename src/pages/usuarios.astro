@@ -10,9 +10,15 @@ if (user.rol !== "admin") return Astro.redirect("/");
 
 const db = getDb(Astro);
 const rows = await db
-  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo, sucursalId: usuarios.sucursalId })
+  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, especialidad: usuarios.especialidad, activo: usuarios.activo, sucursalId: usuarios.sucursalId })
   .from(usuarios)
   .orderBy(desc(usuarios.id));
+
+const ESP_LABEL: Record<string, string> = {
+  general: "🔧 General",
+  biomedico: "🩺 Biomédico",
+  ambos: "🔧🩺 Ambos",
+};
 
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
 
@@ -66,6 +72,16 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
           <option value="visualizador">Visualizador</option>
         </select>
       </div>
+      <div>
+        <label class="label">Especialidad</label>
+        <select class="input" id="f_especialidad">
+          <option value="">— Sin asignar —</option>
+          <option value="general">🔧 General</option>
+          <option value="biomedico">🩺 Biomédico</option>
+          <option value="ambos">🔧🩺 Ambos</option>
+        </select>
+        <p class="mt-1 text-xs text-slate-500">Para jefes/técnicos: filtra qué OTs y tickets verá. Para otros roles, no aplica.</p>
+      </div>
       {sucRows.length > 0 && (
         <div>
           <label class="label">Sucursal</label>
@@ -91,6 +107,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
           <th class="px-4 py-2">Nombre</th>
           <th class="px-4 py-2">Email</th>
           <th class="px-4 py-2">Rol</th>
+          <th class="px-4 py-2">Especialidad</th>
           <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2 text-right">Acciones</th>
@@ -104,6 +121,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
             <td class="px-4 py-2">
               <span class={`badge ${ROL_COLOR[u.rol] ?? "bg-slate-100"}`}>{ROL_LABEL[u.rol] ?? u.rol}</span>
             </td>
+            <td class="px-4 py-2 text-xs">{u.especialidad ? ESP_LABEL[u.especialidad] : <span class="text-slate-400">—</span>}</td>
             <td class="px-4 py-2 text-xs text-slate-600">{u.sucursalId ? sucMap.get(u.sucursalId) ?? "—" : "Todas"}</td>
             <td class="px-4 py-2">
               <span class={`badge ${u.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
@@ -117,6 +135,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
                 data-nombre={u.nombre}
                 data-email={u.email}
                 data-rol={u.rol}
+                data-especialidad={u.especialidad ?? ""}
                 data-sucursal={u.sucursalId ?? ""}
                 data-activo={u.activo ? "1" : "0"}
               >✎ Editar</button>
@@ -153,6 +172,15 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
             <option value="motorista">Motorista</option>
             <option value="solicitante">Solicitante</option>
             <option value="visualizador">Visualizador</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Especialidad</label>
+          <select class="input" id="e_especialidad">
+            <option value="">— Sin asignar —</option>
+            <option value="general">🔧 General</option>
+            <option value="biomedico">🩺 Biomédico</option>
+            <option value="ambos">🔧🩺 Ambos</option>
           </select>
         </div>
         {sucRows.length > 0 && (
@@ -204,6 +232,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
       const err = document.getElementById("formErr") as HTMLElement;
       err.classList.add("hidden");
       const sucEl = document.getElementById("f_sucursal") as HTMLSelectElement | null;
+      const espEl = document.getElementById("f_especialidad") as HTMLSelectElement | null;
       const payload: any = {
         nombre: $("f_nombre").value.trim(),
         email: $("f_email").value.trim(),
@@ -211,6 +240,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
         rol: ($("f_rol") as unknown as HTMLSelectElement).value,
       };
       if (sucEl?.value) payload.sucursalId = Number(sucEl.value);
+      if (espEl?.value) payload.especialidad = espEl.value;
       const res = await fetch("/api/usuarios", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -230,6 +260,8 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
         ($("e_rol") as unknown as HTMLSelectElement).value = btn.dataset.rol!;
         const sucEl = document.getElementById("e_sucursal") as HTMLSelectElement | null;
         if (sucEl) sucEl.value = btn.dataset.sucursal!;
+        const espEl = document.getElementById("e_especialidad") as HTMLSelectElement | null;
+        if (espEl) espEl.value = btn.dataset.especialidad ?? "";
         ($("e_activo") as HTMLInputElement).checked = btn.dataset.activo === "1";
         document.getElementById("editModal")!.classList.remove("hidden");
         document.getElementById("editModal")!.classList.add("flex");
@@ -244,10 +276,12 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
       err.classList.add("hidden");
       const id = $("e_id").value;
       const sucEl = document.getElementById("e_sucursal") as HTMLSelectElement | null;
+      const espEl = document.getElementById("e_especialidad") as HTMLSelectElement | null;
       const payload: any = {
         nombre: $("e_nombre").value.trim(),
         email: $("e_email").value.trim(),
         rol: ($("e_rol") as unknown as HTMLSelectElement).value,
+        especialidad: espEl?.value || null,
         activo: ($("e_activo") as HTMLInputElement).checked,
       };
       if (sucEl) payload.sucursalId = sucEl.value ? Number(sucEl.value) : null;

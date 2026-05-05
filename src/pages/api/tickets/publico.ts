@@ -2,9 +2,10 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios } from "@/lib/schema";
+import { tickets, usuarios, activos } from "@/lib/schema";
 import { generateTrackingToken, calcularVencimientoSla } from "@/lib/tickets";
 import { sendMail, emailLayout } from "@/lib/email";
+import { jefesNotificar } from "@/lib/especialidad";
 
 export const prerender = false;
 
@@ -42,24 +43,28 @@ export const POST: APIRoute = async (ctx) => {
     })
     .returning();
 
-  // Notifica admins por email (best-effort, no bloquea respuesta)
+  // Notifica al jefe correcto según el tipo de equipo del ticket
   try {
-    const admins = await db
-      .select({ email: usuarios.email })
-      .from(usuarios)
-      .where(eq(usuarios.activo, true));
-    const adminEmails = admins.filter((a) => a.email).map((a) => a.email);
-    if (adminEmails.length > 0) {
+    // Determina tipo de equipo (general/biomedico) si hay activo asignado
+    let tipoEquipo: "general" | "biomedico" | null = null;
+    if (row.activoId) {
+      const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, row.activoId)).limit(1);
+      tipoEquipo = a?.tipo as any ?? null;
+    }
+    const jefes = await jefesNotificar(ctx, tipoEquipo);
+    const jefesEmails = jefes.map((j) => j.email).filter(Boolean);
+    if (jefesEmails.length > 0) {
+      const tipoLabel = tipoEquipo === "biomedico" ? "🩺 Biomédico" : tipoEquipo === "general" ? "🔧 General" : "Sin clasificar";
       ctx.locals.runtime.ctx.waitUntil(
         sendMail(ctx, {
-          to: adminEmails,
-          subject: `[Soporte] Nuevo ticket #${row.id}: ${row.asunto}`,
+          to: jefesEmails,
+          subject: `[Soporte ${tipoLabel}] Nuevo ticket #${row.id}: ${row.asunto}`,
           html: emailLayout(
             `Nuevo ticket de soporte`,
             `<p><strong>${row.solicitanteNombre}</strong> (${row.solicitanteEmail}) creó un ticket:</p>
              <h3>${row.asunto}</h3>
              <p style="white-space:pre-wrap">${row.descripcion}</p>
-             <p><strong>Prioridad:</strong> ${row.prioridad} · <strong>SLA:</strong> ${row.slaHoras}h</p>
+             <p><strong>Tipo:</strong> ${tipoLabel} · <strong>Prioridad:</strong> ${row.prioridad} · <strong>SLA:</strong> ${row.slaHoras}h</p>
              <p><strong>Token:</strong> <code>${row.trackingToken}</code></p>`
           ),
           tipo: "ticket_nuevo",

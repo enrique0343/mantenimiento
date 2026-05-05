@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { calcularVencimiento, type Prioridad } from "@/lib/sla";
+import { sendMail, emailLayout } from "@/lib/email";
 
 export const prerender = false;
 
@@ -72,5 +73,34 @@ export const POST: APIRoute = async (ctx) => {
     .insert(ordenes)
     .values({ ...parsed.data, vencimiento, creadoPor: user.id })
     .returning();
+
+  // Si la OT se crea con un técnico ya asignado, notificarle
+  if (row.asignadoA) {
+    try {
+      const [u] = await db
+        .select({ email: usuarios.email, nombre: usuarios.nombre })
+        .from(usuarios).where(eq(usuarios.id, row.asignadoA)).limit(1);
+      if (u?.email) {
+        const baseUrl = (ctx.locals as any)?.runtime?.env?.APP_URL || "https://mantenimiento-49c.pages.dev";
+        const p = sendMail(ctx, {
+          to: u.email,
+          subject: `[OT #${row.id}] Nueva orden asignada: ${row.titulo}`,
+          html: emailLayout(
+            "Nueva orden asignada",
+            `<p>Hola <strong>${u.nombre}</strong>,</p>
+             <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
+             <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
+             ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
+             <p><a href="${baseUrl}/ordenes/${row.id}">Abrir orden →</a></p>`
+          ),
+          tipo: "ot_asignada",
+          referencia: `orden:${row.id}`,
+        }).catch(() => {});
+        const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
+        if (wait) wait(p); else await p;
+      }
+    } catch {}
+  }
+
   return Response.json({ orden: row }, { status: 201 });
 };

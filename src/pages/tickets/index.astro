@@ -1,10 +1,11 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales } from "@/lib/schema";
+import { tickets, usuarios, sucursales, activos } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { tipoActivoFiltro } from "@/lib/especialidad";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -13,14 +14,22 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 
+// Filtro por especialidad (jefe/tecnico)
+const aplicaFiltroEsp = (user.rol === "jefe" || user.rol === "tecnico");
+const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(user.especialidad ?? null) : null;
+
 const rowsRaw = await db
-  .select({ t: tickets, a: usuarios, s: sucursales })
+  .select({ t: tickets, a: usuarios, s: sucursales, act: activos })
   .from(tickets)
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+  .leftJoin(activos, eq(activos.id, tickets.activoId))
   .orderBy(desc(tickets.id));
 
-const rows = rowsRaw.filter((r) => !filtroEstado || r.t.estado === filtroEstado);
+const rows = rowsRaw.filter((r) =>
+  (!filtroEstado || r.t.estado === filtroEstado) &&
+  (!filtroEspecialidad || (r.act && r.act.tipo === filtroEspecialidad))
+);
 
 const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.t.estado] = (acc[r.t.estado] ?? 0) + 1;

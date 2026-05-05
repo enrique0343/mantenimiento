@@ -35,6 +35,7 @@ declare namespace App {
       email: string;
       nombre: string;
       rol: import("./lib/schema").Rol;
+      especialidad: "general" | "biomedico" | "ambos" | null;
     };
   }
 }

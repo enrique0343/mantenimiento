@@ -61,6 +61,9 @@ export const usuarios = sqliteTable("usuarios", {
   nombre: text("nombre").notNull(),
   passwordHash: text("password_hash").notNull(),
   rol: text("rol", { enum: ROLES }).notNull().default("solicitante"),
+  // general | biomedico | ambos | null. Controla qué OTs/tickets ve el jefe
+  // y dirige notificaciones de tickets nuevos al jefe correspondiente.
+  especialidad: text("especialidad", { enum: ["general", "biomedico", "ambos"] }),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   sucursalId: integer("sucursal_id").references(() => sucursales.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

@@ -4,12 +4,18 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, vehiculos, actividades } from "@/lib/schema";
 import { desc, inArray } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { tipoActivoFiltro } from "@/lib/especialidad";
 export const prerender = false;
 
+const usrLogged = Astro.locals.user!;
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
+
+// Filtro por especialidad (jefe/tecnico): solo OTs cuyo activo coincide
+const aplicaFiltroEsp = (usrLogged.rol === "jefe" || usrLogged.rol === "tecnico");
+const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(usrLogged.especialidad ?? null) : null;
 
 let errorMsg: string | null = null;
 let rowsRaw: any[] = [];
@@ -58,7 +64,8 @@ try {
 
 const rows = rowsRaw.filter((r) =>
   (!filtroEstado || r.orden.estado === filtroEstado) &&
-  (!filtroTipo || r.orden.tipo === filtroTipo)
+  (!filtroTipo || r.orden.tipo === filtroTipo) &&
+  (!filtroEspecialidad || (r.activo && r.activo.tipo === filtroEspecialidad))
 );
 
 const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {

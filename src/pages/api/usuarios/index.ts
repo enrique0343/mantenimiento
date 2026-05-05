@@ -17,6 +17,7 @@ export const GET: APIRoute = async (ctx) => {
       email: usuarios.email,
       nombre: usuarios.nombre,
       rol: usuarios.rol,
+      especialidad: usuarios.especialidad,
       activo: usuarios.activo,
     })
     .from(usuarios)
@@ -29,6 +30,7 @@ const createSchema = z.object({
   nombre: z.string().min(2),
   password: z.string().min(6),
   rol: z.enum(ROLES),
+  especialidad: z.enum(["general", "biomedico", "ambos"]).nullable().optional(),
   sucursalId: z.number().int().nullable().optional(),
 });
 
@@ -47,6 +49,7 @@ export const POST: APIRoute = async (ctx) => {
         email: parsed.data.email,
         nombre: parsed.data.nombre,
         rol: parsed.data.rol,
+        especialidad: parsed.data.especialidad ?? null,
         passwordHash,
       })
       .returning({
@@ -54,6 +57,7 @@ export const POST: APIRoute = async (ctx) => {
         email: usuarios.email,
         nombre: usuarios.nombre,
         rol: usuarios.rol,
+        especialidad: usuarios.especialidad,
         activo: usuarios.activo,
       });
     return Response.json({ usuario: row }, { status: 201 });
