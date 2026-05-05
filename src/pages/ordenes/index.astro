@@ -72,6 +72,8 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.orden.estado] = (acc[r.orden.estado] ?? 0) + 1;
   return acc;
 }, {});
+
+const esAdmin = usrLogged.rol === "admin";
 ---
 
 <Layout title="Órdenes de trabajo">
@@ -80,7 +82,14 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
       <h1 class="text-2xl font-bold">Órdenes de trabajo</h1>
       <p class="text-sm text-slate-500">{rowsRaw.length} en total · mostrando {rows.length}</p>
     </div>
-    <a href="/ordenes/nueva" class="btn-primary">+ Nueva orden</a>
+    <div class="flex gap-2">
+      {esAdmin && (
+        <button id="bulkDelBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">
+          🗑 Eliminar seleccionadas (<span id="selCount">0</span>)
+        </button>
+      )}
+      <a href="/ordenes/nueva" class="btn-primary">+ Nueva orden</a>
+    </div>
   </div>
 
   {errorMsg && (
@@ -104,6 +113,7 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
     <table class="w-full text-left text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
+          {esAdmin && <th class="px-3 py-2 w-8"><input type="checkbox" id="selAll" class="cursor-pointer" /></th>}
           <th class="px-4 py-2">#</th>
           <th class="px-4 py-2">Título</th>
           <th class="px-4 py-2">Equipo / Vehículo / Actividad</th>
@@ -115,7 +125,7 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && !errorMsg && (
-          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
+          <tr><td colspan={esAdmin ? 8 : 7} class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
         )}
         {rows.map((r) => {
           const e = (r.orden.estado ?? "abierta") as EstadoOT;
@@ -123,6 +133,7 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
           const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
           return (
             <tr class="hover:bg-slate-50">
+              {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="ot-cb cursor-pointer" data-id={r.orden.id} /></td>}
               <td class="px-4 py-2 font-mono text-xs">#{r.orden.id}</td>
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
@@ -145,4 +156,49 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
       </tbody>
     </table>
   </div>
+
+  {esAdmin && (
+    <script>
+      const cbs = document.querySelectorAll<HTMLInputElement>(".ot-cb");
+      const selAll = document.getElementById("selAll") as HTMLInputElement | null;
+      const bulkBtn = document.getElementById("bulkDelBtn");
+      const countEl = document.getElementById("selCount");
+
+      function refresh() {
+        const sel = Array.from(cbs).filter((cb) => cb.checked);
+        if (countEl) countEl.textContent = String(sel.length);
+        if (bulkBtn) bulkBtn.classList.toggle("hidden", sel.length === 0);
+      }
+
+      selAll?.addEventListener("change", () => {
+        cbs.forEach((cb) => (cb.checked = selAll.checked));
+        refresh();
+      });
+      cbs.forEach((cb) => cb.addEventListener("change", refresh));
+
+      bulkBtn?.addEventListener("click", async () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length) return;
+        const txt = ids.length === 1 ? "esta OT" : `estas ${ids.length} OTs`;
+        if (!confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer. Se borrarán todos sus comentarios, adjuntos y firmas.`)) return;
+        if (ids.length > 5 && !confirm(`Vas a borrar ${ids.length} OTs. ¿Confirmas?`)) return;
+
+        bulkBtn.setAttribute("disabled", "true");
+        bulkBtn.textContent = "Borrando...";
+        const res = await fetch("/api/ordenes/bulk-delete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) {
+          alert(`✓ ${j.borradas} OT(s) eliminadas correctamente`);
+          location.reload();
+        } else {
+          alert("✗ Error: " + (j.error ?? "desconocido"));
+          bulkBtn.removeAttribute("disabled");
+        }
+      });
+    </script>
+  )}
 </Layout>
