@@ -58,14 +58,21 @@ const otsEnProceso = await db
       <p id="items-empty" class="text-sm text-slate-400 py-4 text-center">Usa el botón para agregar ítems.</p>
     </div>
 
-    <!-- Fotos de referencia -->
+    <!-- Fotos y documentos de referencia -->
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900 mb-1">Fotos de referencia <span class="text-slate-400 font-normal text-sm">(opcional)</span></h2>
-      <p class="text-xs text-slate-500 mb-3">Puedes adjuntar imágenes del componente o área para orientar al proveedor.</p>
-      <label class="flex items-center gap-2 cursor-pointer text-sm text-brand-600 hover:underline w-fit">
-        <input type="file" id="fileInput" accept="image/*,application/pdf" multiple class="hidden" />
-        📎 Seleccionar archivos
-      </label>
+      <h2 class="font-semibold text-slate-900 mb-1">📎 Fotos y documentos <span class="text-slate-400 font-normal text-sm">(opcional)</span></h2>
+      <p class="text-xs text-slate-500 mb-3">Adjunta imágenes del componente, manuales, especificaciones o cotizaciones previas. Puedes seleccionar varios archivos a la vez.</p>
+      <div class="flex flex-wrap gap-2">
+        <label class="cursor-pointer flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100">
+          <input type="file" id="fileInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
+          📷 Tomar foto / seleccionar archivos
+        </label>
+        <label class="cursor-pointer flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">
+          <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple class="hidden" />
+          📸 Cámara
+        </label>
+      </div>
+      <p id="fotos-count" class="mt-2 text-xs text-slate-500 hidden"></p>
       <div id="fotos-preview" class="mt-3 flex flex-wrap gap-3"></div>
     </div>
 
@@ -120,37 +127,59 @@ const otsEnProceso = await db
   // Empezar con 1 ítem vacío
   addItem();
 
-  // ─── Fotos ────────────────────────────────────────────────────────────────
+  // ─── Fotos y documentos ───────────────────────────────────────────────────
   const pendingFiles: File[] = [];
   const fileInput = document.getElementById("fileInput") as HTMLInputElement;
-  const preview   = document.getElementById("fotos-preview")!;
+  const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
+  const preview = document.getElementById("fotos-preview")!;
+  const countEl = document.getElementById("fotos-count")!;
 
-  fileInput.addEventListener("change", () => {
-    for (const f of Array.from(fileInput.files ?? [])) {
+  function updateCount() {
+    if (pendingFiles.length === 0) {
+      countEl.classList.add("hidden");
+    } else {
+      countEl.textContent = `${pendingFiles.length} archivo(s) listos para subir`;
+      countEl.classList.remove("hidden");
+    }
+  }
+
+  function addFiles(files: FileList | File[]) {
+    for (const f of Array.from(files)) {
       pendingFiles.push(f);
       const thumb = document.createElement("div");
-      thumb.className = "relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center text-xs text-slate-500";
+      thumb.className = "relative w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center text-xs text-slate-500 p-1 text-center";
       if (f.type.startsWith("image/")) {
         const img = document.createElement("img");
         img.src = URL.createObjectURL(f);
         img.className = "w-full h-full object-cover";
+        img.alt = f.name;
         thumb.appendChild(img);
       } else {
-        thumb.textContent = f.name.slice(0, 12);
+        thumb.innerHTML = `<div><div class="text-2xl">📄</div><div class="truncate">${f.name.slice(0, 14)}</div></div>`;
       }
       const rmBtn = document.createElement("button");
       rmBtn.type = "button";
-      rmBtn.className = "absolute top-0.5 right-0.5 bg-black/50 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center";
+      rmBtn.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
       rmBtn.textContent = "×";
       rmBtn.addEventListener("click", () => {
         const idx = pendingFiles.indexOf(f);
         if (idx >= 0) pendingFiles.splice(idx, 1);
         thumb.remove();
+        updateCount();
       });
       thumb.appendChild(rmBtn);
       preview.appendChild(thumb);
     }
+    updateCount();
+  }
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files) addFiles(fileInput.files);
     fileInput.value = "";
+  });
+  cameraInput?.addEventListener("change", () => {
+    if (cameraInput.files) addFiles(cameraInput.files);
+    cameraInput.value = "";
   });
 
   // ─── Submit ───────────────────────────────────────────────────────────────

@@ -116,6 +116,7 @@ const solicitudesVinculadas = await db
   .where(eq(solicitudesCompra.ordenId, id));
 const puedeSolicitarCompra = (estadoActual === "en_proceso" || estadoActual === "en_espera") &&
   ["admin", "jefe", "tecnico"].includes(user.rol);
+const verComprasSection = ["admin", "jefe", "tecnico"].includes(user.rol);
 
 const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
 const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
@@ -665,7 +666,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       )}
 
       <!-- Solicitudes de compra vinculadas -->
-      {(solicitudesVinculadas.length > 0 || puedeSolicitarCompra) && (
+      {verComprasSection && (
         <div class="card p-5">
           <div class="flex items-center justify-between mb-2">
             <h2 class="font-semibold text-slate-900">🛒 Compras</h2>
@@ -675,9 +676,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </a>
             )}
           </div>
-          {solicitudesVinculadas.length === 0 && (
-            <p class="text-xs text-slate-400">Sin solicitudes de compra aún.</p>
+
+          {!puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
+            <div class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              {estadoActual === "abierta"
+                ? <>⚠ Pulsa <strong>"Iniciar"</strong> para activar la OT y poder solicitar compras de contingencia.</>
+                : <>Esta OT está en estado <strong>{ESTADO_LABEL[estadoActual]}</strong>. Solo se pueden generar solicitudes mientras la OT está en proceso o en espera.</>
+              }
+            </div>
           )}
+
           {solicitudesVinculadas.map((s) => {
             const sc = {
               borrador: "bg-slate-100 text-slate-600", enviada: "bg-blue-100 text-blue-700",

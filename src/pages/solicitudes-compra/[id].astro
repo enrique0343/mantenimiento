@@ -162,10 +162,16 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
       {adjuntos.length === 0 && <p class="text-sm text-slate-400">Sin fotos adjuntas.</p>}
     </div>
     {puedeEditar && (
-      <label class="mt-3 flex items-center gap-2 cursor-pointer text-sm text-brand-600 hover:underline w-fit">
-        <input type="file" id="fileInput" accept="image/*,application/pdf" multiple class="hidden" />
-        📎 Agregar foto
-      </label>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100">
+          <input type="file" id="fileInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
+          📎 Agregar archivos
+        </label>
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">
+          <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple class="hidden" />
+          📸 Cámara
+        </label>
+      </div>
     )}
   </div>
 
@@ -363,16 +369,19 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
     else { const j = await res.json().catch(() => ({})); alert(j.error ?? "Error"); }
   });
 
-  // ─── Fotos ────────────────────────────────────────────────────────────────
-  document.getElementById("fileInput")?.addEventListener("change", async (e) => {
-    const input = e.target as HTMLInputElement;
-    for (const file of Array.from(input.files ?? [])) {
+  // ─── Fotos y documentos ───────────────────────────────────────────────────
+  async function uploadFiles(input: HTMLInputElement) {
+    const files = Array.from(input.files ?? []);
+    if (!files.length) return;
+    for (const file of files) {
       const fd = new FormData(); fd.append("file", file);
-      const r = await fetch(`/api/solicitudes-compra/${solId}/adjuntos`, { method: "POST", body: fd });
-      if (r.ok) location.reload();
+      await fetch(`/api/solicitudes-compra/${solId}/adjuntos`, { method: "POST", body: fd });
     }
     input.value = "";
-  });
+    location.reload();
+  }
+  document.getElementById("fileInput")?.addEventListener("change", (e) => uploadFiles(e.target as HTMLInputElement));
+  document.getElementById("cameraInput")?.addEventListener("change", (e) => uploadFiles(e.target as HTMLInputElement));
   document.querySelectorAll(".btn-del-adj").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const adjId = (btn as HTMLElement).dataset.adjId;
