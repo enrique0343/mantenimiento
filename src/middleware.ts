@@ -2,8 +2,8 @@ import { defineMiddleware } from "astro:middleware";
 import { getCurrentUser } from "./lib/auth";
 
 const PUBLIC_PATHS = new Set(["/login"]);
-const PUBLIC_PATH_PREFIXES = ["/soporte"];
-const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/cron/", "/api/tickets/publico", "/api/tickets/track/"];
+const PUBLIC_PATH_PREFIXES = ["/soporte", "/encuesta"];
+const PUBLIC_API_PREFIXES = ["/api/auth/", "/api/cron/", "/api/tickets/publico", "/api/tickets/track/", "/api/encuestas/"];
 
 export const onRequest = defineMiddleware(async (ctx, next) => {
   const url = new URL(ctx.request.url);

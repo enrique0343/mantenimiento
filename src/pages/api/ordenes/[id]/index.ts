@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
 import { siguienteFecha } from "@/lib/frecuencias";
 import { sendMail, emailLayout } from "@/lib/email";
+import { disparadorOT } from "@/lib/notificaciones";
 
 export const prerender = false;
 
@@ -216,6 +217,13 @@ export const PATCH: APIRoute = async (ctx) => {
           }).catch(() => {})
         );
       }
+    } catch {}
+  }
+
+  // Dispara emails según cambio de estado (iniciada/completada/cerrada)
+  if (parsed.data.estado && parsed.data.estado !== actual.estado) {
+    try {
+      await disparadorOT(ctx, row as any, actual.estado, parsed.data.estado);
     } catch {}
   }
 
