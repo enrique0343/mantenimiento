@@ -12,6 +12,7 @@ const updateSchema = z.object({
   email: z.string().email().optional(),
   rol: z.enum(ROLES).optional(),
   especialidad: z.enum(["general", "biomedico", "ambos"]).nullable().optional(),
+  tarifaHora: z.number().nonnegative().optional(),
   sucursalId: z.number().int().nullable().optional(),
   activo: z.boolean().optional(),
   password: z.string().min(6).optional(), // si viene, resetea la contraseña
