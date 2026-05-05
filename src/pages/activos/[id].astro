@@ -101,10 +101,14 @@ const isBio = a.tipo === "biomedico";
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
     {canEdit && (
-      <div class="flex gap-2">
+      <div class="flex flex-wrap gap-2">
+        <a href={`/activos/${a.id}/historial`} class="btn-secondary">📜 Historial</a>
         <a href={`/activos/${a.id}/editar`} class="btn-primary">✎ Editar</a>
         {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
       </div>
+    )}
+    {!canEdit && (
+      <a href={`/activos/${a.id}/historial`} class="btn-secondary">📜 Historial</a>
     )}
   </div>
 

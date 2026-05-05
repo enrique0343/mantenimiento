@@ -232,11 +232,12 @@ const isActive = (href: string) =>
 
         function renderResultados(R) {
           var groups = [
-            { key: "ordenes",       label: "Órdenes",     icon: "📋", link: function (r) { return "/ordenes/" + r.id; },        title: function (r) { return "#" + r.id + " · " + r.titulo; },     meta: function (r) { return r.tipo + " · " + r.estado; } },
-            { key: "equipos",       label: "Equipos",     icon: "🛠",  link: function (r) { return "/activos/" + r.id; },        title: function (r) { return r.codigo + " · " + r.nombre; },         meta: function (r) { return r.tipo + " · " + r.estado; } },
-            { key: "tickets",       label: "Tickets",     icon: "🎫", link: function (r) { return "/tickets/" + r.id; },        title: function (r) { return "#" + r.id + " · " + r.asunto; },     meta: function (r) { return r.estado; } },
-            { key: "items",         label: "Inventario",  icon: "📦", link: function (r) { return "/inventario/" + r.id; },     title: function (r) { return r.codigo + " · " + r.nombre; },         meta: function (r) { return r.unidad; } },
-            { key: "requisiciones", label: "Requisiciones", icon: "🛒", link: function (r) { return "/requisiciones/" + r.id; }, title: function (r) { return r.numero; },                          meta: function (r) { return r.estado; } },
+            { key: "ordenes",       label: "Órdenes",       icon: "📋", link: function (r) { return "/ordenes/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.titulo); },        meta: function (r) { return r.tipo + " · " + r.estado; } },
+            { key: "equipos",       label: "Equipos",       icon: "🛠",  link: function (r) { return "/activos/" + r.id; },        title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.tipo + " · " + r.estado; } },
+            { key: "tickets",       label: "Tickets",       icon: "🎫", link: function (r) { return "/tickets/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.asunto); },        meta: function (r) { return r.estado; } },
+            { key: "items",         label: "Inventario",    icon: "📦", link: function (r) { return "/inventario/" + r.id; },     title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.unidad; } },
+            { key: "comentarios",   label: "Comentarios",   icon: "💬", link: function (r) { return "/ordenes/" + r.ordenId; },   title: function (r) { return "OT #" + r.ordenId + " · " + esc(r.ordenTitulo); }, meta: function (r) { return new Date(r.createdAt).toLocaleString("es"); } },
+            { key: "requisiciones", label: "Requisiciones", icon: "🛒", link: function (r) { return "/requisiciones/" + r.id; }, title: function (r) { return esc(r.numero); },                            meta: function (r) { return r.estado; } },
           ];
           var html = "";
           var totalRes = 0;
@@ -246,7 +247,10 @@ const isActive = (href: string) =>
             totalRes += arr.length;
             html += '<div class="mb-2"><div class="px-3 py-1 text-[10px] uppercase font-semibold text-slate-400">' + g.icon + ' ' + g.label + '</div>';
             arr.forEach(function (r) {
-              html += '<a href="' + g.link(r) + '" class="block rounded px-3 py-2 hover:bg-slate-100"><div class="font-medium text-sm text-slate-800">' + g.title(r) + '</div><div class="text-xs text-slate-500">' + g.meta(r) + '</div></a>';
+              var snippet = r.snippet
+                ? '<div class="text-xs text-slate-600 mt-0.5">' + r.snippet + '</div>'
+                : '';
+              html += '<a href="' + g.link(r) + '" class="block rounded px-3 py-2 hover:bg-slate-100"><div class="font-medium text-sm text-slate-800">' + g.title(r) + '</div>' + snippet + '<div class="text-[10px] text-slate-500 mt-0.5">' + g.meta(r) + '</div></a>';
             });
             html += '</div>';
           });
@@ -255,6 +259,11 @@ const isActive = (href: string) =>
           } else {
             results.innerHTML = html;
           }
+        }
+        function esc(s) {
+          return String(s || "").replace(/[&<>"']/g, function (c) {
+            return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+          });
         }
       })();
 
