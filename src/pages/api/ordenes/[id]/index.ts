@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos } from "@/lib/schema";
 
 async function contarAdjuntos(db: any, ordenId: number, categoria: string): Promise<number> {
   const rows = await db.select({ id: adjuntos.id }).from(adjuntos)
@@ -325,15 +325,31 @@ export const DELETE: APIRoute = async (ctx) => {
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
-  // Recuperar la OT antes de borrar para resetear plan/actividad si aplica
+  const env = (ctx.locals as any).runtime?.env;
   const [ot] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
-  await db.delete(ordenes).where(eq(ordenes.id, id));
-  // Si la OT venía de un plan o actividad, resetear ultimaGeneracion para
-  // que el cron pueda generar una nueva en el siguiente ciclo.
-  if (ot?.planId) {
+  if (!ot) return Response.json({ error: "No encontrada" }, { status: 404 });
+
+  // Borrar adjuntos de R2
+  const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
+  if (adjs.length && env?.R2) {
+    await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
+  }
+
+  // Limpiar FKs sin cascade (preserva historial)
+  try { await db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)); } catch {}
+  try { await db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)); } catch {}
+  try { await db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)); } catch {}
+
+  try {
+    await db.delete(ordenes).where(eq(ordenes.id, id));
+  } catch (e: any) {
+    return Response.json({ error: `No se pudo borrar: ${e?.message ?? e}` }, { status: 500 });
+  }
+
+  if (ot.planId) {
     try { await db.update(planesMantenimiento).set({ ultimaGeneracion: null }).where(eq(planesMantenimiento.id, ot.planId)); } catch {}
   }
-  if (ot?.actividadId) {
+  if (ot.actividadId) {
     try { await db.update(actividades).set({ ultimaGeneracion: null }).where(eq(actividades.id, ot.actividadId)); } catch {}
   }
   return Response.json({ ok: true });
