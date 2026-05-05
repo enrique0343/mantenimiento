@@ -1,9 +1,12 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, ordenRepuestos, items as itemsTable } from "@/lib/schema";
+import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion } from "@/lib/schema";
 import { eq, and, sql, isNotNull, desc, gte } from "drizzle-orm";
 export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
 
 const db = getDb(Astro);
 const now = new Date();
@@ -15,16 +18,31 @@ const totalesEstado = await db
   .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
   .from(ordenes)
   .groupBy(ordenes.estado);
-
 const total = totalesEstado.reduce((s, r) => s + Number(r.n), 0);
 const get = (estado: string) => Number(totalesEstado.find((r) => r.estado === estado)?.n ?? 0);
 
-// OTs vencidas
+// OTs vencidas (sin cerrar y vencimiento pasado)
 const vencidasRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
   .where(sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada')`);
 const vencidas = Number(vencidasRows[0]?.n ?? 0);
+
+// % cumplimiento SLA: completadas a tiempo / total completadas con vencimiento
+const slaRows = await db
+  .select({
+    total: sql<number>`COUNT(*)`,
+    aTiempo: sql<number>`SUM(CASE WHEN ${ordenes.completadaEn} <= ${ordenes.vencimiento} THEN 1 ELSE 0 END)`,
+  })
+  .from(ordenes)
+  .where(and(
+    isNotNull(ordenes.completadaEn),
+    isNotNull(ordenes.vencimiento),
+    gte(ordenes.completadaEn, inicio30d),
+  ));
+const slaTotal = Number(slaRows[0]?.total ?? 0);
+const slaATiempo = Number(slaRows[0]?.aTiempo ?? 0);
+const cumplimientoSla = slaTotal > 0 ? (slaATiempo / slaTotal) * 100 : 100;
 
 // OTs por tipo
 const porTipo = await db
@@ -32,15 +50,11 @@ const porTipo = await db
   .from(ordenes)
   .groupBy(ordenes.tipo);
 
-// OTs completadas en ultimos 30d - calcular MTTR
+// MTTR (30d): tiempo promedio creación → completada
 const completadas30d = await db
   .select({ createdAt: ordenes.createdAt, completadaEn: ordenes.completadaEn })
   .from(ordenes)
-  .where(and(
-    gte(ordenes.completadaEn, inicio30d),
-    isNotNull(ordenes.completadaEn),
-  ));
-
+  .where(and(gte(ordenes.completadaEn, inicio30d), isNotNull(ordenes.completadaEn)));
 let mttrHoras = 0;
 if (completadas30d.length > 0) {
   const totalMs = completadas30d.reduce((s, r) => {
@@ -51,7 +65,7 @@ if (completadas30d.length > 0) {
   mttrHoras = totalMs / completadas30d.length / 3_600_000;
 }
 
-// MTBF aproximado: tiempo total / cantidad de fallos correctivos
+// MTBF aproximado
 const correctivos30dRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
@@ -59,7 +73,7 @@ const correctivos30dRows = await db
 const correctivos30d = Number(correctivos30dRows[0]?.n ?? 0);
 const mtbfHoras = correctivos30d > 0 ? (30 * 24) / correctivos30d : 0;
 
-// Top 10 equipos con mas correctivos en el año
+// Top 10 equipos con más correctivos en el año
 const topEquipos = await db
   .select({
     activoId: ordenes.activoId,
@@ -74,13 +88,29 @@ const topEquipos = await db
   .orderBy(desc(sql`count(*)`))
   .limit(10);
 
-// Disponibilidad estimada por equipo: 100% - (horas en mantenimiento / horas totales del periodo)
-// Aproximacion: cuenta OTs activas que tocaron ese equipo en el año y suma horas estimadas
+// Top 10 técnicos por OTs completadas en el año
+const topTecnicos = await db
+  .select({
+    tecnicoId: ordenes.asignadoA,
+    nombre: usuarios.nombre,
+    completadas: sql<number>`COUNT(*)`,
+    horas: sql<number>`SUM(COALESCE(${ordenes.horasTrabajadas}, 0))`,
+    aTiempo: sql<number>`SUM(CASE WHEN ${ordenes.vencimiento} IS NOT NULL AND ${ordenes.completadaEn} <= ${ordenes.vencimiento} THEN 1 ELSE 0 END)`,
+    conSla: sql<number>`SUM(CASE WHEN ${ordenes.vencimiento} IS NOT NULL THEN 1 ELSE 0 END)`,
+  })
+  .from(ordenes)
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(and(isNotNull(ordenes.asignadoA), isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicioAno)))
+  .groupBy(ordenes.asignadoA)
+  .orderBy(desc(sql`COUNT(*)`))
+  .limit(10);
+
+// Disponibilidad estimada
 const totalActivos = (await db.select({ n: sql<number>`count(*)` }).from(activos))[0]?.n ?? 0;
 const operativos = (await db.select({ n: sql<number>`count(*)` }).from(activos).where(eq(activos.estado, "operativo")))[0]?.n ?? 0;
 const disponibilidad = totalActivos > 0 ? (Number(operativos) / Number(totalActivos)) * 100 : 0;
 
-// Costo estimado de repuestos consumidos en el año
+// Costo estimado de repuestos en el año
 const costoRepRows = await db
   .select({
     total: sql<number>`SUM(${ordenRepuestos.cantidad} * COALESCE(${ordenRepuestos.precioUnitario}, ${itemsTable.precioReferencia}, 0))`,
@@ -90,41 +120,123 @@ const costoRepRows = await db
   .where(gte(ordenRepuestos.createdAt, inicioAno));
 const costoTotal = Number(costoRepRows[0]?.total ?? 0);
 
-const TIPO_LABEL = { preventivo: "Preventivo", correctivo: "Correctivo", predictivo: "Predictivo" };
+// Satisfacción
+const [satRow] = await db
+  .select({
+    n: sql<number>`COUNT(*)`,
+    avg: sql<number>`AVG(${encuestasSatisfaccion.calificacion})`,
+  })
+  .from(encuestasSatisfaccion)
+  .where(isNotNull(encuestasSatisfaccion.respondidaEn));
+const satN = Number(satRow?.n ?? 0);
+const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
 
+// Tendencia mensual (últimos 12 meses): completadas y correctivas
+const tendencia: { mes: string; completadas: number; correctivas: number }[] = [];
+for (let i = 11; i >= 0; i--) {
+  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const inicio = d.toISOString().slice(0, 10);
+  const fin = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10);
+  const [completadas] = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(ordenes)
+    .where(and(gte(ordenes.completadaEn, inicio), sql`${ordenes.completadaEn} < ${fin}`));
+  const [correctivas] = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(ordenes)
+    .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), sql`${ordenes.createdAt} < ${fin}`));
+  const mesEs = d.toLocaleDateString("es", { month: "short" }).replace(".", "");
+  tendencia.push({
+    mes: `${mesEs} ${String(d.getFullYear()).slice(2)}`,
+    completadas: Number(completadas?.n ?? 0),
+    correctivas: Number(correctivas?.n ?? 0),
+  });
+}
+const maxTendencia = Math.max(1, ...tendencia.map((t) => Math.max(t.completadas, t.correctivas)));
+
+const TIPO_LABEL = { preventivo: "Preventivo", correctivo: "Correctivo", predictivo: "Predictivo" };
 function pct(n: number) { return Math.round(n * 100) / 100; }
 function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(h)} h`; }
 ---
 
 <Layout title="KPIs">
-  <h1 class="text-2xl font-bold">Indicadores de mantenimiento</h1>
-  <p class="text-sm text-slate-500">Vista ejecutiva de la operación · ventana de cálculo: últimos 30 días / año en curso</p>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">Indicadores de mantenimiento</h1>
+      <p class="text-sm text-slate-500">Vista ejecutiva · ventana: últimos 30 días / año en curso</p>
+    </div>
+    <a href="/reportes" class="btn-secondary">📑 Descargar reportes</a>
+  </div>
 
   <!-- Top KPIs -->
-  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
     <div class="card p-4">
-      <div class="text-xs uppercase text-slate-500">Disponibilidad estimada</div>
-      <div class="mt-1 text-3xl font-bold text-emerald-600">{pct(disponibilidad)}%</div>
-      <div class="text-xs text-slate-500">{operativos} de {totalActivos} equipos operativos</div>
+      <div class="text-xs uppercase text-slate-500">Disponibilidad</div>
+      <div class="mt-1 text-2xl font-bold text-emerald-600">{pct(disponibilidad)}%</div>
+      <div class="text-[11px] text-slate-500">{operativos}/{totalActivos} operativos</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Cumplimiento SLA</div>
+      <div class:list={["mt-1 text-2xl font-bold", cumplimientoSla >= 90 ? "text-emerald-600" : cumplimientoSla >= 70 ? "text-amber-600" : "text-red-600"]}>{pct(cumplimientoSla)}%</div>
+      <div class="text-[11px] text-slate-500">{slaATiempo}/{slaTotal} a tiempo (30d)</div>
     </div>
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">MTTR (30d)</div>
-      <div class="mt-1 text-3xl font-bold text-blue-600">{fmtH(mttrHoras)}</div>
-      <div class="text-xs text-slate-500">Tiempo medio de reparación</div>
+      <div class="mt-1 text-2xl font-bold text-blue-600">{fmtH(mttrHoras)}</div>
+      <div class="text-[11px] text-slate-500">Reparación promedio</div>
     </div>
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">MTBF (30d)</div>
-      <div class="mt-1 text-3xl font-bold text-purple-600">{fmtH(mtbfHoras)}</div>
-      <div class="text-xs text-slate-500">Tiempo medio entre fallas</div>
+      <div class="mt-1 text-2xl font-bold text-purple-600">{fmtH(mtbfHoras)}</div>
+      <div class="text-[11px] text-slate-500">Entre fallas</div>
     </div>
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">Backlog vencido</div>
-      <div class="mt-1 text-3xl font-bold text-red-600">{vencidas}</div>
-      <div class="text-xs text-slate-500">OTs con vencimiento pasado y sin cerrar</div>
+      <div class="mt-1 text-2xl font-bold text-red-600">{vencidas}</div>
+      <div class="text-[11px] text-slate-500">OTs sin cerrar</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Satisfacción</div>
+      {satAvg != null ? (
+        <>
+          <div class="mt-1 text-2xl font-bold text-violet-600">{satAvg.toFixed(1)}<span class="text-sm text-slate-400">/5</span></div>
+          <div class="text-[11px] text-slate-500">{satN} respuestas</div>
+        </>
+      ) : (
+        <>
+          <div class="mt-1 text-2xl font-bold text-slate-300">—</div>
+          <div class="text-[11px] text-slate-500">Sin encuestas</div>
+        </>
+      )}
     </div>
   </div>
 
-  <!-- Distribucion -->
+  <!-- Tendencia mensual -->
+  <div class="card mt-6 p-5">
+    <h2 class="font-semibold text-slate-900">Tendencia 12 meses</h2>
+    <p class="text-xs text-slate-500">Completadas (verde) vs correctivos abiertos (rojo) por mes</p>
+    <div class="mt-4 flex items-end gap-2 overflow-x-auto pb-2" style="height:160px">
+      {tendencia.map((t) => {
+        const hC = (t.completadas / maxTendencia) * 130;
+        const hX = (t.correctivas / maxTendencia) * 130;
+        return (
+          <div class="flex min-w-[40px] flex-1 flex-col items-center gap-1">
+            <div class="flex flex-1 items-end gap-0.5">
+              <div class="w-3 rounded-t bg-emerald-500" style={`height:${hC}px`} title={`${t.completadas} completadas`}></div>
+              <div class="w-3 rounded-t bg-red-400" style={`height:${hX}px`} title={`${t.correctivas} correctivos`}></div>
+            </div>
+            <div class="text-[9px] text-slate-500 capitalize whitespace-nowrap">{t.mes}</div>
+          </div>
+        );
+      })}
+    </div>
+    <div class="mt-2 flex gap-4 text-xs text-slate-600">
+      <span><span class="inline-block h-3 w-3 rounded bg-emerald-500"></span> Completadas</span>
+      <span><span class="inline-block h-3 w-3 rounded bg-red-400"></span> Correctivos</span>
+    </div>
+  </div>
+
+  <!-- Distribuciones -->
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <div class="card p-5">
       <h2 class="font-semibold text-slate-900">Estado de las OTs</h2>
@@ -179,27 +291,65 @@ function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(
     </div>
   </div>
 
-  <!-- Top equipos problematicos -->
-  <div class="card mt-6 overflow-hidden">
-    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Top 10 equipos con más correctivos (año)</h2></div>
-    <table class="w-full text-left text-sm">
-      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-        <tr>
-          <th class="px-4 py-2">#</th>
-          <th class="px-4 py-2">Equipo</th>
-          <th class="px-4 py-2 text-right">OTs correctivas</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {topEquipos.length === 0 && <tr><td colspan="3" class="px-4 py-6 text-center text-slate-400">Sin datos.</td></tr>}
-        {topEquipos.map((e, i) => (
+  <!-- Top equipos problemáticos + Top técnicos -->
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card overflow-hidden">
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Top 10 equipos con más correctivos (año)</h2></div>
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
-            <td class="px-4 py-2 font-mono text-xs">{i + 1}</td>
-            <td class="px-4 py-2"><a href={`/activos/${e.activoId}`} class="text-brand-700 hover:underline">{e.codigo} — {e.nombre}</a></td>
-            <td class="px-4 py-2 text-right font-bold text-red-600">{Number(e.n)}</td>
+            <th class="px-4 py-2">#</th>
+            <th class="px-4 py-2">Equipo</th>
+            <th class="px-4 py-2 text-right">Correctivos</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {topEquipos.length === 0 && <tr><td colspan="3" class="px-4 py-6 text-center text-slate-400">Sin datos.</td></tr>}
+          {topEquipos.map((e, i) => (
+            <tr>
+              <td class="px-4 py-2 font-mono text-xs">{i + 1}</td>
+              <td class="px-4 py-2"><a href={`/activos/${e.activoId}`} class="text-brand-700 hover:underline">{e.codigo} — {e.nombre}</a></td>
+              <td class="px-4 py-2 text-right font-bold text-red-600">{Number(e.n)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card overflow-hidden">
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Top 10 técnicos por OTs completadas (año)</h2></div>
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">#</th>
+            <th class="px-4 py-2">Técnico</th>
+            <th class="px-4 py-2 text-right">OTs</th>
+            <th class="px-4 py-2 text-right">Horas</th>
+            <th class="px-4 py-2 text-right">A tiempo</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {topTecnicos.length === 0 && <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Sin datos.</td></tr>}
+          {topTecnicos.map((t, i) => {
+            const conSla = Number(t.conSla);
+            const aTiempo = Number(t.aTiempo);
+            const pctTiempo = conSla > 0 ? Math.round((aTiempo / conSla) * 100) : null;
+            return (
+              <tr>
+                <td class="px-4 py-2 font-mono text-xs">{i + 1}</td>
+                <td class="px-4 py-2">{t.nombre ?? "—"}</td>
+                <td class="px-4 py-2 text-right font-bold text-emerald-700">{Number(t.completadas)}</td>
+                <td class="px-4 py-2 text-right font-mono text-slate-600">{Number(t.horas).toFixed(1)}h</td>
+                <td class="px-4 py-2 text-right">
+                  {pctTiempo != null ? (
+                    <span class:list={["badge", pctTiempo >= 90 ? "bg-emerald-100 text-emerald-700" : pctTiempo >= 70 ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"]}>{pctTiempo}%</span>
+                  ) : <span class="text-slate-400 text-xs">—</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   </div>
 </Layout>
