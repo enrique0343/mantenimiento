@@ -219,24 +219,35 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
   const baseUrl = appUrl(ctx);
   const encuestaUrl = `${baseUrl}/encuesta/${token}`;
   const otUrl = `${baseUrl}/ordenes/${orden.id}`;
+  const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
+
+  // Nombre del técnico para mostrarlo en la prosa de reconocimiento
+  const asg = await obtenerAsignado(ctx, orden);
+  const nombreTec = asg?.nombre ?? "el equipo de Mantenimiento";
 
   // Botones grandes con las 5 calificaciones (acceso directo)
   const stars = [1, 2, 3, 4, 5].map((n) => {
-    const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😐" : n === 4 ? "🙂" : "😀";
+    const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😐" : n === 4 ? "🙂" : "😄";
     return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;border:1px solid #e2e8f0;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#64748b">${n}</span></a>`;
   }).join("");
 
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] ¿Cómo calificas el trabajo?`,
+    subject: `[OT #${orden.id}] Tu calificación define el próximo cambio en Mantenimiento`,
     html: emailLayout(
-      "Tu opinión es importante",
-      `<p>Hola <strong>${sol.nombre}</strong>,</p>
-       <p>La orden <strong>#${orden.id} - ${orden.titulo}</strong> ha sido cerrada. ¡Gracias!</p>
-       <p>Nos ayudaría mucho que califiques el servicio del 1 al 5:</p>
-       <div style="text-align:center;margin:18px 0">${stars}</div>
-       <p style="text-align:center;font-size:12px;color:#64748b">o haz clic en <a href="${encuestaUrl}">este enlace</a> para dejar un comentario.</p>
-       <p style="margin-top:18px"><a href="${otUrl}">Ver detalle de la orden →</a></p>`
+      "Cuéntanos cómo nos fue",
+      `<p>Hola <strong>${primerNombreSol}</strong>,</p>
+       <p>La orden <strong>#${orden.id} — ${orden.titulo}</strong> quedó cerrada. Antes de archivarla, te pedimos un favor de 10 segundos.</p>
+       <p style="margin:20px 0 8px 0;text-align:center;font-weight:600;color:#0a4082">¿Cómo te atendimos?</p>
+       <div style="text-align:center;margin:8px 0 22px 0">${stars}</div>
+       <p style="margin:0 0 6px 0"><strong>Qué pasa con tu voto:</strong></p>
+       <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+         <li>Si calificas con <strong>4 o 5</strong>, le llega como reconocimiento al técnico <strong>${nombreTec}</strong> en su evaluación mensual.</li>
+         <li>Si calificas con <strong>1, 2 o 3</strong>, entra al tablero de mejoras de Mantenimiento como caso a revisar esta semana.</li>
+       </ul>
+       <p style="font-size:13px;color:#475569">Si quieres dejar un comentario adicional, hay un campo opcional al final.</p>
+       <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver detalle de la orden →</a></p>
+       <p style="margin-top:18px"><em>Cada voto que recibimos cambia algo. Gracias por tomarte el tiempo.</em></p>`
     ),
     tipo: "encuesta_satisfaccion",
     referencia: `orden:${orden.id}`,
