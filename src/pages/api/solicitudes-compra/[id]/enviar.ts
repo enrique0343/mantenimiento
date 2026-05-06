@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { solicitudesCompra, solicitudCompraEnvios, solicitudCompraItems, comprasDestinatarios, usuarios, ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { sendMail, emailLayout } from "@/lib/email";
+import { fmtFechaLarga } from "@/lib/datetime";
 
 export const prerender = false;
 
@@ -64,7 +65,7 @@ export const POST: APIRoute = async (ctx) => {
     ? await db.select({ titulo: ordenes.titulo }).from(ordenes).where(eq(ordenes.id, sol.ordenId)).limit(1)
     : [null];
 
-  const fechaSol = new Date(sol.createdAt).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+  const fechaSol = fmtFechaLarga(sol.createdAt);
 
   const destinatarios: Array<{ id?: number; email: string; nombre?: string }> = [];
 

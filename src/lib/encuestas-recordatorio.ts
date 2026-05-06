@@ -6,6 +6,7 @@ import { and, eq, isNull, lte } from "drizzle-orm";
 import { getDb } from "./db";
 import { encuestasSatisfaccion, ordenes, usuarios } from "./schema";
 import { sendMail, emailLayout } from "./email";
+import { fmtFechaLarga } from "./datetime";
 
 // Horas tras las cuales se envía el recordatorio (si no hay respuesta)
 const HORAS_RECORDATORIO = 48;

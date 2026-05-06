@@ -7,6 +7,7 @@ import { sendMail, emailLayout } from "@/lib/email";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
+import { fmtFechaLarga } from "@/lib/datetime";
 
 export const prerender = false;
 
@@ -168,10 +169,8 @@ export const POST: APIRoute = async (ctx) => {
     // Jefes
     const jefes = await db.select().from(usuarios).where(eq(usuarios.rol, "jefe"));
     // Datos para los correos a jefes (técnico responsable, fechas)
-    const fechaCierre = ot.completadaEn
-      ? new Date(ot.completadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
-      : "—";
-    const fechaReabrimiento = new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+    const fechaCierre = ot.completadaEn ? fmtFechaLarga(ot.completadaEn) : "—";
+    const fechaReabrimiento = fmtFechaLarga(new Date());
     let nombreTecnico = "el técnico asignado";
     if (ot.asignadoA) {
       const [tecRow] = await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, ot.asignadoA)).limit(1);

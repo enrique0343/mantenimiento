@@ -18,6 +18,7 @@ import { disparadorOT } from "@/lib/notificaciones";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
+import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 export const prerender = false;
 
@@ -362,9 +363,7 @@ export const PATCH: APIRoute = async (ctx) => {
       }
 
       const primerNombre = (u?.nombre ?? "").split(" ")[0] || u?.nombre || "";
-      const venceFormateado = row.vencimiento
-        ? new Date(row.vencimiento).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
-        : null;
+      const venceFormateado = row.vencimiento ? fmtFechaLarga(row.vencimiento) : null;
       const subjectVence = venceFormateado ? ` — vence ${venceFormateado}` : "";
       const motivo = motivoReasignacion?.trim() || "";
 
@@ -433,7 +432,7 @@ export const PATCH: APIRoute = async (ctx) => {
       if (u?.telegramChatId) {
         ctx.locals.runtime.ctx.waitUntil(
           sendTelegram(env, u.telegramChatId,
-            `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}`,
+            `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
             { linkUrl: otUrl, linkLabel: "Abrir orden" }
           )
         );
@@ -441,7 +440,7 @@ export const PATCH: APIRoute = async (ctx) => {
       await crearNotificacion(ctx, {
         usuarioId: parsed.data.asignadoA, tipo: "ot_asignada",
         titulo: `Te asignaron OT #${row.id}: ${row.titulo}`,
-        mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${new Date(row.vencimiento).toLocaleDateString("es")}` : ""}`,
+        mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${fmtFechaLarga(row.vencimiento)}` : ""}`,
         link: `/ordenes/${row.id}`,
       });
     } catch {}

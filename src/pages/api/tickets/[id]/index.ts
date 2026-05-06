@@ -8,6 +8,7 @@ import { calcularVencimientoSla } from "@/lib/tickets";
 import { sendMail, emailLayout } from "@/lib/email";
 import { logAudit } from "@/lib/audit";
 import { crearNotificacion } from "@/lib/notif-app";
+import { fmtFechaLarga } from "@/lib/datetime";
 
 export const prerender = false;
 
@@ -179,9 +180,7 @@ export const PATCH: APIRoute = async (ctx) => {
         }
         if (!ubicacionTexto && actual.ubicacion) ubicacionTexto = actual.ubicacion;
 
-        const venceFormateado = orden.vencimiento
-          ? new Date(orden.vencimiento).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
-          : null;
+        const venceFormateado = orden.vencimiento ? fmtFechaLarga(orden.vencimiento) : null;
         const subjectVence = venceFormateado ? ` — vence ${venceFormateado}` : "";
 
         ctx.locals.runtime.ctx.waitUntil(

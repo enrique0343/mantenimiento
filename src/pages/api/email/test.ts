@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { sendMail, emailLayout, detectarProveedor, nombreProveedor } from "@/lib/email";
 import { getEnv } from "@/lib/db";
+import { fmtFecha } from "@/lib/datetime";
 
 export const prerender = false;
 
@@ -32,7 +33,7 @@ export const POST: APIRoute = async (ctx) => {
       "Prueba de envío",
       `<p>Si recibes este mensaje, la integración de email está funcionando.</p>
        <p>Proveedor: <strong>${nombreProveedor(proveedorActual)}</strong></p>
-       <p>Enviado por <strong>${user.nombre}</strong> el ${new Date().toLocaleString("es")}.</p>`
+       <p>Enviado por <strong>${user.nombre}</strong> el ${fmtFecha(new Date())}.</p>`
     ),
     tipo: "test",
   });

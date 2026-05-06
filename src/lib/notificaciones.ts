@@ -8,6 +8,7 @@ import { ordenes, usuarios, tickets, encuestasSatisfaccion } from "./schema";
 import { sendMail, emailLayout } from "./email";
 import { sendTelegram } from "./telegram";
 import { crearNotificacion } from "./notif-app";
+import { fmtFechaLarga } from "./datetime";
 
 // URL base del despliegue. Se puede sobrescribir por env APP_URL.
 function appUrl(ctx: APIContext): string {
@@ -100,7 +101,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
   // Si por alguna razón no está, usamos "Hace un momento" para no engañar
   // mostrando la fecha de creación de la OT o del ticket.
   const fechaInicio = (orden as any).iniciadaEn
-    ? new Date((orden as any).iniciadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+    ? fmtFechaLarga((orden as any).iniciadaEn)
     : "Hace un momento";
 
   await sendMail(ctx, {
@@ -160,8 +161,8 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
   const inconformidadUrl = tk?.token ? `${appUrl(ctx)}/soporte/track/${tk.token}?inconformidad=1` : null;
 
   const fechaCierre = (orden as any).completadaEn
-    ? new Date((orden as any).completadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
-    : new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+    ? fmtFechaLarga((orden as any).completadaEn)
+    : fmtFechaLarga(new Date());
 
   await sendMail(ctx, {
     to: sol.email,
