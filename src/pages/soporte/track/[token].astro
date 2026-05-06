@@ -1,7 +1,7 @@
 ---
 import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
-import { tickets, ticketComentarios, usuarios } from "@/lib/schema";
+import { tickets, ticketComentarios, usuarios, ordenes } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
 export const prerender = false;
@@ -19,6 +19,25 @@ const coms = t
       .orderBy(asc(ticketComentarios.id))
   : [];
 
+// Cargar la OT vinculada para saber si está completada/verificada y dentro
+// de la ventana de 48h para reportar inconformidad
+let ot: any = null;
+let mostrarInconformidad = false;
+let horasRestantes = 0;
+const VENTANA_HORAS = 48;
+if (t?.otId) {
+  const [otRow] = await db.select().from(ordenes).where(eq(ordenes.id, t.otId)).limit(1);
+  ot = otRow ?? null;
+  if (ot && (ot.estado === "completada" || ot.estado === "verificada") && ot.completadaEn) {
+    const horas = (Date.now() - new Date(ot.completadaEn).getTime()) / 3_600_000;
+    if (horas < VENTANA_HORAS) {
+      mostrarInconformidad = true;
+      horasRestantes = Math.max(0, Math.round(VENTANA_HORAS - horas));
+    }
+  }
+}
+
+const abrirInconformidad = Astro.url.searchParams.get("inconformidad") === "1";
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
 ---
 
@@ -58,6 +77,35 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
             )}
           </div>
 
+          {mostrarInconformidad && (
+            <div id="inconformidadBox" class="card mt-4 p-5 border-l-4 border-red-400">
+              <h2 class="text-sm font-semibold text-red-700">¿El problema persiste?</h2>
+              <p class="mt-1 text-sm text-slate-600">
+                Tu orden fue marcada como <strong>resuelta</strong>. Tienes <strong>{horasRestantes} horas</strong> para reportar inconformidad y reabrirla automáticamente. Después, deberás crear un nuevo ticket.
+              </p>
+              <button id="btnAbrirIncon" class:list={["mt-3 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700", abrirInconformidad ? "hidden" : ""]}>
+                Reportar inconformidad
+              </button>
+              <form id="formIncon" class:list={["mt-3 space-y-2", abrirInconformidad ? "" : "hidden"]}>
+                <label class="block text-sm font-medium text-slate-700">Cuéntanos qué notaste</label>
+                <textarea id="motivoIncon" class="input" rows="4" minlength="10" placeholder="Ej: el aire sigue sin enfriar, el filtro quedó mal puesto, etc." required></textarea>
+                <p class="text-xs text-slate-500">Sé específico: nos ayuda a resolver más rápido. Mínimo 10 caracteres.</p>
+                <p id="errIncon" class="hidden text-sm text-red-600"></p>
+                <div class="flex gap-2">
+                  <button type="submit" class="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                    Enviar y reabrir orden
+                  </button>
+                  <button type="button" id="btnCancelIncon" class="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm hover:bg-slate-50">
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+              <div id="okIncon" class="hidden mt-3 rounded bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">
+                ✓ Reportamos tu inconformidad y la orden fue reabierta. El técnico ya recibió la notificación.
+              </div>
+            </div>
+          )}
+
           <div class="card mt-4 p-5">
             <h2 class="text-sm font-semibold text-slate-700">Conversación</h2>
             <ul class="mt-3 space-y-3 text-sm">
@@ -79,7 +127,7 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
         </>
       )}
     </main>
-    <script define:vars={{ token }}>
+    <script define:vars={{ token, abrirInconformidad }}>
       document.getElementById("comForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const texto = document.getElementById("comTexto").value.trim();
@@ -91,6 +139,56 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
         });
         if (res.ok) location.reload();
       });
+
+      const btnAbrir = document.getElementById("btnAbrirIncon");
+      const formIncon = document.getElementById("formIncon");
+      const btnCancel = document.getElementById("btnCancelIncon");
+      btnAbrir?.addEventListener("click", () => {
+        btnAbrir.classList.add("hidden");
+        formIncon.classList.remove("hidden");
+        document.getElementById("motivoIncon")?.focus();
+      });
+      btnCancel?.addEventListener("click", () => {
+        formIncon.classList.add("hidden");
+        btnAbrir.classList.remove("hidden");
+      });
+
+      formIncon?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const motivo = document.getElementById("motivoIncon").value.trim();
+        const err = document.getElementById("errIncon");
+        err.classList.add("hidden");
+        if (motivo.length < 10) {
+          err.textContent = "Por favor describe qué notaste con al menos 10 caracteres.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const submitBtn = formIncon.querySelector("button[type='submit']");
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Enviando...";
+        const res = await fetch(`/api/tickets/track/${token}/reabrir`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motivo }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) {
+          formIncon.classList.add("hidden");
+          document.getElementById("okIncon").classList.remove("hidden");
+          setTimeout(() => location.reload(), 2500);
+        } else {
+          err.textContent = j.error ?? "Error al enviar. Intenta de nuevo.";
+          err.classList.remove("hidden");
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Enviar y reabrir orden";
+        }
+      });
+
+      // Si llega con ?inconformidad=1, hacer scroll al bloque
+      if (abrirInconformidad) {
+        document.getElementById("inconformidadBox")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     </script>
   </body>
 </html>
+
