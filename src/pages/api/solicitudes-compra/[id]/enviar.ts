@@ -146,8 +146,7 @@ export const POST: APIRoute = async (ctx) => {
            <p style="margin-top:20px">Agradezco de antemano su gestión y disposición habituales.</p>
 
            <p style="margin-top:24px">Atentamente,<br/>
-             <strong>${autorizador?.nombre ?? "Gerencia de Operaciones"}</strong><br/>
-             Gerencia de Operaciones<br/>
+             <strong>Departamento de Operaciones</strong><br/>
              <em>Avante Complejo Hospitalario</em><br/>
              <span style="font-size:12px;color:#64748b">Inversiones Avante S.A. de C.V.</span>
            </p>`
