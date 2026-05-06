@@ -167,19 +167,46 @@ export const POST: APIRoute = async (ctx) => {
 
     // Jefes
     const jefes = await db.select().from(usuarios).where(eq(usuarios.rol, "jefe"));
+    // Datos para los correos a jefes (técnico responsable, fechas)
+    const fechaCierre = ot.completadaEn
+      ? new Date(ot.completadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+      : "—";
+    const fechaReabrimiento = new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+    let nombreTecnico = "el técnico asignado";
+    if (ot.asignadoA) {
+      const [tecRow] = await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, ot.asignadoA)).limit(1);
+      if (tecRow?.nombre) nombreTecnico = tecRow.nombre;
+    }
+
     for (const jefe of jefes) {
+      const primerNombreJefe = (jefe.nombre ?? "").split(" ")[0] || jefe.nombre;
       if (jefe.email) {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: jefe.email,
-            subject: `[OT #${ot.id}] Inconformidad reportada — ${ot.titulo}`,
+            subject: `[OT #${ot.id}] Reabrimiento de OT — Aviso para tu monitoreo`,
             html: emailLayout(
-              "Inconformidad reportada en OT cerrada",
-              `<p>El solicitante <strong>${t.solicitanteNombre}</strong> &lt;${t.solicitanteEmail}&gt; reportó que el problema no quedó resuelto en la orden <strong>#${ot.id} — ${ot.titulo}</strong>.</p>
-               <p style="margin:0 0 6px 0"><strong>Motivo:</strong></p>
+              "Aviso de gobierno",
+              `<p>Hola <strong>${primerNombreJefe}</strong>,</p>
+               <p>Te enviamos este aviso para tu monitoreo, no para que intervengas.</p>
+               <p>La <strong>OT #${ot.id} — ${ot.titulo}</strong>, que cerró <strong>${nombreTecnico}</strong>, fue reabierta por inconformidad del solicitante.</p>
+
+               <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:15px">Datos clave</h3>
+               <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+                 <li><strong>Solicitante:</strong> ${t.solicitanteNombre} &lt;${t.solicitanteEmail}&gt;</li>
+                 <li><strong>Técnico asignado:</strong> ${nombreTecnico}</li>
+                 <li><strong>Fecha de cierre original:</strong> ${fechaCierre}</li>
+                 <li><strong>Fecha de reabrimiento:</strong> ${fechaReabrimiento}</li>
+               </ul>
+
+               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Lo que reportó el solicitante</h3>
                <p style="white-space:pre-wrap;background:#fef2f2;padding:12px;border-left:3px solid #dc2626;border-radius:4px;margin:0 0 18px 0">${motivo}</p>
-               <p>La orden fue reabierta a <strong>en proceso</strong>. El técnico asignado ya fue notificado.</p>
-               <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>`
+
+               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Estado actual</h3>
+               <p>La OT regresó a estado <strong>en proceso</strong>. ${nombreTecnico.split(" ")[0]} ya fue notificado y volverá al sitio bajo flujo estándar.</p>
+               <p>Si después de revisar el caso consideras que requiere tu intervención, puedes hacerlo desde la orden. Si no, basta con que quede registrado para tu visibilidad.</p>
+
+               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>`
             ),
             tipo: "ot_reabierta_jefe",
             referencia: `orden:${ot.id}`,
