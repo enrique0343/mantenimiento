@@ -228,7 +228,7 @@ export function emailLayout(title: string, body: string, footer?: string): strin
     <div style="background:#0a4082;color:#fff;padding:16px 20px"><h1 style="margin:0;font-size:18px">${title}</h1></div>
     <div style="padding:20px;color:#0f172a;line-height:1.5">${body}</div>
     <div style="padding:12px 20px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
-      ${footer ?? "Este es un mensaje automático del sistema de mantenimiento."}
+      ${footer ?? "Correo enviado automáticamente desde la Gerencia de Operaciones."}
     </div>
   </div>
 </body></html>`;
