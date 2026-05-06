@@ -133,7 +133,7 @@ export const POST: APIRoute = async (ctx) => {
 
            ${sol.descripcion ? `<h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Justificación operativa</h3>
              <p style="white-space:pre-wrap">${sol.descripcion}</p>
-             <p>La pronta atención de esta solicitud resulta clave para restablecer la operación bajo parámetros normales y evitar escalamientos a otras áreas del Complejo.</p>` : ""}
+             <p>La pronta atención de esta solicitud resulta clave para restablecer la operación bajo parámetros normales y proteger la continuidad del servicio en las áreas que dependen de esta operación.</p>` : ""}
 
            <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Documentación adjunta</h3>
            <p>En el siguiente enlace encontrará el detalle técnico completo, especificaciones del repuesto y el formulario PDF firmado de la solicitud:</p>
