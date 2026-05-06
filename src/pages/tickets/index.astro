@@ -14,6 +14,7 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroVista = url.searchParams.get("vista"); // "mios" | null
+const verCerrados = url.searchParams.get("verCerrados") === "1";
 
 // Filtro por especialidad (jefe/tecnico)
 const aplicaFiltroEsp = (user.rol === "jefe" || user.rol === "tecnico");
@@ -28,6 +29,10 @@ const rowsRaw = await db
   .leftJoin(activos, eq(activos.id, tickets.activoId))
   .orderBy(desc(tickets.id));
 
+// Estados activos: los que se muestran por defecto (vista limpia).
+// Resueltos, cerrados y descartados se ocultan salvo toggle "Ver cerrados".
+const ESTADOS_ACTIVOS = new Set<EstadoTicket>(["nuevo", "asignado", "en_proceso"]);
+
 // Filtro por especialidad: usa tipoMantenimiento del ticket directamente.
 // Si el ticket no tiene tipoMantenimiento (legacy), cae al tipo del activo.
 // Si tampoco hay activo, se asume "general" → visible para techs general.
@@ -36,6 +41,8 @@ const rows = rowsRaw.filter((r) => {
   const asignadoAMi = r.t.asignadoA === user.id;
   if (filtroVista === "mios" && !asignadoAMi) return false;
   if (filtroEstado && r.t.estado !== filtroEstado) return false;
+  // Por defecto solo mostrar activos
+  if (!filtroEstado && !verCerrados && !ESTADOS_ACTIVOS.has(r.t.estado as EstadoTicket)) return false;
   if (filtroEspecialidad && !asignadoAMi) {
     const tipoTicket = (r.t as any).tipoMantenimiento ?? r.act?.tipo ?? "general";
     if (tipoTicket !== filtroEspecialidad) return false;
@@ -44,6 +51,11 @@ const rows = rowsRaw.filter((r) => {
 });
 
 const conteoMios = rowsRaw.filter((r) => r.t.asignadoA === user.id).length;
+const conteoActivos = rowsRaw.filter((r) => ESTADOS_ACTIVOS.has(r.t.estado as EstadoTicket)).length;
+const conteoNuevoSinAsignar = rowsRaw.filter((r) => r.t.estado === "nuevo" && !r.t.asignadoA).length;
+const conteoAsignados = rowsRaw.filter((r) => r.t.estado === "asignado").length;
+const conteoEnProcesoTk = rowsRaw.filter((r) => r.t.estado === "en_proceso").length;
+const conteoCerrados = rowsRaw.length - conteoActivos;
 
 const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.t.estado] = (acc[r.t.estado] ?? 0) + 1;
@@ -71,31 +83,59 @@ const esAdmin = user.rol === "admin";
     </div>
   </div>
 
-  <!-- Toggle vista -->
+  <!-- Toggle vista mios / todos -->
   <div class="mt-4 flex gap-1 text-xs">
-    <a href={`/tickets${filtroEstado ? `?estado=${filtroEstado}` : ""}`}
+    <a href={`/tickets${filtroEstado ? `?estado=${filtroEstado}` : ""}${verCerrados ? (filtroEstado ? "&" : "?") + "verCerrados=1" : ""}`}
        class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista !== "mios" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-      Todos ({rowsRaw.length})
+      Todos
     </a>
     {esTecnico && (
-      <a href={`/tickets?vista=mios${filtroEstado ? `&estado=${filtroEstado}` : ""}`}
+      <a href={`/tickets?vista=mios${filtroEstado ? `&estado=${filtroEstado}` : ""}${verCerrados ? "&verCerrados=1" : ""}`}
          class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista === "mios" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"]}>
         👤 Asignados a mí ({conteoMios})
       </a>
     )}
   </div>
 
-  <div class="mt-3 flex flex-wrap gap-1 text-xs">
+  <!-- Filtros rapidos por estado -->
+  <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
     <a href={`/tickets${filtroVista ? `?vista=${filtroVista}` : ""}`}
-       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-50 text-brand-700 border border-brand-200" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-      Todos los estados
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerrados ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      ⚡ Activos ({conteoActivos})
     </a>
-    {ESTADOS.map((s) => (
+    <span class="text-slate-300">·</span>
+    <a href={`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "nuevo" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
+      🔵 Nuevos ({conteo.nuevo ?? 0})
+    </a>
+    <a href={`/tickets?estado=asignado${filtroVista ? `&vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "asignado" ? "bg-indigo-600 text-white" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"]}>
+      🟦 Asignados ({conteoAsignados})
+    </a>
+    <a href={`/tickets?estado=en_proceso${filtroVista ? `&vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_proceso" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
+      🟢 En progreso ({conteoEnProcesoTk})
+    </a>
+    {conteoNuevoSinAsignar > 0 && (
+      <a href={`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`}
+         class:list={["rounded-md px-2 py-1 font-medium bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"]}
+         title="Tickets nuevos sin técnico asignado">
+        🔴 Sin asignar ({conteoNuevoSinAsignar})
+      </a>
+    )}
+    <span class="text-slate-300">·</span>
+    {(["resuelto", "cerrado", "descartado"] as EstadoTicket[]).map((s) => (
       <a href={`/tickets?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`}
-         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_TICKET_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_TICKET_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {ESTADO_TICKET_LABEL[s]} ({conteo[s] ?? 0})
       </a>
     ))}
+    {!filtroEstado && (
+      <a href={`/tickets?verCerrados=1${filtroVista ? `&vista=${filtroVista}` : ""}`}
+         class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerrados ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
+        {verCerrados ? "🗂 Mostrando todos" : "🗂 Ver cerrados (" + conteoCerrados + ")"}
+      </a>
+    )}
   </div>
 
   <div class="card mt-4 overflow-hidden">
@@ -118,8 +158,21 @@ const esAdmin = user.rol === "admin";
         {rows.map((r) => {
           const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           const asignadoAMi = r.t.asignadoA === user.id;
+          const e = r.t.estado as EstadoTicket;
+          // Color de fila por subestado: rojo (nuevo sin asignar), azul (nuevo
+          // con asignado), indigo (asignado oficial), verde (en proceso)
+          const filaColor =
+            e === "nuevo" && !r.t.asignadoA ? "border-l-4 border-red-500 bg-red-50/40" :
+            e === "nuevo" ? "border-l-4 border-blue-500 bg-blue-50/40" :
+            e === "asignado" ? "border-l-4 border-indigo-500 bg-indigo-50/40" :
+            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50/40" :
+            "";
+          const subestadoBadge =
+            e === "nuevo" && !r.t.asignadoA
+              ? <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Sin asignar</span>
+              : null;
           return (
-            <tr class:list={["hover:bg-slate-50", asignadoAMi && "bg-emerald-50/50"]}>
+            <tr class:list={["hover:bg-slate-100", filaColor]}>
               {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="tk-cb cursor-pointer" data-id={r.t.id} /></td>}
               <td class="px-4 py-2 font-mono text-xs">
                 {asignadoAMi && <span title="Asignado a ti" class="mr-1">👤</span>}
@@ -127,6 +180,7 @@ const esAdmin = user.rol === "admin";
               </td>
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
+                {subestadoBadge && <span class="ml-2">{subestadoBadge}</span>}
                 <div class="text-xs text-slate-400 truncate max-w-md">{r.t.descripcion}</div>
               </td>
               <td class="px-4 py-2 text-xs">
