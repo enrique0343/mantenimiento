@@ -3,6 +3,7 @@ import { eq, lte, and } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias } from "@/lib/schema";
 import { siguienteFecha } from "@/lib/frecuencias";
+import { enviarRecordatoriosEncuestas } from "@/lib/encuestas-recordatorio";
 
 export const prerender = false;
 
@@ -115,5 +116,14 @@ export const POST: APIRoute = async (ctx) => {
     detalles.push({ origen: "actividad", refId: a.id, ordenId: orden.id, descripcion: a.titulo });
   }
 
-  return Response.json({ ok: true, fecha: hoy, creadas, detalles });
+  // Recordatorios de encuestas de satisfacción no respondidas (>48h)
+  let recordatoriosEnviados = 0;
+  try {
+    const r = await enviarRecordatoriosEncuestas(ctx);
+    recordatoriosEnviados = r.enviados;
+  } catch (e) {
+    console.error("recordatorios encuestas:", e);
+  }
+
+  return Response.json({ ok: true, fecha: hoy, creadas, detalles, recordatoriosEnviados });
 };
