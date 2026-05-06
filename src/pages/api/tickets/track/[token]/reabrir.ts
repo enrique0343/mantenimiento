@@ -120,18 +120,29 @@ export const POST: APIRoute = async (ctx) => {
     if (ot.asignadoA) {
       const [tec] = await db.select().from(usuarios).where(eq(usuarios.id, ot.asignadoA)).limit(1);
       if (tec?.email) {
+        const primerNombreTec = (tec.nombre ?? "").split(" ")[0] || tec.nombre;
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: tec.email,
-            subject: `[OT #${ot.id}] El solicitante reportó inconformidad — ${ot.titulo}`,
+            subject: `[OT #${ot.id}] Necesitamos una segunda visita — ${ot.titulo}`,
             html: emailLayout(
-              "OT reabierta — El solicitante necesita más",
-              `<p>Hola <strong>${(tec.nombre ?? "").split(" ")[0] || tec.nombre}</strong>,</p>
-               <p>El solicitante de la orden <strong>#${ot.id} — ${ot.titulo}</strong> reportó que el problema no quedó resuelto y la orden fue reabierta.</p>
-               <p style="margin:0 0 6px 0"><strong>Lo que reporta:</strong></p>
+              "Volvamos al sitio para terminar bien",
+              `<p>Hola <strong>${primerNombreTec}</strong>,</p>
+               <p>El solicitante de la <strong>OT #${ot.id} — ${ot.titulo}</strong> nos compartió que el problema no quedó completamente resuelto después de tu intervención. La orden volvió a estado <strong>en proceso</strong> para que puedas completarla.</p>
+
+               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Lo que el solicitante observó al verificar:</h3>
                <p style="white-space:pre-wrap;background:#fef2f2;padding:12px;border-left:3px solid #dc2626;border-radius:4px;margin:0 0 18px 0">${motivo}</p>
-               <p>Por favor revisa lo antes posible y vuelve al sitio para terminar de resolver. La orden está nuevamente en estado <strong>en proceso</strong>.</p>
-               <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>`
+
+               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Cómo leer este reabrimiento</h3>
+               <p>Esto no es una observación contra tu trabajo. El trabajo que ejecutaste está registrado y sigue siendo válido. Lo que el solicitante está señalando es un alcance adicional que probablemente no era visible al momento del diagnóstico inicial, o que se manifestó después.</p>
+               <p>Estos casos pasan. El sistema de reabrimiento existe precisamente para que casos como este se resuelvan dentro de la misma OT, sin generar tickets nuevos ni perder la trazabilidad del trabajo ya hecho.</p>
+
+               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Próximos pasos sugeridos</h3>
+               <p>Cuando regreses al sitio, te sugerimos verificar tres cosas: el estado real del problema bajo las condiciones actuales, los componentes adicionales que pudieran estar relacionados con el síntoma, y cualquier otro elemento del sistema que pueda estar contribuyendo al caso.</p>
+               <p>Si al diagnosticar de nuevo encuentras un alcance distinto al original (por ejemplo, repuesto adicional, falla en otro componente, intervención mayor), regístralo en la orden antes de intervenir. Si al evaluar consideras que el caso ya excede mantenimiento correctivo y requiere apoyo de jefatura o de un especialista externo, escálalo. Esto no es retroceso; es buen criterio.</p>
+
+               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+               <p style="margin-top:14px"><em>Gracias por tomar este reabrimiento como lo que es: una oportunidad de cerrar bien un caso que importa.</em></p>`
             ),
             tipo: "ot_reabierta",
             referencia: `orden:${ot.id}`,
