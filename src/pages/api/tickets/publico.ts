@@ -96,16 +96,21 @@ export const POST: APIRoute = async (ctx) => {
     }
 
     // Confirmacion al solicitante
+    const env2 = (ctx.locals as any)?.runtime?.env ?? {};
+    const baseUrl2 = env2.APP_URL || "https://mantenimiento-49c.pages.dev";
+    const portalUrl = `${baseUrl2}/soporte/track`;
     ctx.locals.runtime.ctx.waitUntil(
       sendMail(ctx, {
         to: row.solicitanteEmail,
-        subject: `Tu ticket #${row.id} fue recibido`,
+        subject: `Recibimos tu solicitud — Ticket #${row.id}`,
         html: emailLayout(
           `Recibimos tu solicitud`,
           `<p>Hola <strong>${row.solicitanteNombre}</strong>,</p>
-           <p>Tu solicitud fue registrada con el código <code>${row.trackingToken}</code>.</p>
-           <p>Tiempo estimado de respuesta: <strong>${row.slaHoras} horas</strong>.</p>
-           <p>Puedes consultar el estado en cualquier momento desde nuestro portal de soporte.</p>`
+           <p>Gracias por tomarte el tiempo de reportarnos lo que está ocurriendo. Tu solicitud ya quedó en manos del equipo de Operaciones y la atenderemos con el cuidado que merece.</p>
+           <p>La registramos con el código <strong style="font-family:monospace;background:#f1f5f9;padding:2px 8px;border-radius:4px">${row.trackingToken}</strong>, para que puedas darle seguimiento cuando lo necesites.</p>
+           <p>Trabajaremos para darte una respuesta dentro de las próximas <strong>${row.slaHoras} horas</strong>. Si el caso lo requiere, te contactaremos antes.</p>
+           <p>Mientras tanto, puedes consultar el estado de tu ticket en cualquier momento desde <a href="${portalUrl}" style="color:#0a4082;font-weight:500">nuestro portal de soporte</a>.</p>
+           <p style="margin-top:20px"><em>Estamos para servirte.</em></p>`
         ),
         tipo: "ticket_confirmacion",
         referencia: `ticket:${row.id}`,
