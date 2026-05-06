@@ -131,19 +131,45 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
 // ─── Notificación: OT completada por técnico ─────────────────────────────────
 export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
   const sol = await obtenerSolicitante(ctx, orden);
+  const asg = await obtenerAsignado(ctx, orden);
   if (!sol) return;
   const env = (ctx.locals as any)?.runtime?.env ?? {};
   const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
+  const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
+
+  // Si la OT viene de un ticket público, recuperamos su tracking_token para
+  // que el botón "Reportar inconformidad" lleve al portal público (donde el
+  // solicitante podrá reabrir, una vez construyamos el flujo).
+  const db = getDb(ctx);
+  const [tk] = await db.select({ token: tickets.trackingToken }).from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
+  const inconformidadUrl = tk?.token ? `${appUrl(ctx)}/soporte/track/${tk.token}?inconformidad=1` : null;
+
+  const fechaCierre = (orden as any).completadaEn
+    ? new Date((orden as any).completadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+    : new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Trabajo completado: ${orden.titulo}`,
+    subject: `[OT #${orden.id}] Tu solicitud quedó resuelta — ${orden.titulo}`,
     html: emailLayout(
-      "Trabajo completado",
-      `<p>Hola <strong>${sol.nombre}</strong>,</p>
-       <p>El técnico marcó como <strong>completada</strong> la orden <strong>#${orden.id} - ${orden.titulo}</strong>.</p>
-       ${orden.solucionAplicada ? `<p><strong>Solución aplicada:</strong><br/><span style="white-space:pre-wrap">${orden.solucionAplicada}</span></p>` : ""}
-       <p>El trabajo aún debe ser verificado por el área de mantenimiento.</p>
-       <p><a href="${url}">Ver detalle de la orden →</a></p>`
+      "Tu solicitud quedó resuelta",
+      `<p>Hola <strong>${primerNombreSol}</strong>,</p>
+       <p>Te confirmamos que tu orden ya fue atendida.</p>
+       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+         ${asg ? `<li><strong>Técnico responsable:</strong> ${asg.nombre}</li>` : ""}
+         <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
+         <li><strong>Estado:</strong> completada</li>
+       </ul>
+       ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
+         <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
+       <p style="margin-top:18px"><strong>Tu validación nos importa.</strong> Tú conoces el área mejor que nadie. Si al verificar notas que el problema original persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
+       <p>Si todo quedó conforme, no necesitas hacer nada. Tu silencio confirma el cierre.</p>
+       <p style="margin:18px 0">
+         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">Ver detalle de la orden →</a>
+         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
+       </p>
+       <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. Cada orden cerrada es una oportunidad de hacerlo mejor la próxima vez.</em></p>`
     ),
     tipo: "ot_completada",
     referencia: `orden:${orden.id}`,
