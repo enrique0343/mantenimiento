@@ -13,6 +13,7 @@ const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
 const filtroVista = url.searchParams.get("vista"); // "mias" | null
+const verCerradas = url.searchParams.get("verCerradas") === "1"; // por defecto false: solo activas
 
 // Filtro por especialidad (jefe/tecnico): solo OTs cuyo activo coincide
 const aplicaFiltroEsp = (usrLogged.rol === "jefe" || usrLogged.rol === "tecnico");
@@ -67,11 +68,18 @@ try {
 // Filtro por especialidad: OTs cuyo activo coincide, OR OTs sin activo
 // (no excluimos las "sin equipo" — son trabajos generales que también aplican).
 // OTs asignadas al usuario actual SIEMPRE se muestran (override del filtro).
+// Estados "activos" = los que se muestran por defecto (vista limpia).
+// Cerradas, verificadas, completadas, canceladas requieren toggle "Ver cerradas".
+const ESTADOS_ACTIVOS = new Set<EstadoOT>(["abierta", "en_proceso", "en_espera"]);
+
 const rows = rowsRaw.filter((r) => {
   const asignadaAMi = r.orden.asignadoA === usrLogged.id;
   if (filtroVista === "mias" && !asignadaAMi) return false;
   if (filtroEstado && r.orden.estado !== filtroEstado) return false;
   if (filtroTipo && r.orden.tipo !== filtroTipo) return false;
+  // Por defecto solo mostrar activas, salvo que el usuario filtre por estado
+  // explicitamente o haya pulsado "Ver cerradas"
+  if (!filtroEstado && !verCerradas && !ESTADOS_ACTIVOS.has(r.orden.estado as EstadoOT)) return false;
   if (filtroEspecialidad && !asignadaAMi) {
     // Sin activo: visible para todos (trabajos generales)
     if (r.activo && r.activo.tipo !== filtroEspecialidad) return false;
@@ -80,6 +88,12 @@ const rows = rowsRaw.filter((r) => {
 });
 
 const conteoMias = rowsRaw.filter((r) => r.orden.asignadoA === usrLogged.id).length;
+const conteoActivas = rowsRaw.filter((r) => ESTADOS_ACTIVOS.has(r.orden.estado as EstadoOT)).length;
+const conteoCreadas = rowsRaw.filter((r) => r.orden.estado === "abierta" && !r.orden.asignadoA).length;
+const conteoAbiertas = rowsRaw.filter((r) => r.orden.estado === "abierta" && r.orden.asignadoA).length;
+const conteoEnProceso = rowsRaw.filter((r) => r.orden.estado === "en_proceso").length;
+const conteoEnEspera = rowsRaw.filter((r) => r.orden.estado === "en_espera").length;
+const conteoCerradas = rowsRaw.length - conteoActivas;
 
 const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.orden.estado] = (acc[r.orden.estado] ?? 0) + 1;
@@ -112,14 +126,14 @@ const esAdmin = usrLogged.rol === "admin";
     </div>
   )}
 
-  <!-- Toggle vista -->
+  <!-- Toggle vista mías / todas -->
   <div class="mt-4 flex gap-1 text-xs">
-    <a href={`/ordenes${filtroEstado ? `?estado=${filtroEstado}` : ""}`}
+    <a href={`/ordenes${filtroEstado ? `?estado=${filtroEstado}` : ""}${verCerradas ? (filtroEstado ? "&" : "?") + "verCerradas=1" : ""}`}
        class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista !== "mias" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-      Todas ({rowsRaw.length})
+      Todas
     </a>
     {esTecnico && (
-      <a href={`/ordenes?vista=mias${filtroEstado ? `&estado=${filtroEstado}` : ""}`}
+      <a href={`/ordenes?vista=mias${filtroEstado ? `&estado=${filtroEstado}` : ""}${verCerradas ? "&verCerradas=1" : ""}`}
          class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista === "mias" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"]}>
         👤 Asignadas a mí ({conteoMias})
       </a>
@@ -127,17 +141,46 @@ const esAdmin = usrLogged.rol === "admin";
   </div>
 
   <!-- Filtros rapidos por estado -->
-  <div class="mt-3 flex flex-wrap gap-1 text-xs">
+  <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
     <a href={`/ordenes${filtroVista ? `?vista=${filtroVista}` : ""}`}
-       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-50 text-brand-700 border border-brand-200" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-      Todos los estados
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerradas ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      ⚡ Activas ({conteoActivas})
     </a>
-    {(["abierta", "en_proceso", "en_espera", "completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
+    <span class="text-slate-300">·</span>
+    <a href={`/ordenes?estado=abierta${filtroVista ? `&vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "abierta" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
+      🔵 Abiertas ({conteoAbiertas + conteoCreadas})
+    </a>
+    <a href={`/ordenes?estado=en_proceso${filtroVista ? `&vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_proceso" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
+      🟢 En progreso ({conteoEnProceso})
+    </a>
+    {conteoEnEspera > 0 && (
+      <a href={`/ordenes?estado=en_espera${filtroVista ? `&vista=${filtroVista}` : ""}`}
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_espera" ? "bg-purple-600 text-white" : "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"]}>
+        🟣 En espera ({conteoEnEspera})
+      </a>
+    )}
+    {conteoCreadas > 0 && (
+      <a href="#" id="filtroCreadas"
+         class:list={["rounded-md px-2 py-1 font-medium bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"]}
+         title="OTs abiertas sin técnico asignado">
+        🔴 Sin asignar ({conteoCreadas})
+      </a>
+    )}
+    <span class="text-slate-300">·</span>
+    {(["completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
       <a href={`/ordenes?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`}
-         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {ESTADO_LABEL[s]} ({conteoEstados[s] ?? 0})
       </a>
     ))}
+    {!filtroEstado && (
+      <a href={`/ordenes?verCerradas=1${filtroVista ? `&vista=${filtroVista}` : ""}`}
+         class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerradas ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
+        {verCerradas ? "🗂 Mostrando todas" : "🗂 Ver cerradas (" + conteoCerradas + ")"}
+      </a>
+    )}
   </div>
 
   <div class="card mt-4 overflow-hidden">
@@ -163,8 +206,20 @@ const esAdmin = usrLogged.rol === "admin";
           const tipo = (r.orden.tipo ?? "correctivo") as keyof typeof TIPO_COLOR;
           const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
           const asignadaAMi = r.orden.asignadoA === usrLogged.id;
+          // Color de fila por subestado: rojo (creada sin asignar), azul (asignada
+          // sin iniciar), verde (en proceso), morado (en espera), neutro (otros)
+          const filaColor =
+            e === "abierta" && !r.orden.asignadoA ? "border-l-4 border-red-500 bg-red-50/40" :
+            e === "abierta" ? "border-l-4 border-blue-500 bg-blue-50/40" :
+            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50/40" :
+            e === "en_espera" ? "border-l-4 border-purple-500 bg-purple-50/40" :
+            "";
+          const subestadoBadge =
+            e === "abierta" && !r.orden.asignadoA
+              ? <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Sin asignar</span>
+              : null;
           return (
-            <tr class:list={["hover:bg-slate-50", asignadaAMi && "bg-emerald-50/50"]}>
+            <tr class:list={["hover:bg-slate-100", filaColor]}>
               {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="ot-cb cursor-pointer" data-id={r.orden.id} /></td>}
               <td class="px-4 py-2 font-mono text-xs">
                 {asignadaAMi && <span title="Asignada a ti" class="mr-1">👤</span>}
@@ -172,6 +227,7 @@ const esAdmin = usrLogged.rol === "admin";
               </td>
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
+                {subestadoBadge && <span class="ml-2">{subestadoBadge}</span>}
               </td>
               <td class="px-4 py-2 text-slate-600 text-xs">
                 {r.activo && <span>🛠 {r.activo.codigo}</span>}
@@ -191,6 +247,30 @@ const esAdmin = usrLogged.rol === "admin";
       </tbody>
     </table>
   </div>
+
+  <script>
+    // Filtro "Sin asignar": cliente-side, oculta filas con asignado != null
+    document.getElementById("filtroCreadas")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget as HTMLElement;
+      const activo = btn.getAttribute("data-active") === "1";
+      const rows = document.querySelectorAll<HTMLTableRowElement>("tbody tr");
+      rows.forEach((tr) => {
+        const sinAsignar = tr.querySelector("td:nth-child(2)")?.textContent?.includes("Sin asignar")
+          || tr.querySelector(".badge.bg-red-100")
+          || tr.classList.contains("border-red-500");
+        // Más simple: buscar el bg-red-50/40 en class
+        const esRojo = tr.className.includes("bg-red-50");
+        if (activo) {
+          tr.style.display = "";
+        } else {
+          tr.style.display = esRojo ? "" : "none";
+        }
+      });
+      btn.setAttribute("data-active", activo ? "0" : "1");
+      btn.textContent = activo ? btn.textContent!.replace("✓ ", "") : "✓ " + btn.textContent;
+    });
+  </script>
 
   {esAdmin && (
     <script>
