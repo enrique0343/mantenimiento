@@ -574,7 +574,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
       <!-- Trabajos realizados / causa raiz / solucion -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
+          <span id="autosaveIndicador" class="text-xs text-slate-400" data-status="idle"></span>
+        </div>
         <div class="mt-3 space-y-3 text-sm">
           <div>
             <label class="label">Trabajos realizados</label>
@@ -598,7 +601,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente al completar (de "iniciada" a "completada"). Puedes ajustarlo si hubo pausas.</p>
           </div>
           {puedeEditar && (
-            <button id="ejecSave" class="btn-primary text-sm">Guardar ejecución</button>
+            <div class="flex items-center gap-2 flex-wrap">
+              <p class="text-xs text-emerald-700 mr-auto">✓ Tus cambios se guardan automáticamente al escribir.</p>
+              <button id="ejecSave" class="btn-secondary text-xs">Guardar ahora</button>
+            </div>
           )}
           <p id="ejecMsg" class="hidden text-xs"></p>
         </div>
@@ -1173,22 +1179,136 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
     });
 
-    // Ejecucion
-    $("ejecSave")?.addEventListener("click", async () => {
-      const msg = $("ejecMsg");
-      msg.classList.add("hidden");
+    // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
+    const STORAGE_KEY = `ot-${id}-draft`;
+    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas"];
+    const ejecIndicador = $("autosaveIndicador");
+
+    function setIndicador(estado, texto) {
+      if (!ejecIndicador) return;
+      ejecIndicador.dataset.status = estado;
+      ejecIndicador.textContent = texto;
+      const colores = {
+        idle: "text-slate-400",
+        guardando: "text-amber-600",
+        guardado: "text-emerald-600",
+        error: "text-red-600",
+        offline: "text-amber-700",
+      };
+      ejecIndicador.className = "text-xs " + (colores[estado] || colores.idle);
+    }
+
+    function leerEjecPayload() {
       const horas = $("horasTrabajadas")?.value;
-      const payload = {
+      return {
         trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
         causaRaiz: $("causaRaiz")?.value?.trim() || null,
         solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
         horasTrabajadas: horas ? Number(horas) : null,
       };
-      const r = await patchOrden(payload);
-      if (r) {
-        msg.textContent = "✓ Guardado";
-        msg.className = "text-xs text-emerald-600";
-        msg.classList.remove("hidden");
+    }
+
+    function guardarLocal(payload) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, savedAt: Date.now() }));
+      } catch {}
+    }
+    function limpiarLocal() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    }
+
+    let debounceTimer = null;
+    let inFlight = false;
+    let pending = false;
+
+    async function ejecutarGuardado() {
+      if (inFlight) { pending = true; return; }
+      inFlight = true;
+      setIndicador("guardando", "⏳ Guardando…");
+      const payload = leerEjecPayload();
+      // Backup local antes de mandar al servidor
+      guardarLocal(payload);
+      try {
+        const r = await patchOrden(payload);
+        if (r) {
+          limpiarLocal();
+          setIndicador("guardado", "✓ Guardado");
+          setTimeout(() => { if (ejecIndicador?.dataset.status === "guardado") setIndicador("idle", ""); }, 2000);
+        } else {
+          setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+        }
+      } catch {
+        setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+      } finally {
+        inFlight = false;
+        if (pending) { pending = false; ejecutarGuardado(); }
+      }
+    }
+
+    function programarGuardado() {
+      // Mostrar inmediatamente que hay cambios pendientes
+      setIndicador("guardando", "✏️ Editando…");
+      // Backup local instantáneo
+      guardarLocal(leerEjecPayload());
+      // Debounce 1.5s
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(ejecutarGuardado, 1500);
+    }
+
+    // Conectar listeners a cada campo de ejecución
+    ejecFields.forEach((fieldId) => {
+      const el = $(fieldId);
+      if (!el || el.disabled) return;
+      el.addEventListener("input", programarGuardado);
+      el.addEventListener("change", programarGuardado);
+    });
+
+    // Botón "Guardar ahora" (forzar sin esperar el debounce)
+    $("ejecSave")?.addEventListener("click", async () => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      await ejecutarGuardado();
+    });
+
+    // Al cargar la página: si hay un draft local más reciente que el servidor,
+    // ofrecer restaurarlo
+    (function checkDraftLocal() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const { payload, savedAt } = JSON.parse(raw);
+        if (!payload) return;
+        // Comparar con valores actuales del DOM (que vienen del servidor)
+        const actualTrab = ($("trabajosRealizados")?.value || "").trim();
+        const actualCausa = ($("causaRaiz")?.value || "").trim();
+        const actualSol = ($("solucionAplicada")?.value || "").trim();
+        const actualHoras = $("horasTrabajadas")?.value || "";
+        const cambios = (
+          (payload.trabajosRealizados ?? "") !== actualTrab ||
+          (payload.causaRaiz ?? "") !== actualCausa ||
+          (payload.solucionAplicada ?? "") !== actualSol ||
+          String(payload.horasTrabajadas ?? "") !== String(actualHoras)
+        );
+        if (!cambios) { limpiarLocal(); return; }
+        const fechaSave = new Date(savedAt).toLocaleString("es");
+        const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
+        if (confirm(mensaje)) {
+          if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
+          if ($("causaRaiz") && payload.causaRaiz != null) $("causaRaiz").value = payload.causaRaiz;
+          if ($("solucionAplicada") && payload.solucionAplicada != null) $("solucionAplicada").value = payload.solucionAplicada;
+          if ($("horasTrabajadas") && payload.horasTrabajadas != null) $("horasTrabajadas").value = String(payload.horasTrabajadas);
+          // Disparar guardado inmediato al servidor
+          ejecutarGuardado();
+        } else {
+          limpiarLocal();
+        }
+      } catch {}
+    })();
+
+    // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
+    window.addEventListener("beforeunload", (e) => {
+      if (debounceTimer || inFlight) {
+        e.preventDefault();
+        e.returnValue = "";
       }
     });
 
