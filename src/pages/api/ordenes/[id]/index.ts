@@ -1,8 +1,8 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales } from "@/lib/schema";
 
 async function contarAdjuntos(db: any, ordenId: number, categoria: string): Promise<number> {
   const rows = await db.select({ id: adjuntos.id }).from(adjuntos)
@@ -38,6 +38,8 @@ const updateSchema = z.object({
   checklistEjecucion: z.string().nullable().optional(),
   // Verificacion (solo se setea via accion explicita; aqui aceptamos notas)
   verificacionNotas: z.string().nullable().optional(),
+  // Motivo opcional al reasignar (solo se usa para el email al técnico nuevo)
+  motivoReasignacion: z.string().nullable().optional(),
   // Si es correctivo y se cierra, reprogramar planes preventivos del activo
   // (default true; el técnico puede desmarcar si fue trivial)
   reprogramarPreventivos: z.boolean().optional(),
@@ -93,7 +95,7 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const { reprogramarPreventivos, ...rest } = parsed.data;
+  const { reprogramarPreventivos, motivoReasignacion, ...rest } = parsed.data;
   const data: Record<string, unknown> = { ...rest };
   const now = new Date().toISOString();
 
@@ -305,7 +307,7 @@ export const PATCH: APIRoute = async (ctx) => {
     } catch {}
   }
 
-  // Notifica al tecnico cuando se le asigna una OT
+  // Notifica al tecnico cuando se le asigna o reasigna una OT
   if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
     try {
       const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
@@ -314,23 +316,119 @@ export const PATCH: APIRoute = async (ctx) => {
       const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
       const otUrl = `${baseUrl}/ordenes/${row.id}`;
 
+      // Detecta si es reasignación (ya tenía técnico) vs primera asignación
+      const esReasignacion = !!actual.asignadoA;
+      let nombreAnterior: string | null = null;
+      if (esReasignacion && actual.asignadoA) {
+        const [prev] = await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, actual.asignadoA)).limit(1);
+        nombreAnterior = prev?.nombre ?? null;
+      }
+
+      // Resolver ubicación
+      let ubicacionTexto: string | null = null;
+      if (row.activoId) {
+        try {
+          const [info] = await db
+            .select({ ub: ubicaciones.nombre, suc: sucursales.nombre })
+            .from(activos)
+            .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+            .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+            .where(eq(activos.id, row.activoId))
+            .limit(1);
+          ubicacionTexto = [info?.ub, info?.suc].filter(Boolean).join(", ") || null;
+        } catch {}
+      }
+
+      // Derivar avance previo automáticamente
+      let avancePrevio = "Ninguno aún. La orden estaba pendiente de iniciar.";
+      if (esReasignacion) {
+        const partes: string[] = [];
+        if (actual.iniciadaEn) partes.push("trabajo iniciado");
+        if (actual.completadaEn) partes.push("marcada como completada");
+        if (actual.trabajosRealizados) partes.push("hay registro de trabajos realizados");
+        if (actual.solucionAplicada) partes.push("se documentó solución aplicada");
+        try {
+          const [{ n: nCom }] = await db.select({ n: sql<number>`count(*)` }).from(comentarios).where(eq(comentarios.ordenId, row.id));
+          if (Number(nCom) > 0) partes.push(`${nCom} comentario${Number(nCom) === 1 ? "" : "s"}`);
+        } catch {}
+        try {
+          const [{ n: nAdj }] = await db.select({ n: sql<number>`count(*)` }).from(adjuntos).where(eq(adjuntos.ordenId, row.id));
+          if (Number(nAdj) > 0) partes.push(`${nAdj} adjunto${Number(nAdj) === 1 ? "" : "s"}`);
+        } catch {}
+        if (partes.length > 0) {
+          const joined = partes.join(", ");
+          avancePrevio = joined.charAt(0).toUpperCase() + joined.slice(1) + ".";
+        }
+      }
+
+      const primerNombre = (u?.nombre ?? "").split(" ")[0] || u?.nombre || "";
+      const venceFormateado = row.vencimiento
+        ? new Date(row.vencimiento).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+        : null;
+      const subjectVence = venceFormateado ? ` — vence ${venceFormateado}` : "";
+      const motivo = motivoReasignacion?.trim() || "";
+
       if (u?.email) {
-        ctx.locals.runtime.ctx.waitUntil(
-          sendMail(ctx, {
-            to: u.email,
-            subject: `[OT #${row.id}] Te asignaron: ${row.titulo}`,
-            html: emailLayout(
-              `Nueva orden asignada`,
-              `<p>Hola <strong>${u.nombre}</strong>,</p>
-               <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
-               <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
-               ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
-               <p><a href="${otUrl}">Abrir orden →</a></p>`
-            ),
-            tipo: "ot_asignada",
-            referencia: `orden:${row.id}`,
-          }).catch(() => {})
-        );
+        if (esReasignacion) {
+          // ── CORREO #4 — Reasignación ──────────────────────────────────
+          ctx.locals.runtime.ctx.waitUntil(
+            sendMail(ctx, {
+              to: u.email,
+              subject: `[OT #${row.id}] Reasignación: ahora la atiendes tú — ${row.titulo}`,
+              html: emailLayout(
+                "Esta orden pasa a tus manos",
+                `<p>Hola <strong>${primerNombre}</strong>,</p>
+                 <p>Te estamos transfiriendo la <strong>OT #${row.id} — ${row.titulo}</strong>${nombreAnterior ? `, que hasta hoy estaba asignada a <strong>${nombreAnterior}</strong>` : ""}.</p>
+                 <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Datos de la orden</h3>
+                 <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+                   <li><strong>Tipo:</strong> ${row.tipo}</li>
+                   <li><strong>Prioridad:</strong> ${row.prioridad}</li>
+                   ${venceFormateado ? `<li><strong>Vence:</strong> ${venceFormateado}</li>` : ""}
+                   ${ubicacionTexto ? `<li><strong>Ubicación:</strong> ${ubicacionTexto}</li>` : ""}
+                 </ul>
+                 ${motivo ? `<h3 style="margin:18px 0 6px 0;color:#0a4082;font-size:15px">Motivo de la reasignación</h3>
+                   <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 14px 0">${motivo}</p>` : ""}
+                 <h3 style="margin:18px 0 6px 0;color:#0a4082;font-size:15px">Lo que ya se hizo antes de tu llegada</h3>
+                 <p style="margin:0 0 14px 0">${avancePrevio}</p>
+                 ${row.descripcion ? `<h3 style="margin:18px 0 6px 0;color:#0a4082;font-size:15px">Lo que reportaron originalmente</h3>
+                   <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 14px 0">${row.descripcion}</p>` : ""}
+                 <h3 style="margin:18px 0 6px 0;color:#0a4082;font-size:15px">Antes de iniciar</h3>
+                 <p>Revisa los comentarios y registros previos en la orden. Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo antes de intervenir.${nombreAnterior ? ` Si necesitas hablar con <strong>${nombreAnterior}</strong> para entender mejor el estado actual, queda autorizado.` : ""}</p>
+                 <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+                 <p style="margin-top:14px"><em>Contamos contigo para cerrar este caso.</em></p>`
+              ),
+              tipo: "ot_reasignada",
+              referencia: `orden:${row.id}`,
+            }).catch(() => {})
+          );
+        } else {
+          // ── CORREO #3 — Primera asignación a OT existente ─────────────
+          ctx.locals.runtime.ctx.waitUntil(
+            sendMail(ctx, {
+              to: u.email,
+              subject: `[OT #${row.id}] Te asignamos: ${row.titulo}${subjectVence}`,
+              html: emailLayout(
+                "Nueva orden para ti",
+                `<p>Hola <strong>${primerNombre}</strong>,</p>
+                 <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
+                 <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
+                 <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+                   <li><strong>Tipo:</strong> ${row.tipo}</li>
+                   <li><strong>Prioridad:</strong> ${row.prioridad}</li>
+                   ${venceFormateado ? `<li><strong>Vence:</strong> ${venceFormateado}</li>` : ""}
+                   ${ubicacionTexto ? `<li><strong>Ubicación:</strong> ${ubicacionTexto}</li>` : ""}
+                 </ul>
+                 ${row.descripcion ? `<p style="margin:0 0 6px 0"><strong>Lo que reportaron:</strong></p>
+                   <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
+                 <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+                 <p style="font-size:13px;color:#475569;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
+                 <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
+              ),
+              tipo: "ot_asignada",
+              referencia: `orden:${row.id}`,
+            }).catch(() => {})
+          );
+        }
       }
       if (u?.telegramChatId) {
         ctx.locals.runtime.ctx.waitUntil(

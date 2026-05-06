@@ -786,6 +786,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 <option value={t.id} selected={o.asignadoA === t.id}>{t.nombre} ({t.rol})</option>
               ))}
             </select>
+            {o.asignadoA && (
+              <div>
+                <label class="text-xs text-slate-500 block mb-1">Motivo de reasignación <span class="text-slate-400">(opcional)</span></label>
+                <input class="input text-sm" id="motivoReasignacion" placeholder="Ej: Cobertura por ausencia, mejor especialidad…" />
+                <p class="mt-0.5 text-[11px] text-slate-400">Se incluye en el correo al técnico nuevo. Déjalo vacío si no aplica.</p>
+              </div>
+            )}
             <button id="asignarBtn" class="btn-secondary w-full justify-center">Guardar asignación</button>
           </div>
         </div>
@@ -1117,7 +1124,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // Asignacion
     $("asignarBtn")?.addEventListener("click", async () => {
       const v = $("asignadoA").value;
-      const r = await patchOrden({ asignadoA: v ? Number(v) : null });
+      const motivoEl = $("motivoReasignacion");
+      const motivo = motivoEl ? motivoEl.value.trim() : "";
+      const payload = { asignadoA: v ? Number(v) : null };
+      if (motivo) payload.motivoReasignacion = motivo;
+      const r = await patchOrden(payload);
       if (r) location.reload();
     });
 
