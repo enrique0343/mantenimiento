@@ -175,7 +175,7 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico responsable:</strong> ${asg.nombre}</li>` : ""}
          <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
-         <li><strong>Estado:</strong> completada</li>
+         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">✓ completada</span></li>
        </ul>
        ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
          <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
