@@ -159,12 +159,11 @@ const esAdmin = user.rol === "admin";
           const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           const asignadoAMi = r.t.asignadoA === user.id;
           const e = r.t.estado as EstadoTicket;
-          // Indicador de subestado: solo borde de color a la izquierda
           const filaColor =
-            e === "nuevo" && !r.t.asignadoA ? "border-l-4 border-red-500" :
-            e === "nuevo" ? "border-l-4 border-blue-500" :
-            e === "asignado" ? "border-l-4 border-indigo-500" :
-            e === "en_proceso" ? "border-l-4 border-emerald-500" :
+            e === "nuevo" && !r.t.asignadoA ? "border-l-4 border-red-500 bg-red-50/40" :
+            e === "nuevo" ? "border-l-4 border-blue-500 bg-blue-50/40" :
+            e === "asignado" ? "border-l-4 border-indigo-500 bg-indigo-50/40" :
+            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50/40" :
             "border-l-4 border-transparent";
           const subestadoBadge =
             e === "nuevo" && !r.t.asignadoA
@@ -178,9 +177,9 @@ const esAdmin = user.rol === "admin";
                 #{r.t.id}
               </td>
               <td class="px-4 py-2">
-                <a class="font-medium text-brand-700 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
+                <a class="font-medium text-slate-900 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
                 {subestadoBadge && <span class="ml-2">{subestadoBadge}</span>}
-                <div class="text-xs text-slate-400 truncate max-w-md">{r.t.descripcion}</div>
+                <div class="text-xs text-slate-500 truncate max-w-md">{r.t.descripcion}</div>
               </td>
               <td class="px-4 py-2 text-xs">
                 <div>{r.t.solicitanteNombre}</div>

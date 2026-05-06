@@ -206,13 +206,11 @@ const esAdmin = usrLogged.rol === "admin";
           const tipo = (r.orden.tipo ?? "correctivo") as keyof typeof TIPO_COLOR;
           const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
           const asignadaAMi = r.orden.asignadoA === usrLogged.id;
-          // Indicador de subestado: solo borde de color a la izquierda
-          // (sin fondo coloreado para no confundir con badges del texto)
           const filaColor =
-            e === "abierta" && !r.orden.asignadoA ? "border-l-4 border-red-500" :
-            e === "abierta" ? "border-l-4 border-blue-500" :
-            e === "en_proceso" ? "border-l-4 border-emerald-500" :
-            e === "en_espera" ? "border-l-4 border-purple-500" :
+            e === "abierta" && !r.orden.asignadoA ? "border-l-4 border-red-500 bg-red-50/40" :
+            e === "abierta" ? "border-l-4 border-blue-500 bg-blue-50/40" :
+            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50/40" :
+            e === "en_espera" ? "border-l-4 border-purple-500 bg-purple-50/40" :
             "border-l-4 border-transparent";
           const subestadoBadge =
             e === "abierta" && !r.orden.asignadoA
@@ -226,7 +224,7 @@ const esAdmin = usrLogged.rol === "admin";
                 #{r.orden.id}
               </td>
               <td class="px-4 py-2">
-                <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
+                <a class="font-medium text-slate-900 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
                 {subestadoBadge && <span class="ml-2">{subestadoBadge}</span>}
               </td>
               <td class="px-4 py-2 text-slate-600 text-xs">
