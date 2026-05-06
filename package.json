@@ -7,7 +7,7 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "wrangler pages dev ./dist --d1=DB --r2=R2 --compatibility-date=2025-01-01",
-    "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true",
+    "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true --commit-message=deploy",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply mantenimiento-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply mantenimiento-db --remote",
