@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { desc, eq, and } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios } from "@/lib/schema";
+import { ordenes, activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { calcularVencimiento, type Prioridad } from "@/lib/sla";
 import { sendMail, emailLayout } from "@/lib/email";
@@ -100,17 +100,47 @@ export const POST: APIRoute = async (ctx) => {
       const otUrl = `${baseUrl}/ordenes/${row.id}`;
       const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
 
+      // Resolver ubicación (sucursal + ubicación) si la OT tiene equipo
+      let ubicacionTexto: string | null = null;
+      if (row.activoId) {
+        try {
+          const [info] = await db
+            .select({ ub: ubicaciones.nombre, suc: sucursales.nombre })
+            .from(activos)
+            .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+            .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+            .where(eq(activos.id, row.activoId))
+            .limit(1);
+          ubicacionTexto = [info?.ub, info?.suc].filter(Boolean).join(", ") || null;
+        } catch {}
+      }
+
+      const primerNombre = (u?.nombre ?? "").split(" ")[0] || u?.nombre || "";
+      const venceFormateado = row.vencimiento
+        ? new Date(row.vencimiento).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+        : null;
+      const subjectVence = venceFormateado ? ` — vence ${venceFormateado}` : "";
+
       if (u?.email) {
         const p = sendMail(ctx, {
           to: u.email,
-          subject: `[OT #${row.id}] Nueva orden asignada: ${row.titulo}`,
+          subject: `[OT #${row.id}] Te asignamos: ${row.titulo}${subjectVence}`,
           html: emailLayout(
-            "Nueva orden asignada",
-            `<p>Hola <strong>${u.nombre}</strong>,</p>
-             <p>Te asignaron la orden <strong>#${row.id} - ${row.titulo}</strong>.</p>
-             <p>Tipo: ${row.tipo} · Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence: ${new Date(row.vencimiento).toLocaleString("es")}` : ""}</p>
-             ${row.descripcion ? `<p style="white-space:pre-wrap">${row.descripcion}</p>` : ""}
-             <p><a href="${otUrl}">Abrir orden →</a></p>`
+            "Nueva orden para ti",
+            `<p>Hola <strong>${primerNombre}</strong>,</p>
+             <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
+             <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
+             <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+               <li><strong>Tipo:</strong> ${row.tipo}</li>
+               <li><strong>Prioridad:</strong> ${row.prioridad}</li>
+               ${venceFormateado ? `<li><strong>Vence:</strong> ${venceFormateado}</li>` : ""}
+               ${ubicacionTexto ? `<li><strong>Ubicación:</strong> ${ubicacionTexto}</li>` : ""}
+             </ul>
+             ${row.descripcion ? `<p style="margin:0 0 6px 0"><strong>Lo que reportaron:</strong></p>
+               <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
+             <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+             <p style="font-size:13px;color:#475569;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
+             <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
           ),
           tipo: "ot_asignada",
           referencia: `orden:${row.id}`,
