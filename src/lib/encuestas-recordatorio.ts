@@ -38,7 +38,7 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
     const encuestaUrl = `${baseUrl}/encuesta/${enc.token}`;
 
     const stars = [1, 2, 3, 4, 5].map((n) => {
-      const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😐" : n === 4 ? "🙂" : "😀";
+      const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😐" : n === 4 ? "🙂" : "😎";
       return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;border:1px solid #e2e8f0;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#64748b">${n}</span></a>`;
     }).join("");
 
