@@ -43,6 +43,7 @@ type Item = {
   ubicacion: string | null;
   asignado: string | null;
   icono: string;
+  yaGenerada: boolean;
 };
 
 const items: Item[] = [
@@ -58,6 +59,7 @@ const items: Item[] = [
     ubicacion: r.ub?.nombre ?? r.a?.ubicacion ?? null,
     asignado: r.u?.nombre ?? null,
     icono: "🛠",
+    yaGenerada: !!(r.p.ultimaGeneracion && r.p.ultimaGeneracion.slice(0, 10) >= r.p.proximaFecha),
   })),
   ...actRows.map((r): Item => ({
     tipo: "actividad",
@@ -71,8 +73,11 @@ const items: Item[] = [
     ubicacion: r.ub?.nombre ?? r.a.ubicacionDetalle ?? null,
     asignado: r.u?.nombre ?? null,
     icono: r.c?.icono ?? "📌",
+    yaGenerada: !!(r.a.ultimaGeneracion && r.a.ultimaGeneracion.slice(0, 10) >= r.a.proximaFecha),
   })),
 ].sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+const puedeGenerar = user.rol === "admin" || user.rol === "jefe";
 
 const hoy = new Date().toISOString().slice(0, 10);
 const en7 = new Date(); en7.setDate(en7.getDate() + 7);
@@ -117,7 +122,7 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es");
         ) : (
           <ul class="mt-3 space-y-2 text-sm">
             {seccion.items.map((r) => (
-              <li class="rounded-md bg-white p-2 shadow-sm">
+              <li class="rounded-md bg-white p-2 shadow-sm" data-item-tipo={r.tipo} data-item-id={r.id}>
                 <div class="flex items-center justify-between gap-2">
                   <a href={r.link} class="font-medium text-brand-700 hover:underline">
                     {r.icono} {r.titulo}
@@ -140,6 +145,13 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es");
                   {r.frecuencia}
                   {r.asignado && ` · 👤 ${r.asignado}`}
                 </div>
+                {puedeGenerar && (
+                  r.yaGenerada
+                    ? <div class="mt-2 text-[11px] text-emerald-700 font-medium">✓ OT ya generada para este ciclo</div>
+                    : <button class="generar-ot-btn mt-2 px-2 py-1 rounded bg-brand-600 text-white text-[11px] font-medium hover:bg-brand-700 disabled:opacity-50" data-tipo={r.tipo} data-id={r.id}>
+                        ⚡ Generar OT ahora
+                      </button>
+                )}
               </li>
             ))}
           </ul>
@@ -147,4 +159,31 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es");
       </div>
     ))}
   </div>
+
+  {puedeGenerar && (
+    <script>
+      document.querySelectorAll<HTMLButtonElement>(".generar-ot-btn").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          const tipo = btn.dataset.tipo;
+          const id = btn.dataset.id;
+          const labelOriginal = btn.textContent;
+          if (!confirm(`¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`)) return;
+          btn.disabled = true;
+          btn.textContent = "Generando...";
+          const url = tipo === "plan" ? `/api/planes/${id}/generar-ot` : `/api/actividades/${id}/generar-ot`;
+          const res = await fetch(url, { method: "POST" });
+          const j = await res.json().catch(() => ({}));
+          if (res.ok && j.orden) {
+            // Redirige a la nueva OT
+            location.href = `/ordenes/${j.orden.id}`;
+          } else {
+            alert("✗ " + (j.error ?? "Error al generar OT"));
+            btn.disabled = false;
+            btn.textContent = labelOriginal;
+          }
+        });
+      });
+    </script>
+  )}
 </Layout>
