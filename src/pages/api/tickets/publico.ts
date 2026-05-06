@@ -98,7 +98,7 @@ export const POST: APIRoute = async (ctx) => {
     // Confirmacion al solicitante
     const env2 = (ctx.locals as any)?.runtime?.env ?? {};
     const baseUrl2 = env2.APP_URL || "https://mantenimiento-49c.pages.dev";
-    const portalUrl = `${baseUrl2}/soporte/track`;
+    const trackUrl = `${baseUrl2}/soporte/track/${row.trackingToken}`;
     ctx.locals.runtime.ctx.waitUntil(
       sendMail(ctx, {
         to: row.solicitanteEmail,
@@ -107,9 +107,10 @@ export const POST: APIRoute = async (ctx) => {
           `Recibimos tu solicitud`,
           `<p>Hola <strong>${row.solicitanteNombre}</strong>,</p>
            <p>Gracias por tomarte el tiempo de reportarnos lo que está ocurriendo. Tu solicitud ya quedó en manos del equipo de Operaciones y la atenderemos con el cuidado que merece.</p>
-           <p>La registramos con el código <strong style="font-family:monospace;background:#f1f5f9;padding:2px 8px;border-radius:4px">${row.trackingToken}</strong>, para que puedas darle seguimiento cuando lo necesites.</p>
+           <p>La registramos con el código <a href="${trackUrl}" style="font-family:monospace;background:#f1f5f9;padding:2px 8px;border-radius:4px;color:#0a4082;text-decoration:none;font-weight:600">${row.trackingToken}</a>, para que puedas darle seguimiento cuando lo necesites.</p>
            <p>Trabajaremos para darte una respuesta dentro de las próximas <strong>${row.slaHoras} horas</strong>. Si el caso lo requiere, te contactaremos antes.</p>
-           <p>Mientras tanto, puedes consultar el estado de tu ticket en cualquier momento desde <a href="${portalUrl}" style="color:#0a4082;font-weight:500">nuestro portal de soporte</a>.</p>
+           <p style="margin:18px 0"><a href="${trackUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver estado de mi ticket →</a></p>
+           <p style="font-size:13px;color:#64748b">Si lo prefieres, también puedes consultar tu ticket o cualquier otro desde <a href="${baseUrl2}/soporte/track" style="color:#0a4082">el portal de soporte</a> usando tu código.</p>
            <p style="margin-top:20px"><em>Estamos para servirte.</em></p>`
         ),
         tipo: "ticket_confirmacion",
