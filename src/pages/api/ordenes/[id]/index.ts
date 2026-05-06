@@ -168,9 +168,17 @@ export const PATCH: APIRoute = async (ctx) => {
         }
         break;
       case "verificada":
+        // Cuando el jefe verifica, automaticamente cerramos la OT.
+        // El intent del usuario es "doy por buena la ejecucion" — y eso
+        // implica cerrar definitivamente. Registramos quien verifica + cierra.
         data.verificadoPor = user.id;
         data.verificadoEn = now;
         if (!actual.completadaEn) data.completadaEn = now;
+        data.cerradoPor = user.id;
+        data.cerradoEn = now;
+        // Promover el estado destino a "cerrada" (override del que vino del API)
+        data.estado = "cerrada";
+        parsed.data.estado = "cerrada";
         break;
       case "cerrada":
         data.cerradoPor = user.id;
