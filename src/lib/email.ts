@@ -76,6 +76,7 @@ export interface SendMailParams {
   subject: string;
   html: string;
   cc?: string[];
+  replyTo?: string | string[];
   tipo?: string;
   referencia?: string;
 }
@@ -105,6 +106,7 @@ async function getM365Token(env: EmailEnv): Promise<string> {
 async function sendViaM365(env: EmailEnv, p: SendMailParams) {
   const token = await getM365Token(env);
   const toList = Array.isArray(p.to) ? p.to : [p.to];
+  const replyToList = p.replyTo ? (Array.isArray(p.replyTo) ? p.replyTo : [p.replyTo]) : [];
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(env.M365_FROM_ADDRESS!)}/sendMail`;
   const message = {
     message: {
@@ -112,6 +114,7 @@ async function sendViaM365(env: EmailEnv, p: SendMailParams) {
       body: { contentType: "HTML", content: p.html },
       toRecipients: toList.map((a) => ({ emailAddress: { address: a } })),
       ccRecipients: (p.cc ?? []).map((a) => ({ emailAddress: { address: a } })),
+      replyTo: replyToList.map((a) => ({ emailAddress: { address: a } })),
     },
     saveToSentItems: true,
   };
@@ -132,6 +135,7 @@ async function sendViaResend(env: EmailEnv, p: SendMailParams) {
       from: env.EMAIL_FROM_NAME ? `${env.EMAIL_FROM_NAME} <${env.EMAIL_FROM}>` : env.EMAIL_FROM,
       to: toList,
       cc: p.cc,
+      reply_to: p.replyTo,
       subject: p.subject,
       html: p.html,
     }),
@@ -141,12 +145,14 @@ async function sendViaResend(env: EmailEnv, p: SendMailParams) {
 
 async function sendViaSendGrid(env: EmailEnv, p: SendMailParams) {
   const toList = Array.isArray(p.to) ? p.to : [p.to];
-  const body = {
+  const replyTo = p.replyTo ? (Array.isArray(p.replyTo) ? p.replyTo[0] : p.replyTo) : undefined;
+  const body: any = {
     personalizations: [{ to: toList.map((a) => ({ email: a })), cc: p.cc?.map((a) => ({ email: a })) }],
     from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME },
     subject: p.subject,
     content: [{ type: "text/html", value: p.html }],
   };
+  if (replyTo) body.reply_to = { email: replyTo };
   const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
     method: "POST",
     headers: { authorization: `Bearer ${env.SENDGRID_API_KEY}`, "content-type": "application/json" },
@@ -157,13 +163,15 @@ async function sendViaSendGrid(env: EmailEnv, p: SendMailParams) {
 
 async function sendViaBrevo(env: EmailEnv, p: SendMailParams) {
   const toList = Array.isArray(p.to) ? p.to : [p.to];
-  const body = {
+  const replyTo = p.replyTo ? (Array.isArray(p.replyTo) ? p.replyTo[0] : p.replyTo) : undefined;
+  const body: any = {
     sender: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME },
     to: toList.map((a) => ({ email: a })),
     cc: p.cc?.map((a) => ({ email: a })),
     subject: p.subject,
     htmlContent: p.html,
   };
+  if (replyTo) body.replyTo = { email: replyTo };
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: { "api-key": env.BREVO_API_KEY!, "content-type": "application/json", accept: "application/json" },
@@ -199,7 +207,13 @@ export async function sendMail(ctx: APIContext, params: SendMailParams): Promise
           from: env.EMAIL_FROM ?? env.SMTP_USER!,
           fromName: env.EMAIL_FROM_NAME,
         },
-        { to: toList, subject: params.subject, html: params.html }
+        {
+          to: toList,
+          subject: params.subject,
+          html: params.html,
+          cc: params.cc,
+          replyTo: params.replyTo ? (Array.isArray(params.replyTo) ? params.replyTo : [params.replyTo]) : undefined,
+        }
       );
     } else if (proveedor === "m365") await sendViaM365(env, params);
     else if (proveedor === "resend") await sendViaResend(env, params);

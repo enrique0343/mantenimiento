@@ -5,6 +5,7 @@ import {
   solicitudCompraEnvios, solicitudCompraDescargas, solicitudCompraAdjuntos,
   solicitudesCompra, solicitudCompraItems,
 } from "@/lib/schema";
+import { getCurrentUser } from "@/lib/auth";
 
 export const prerender = false;
 
@@ -28,16 +29,22 @@ export const GET: APIRoute = async (ctx) => {
   const adjuntos = await db.select().from(solicitudCompraAdjuntos)
     .where(eq(solicitudCompraAdjuntos.solicitudId, sol.id));
 
-  // Registrar descarga
-  const ip = ctx.request.headers.get("cf-connecting-ip") ??
-              ctx.request.headers.get("x-forwarded-for") ??
-              ctx.request.headers.get("x-real-ip") ?? null;
-  const userAgent = ctx.request.headers.get("user-agent") ?? null;
-  await db.insert(solicitudCompraDescargas).values({
-    envioId: envio.id,
-    ip,
-    userAgent,
-  });
+  // Registrar descarga SOLO si el visitante NO tiene sesión interna activa.
+  // Los usuarios autenticados (admin/jefe/técnico) que llegan al link público
+  // no contaminan el log de trazabilidad — para eso ven la solicitud en el
+  // panel interno /solicitudes-compra/[id].
+  const usuarioInterno = await getCurrentUser(ctx).catch(() => null);
+  if (!usuarioInterno) {
+    const ip = ctx.request.headers.get("cf-connecting-ip") ??
+                ctx.request.headers.get("x-forwarded-for") ??
+                ctx.request.headers.get("x-real-ip") ?? null;
+    const userAgent = ctx.request.headers.get("user-agent") ?? null;
+    await db.insert(solicitudCompraDescargas).values({
+      envioId: envio.id,
+      ip,
+      userAgent,
+    });
+  }
 
   return Response.json({
     solicitud: sol,

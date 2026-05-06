@@ -16,6 +16,8 @@ export interface SmtpMessage {
   to: string[];
   subject: string;
   html: string;
+  cc?: string[];
+  replyTo?: string[];
 }
 
 // Lee líneas de un ReadableStream acumulando en buffer interno
@@ -77,9 +79,14 @@ function toB64(s: string): string {
 function buildEmail(cfg: SmtpConfig, msg: SmtpMessage): string {
   const from = cfg.fromName ? `"${cfg.fromName}" <${cfg.from}>` : cfg.from;
   const boundary = `_mnt_${Date.now()}`;
-  return [
+  const headers: string[] = [
     `From: ${from}`,
     `To: ${msg.to.join(", ")}`,
+  ];
+  if (msg.cc && msg.cc.length) headers.push(`Cc: ${msg.cc.join(", ")}`);
+  if (msg.replyTo && msg.replyTo.length) headers.push(`Reply-To: ${msg.replyTo.join(", ")}`);
+  return [
+    ...headers,
     `Subject: =?UTF-8?B?${toB64(msg.subject)}?=`,
     `Date: ${new Date().toUTCString()}`,
     `MIME-Version: 1.0`,
@@ -157,8 +164,9 @@ export async function sendSmtpWorker(cfg: SmtpConfig, msg: SmtpMessage): Promise
   r = await reader.resp();
   expect(r, 250, "MAIL FROM");
 
-  // RCPT TO (uno por destinatario)
-  for (const to of msg.to) {
+  // RCPT TO (incluye to + cc para que ambos reciban el correo)
+  const allRecipients = [...msg.to, ...(msg.cc ?? [])];
+  for (const to of allRecipients) {
     await writer.send(`RCPT TO:<${to}>`);
     r = await reader.resp();
     expect(r, 250, `RCPT TO <${to}>`);
