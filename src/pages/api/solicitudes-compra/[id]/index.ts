@@ -141,6 +141,7 @@ export const PATCH: APIRoute = async (ctx) => {
         .from(usuarios).where(eq(usuarios.id, actual.creadoPor)).limit(1);
       if (creador) {
         const estadoLabel = parsed.data.estado === "comprada" ? "✅ aprobada/comprada" : "❌ rechazada";
+        // Notificación in-app (campanita) — sigue activa
         await crearNotificacion(ctx, {
           usuarioId: creador.id,
           tipo: "compra_actualizada",
@@ -148,6 +149,11 @@ export const PATCH: APIRoute = async (ctx) => {
           mensaje: parsed.data.notasResultado ?? "",
           link: `/solicitudes-compra/${id}`,
         });
+        // ── Correo desactivado temporalmente (#10) ─────────────────────────
+        // La secuencia de compras no sigue aún una lógica formal en nuestro
+        // ecosistema. Reactivar cuando se defina el flujo definitivo.
+        // Para reactivar: descomentar el bloque siguiente.
+        /*
         if (creador.email) {
           const env = (ctx.locals as any)?.runtime?.env ?? {};
           const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
@@ -167,6 +173,7 @@ export const PATCH: APIRoute = async (ctx) => {
             }).catch(() => {})
           );
         }
+        */
       }
     } catch {}
   }
