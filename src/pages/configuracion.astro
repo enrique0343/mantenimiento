@@ -83,6 +83,30 @@ const TIPOS_UB = [
     <p id="e_err" class="mt-2 hidden text-sm text-red-600"></p>
     <p id="e_ok" class="mt-2 hidden text-sm text-emerald-600">Guardado correctamente.</p>
     <button id="e_save" class="btn-primary mt-4">Guardar empresa</button>
+
+    <!-- Logo de la empresa -->
+    <div class="mt-6 border-t border-slate-200 pt-5">
+      <h3 class="font-semibold text-slate-900">Logo de la empresa</h3>
+      <p class="text-xs text-slate-500 mt-0.5">Aparece en el formulario público de soporte. Recomendado: PNG con fondo transparente, máx 2MB.</p>
+      <div class="mt-3 flex items-center gap-4">
+        <div class="w-32 h-20 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center overflow-hidden">
+          {emp?.logoR2Key
+            ? <img id="logoPreview" src={`/api/empresa/logo?t=${Date.now()}`} class="max-w-full max-h-full object-contain" alt="Logo" />
+            : <span id="logoPreview" class="text-xs text-slate-400">Sin logo</span>
+          }
+        </div>
+        <div class="flex flex-col gap-2">
+          <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100 border border-brand-200 w-fit">
+            <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" class="hidden" />
+            📎 Subir / reemplazar logo
+          </label>
+          {emp?.logoR2Key && (
+            <button id="logoDel" class="text-xs text-red-600 hover:underline w-fit">Eliminar logo</button>
+          )}
+        </div>
+      </div>
+      <p id="logoMsg" class="hidden mt-2 text-sm"></p>
+    </div>
   </div>
 
   <!-- Tab: Sucursales -->
@@ -400,6 +424,34 @@ const TIPOS_UB = [
     });
     if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); return; }
     ok.classList.remove("hidden");
+  });
+
+  // ── Logo de la empresa ────────────────────────────────────────────────────
+  const logoFile = document.getElementById("logoFile") as HTMLInputElement | null;
+  const logoMsg = document.getElementById("logoMsg")!;
+  logoFile?.addEventListener("change", async () => {
+    const f = logoFile.files?.[0];
+    if (!f) return;
+    logoMsg.className = "mt-2 text-sm text-slate-500";
+    logoMsg.textContent = "Subiendo...";
+    logoMsg.classList.remove("hidden");
+    const fd = new FormData();
+    fd.append("file", f);
+    const res = await fetch("/api/empresa/logo", { method: "POST", body: fd });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok) {
+      logoMsg.className = "mt-2 text-sm text-emerald-600";
+      logoMsg.textContent = "✓ Logo actualizado";
+      setTimeout(() => location.reload(), 800);
+    } else {
+      logoMsg.className = "mt-2 text-sm text-red-600";
+      logoMsg.textContent = "✗ " + (j.error ?? "Error al subir");
+    }
+  });
+  document.getElementById("logoDel")?.addEventListener("click", async () => {
+    if (!confirm("¿Eliminar el logo?")) return;
+    const res = await fetch("/api/empresa/logo", { method: "DELETE" });
+    if (res.ok) location.reload();
   });
 
   // ── Sucursales CRUD ───────────────────────────────────────────────────────

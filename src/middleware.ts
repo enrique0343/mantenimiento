@@ -7,6 +7,7 @@ const PUBLIC_API_PREFIXES = [
   "/api/auth/", "/api/cron/", "/api/tickets/publico", "/api/tickets/track/",
   "/api/encuestas/", "/api/calendar/", "/api/telegram/",
   "/api/solicitudes-compra/r/", "/api/solicitudes-compra/adjunto/",
+  "/api/empresa/logo",
 ];
 
 function isPublic(path: string): boolean {

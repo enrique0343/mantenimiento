@@ -7,6 +7,7 @@ export const prerender = false;
 
 const db = getDb(Astro);
 const [emp] = await db.select().from(empresa).limit(1);
+const tieneLogo = !!emp?.logoR2Key;
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
   .from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
 const ubRows = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, tipo: ubicaciones.tipo })
@@ -24,7 +25,10 @@ const ubJson = JSON.stringify(ubRows);
   <body class="min-h-screen bg-slate-50">
     <header class="border-b border-slate-200 bg-white">
       <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
-        <h1 class="text-lg font-bold text-brand-600">{emp?.nombre ?? "Soporte"}</h1>
+        {tieneLogo
+          ? <img src="/api/empresa/logo" alt={emp?.nombre ?? "Logo"} class="h-10 w-auto max-w-[200px] object-contain" />
+          : <h1 class="text-lg font-bold text-brand-600">{emp?.nombre ?? "Soporte"}</h1>
+        }
         <a href="/soporte/track" class="text-sm text-brand-700 hover:underline">¿Ya enviaste un ticket? Consultar estado →</a>
       </div>
     </header>
