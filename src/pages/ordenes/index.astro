@@ -207,17 +207,17 @@ const esAdmin = usrLogged.rol === "admin";
           const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
           const asignadaAMi = r.orden.asignadoA === usrLogged.id;
           const filaColor =
-            e === "abierta" && !r.orden.asignadoA ? "border-l-4 border-red-500 bg-red-50/40" :
-            e === "abierta" ? "border-l-4 border-blue-500 bg-blue-50/40" :
-            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50/40" :
-            e === "en_espera" ? "border-l-4 border-purple-500 bg-purple-50/40" :
+            e === "abierta" && !r.orden.asignadoA ? "border-l-4 border-red-500 bg-red-50" :
+            e === "abierta" ? "border-l-4 border-blue-500 bg-blue-50" :
+            e === "en_proceso" ? "border-l-4 border-emerald-500 bg-emerald-50" :
+            e === "en_espera" ? "border-l-4 border-purple-500 bg-purple-50" :
             "border-l-4 border-transparent";
           const subestadoBadge =
             e === "abierta" && !r.orden.asignadoA
               ? <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Sin asignar</span>
               : null;
           return (
-            <tr class:list={["hover:bg-slate-50", filaColor, asignadaAMi && "bg-emerald-50/30"]}>
+            <tr class:list={["hover:brightness-95", filaColor]}>
               {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="ot-cb cursor-pointer" data-id={r.orden.id} /></td>}
               <td class="px-4 py-2 font-mono text-xs">
                 {asignadaAMi && <span title="Asignada a ti" class="mr-1">👤</span>}
