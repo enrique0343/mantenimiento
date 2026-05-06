@@ -12,10 +12,12 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
+const filtroVista = url.searchParams.get("vista"); // "mias" | null
 
 // Filtro por especialidad (jefe/tecnico): solo OTs cuyo activo coincide
 const aplicaFiltroEsp = (usrLogged.rol === "jefe" || usrLogged.rol === "tecnico");
 const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(usrLogged.especialidad ?? null) : null;
+const esTecnico = usrLogged.rol === "tecnico";
 
 let errorMsg: string | null = null;
 let rowsRaw: any[] = [];
@@ -62,11 +64,22 @@ try {
   errorMsg = String(e?.message ?? e);
 }
 
-const rows = rowsRaw.filter((r) =>
-  (!filtroEstado || r.orden.estado === filtroEstado) &&
-  (!filtroTipo || r.orden.tipo === filtroTipo) &&
-  (!filtroEspecialidad || (r.activo && r.activo.tipo === filtroEspecialidad))
-);
+// Filtro por especialidad: OTs cuyo activo coincide, OR OTs sin activo
+// (no excluimos las "sin equipo" — son trabajos generales que también aplican).
+// OTs asignadas al usuario actual SIEMPRE se muestran (override del filtro).
+const rows = rowsRaw.filter((r) => {
+  const asignadaAMi = r.orden.asignadoA === usrLogged.id;
+  if (filtroVista === "mias" && !asignadaAMi) return false;
+  if (filtroEstado && r.orden.estado !== filtroEstado) return false;
+  if (filtroTipo && r.orden.tipo !== filtroTipo) return false;
+  if (filtroEspecialidad && !asignadaAMi) {
+    // Sin activo: visible para todos (trabajos generales)
+    if (r.activo && r.activo.tipo !== filtroEspecialidad) return false;
+  }
+  return true;
+});
+
+const conteoMias = rowsRaw.filter((r) => r.orden.asignadoA === usrLogged.id).length;
 
 const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.orden.estado] = (acc[r.orden.estado] ?? 0) + 1;
@@ -99,11 +112,29 @@ const esAdmin = usrLogged.rol === "admin";
     </div>
   )}
 
+  <!-- Toggle vista -->
+  <div class="mt-4 flex gap-1 text-xs">
+    <a href={`/ordenes${filtroEstado ? `?estado=${filtroEstado}` : ""}`}
+       class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista !== "mias" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      Todas ({rowsRaw.length})
+    </a>
+    {esTecnico && (
+      <a href={`/ordenes?vista=mias${filtroEstado ? `&estado=${filtroEstado}` : ""}`}
+         class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista === "mias" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"]}>
+        👤 Asignadas a mí ({conteoMias})
+      </a>
+    )}
+  </div>
+
   <!-- Filtros rapidos por estado -->
-  <div class="mt-4 flex flex-wrap gap-1 text-xs">
-    <a href="/ordenes" class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>Todas ({rowsRaw.length})</a>
-    {(["abierta", "en_proceso", "completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
-      <a href={`/ordenes?estado=${s}`} class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+  <div class="mt-3 flex flex-wrap gap-1 text-xs">
+    <a href={`/ordenes${filtroVista ? `?vista=${filtroVista}` : ""}`}
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado ? "bg-brand-50 text-brand-700 border border-brand-200" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      Todos los estados
+    </a>
+    {(["abierta", "en_proceso", "en_espera", "completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
+      <a href={`/ordenes?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`}
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
         {ESTADO_LABEL[s]} ({conteoEstados[s] ?? 0})
       </a>
     ))}
@@ -131,10 +162,14 @@ const esAdmin = usrLogged.rol === "admin";
           const e = (r.orden.estado ?? "abierta") as EstadoOT;
           const tipo = (r.orden.tipo ?? "correctivo") as keyof typeof TIPO_COLOR;
           const prio = (r.orden.prioridad ?? "media") as keyof typeof PRIO_COLOR;
+          const asignadaAMi = r.orden.asignadoA === usrLogged.id;
           return (
-            <tr class="hover:bg-slate-50">
+            <tr class:list={["hover:bg-slate-50", asignadaAMi && "bg-emerald-50/50"]}>
               {esAdmin && <td class="px-3 py-2"><input type="checkbox" class="ot-cb cursor-pointer" data-id={r.orden.id} /></td>}
-              <td class="px-4 py-2 font-mono text-xs">#{r.orden.id}</td>
+              <td class="px-4 py-2 font-mono text-xs">
+                {asignadaAMi && <span title="Asignada a ti" class="mr-1">👤</span>}
+                #{r.orden.id}
+              </td>
               <td class="px-4 py-2">
                 <a class="font-medium text-brand-700 hover:underline" href={`/ordenes/${r.orden.id}`}>{r.orden.titulo}</a>
               </td>

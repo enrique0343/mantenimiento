@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, planesMantenimiento, vehiculos, viajes } from "@/lib/schema";
+import { ordenes, activos, planesMantenimiento, vehiculos, viajes, tickets, sucursales } from "@/lib/schema";
 import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 import { fmtKm, fmtDuracion } from "@/lib/flota";
@@ -59,6 +59,7 @@ if (esMotorista) {
 // === DATOS PARA TÉCNICO ===
 let misActivas: any[] = [];
 let misPlanes: any[] = [];
+let misTickets: any[] = [];
 let nCompletadas = 0;
 let totalHoras = 0;
 let pctATiempo = 100;
@@ -72,8 +73,16 @@ if (!esMotorista) {
     .select({ o: ordenes, a: activos })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
-    .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'completada')`))
+    .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
     .orderBy(desc(ordenes.prioridad), ordenes.vencimiento);
+
+  // Tickets asignados al técnico que aún no estén resueltos/cerrados
+  misTickets = await db
+    .select({ t: tickets, s: sucursales })
+    .from(tickets)
+    .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+    .where(and(eq(tickets.asignadoA, user.id), sql`${tickets.estado} IN ('nuevo', 'asignado', 'en_proceso')`))
+    .orderBy(desc(tickets.prioridad), tickets.vencimientoSla);
 
   misPlanes = await db
     .select({ p: planesMantenimiento, a: activos })
@@ -347,6 +356,34 @@ if (!esMotorista) {
           </>
         )}
       </div>
+
+      {misTickets.length > 0 && (
+        <div class="mt-6">
+          <h2 class="mb-2 font-semibold text-slate-900">🎫 Mis tickets asignados ({misTickets.length})</h2>
+          <div class="card overflow-hidden">
+            <ul class="divide-y divide-slate-100">
+              {misTickets.map((r: any) => (
+                <li class="px-4 py-2.5 hover:bg-slate-50">
+                  <a href={`/tickets/${r.t.id}`} class="block">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                      <span class="font-mono text-xs text-slate-400">#{r.t.id}</span>
+                      <div class="flex gap-1.5">
+                        <span class={`badge ${PRIO_COLOR[r.t.prioridad]} capitalize text-xs`}>{r.t.prioridad}</span>
+                        <span class="badge bg-slate-100 text-slate-700 text-xs capitalize">{r.t.estado.replace("_", " ")}</span>
+                      </div>
+                    </div>
+                    <div class="mt-1 font-medium text-sm text-slate-800 truncate">{r.t.asunto}</div>
+                    <div class="text-xs text-slate-500 truncate">
+                      {r.t.solicitanteNombre} · {r.s?.nombre ?? "—"}
+                      {r.t.tipoMantenimiento === "biomedico" ? " · 🩺 Biomédico" : " · 🔧 General"}
+                    </div>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       <div class="mt-6">
         <h2 class="mb-2 font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2>
