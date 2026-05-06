@@ -83,12 +83,25 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
   const asg = await obtenerAsignado(ctx, orden);
   if (!sol) return;
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
   const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
   const primerNombreTec = asg ? ((asg.nombre ?? "").split(" ")[0] || asg.nombre) : null;
+
+  // Si la OT viene de un ticket público, usamos el portal público de
+  // seguimiento (sin login). Si no, usamos el detalle interno (que
+  // requiere login pero es accesible al solicitante interno).
+  const db = getDb(ctx);
+  const [tk] = await db.select({ token: tickets.trackingToken }).from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
+  const url = tk?.token
+    ? `${appUrl(ctx)}/soporte/track/${tk.token}`
+    : `${appUrl(ctx)}/ordenes/${orden.id}`;
+  const linkLabel = tk?.token ? "Ver estado de tu solicitud →" : "Ver detalle de la orden →";
+
+  // Inicio del trabajo: SIEMPRE el momento real de iniciada_en.
+  // Si por alguna razón no está, usamos "Hace un momento" para no engañar
+  // mostrando la fecha de creación de la OT o del ticket.
   const fechaInicio = (orden as any).iniciadaEn
     ? new Date((orden as any).iniciadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
-    : new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+    : "Hace un momento";
 
   await sendMail(ctx, {
     to: sol.email,
@@ -105,7 +118,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
        </ul>
        <p>${primerNombreTec ? `${primerNombreTec} está atendiendo personalmente tu solicitud` : "El equipo está atendiendo personalmente tu solicitud"} y te confirmaremos por este medio cuando el trabajo quede completado.</p>
        <p>Si durante la ejecución necesitas dar acceso a un área, aclarar un detalle del reporte original o compartir información adicional con el técnico, puedes hacerlo desde la orden.</p>
-       <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver detalle de la orden →</a></p>
+       <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">${linkLabel}</a></p>
        <p style="margin-top:18px"><em>Gracias por reportarlo. Cada solicitud que llega nos ayuda a mantener Avante en su mejor forma.</em></p>`
     ),
     tipo: "ot_iniciada",
@@ -134,14 +147,16 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
   const asg = await obtenerAsignado(ctx, orden);
   if (!sol) return;
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
   const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
 
-  // Si la OT viene de un ticket público, recuperamos su tracking_token para
-  // que el botón "Reportar inconformidad" lleve al portal público (donde el
-  // solicitante podrá reabrir, una vez construyamos el flujo).
+  // Si la OT viene de un ticket público, usamos el portal público para los
+  // botones (sin login). Si no, usamos el detalle interno.
   const db = getDb(ctx);
   const [tk] = await db.select({ token: tickets.trackingToken }).from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
+  const url = tk?.token
+    ? `${appUrl(ctx)}/soporte/track/${tk.token}`
+    : `${appUrl(ctx)}/ordenes/${orden.id}`;
+  const linkLabel = tk?.token ? "Ver estado de tu solicitud →" : "Ver detalle de la orden →";
   const inconformidadUrl = tk?.token ? `${appUrl(ctx)}/soporte/track/${tk.token}?inconformidad=1` : null;
 
   const fechaCierre = (orden as any).completadaEn
@@ -166,7 +181,7 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
        <p style="margin-top:18px"><strong>Tu validación nos importa.</strong> Tú conoces el área mejor que nadie. Si al verificar notas que el problema original persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
        <p>Si todo quedó conforme, no necesitas hacer nada. Tu silencio confirma el cierre.</p>
        <p style="margin:18px 0">
-         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">Ver detalle de la orden →</a>
+         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">${linkLabel}</a>
          ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
        </p>
        <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. Cada orden cerrada es una oportunidad de hacerlo mejor la próxima vez.</em></p>`
