@@ -84,16 +84,29 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
   if (!sol) return;
   const env = (ctx.locals as any)?.runtime?.env ?? {};
   const url = `${appUrl(ctx)}/ordenes/${orden.id}`;
+  const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
+  const primerNombreTec = asg ? ((asg.nombre ?? "").split(" ")[0] || asg.nombre) : null;
+  const fechaInicio = (orden as any).iniciadaEn
+    ? new Date((orden as any).iniciadaEn).toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true })
+    : new Date().toLocaleString("es", { day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Iniciado el trabajo: ${orden.titulo}`,
+    subject: `[OT #${orden.id}] Tu orden ya está en proceso — ${orden.titulo}`,
     html: emailLayout(
-      "Tu solicitud está en proceso",
-      `<p>Hola <strong>${sol.nombre}</strong>,</p>
-       <p>El técnico ha comenzado a trabajar en la orden <strong>#${orden.id} - ${orden.titulo}</strong>.</p>
-       ${asg ? `<p>Técnico asignado: <strong>${asg.nombre}</strong></p>` : ""}
-       <p>Te avisaremos cuando el trabajo esté completado.</p>
-       <p><a href="${url}">Ver detalle de la orden →</a></p>`
+      "Estamos trabajando en tu solicitud",
+      `<p>Hola <strong>${primerNombreSol}</strong>,</p>
+       <p>Buenas noticias. Tu orden ya está en marcha.</p>
+       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+         ${asg ? `<li><strong>Técnico asignado:</strong> ${asg.nombre}</li>` : ""}
+         <li><strong>Inicio del trabajo:</strong> ${fechaInicio}</li>
+         <li><strong>Estado:</strong> en ejecución</li>
+       </ul>
+       <p>${primerNombreTec ? `${primerNombreTec} está atendiendo personalmente tu solicitud` : "El equipo está atendiendo personalmente tu solicitud"} y te confirmaremos por este medio cuando el trabajo quede completado.</p>
+       <p>Si durante la ejecución necesitas dar acceso a un área, aclarar un detalle del reporte original o compartir información adicional con el técnico, puedes hacerlo desde la orden.</p>
+       <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver detalle de la orden →</a></p>
+       <p style="margin-top:18px"><em>Gracias por reportarlo. Cada solicitud que llega nos ayuda a mantener Avante en su mejor forma.</em></p>`
     ),
     tipo: "ot_iniciada",
     referencia: `orden:${orden.id}`,
