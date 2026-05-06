@@ -158,8 +158,25 @@ const esAdmin = user.rol === "admin";
             <button id="saveBtn" class="btn-primary w-full justify-center">Guardar</button>
             <p id="saveMsg" class="hidden text-xs"></p>
 
+            {!t.otId && (t.estado === "nuevo" || t.estado === "asignado") && (
+              <div class="mt-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
+                💡 Al asignar un técnico se creará automáticamente la <strong>orden de trabajo</strong> y se le notificará por correo.
+              </div>
+            )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
-              <button id="convertBtn" class="btn-secondary w-full justify-center mt-2">⚙ Convertir en OT</button>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <button id="cerrarSinOtBtn" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
+                  Cerrar sin OT
+                </button>
+                <button id="descartarBtn" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">
+                  Descartar
+                </button>
+              </div>
+            )}
+            {t.otId && (
+              <div class="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800">
+                ✅ Este ticket ya tiene <a href={`/ordenes/${t.otId}`} class="font-bold underline">OT #{t.otId}</a> asociada.
+              </div>
             )}
           </div>
         </div>
@@ -208,21 +225,33 @@ const esAdmin = user.rol === "admin";
         body: JSON.stringify(payload),
       });
       if (!res.ok) { msg.textContent = "Error"; msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return; }
-      location.reload();
+      const j = await res.json().catch(() => ({}));
+      if (j.otCreada) {
+        // Si se creó OT automáticamente, lleva al usuario directo a esa OT
+        location.href = `/ordenes/${j.otCreada}`;
+      } else {
+        location.reload();
+      }
     });
 
-    document.getElementById("convertBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Convertir este ticket en una orden de trabajo?")) return;
-      const asignadoA = document.getElementById("asignadoA").value;
-      const res = await fetch(`/api/tickets/${id}/convertir`, {
-        method: "POST",
+    document.getElementById("cerrarSinOtBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.")) return;
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ asignadoA: asignadoA ? Number(asignadoA) : null }),
+        body: JSON.stringify({ estado: "cerrado" }),
       });
-      if (res.ok) {
-        const j = await res.json();
-        location.href = `/ordenes/${j.orden.id}`;
-      }
+      if (res.ok) location.reload();
+    });
+
+    document.getElementById("descartarBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")) return;
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ estado: "descartado" }),
+      });
+      if (res.ok) location.reload();
     });
 
     document.getElementById("comForm")?.addEventListener("submit", async (e) => {
