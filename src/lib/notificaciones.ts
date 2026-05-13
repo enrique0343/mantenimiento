@@ -213,24 +213,24 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
   if (!sol) return;
   const db = getDb(ctx);
 
-  // Crear encuesta única (no duplicar si ya existe para esta OT)
+  // Crear encuesta única — UN SOLO envío por OT.
+  // Si ya existe el registro (porque la OT fue cerrada antes, reabierta y
+  // re-cerrada, o por cualquier otra razón), NO mandamos el correo otra vez.
+  // El recordatorio (#8) se encarga del segundo envío a las 48h vía cron.
   const existente = await db.select().from(encuestasSatisfaccion).where(eq(encuestasSatisfaccion.ordenId, orden.id)).limit(1);
-  let token: string;
   if (existente.length > 0) {
-    if (existente[0].respondidaEn) return; // ya respondió, no spamear
-    token = existente[0].token;
-  } else {
-    token = generarToken();
-    // Buscar ticket relacionado para enlazarlo (si existe)
-    const [tk] = await db.select().from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
-    await db.insert(encuestasSatisfaccion).values({
-      ordenId: orden.id,
-      ticketId: tk?.id ?? null,
-      token,
-      destinatarioEmail: sol.email,
-      destinatarioNombre: sol.nombre,
-    });
+    return; // Encuesta ya fue enviada antes — evitamos duplicados
   }
+  const token = generarToken();
+  // Buscar ticket relacionado para enlazarlo (si existe)
+  const [tk] = await db.select().from(tickets).where(eq(tickets.otId, orden.id)).limit(1);
+  await db.insert(encuestasSatisfaccion).values({
+    ordenId: orden.id,
+    ticketId: tk?.id ?? null,
+    token,
+    destinatarioEmail: sol.email,
+    destinatarioNombre: sol.nombre,
+  });
 
   const baseUrl = appUrl(ctx);
   const encuestaUrl = `${baseUrl}/encuesta/${token}`;
