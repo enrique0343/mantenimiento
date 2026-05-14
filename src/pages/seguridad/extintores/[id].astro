@@ -38,8 +38,8 @@ const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombr
 
 const admin = puedeAdministrarSeguridad(user.rol);
 
-const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es") : "—");
-const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
 
 const host = new URL(Astro.request.url).origin;
 const qrUrl = `${host}/seguridad/extintor/qr/${e.qrToken}`;
@@ -258,13 +258,13 @@ const dPrueba = diasParaFecha(e.proximaPruebaHidrostatica);
       px.textContent = "";
       if (tipoActual === "inspeccion") {
         const d = new Date(f); d.setDate(d.getDate() + frec.diasInspeccion);
-        px.textContent = `Próxima inspección: ${d.toLocaleDateString("es")}`;
+        px.textContent = `Próxima inspección: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
       } else if (tipoActual === "recarga") {
         const d = new Date(f); d.setMonth(d.getMonth() + frec.mesesRecarga);
-        px.textContent = `Próxima recarga: ${d.toLocaleDateString("es")}`;
+        px.textContent = `Próxima recarga: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
       } else if (tipoActual === "prueba_hidrostatica") {
         const d = new Date(f); d.setFullYear(d.getFullYear() + frec.aniosPrueba);
-        px.textContent = `Próxima prueba: ${d.toLocaleDateString("es")}`;
+        px.textContent = `Próxima prueba: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
       }
       document.getElementById("evtModal").classList.remove("hidden");
       document.getElementById("evtModal").classList.add("flex");

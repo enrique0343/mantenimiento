@@ -22,7 +22,7 @@ if (!r) {
   return new Response(`Extintor no encontrado para token ${token}`, { status: 404 });
 }
 const e = r.e;
-const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
 
 const stInsp = estadoVencimiento(e.proximaInspeccion);
 const stRec = estadoVencimiento(e.proximaRecarga);

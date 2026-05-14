@@ -145,7 +145,7 @@ for (let i = 11; i >= 0; i--) {
     .select({ n: sql<number>`COUNT(*)` })
     .from(ordenes)
     .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), sql`${ordenes.createdAt} < ${fin}`));
-  const mesEs = d.toLocaleDateString("es", { month: "short" }).replace(".", "");
+  const mesEs = d.toLocaleDateString("es", { month: "short", timeZone: "America/El_Salvador" }).replace(".", "");
   tendencia.push({
     mes: `${mesEs} ${String(d.getFullYear()).slice(2)}`,
     completadas: Number(completadas?.n ?? 0),

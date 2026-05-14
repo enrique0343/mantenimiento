@@ -89,7 +89,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
         </div>
         <h1 class="text-xl font-bold">{sol.titulo}</h1>
         {sol.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{sol.descripcion}</p>}
-        <p class="mt-2 text-xs text-slate-400">Creada por {creador?.nombre ?? "—"} · {new Date(sol.createdAt).toLocaleString("es")}</p>
+        <p class="mt-2 text-xs text-slate-400">Creada por {creador?.nombre ?? "—"} · {new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
       </div>
       <div class="flex gap-2 flex-wrap">
         {puedeEditar && (
@@ -184,7 +184,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
           <div class="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm">
             <div>
               <p class="font-medium">{e.destinatarioNombre ?? e.destinatarioEmail}</p>
-              <p class="text-xs text-slate-400">{e.destinatarioEmail} · Enviado {new Date(e.enviadoEn).toLocaleString("es")}</p>
+              <p class="text-xs text-slate-400">{e.destinatarioEmail} · Enviado {new Date(e.enviadoEn).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
               <p class="mt-1 text-xs text-slate-500 font-mono break-all">{baseUrl}/solicitudes-compra/r/{e.token}</p>
             </div>
           </div>
@@ -309,7 +309,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
     doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
     doc.setFontSize(10); doc.setFont(undefined, "normal");
     doc.text(`Estado: ${sol.estado}`, 14, y); y += 6;
-    doc.text(`Fecha: ${new Date(sol.createdAt).toLocaleString("es")}`, 14, y); y += 10;
+    doc.text(`Fecha: ${new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}`, 14, y); y += 10;
 
     // Si pusimos logo, dejamos espacio vertical para no chocar con el título
     if (logo && logo.data && y < 32) y = 32;

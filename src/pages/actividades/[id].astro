@@ -29,8 +29,8 @@ const ots = await db.select().from(ordenes).where(eq(ordenes.actividadId, id)).o
 
 const checklist = parseChecklist(a.checklist);
 const admin = puedeAdministrarActividades(user.rol);
-const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es") : "—");
-const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
 const st = estadoFecha(a.proximaFecha, a.alertaDiasAntes);
 const dias = diasParaFecha(a.proximaFecha);
 ---

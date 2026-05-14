@@ -80,7 +80,7 @@ const totalEq = data.equipos.length;
   </div>
 
   <script>
-    const fmt = (n) => Number(n).toLocaleString("es");
+    const fmt = (n) => Number(n).toLocaleString("es", { timeZone: "America/El_Salvador" });
 
     async function run(dry) {
       const btn = dry ? document.getElementById("dryBtn") : document.getElementById("runBtn");

@@ -16,7 +16,7 @@ const rows = await db
   .leftJoin(usuarios, eq(usuarios.id, requisiciones.creadoPor))
   .orderBy(desc(requisiciones.id));
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
 
 const conteos = rows.reduce<Record<string, number>>((acc, r) => {

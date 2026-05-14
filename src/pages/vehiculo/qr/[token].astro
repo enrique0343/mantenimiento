@@ -40,7 +40,7 @@ const esMioElViaje = viajeActivo && viajeActivo.motoristaId === user.id;
 const enUsoPorOtro = viajeActivo && !esMioElViaje;
 const bloqueadoPorOtroVehiculo = otroMio && otroMio.vehiculoId !== v.id;
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 ---
 
 <Layout title={`${v.placa} · ${v.marca} ${v.modelo}`}>

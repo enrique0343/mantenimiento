@@ -90,7 +90,7 @@ const proximos7  = items.filter((r) => r.fecha > hoy && r.fecha <= en7Str);
 const proximos30 = items.filter((r) => r.fecha > en7Str && r.fecha <= en30Str);
 const futuros    = items.filter((r) => r.fecha > en30Str);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 ---
 
 <Layout title="Cronograma">

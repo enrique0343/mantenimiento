@@ -68,8 +68,8 @@ const user = Astro.locals.user!;
 const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
 const canDelete = user.rol === "admin";
 
-const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleDateString("es") : "-");
-const fmtFull = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
+const fmtFull = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 
 function parsearCambios(json: string | null) {
   if (!json) return [];

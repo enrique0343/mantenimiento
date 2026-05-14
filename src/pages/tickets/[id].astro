@@ -40,7 +40,7 @@ const tecnicos = await db
   .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
   .orderBy(asc(usuarios.nombre));
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
 const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
 const esAdmin = user.rol === "admin";

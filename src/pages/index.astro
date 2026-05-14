@@ -70,7 +70,7 @@ const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
 const satEnv = Number(satEnviadas?.n ?? 0);
 const satTasa = satEnv > 0 ? Math.round((satN / satEnv) * 100) : 0;
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 ---
 
 <Layout title="Dashboard">

@@ -28,7 +28,7 @@ const rows = rowsRaw.filter((r) =>
 
 const sucursalesList = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
 
-const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
 ---
 
 <Layout title="Extintores">

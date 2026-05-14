@@ -35,7 +35,7 @@ const sucursalesList = await db
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const FREC_LABEL: Record<string, string> = {
   diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal",
   mensual: "Mensual", bimestral: "Bimestral", trimestral: "Trimestral",

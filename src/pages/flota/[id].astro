@@ -52,7 +52,7 @@ if (ultimasCargas.length >= 2 && ultimasCargas[0].c.kmAlCargar != null && ultima
   }
 }
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const host = new URL(Astro.request.url).origin;
 const qrUrl = `${host}/vehiculo/qr/${v.qrToken}`;
 ---
@@ -145,7 +145,7 @@ const qrUrl = `${host}/vehiculo/qr/${v.qrToken}`;
                   dias != null && dias < 0 ? "text-red-600 font-bold" :
                   dias != null && dias < 30 ? "text-amber-600" : "text-slate-500",
                 ]}>
-                  Vence: {new Date(d.vencimiento).toLocaleDateString("es")}
+                  Vence: {new Date(d.vencimiento).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}
                   {dias != null && dias < 0 && ` (vencido hace ${Math.abs(dias)}d)`}
                   {dias != null && dias >= 0 && dias < 30 && ` (en ${dias}d)`}
                 </span>
@@ -215,7 +215,7 @@ const qrUrl = `${host}/vehiculo/qr/${v.qrToken}`;
               {p.kmIntervalo && p.frecuenciaMeses && <span> · </span>}
               {p.frecuenciaMeses && <span>Cada {p.frecuenciaMeses} meses</span>}
               {p.kmProximo && <span> · próximo: {p.kmProximo.toLocaleString()} km</span>}
-              {p.proximaFecha && <span> · próxima fecha: {new Date(p.proximaFecha).toLocaleDateString("es")}</span>}
+              {p.proximaFecha && <span> · próxima fecha: {new Date(p.proximaFecha).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}</span>}
             </div>
           </div>
           {admin && <button class="plan-del-btn text-xs text-red-500 hover:underline" data-id={p.id}>Eliminar</button>}

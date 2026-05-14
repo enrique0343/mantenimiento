@@ -34,7 +34,7 @@ const movRows = await db
   .orderBy(desc(movimientosInventario.id))
   .limit(50);
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const puedeMover = ["admin", "jefe", "tecnico"].includes(user.rol);
 
 const bajoMinimo = stockTotal < it.stockMinimo;

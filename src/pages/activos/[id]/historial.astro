@@ -129,7 +129,7 @@ for (let i = 11; i >= 0; i--) {
     }
   }
   costoMes.push({
-    mes: d.toLocaleDateString("es", { month: "short" }).replace(".", "") + " " + String(d.getFullYear()).slice(2),
+    mes: d.toLocaleDateString("es", { month: "short", timeZone: "America/El_Salvador" }).replace(".", "") + " " + String(d.getFullYear()).slice(2),
     mo, rep, total: mo + rep, ots: count,
   });
 }
@@ -213,7 +213,7 @@ if (a.tipo === "biomedico") {
       fecha: a.ultimaCalibracion,
       tipo: "calibracion",
       titulo: `Calibración registrada`,
-      detalle: a.proximaCalibracion ? `Próxima: ${new Date(a.proximaCalibracion).toLocaleDateString("es")}` : "",
+      detalle: a.proximaCalibracion ? `Próxima: ${new Date(a.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
       meta: a.claseRiesgo ? `Clase ${a.claseRiesgo}` : "",
       color: "border-purple-500",
       icono: "🩺",
@@ -223,8 +223,8 @@ if (a.tipo === "biomedico") {
 
 eventos.sort((a, b) => b.fecha.localeCompare(a.fecha));
 
-const fmt = (s: string) => new Date(s).toLocaleString("es");
-const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es") : "—";
+const fmt = (s: string) => new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" });
+const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—";
 ---
 
 <Layout title={`Historial · ${a.codigo}`}>

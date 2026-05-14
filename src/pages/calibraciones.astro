@@ -45,7 +45,7 @@ for (const r of rows) {
   }
 }
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
 const claseColor: Record<string, string> = {
   I: "bg-green-100 text-green-700",
   IIa: "bg-blue-100 text-blue-700",

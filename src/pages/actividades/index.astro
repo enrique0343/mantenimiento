@@ -32,7 +32,7 @@ const rows = rowsRaw.filter((r) =>
 const sucursalesList = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
 const categoriasList = await db.select().from(actividadCategorias).where(eq(actividadCategorias.activo, true)).orderBy(actividadCategorias.orden);
 
-const fmt = (s: string) => new Date(s + "T00:00:00").toLocaleDateString("es");
+const fmt = (s: string) => new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const vencidas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes) === "vencido").length;
 const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes) === "proximo").length;
 ---

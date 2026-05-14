@@ -92,7 +92,7 @@ const enMant = rows.filter((v) => v.estado === "mantenimiento").length;
               <td class="px-4 py-2 capitalize text-slate-600">{v.tipo}</td>
               <td class="px-4 py-2 text-right font-mono">{fmtKm(v.kilometrajeActual)}</td>
               <td class="px-4 py-2"><span class={`badge ${ESTADO_VEHICULO_COLOR[v.estado]}`}>{ESTADO_VEHICULO_LABEL[v.estado]}</span></td>
-              <td class="px-4 py-2 text-xs text-slate-500">{enUso ? `${enUso.motorista ?? "—"} · ${new Date(enUso.inicio).toLocaleString("es")}` : "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-500">{enUso ? `${enUso.motorista ?? "—"} · ${new Date(enUso.inicio).toLocaleString("es", { timeZone: "America/El_Salvador" })}` : "—"}</td>
             </tr>
           );
         })}

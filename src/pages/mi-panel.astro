@@ -12,8 +12,8 @@ const db = getDb(Astro);
 const esMotorista = user.rol === "motorista";
 
 const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "—");
-const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 
 // === DATOS PARA MOTORISTA ===
 let miViaje: any = null;

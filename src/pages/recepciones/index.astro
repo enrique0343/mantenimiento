@@ -15,7 +15,7 @@ const rows = await db
   .leftJoin(usuarios, eq(usuarios.id, recepciones.recibidoPor))
   .orderBy(desc(recepciones.id));
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
 ---
 

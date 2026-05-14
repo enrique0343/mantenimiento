@@ -57,7 +57,7 @@ const ESTADO_LABEL: Record<string, string> = {
           <span class="badge" style="background:#dbeafe;color:#1e40af">{ESTADO_LABEL[sol.estado] ?? sol.estado}</span>
           <h2 class="text-lg font-bold mt-2">{sol.titulo}</h2>
           {sol.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{sol.descripcion}</p>}
-          <p class="mt-2 text-xs text-slate-400">Generada: {new Date(sol.createdAt).toLocaleString("es")}</p>
+          <p class="mt-2 text-xs text-slate-400">Generada: {new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
         </div>
         <button class="btn-pdf" id="btnPdf">📄 Descargar PDF</button>
       </div>
@@ -137,7 +137,7 @@ const ESTADO_LABEL: Record<string, string> = {
       doc.setFontSize(16); doc.setFont(undefined, "bold");
       doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
       doc.setFontSize(10); doc.setFont(undefined, "normal");
-      doc.text(`Estado: ${sol.estado}  ·  Fecha: ${new Date(sol.createdAt).toLocaleString("es")}`, 14, y); y += 10;
+      doc.text(`Estado: ${sol.estado}  ·  Fecha: ${new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}`, 14, y); y += 10;
 
       if (logo && logo.data && y < 32) y = 32;
 

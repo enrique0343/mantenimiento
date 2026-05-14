@@ -30,7 +30,7 @@ const lineas = await db
 const req = r.rec;
 const estado = req.estado as EstadoReq;
 const transiciones = transicionesReq(estado, user.rol);
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "—");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
 const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") && ["admin", "jefe", "tecnico"].includes(user.rol);
 ---
 

@@ -38,7 +38,7 @@ if (t?.otId) {
 }
 
 const abrirInconformidad = Astro.url.searchParams.get("inconformidad") === "1";
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 ---
 
 <!doctype html>

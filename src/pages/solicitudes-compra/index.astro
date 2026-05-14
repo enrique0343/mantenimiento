@@ -67,7 +67,7 @@ const ESTADO_LABEL: Record<string, string> = {
           {s.descripcion && <p class="text-xs text-slate-500 line-clamp-1 mt-0.5">{s.descripcion}</p>}
         </div>
         <div class="text-right shrink-0">
-          <p class="text-xs text-slate-400">{new Date(s.createdAt).toLocaleDateString("es")}</p>
+          <p class="text-xs text-slate-400">{new Date(s.createdAt).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}</p>
           <p class="text-xs text-slate-500">{u?.nombre ?? "—"}</p>
         </div>
       </a>

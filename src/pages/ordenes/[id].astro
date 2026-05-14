@@ -147,8 +147,8 @@ const ESTADO_PROGRESO: Record<EstadoOT, number> = {
 };
 const stepActual = ESTADO_PROGRESO[estadoActual];
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
+const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
 
 const adjsAntes = adjs.filter((a) => a.categoria === "antes");
 const adjsDespues = adjs.filter((a) => a.categoria === "despues");
@@ -208,7 +208,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
       function fmtDate(s) {
         if (!s) return "—";
-        return new Date(s).toLocaleString("es", { dateStyle: "medium", timeStyle: "short" });
+        return new Date(s).toLocaleString("es", { dateStyle: "medium", timeStyle: "short", timeZone: "America/El_Salvador" });
       }
       function escHtml(s) {
         if (s == null) return "";
@@ -979,7 +979,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <div class="mt-2">
                 <img src={`/api/firmas/${o.id}/${rol}`} alt={`Firma ${rol}`} class="h-20 w-full rounded bg-white object-contain" />
                 <div class="mt-1 text-xs text-slate-600"><strong>{nombre}</strong></div>
-                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es") : ""}</div>
+                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es", { timeZone: "America/El_Salvador" }) : ""}</div>
                 <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>
               </div>
             ) : (
@@ -1321,7 +1321,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           (payload.solucionAplicada ?? "") !== actualSol
         );
         if (!cambios) { limpiarLocal(); return; }
-        const fechaSave = new Date(savedAt).toLocaleString("es");
+        const fechaSave = new Date(savedAt).toLocaleString("es", { timeZone: "America/El_Salvador" });
         const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
         if (confirm(mensaje)) {
           if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
@@ -1545,7 +1545,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       } catch { return null; }
     }
 
-    function fmt(s) { return s ? new Date(s).toLocaleString("es") : "—"; }
+    function fmt(s) { return s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—"; }
 
     $("pdfBtn").addEventListener("click", async () => {
       $("pdfBtn").disabled = true;
@@ -1729,7 +1729,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         for (let p = 1; p <= pages; p++) {
           doc.setPage(p);
           doc.setFontSize(7); doc.setTextColor(120);
-          doc.text(`Generado ${new Date().toLocaleString("es")} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
+          doc.text(`Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
         }
 
         doc.save(`OT-${ordenData.id}.pdf`);

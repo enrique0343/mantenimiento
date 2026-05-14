@@ -62,7 +62,7 @@ const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   return acc;
 }, {});
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const ESTADOS: EstadoTicket[] = ["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"];
 const esAdmin = user.rol === "admin";
 ---
