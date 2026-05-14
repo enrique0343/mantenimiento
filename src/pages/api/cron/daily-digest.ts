@@ -4,9 +4,9 @@ import { enviarDigestDiario } from "@/lib/daily-digest";
 
 export const prerender = false;
 
-// Cron: envía el resumen diario de operaciones a todos los admins.
-// Pensado para correr a las 6:00 AM hora El Salvador (= 12:00 UTC).
-// Protegido por X-Cron-Secret.
+// Cron: envía el resumen diario. Se puede correr a cualquier hora — la función
+// verifica si ya se envió hoy (hora SV) mirando el email_log. Si quieres
+// forzar el reenvío, manda ?force=1 (solo via GET autenticado).
 export const POST: APIRoute = async (ctx) => {
   const env = getEnv(ctx);
   const expected = (env as any).CRON_SECRET as string | undefined;
@@ -14,16 +14,20 @@ export const POST: APIRoute = async (ctx) => {
   if (!expected || got !== expected) {
     return Response.json({ error: "No autorizado" }, { status: 401 });
   }
-  const { enviados } = await enviarDigestDiario(ctx);
-  return Response.json({ ok: true, enviados });
+  const { enviados, razon } = await enviarDigestDiario(ctx);
+  return Response.json({ ok: true, enviados, razon });
 };
 
 // GET: permite a un admin disparar manualmente el digest desde el navegador
-// (útil para probar). Requiere autenticación.
+// (útil para probar). Si pasas ?force=1, ignora el check anti-duplicado.
 export const GET: APIRoute = async (ctx) => {
   const { requireUser } = await import("@/lib/auth");
   const { user, response } = await requireUser(ctx, ["admin"]);
   if (!user) return response;
-  const { enviados } = await enviarDigestDiario(ctx);
-  return Response.json({ ok: true, enviados, mensaje: `Digest enviado a ${enviados} admin(s).` });
+  const force = new URL(ctx.request.url).searchParams.get("force") === "1";
+  const { enviados, razon } = await enviarDigestDiario(ctx, { force });
+  const mensaje = enviados > 0
+    ? `✓ Digest enviado a ${enviados} admin(s).`
+    : `⏸ Digest no enviado. ${razon ?? ""}`;
+  return Response.json({ ok: true, enviados, razon, mensaje });
 };

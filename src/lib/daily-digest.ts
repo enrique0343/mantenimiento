@@ -1,15 +1,16 @@
 // Resumen diario de operaciones de Mantenimiento.
-// Se envía cada día a las 6am hora El Salvador a todos los admins.
-// Reúne: avances de ayer, en curso, atrasados, KPIs del mes, próximos vencimientos
-// y solicitudes de compra pendientes. Incluye costos y métricas por técnico.
+// Se envía cada día a todos los admins. La protección anti-duplicado usa
+// email_log: si ya hay un envío "digest_diario" con referencia de hoy (en
+// hora El Salvador), no se vuelve a mandar. Esto permite que el cron corra
+// a cualquier hora del día sin riesgo de duplicar y sin depender de UTC.
 
 import type { APIContext } from "astro";
-import { and, eq, lte, gte, isNotNull, isNull, inArray, desc, sql } from "drizzle-orm";
+import { and, eq, lte, gte, isNotNull, isNull, inArray, desc, sql, like } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   ordenes, tickets, usuarios, activos, ubicaciones, sucursales,
   ordenRepuestos, items as itemsTable, planesMantenimiento, actividades,
-  solicitudesCompra,
+  solicitudesCompra, emailLog,
 } from "./schema";
 import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga, fmtFechaSimple } from "./datetime";
@@ -61,19 +62,39 @@ const ESTADO_TICKET_LABEL: Record<string, string> = {
   descartado: "Descartado",
 };
 
-export async function enviarDigestDiario(ctx: APIContext): Promise<{ enviados: number }> {
+export async function enviarDigestDiario(
+  ctx: APIContext,
+  opts: { force?: boolean } = {}
+): Promise<{ enviados: number; razon?: string }> {
   const db = getDb(ctx);
   const baseUrl = appUrl(ctx);
+  const hoy = hoyDateSV();
+
+  // Anti-duplicado: si ya hay un envío "digest_diario" hoy (SV), no repetir.
+  // El parámetro force=true salta esta verificación (para el botón manual).
+  if (!opts.force) {
+    const yaEnviado = await db
+      .select({ id: emailLog.id })
+      .from(emailLog)
+      .where(and(
+        eq(emailLog.tipo, "digest_diario"),
+        eq(emailLog.referencia, `digest:${hoy}`),
+        eq(emailLog.estado, "enviado"),
+      ))
+      .limit(1);
+    if (yaEnviado.length > 0) {
+      return { enviados: 0, razon: `Ya se envió el digest de hoy (${hoy}). Usa force=true para reenviar.` };
+    }
+  }
 
   // 1) Destinatarios: solo admins activos con email
   const admins = await db.select().from(usuarios).where(and(eq(usuarios.rol, "admin"), eq(usuarios.activo, true)));
   const destinatarios = admins.filter((a) => !!a.email);
-  if (destinatarios.length === 0) return { enviados: 0 };
+  if (destinatarios.length === 0) return { enviados: 0, razon: "Sin admins con email configurado" };
 
   // ── Rangos de tiempo ──────────────────────────────────────────────────────
   const { inicio: ayerIni, fin: ayerFin } = ayerEnSV();
   const inicioMes = inicioMesEnSV();
-  const hoy = hoyDateSV();
   const en3 = new Date(Date.now() + 3 * 24 * 3600_000).toISOString().slice(0, 10);
   const ahoraIso = new Date().toISOString();
 
