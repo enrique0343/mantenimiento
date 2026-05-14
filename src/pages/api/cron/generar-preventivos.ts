@@ -4,6 +4,7 @@ import { getDb, getEnv } from "@/lib/db";
 import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias } from "@/lib/schema";
 import { siguienteFecha } from "@/lib/frecuencias";
 import { enviarRecordatoriosEncuestas } from "@/lib/encuestas-recordatorio";
+import { enviarDigestDiario } from "@/lib/daily-digest";
 
 export const prerender = false;
 
@@ -125,5 +126,22 @@ export const POST: APIRoute = async (ctx) => {
     console.error("recordatorios encuestas:", e);
   }
 
-  return Response.json({ ok: true, fecha: hoy, creadas, detalles, recordatoriosEnviados });
+  // Digest diario: solo si la hora UTC está entre 11:30 y 12:30 (= 5:30-6:30 SV).
+  // Esta ventana evita enviarlo varias veces si el cron corre múltiples veces
+  // al día. Si solo corres una vez al día a otra hora, mejor usa el endpoint
+  // dedicado /api/cron/daily-digest con su propio trigger.
+  let digestEnviados = 0;
+  const horaUtc = new Date().getUTCHours();
+  const minUtc = new Date().getUTCMinutes();
+  const enVentanaDigest = (horaUtc === 11 && minUtc >= 30) || (horaUtc === 12 && minUtc <= 30);
+  if (enVentanaDigest) {
+    try {
+      const r = await enviarDigestDiario(ctx);
+      digestEnviados = r.enviados;
+    } catch (e) {
+      console.error("digest diario:", e);
+    }
+  }
+
+  return Response.json({ ok: true, fecha: hoy, creadas, detalles, recordatoriosEnviados, digestEnviados });
 };
