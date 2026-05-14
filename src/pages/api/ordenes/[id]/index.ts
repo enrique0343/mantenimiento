@@ -166,6 +166,15 @@ export const PATCH: APIRoute = async (ctx) => {
           const horas = Math.max(0, (fin - inicio - pausadoMs) / 3_600_000);
           data.horasTrabajadas = Math.round(horas * 100) / 100;
         }
+        // Cuando se marca completada, automaticamente la cerramos.
+        // Esto dispara la encuesta de satisfaccion al solicitante y libera
+        // al jefe del paso intermedio de verificacion. Si despues hay
+        // inconformidad, el solicitante tiene 48h para reabrir desde el
+        // portal publico.
+        data.cerradoPor = user.id;
+        data.cerradoEn = now;
+        data.estado = "cerrada";
+        parsed.data.estado = "cerrada";
         break;
       case "verificada":
         // Cuando el jefe verifica, automaticamente cerramos la OT.

@@ -338,7 +338,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               {s === "abierta" ? "↺ Reabrir" :
                s === "en_proceso" ? (estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
                s === "en_espera" ? "⏸ Poner en espera" :
-               s === "completada" ? "✓ Marcar finalizada" :
+               s === "completada" ? "✓ Completar y cerrar" :
                s === "verificada" ? "✓✓ Verificar y cerrar" :
                s === "cerrada" ? "🔒 Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
