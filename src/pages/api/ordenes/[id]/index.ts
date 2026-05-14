@@ -96,7 +96,9 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const { reprogramarPreventivos, motivoReasignacion, ...rest } = parsed.data;
+  const { reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras, ...rest } = parsed.data;
+  // horasTrabajadas se calcula SIEMPRE en el servidor (al cerrar la OT).
+  // Ignoramos cualquier valor que venga del cliente para evitar manipulacion.
   const data: Record<string, unknown> = { ...rest };
   const now = new Date().toISOString();
 
@@ -157,9 +159,11 @@ export const PATCH: APIRoute = async (ctx) => {
         break;
       case "completada":
         data.completadaEn = now;
-        // Auto-calcular horas trabajadas si hay inicio y el técnico no las
-        // proporcionó manualmente en este PATCH. Descuenta tiempo pausado.
-        if (actual.iniciadaEn && parsed.data.horasTrabajadas == null) {
+        // SIEMPRE auto-calcular horas trabajadas desde inicio hasta ahora,
+        // descontando el tiempo pausado (en_espera). El campo en el cliente
+        // es solo lectura — ignoramos cualquier valor que venga en el PATCH
+        // para garantizar trazabilidad real de tiempo.
+        if (actual.iniciadaEn) {
           const inicio = new Date(actual.iniciadaEn).getTime();
           const fin = new Date(now).getTime();
           const pausadoMs = (actual.tiempoPausadoMin ?? 0) * 60_000;

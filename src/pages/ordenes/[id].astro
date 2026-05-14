@@ -597,8 +597,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           )}
           <div>
             <label class="label">Horas trabajadas</label>
-            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32" value={o.horasTrabajadas ?? ""} disabled={!puedeEditar} />
-            <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente al completar (de "iniciada" a "completada"). Puedes ajustarlo si hubo pausas.</p>
+            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
+            <p class="mt-1 text-xs text-slate-500">🔒 Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
           </div>
           {puedeEditar && (
             <div class="flex items-center gap-2 flex-wrap">
@@ -1181,7 +1181,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
     const STORAGE_KEY = `ot-${id}-draft`;
-    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas"];
+    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada"];
     const ejecIndicador = $("autosaveIndicador");
 
     function setIndicador(estado, texto) {
@@ -1199,12 +1199,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
 
     function leerEjecPayload() {
-      const horas = $("horasTrabajadas")?.value;
+      // horasTrabajadas se calcula en el servidor automaticamente al cerrar.
+      // No se envia desde el cliente.
       return {
         trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
         causaRaiz: $("causaRaiz")?.value?.trim() || null,
         solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
-        horasTrabajadas: horas ? Number(horas) : null,
       };
     }
 
@@ -1281,12 +1281,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const actualTrab = ($("trabajosRealizados")?.value || "").trim();
         const actualCausa = ($("causaRaiz")?.value || "").trim();
         const actualSol = ($("solucionAplicada")?.value || "").trim();
-        const actualHoras = $("horasTrabajadas")?.value || "";
         const cambios = (
           (payload.trabajosRealizados ?? "") !== actualTrab ||
           (payload.causaRaiz ?? "") !== actualCausa ||
-          (payload.solucionAplicada ?? "") !== actualSol ||
-          String(payload.horasTrabajadas ?? "") !== String(actualHoras)
+          (payload.solucionAplicada ?? "") !== actualSol
         );
         if (!cambios) { limpiarLocal(); return; }
         const fechaSave = new Date(savedAt).toLocaleString("es");
@@ -1295,7 +1293,6 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
           if ($("causaRaiz") && payload.causaRaiz != null) $("causaRaiz").value = payload.causaRaiz;
           if ($("solucionAplicada") && payload.solucionAplicada != null) $("solucionAplicada").value = payload.solucionAplicada;
-          if ($("horasTrabajadas") && payload.horasTrabajadas != null) $("horasTrabajadas").value = String(payload.horasTrabajadas);
           // Disparar guardado inmediato al servidor
           ejecutarGuardado();
         } else {
