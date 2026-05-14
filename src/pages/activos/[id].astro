@@ -382,14 +382,16 @@ const isBio = a.tipo === "biomedico";
     )}
   </div>
 
-  <script define:vars={{ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre }}>
+  <script define:vars={{ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null }}>
     const $ = (id) => document.getElementById(id);
     $("newPlanBtn")?.addEventListener("click", () => {
       $("newPlanForm").classList.remove("hidden");
-      // Pre-llenar título con un default razonable basado en el equipo
+      // Pre-llenar título: "Mantenimiento preventivo {nombre equipo} {ubicación}"
       const tituloEl = $("p_titulo");
       if (tituloEl && !tituloEl.value) {
-        tituloEl.value = `Mantenimiento preventivo - ${activoCodigo} ${activoNombre}`.trim();
+        const partes = ["Mantenimiento preventivo", activoNombre];
+        if (ubicacionNombre) partes.push(ubicacionNombre);
+        tituloEl.value = partes.filter(Boolean).join(" ");
       }
       // Pre-llenar próxima fecha con hoy (hora SV)
       const fechaEl = $("p_proxima");
