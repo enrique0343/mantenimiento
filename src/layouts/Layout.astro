@@ -30,6 +30,7 @@ const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
 const allLinks: Link[] = [
   { href: homeHref,         label: homeLabel,       icon: "🏠" },
   { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
+  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
   { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
   { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
   { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },

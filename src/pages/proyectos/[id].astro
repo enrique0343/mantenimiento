@@ -1,0 +1,775 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  proyectos, proyectoPresupuestoItems, proyectoHitos, proyectoAdjuntos,
+  proyectoComentarios, usuarios, sucursales, ubicaciones, activos, tickets,
+  ordenes, proveedores,
+} from "@/lib/schema";
+import { eq, asc, desc } from "drizzle-orm";
+import {
+  ESTADO_PROYECTO_LABEL, ESTADO_PROYECTO_COLOR,
+  calcularResumenProyecto, puedeAprobarProyecto, puedeEditarProyecto, puedeCrearProyecto,
+} from "@/lib/proyectos";
+import { ESTADO_LABEL as ESTADO_OT_LABEL, ESTADO_COLOR as ESTADO_OT_COLOR } from "@/lib/ordenes";
+import { PRIO_COLOR } from "@/lib/ordenes";
+import { fmtFechaSimple, fmtFechaLarga } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const id = Number(Astro.params.id);
+const db = getDb(Astro);
+
+const [row] = await db
+  .select({ p: proyectos, creador: usuarios, sucursal: sucursales, ubicacion: ubicaciones, activo: activos, ticket: tickets })
+  .from(proyectos)
+  .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
+  .leftJoin(sucursales, eq(sucursales.id, proyectos.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, proyectos.ubicacionId))
+  .leftJoin(activos, eq(activos.id, proyectos.activoId))
+  .leftJoin(tickets, eq(tickets.id, proyectos.ticketId))
+  .where(eq(proyectos.id, id))
+  .limit(1);
+if (!row) return Astro.redirect("/proyectos");
+const p = row.p;
+
+const items = await db
+  .select({ i: proyectoPresupuestoItems, prov: proveedores })
+  .from(proyectoPresupuestoItems)
+  .leftJoin(proveedores, eq(proveedores.id, proyectoPresupuestoItems.proveedorId))
+  .where(eq(proyectoPresupuestoItems.proyectoId, id))
+  .orderBy(asc(proyectoPresupuestoItems.orden), asc(proyectoPresupuestoItems.id));
+
+const hitos = await db.select().from(proyectoHitos)
+  .where(eq(proyectoHitos.proyectoId, id))
+  .orderBy(asc(proyectoHitos.orden), asc(proyectoHitos.id));
+
+const adjs = await db.select().from(proyectoAdjuntos).where(eq(proyectoAdjuntos.proyectoId, id));
+
+const coms = await db
+  .select({ c: proyectoComentarios, u: usuarios })
+  .from(proyectoComentarios)
+  .leftJoin(usuarios, eq(usuarios.id, proyectoComentarios.usuarioId))
+  .where(eq(proyectoComentarios.proyectoId, id))
+  .orderBy(asc(proyectoComentarios.id));
+
+const otsHijas = await db
+  .select({ o: ordenes, u: usuarios })
+  .from(ordenes)
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(eq(ordenes.proyectoId, id))
+  .orderBy(desc(ordenes.id));
+
+const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.activo, true)).orderBy(asc(usuarios.nombre));
+const provs = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre));
+
+const resumen = await calcularResumenProyecto(Astro, id);
+
+const esAdmin = user.rol === "admin";
+const puedeEditar = puedeEditarProyecto(user.rol, p, user.id);
+const puedeAprobar = puedeAprobarProyecto(user.rol) && p.estado === "evaluacion";
+const puedeGenerarOT = (user.rol === "admin" || user.rol === "jefe") && ["aprobado", "en_ejecucion", "en_pausa"].includes(p.estado);
+
+const provsJson = JSON.stringify(provs);
+const tecnicosJson = JSON.stringify(tecnicos);
+---
+
+<Layout title={`${p.codigo} - ${p.titulo}`}>
+  <a href="/proyectos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <!-- Cabecera -->
+  <div class="card mt-3 p-5">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <div class="flex-1">
+        <div class="flex items-center gap-2 flex-wrap mb-1">
+          <span class="font-mono text-sm text-slate-500">{p.codigo}</span>
+          <span class:list={["text-xs px-2 py-0.5 rounded-full font-medium", ESTADO_PROYECTO_COLOR[p.estado]]}>
+            {ESTADO_PROYECTO_LABEL[p.estado]}
+          </span>
+          <span class={`badge ${PRIO_COLOR[p.prioridad]} capitalize`}>{p.prioridad}</span>
+          {row.ticket && (
+            <a href={`/tickets/${row.ticket.id}`} class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full hover:bg-amber-200">
+              Ticket #{row.ticket.id}
+            </a>
+          )}
+        </div>
+        <h1 class="text-2xl font-bold">{p.titulo}</h1>
+        {p.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{p.descripcion}</p>}
+        <p class="mt-2 text-xs text-slate-400">
+          Creado por {row.creador?.nombre ?? "—"} · {fmtFechaSimple(p.createdAt)}
+          {row.sucursal && <> · 🏢 {row.sucursal.nombre}</>}
+          {row.ubicacion && <> · 📍 {row.ubicacion.nombre}</>}
+        </p>
+      </div>
+      <div class="flex flex-col gap-2 items-end">
+        {puedeAprobar && (
+          <div class="flex gap-2">
+            <button id="btnAprobar" class="btn-primary text-sm">✅ Aprobar</button>
+            <button id="btnRechazar" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">❌ Rechazar</button>
+          </div>
+        )}
+        {esAdmin && p.estado === "en_ejecucion" && (
+          <button id="btnCompletar" class="btn-primary bg-emerald-600 hover:bg-emerald-700 text-sm">✓ Marcar completado</button>
+        )}
+        {esAdmin && p.estado === "en_ejecucion" && (
+          <button id="btnPausar" class="text-sm px-3 py-1.5 rounded-lg border border-purple-300 text-purple-600 hover:bg-purple-50">⏸ Pausar</button>
+        )}
+        {esAdmin && p.estado === "en_pausa" && (
+          <button id="btnReanudar" class="btn-primary text-sm">▶ Reanudar</button>
+        )}
+        {esAdmin && ["evaluacion","aprobado","en_ejecucion","en_pausa"].includes(p.estado) && (
+          <button id="btnCancelar" class="text-xs text-slate-500 hover:underline">Cancelar proyecto</button>
+        )}
+      </div>
+    </div>
+
+    <!-- Indicadores -->
+    <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
+      <div class="bg-slate-50 rounded-lg p-3">
+        <div class="text-xs uppercase text-slate-500">% Avance</div>
+        <div class="mt-1 text-2xl font-bold text-emerald-700">{resumen.avancePct}%</div>
+        <div class="text-[10px] text-slate-400 capitalize">{resumen.avanceFuente === "manual" ? "manual" : resumen.avanceFuente === "hitos" ? `${resumen.hitosCompletados}/${resumen.hitosTotal} hitos` : resumen.avanceFuente === "ots" ? `${resumen.otsCerradas}/${resumen.otsTotal} OTs` : "sin datos"}</div>
+        <div class="mt-2 h-1.5 overflow-hidden rounded bg-slate-200">
+          <div class="h-full bg-emerald-500" style={`width: ${resumen.avancePct}%`}></div>
+        </div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3">
+        <div class="text-xs uppercase text-slate-500">Presupuesto</div>
+        <div class="mt-1 text-lg font-bold text-slate-700">${resumen.costoEstimado.toFixed(2)}</div>
+        <div class="text-[10px] text-slate-400">estimado</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3">
+        <div class="text-xs uppercase text-slate-500">Costo real</div>
+        <div class="mt-1 text-lg font-bold" class:list={[resumen.desviacionAbs > 0 ? "text-red-700" : "text-emerald-700"]}>${resumen.costoReal.toFixed(2)}</div>
+        <div class="text-[10px]" class:list={[resumen.desviacionAbs > 0 ? "text-red-500" : "text-emerald-500"]}>
+          {resumen.desviacionAbs > 0 ? "+" : ""}${resumen.desviacionAbs.toFixed(2)} ({resumen.desviacionPct > 0 ? "+" : ""}{resumen.desviacionPct}%)
+        </div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3">
+        <div class="text-xs uppercase text-slate-500">OTs hijas</div>
+        <div class="mt-1 text-2xl font-bold text-slate-700">{resumen.otsCerradas}/{resumen.otsTotal}</div>
+        <div class="text-[10px] text-slate-400">cerradas/total</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notas de aprobación/cierre -->
+  {p.notasAprobacion && (
+    <div class:list={["card mt-3 p-4 border-l-4", p.estado === "rechazado" ? "border-red-500 bg-red-50" : "border-blue-500 bg-blue-50"]}>
+      <p class="text-xs uppercase font-semibold mb-1" class:list={[p.estado === "rechazado" ? "text-red-700" : "text-blue-700"]}>
+        {p.estado === "rechazado" ? "Razón del rechazo" : "Notas de aprobación"}
+      </p>
+      <p class="text-sm whitespace-pre-wrap text-slate-700">{p.notasAprobacion}</p>
+      <p class="mt-2 text-xs text-slate-500">Por usuario ID {p.aprobadoPor} · {fmtFechaLarga(p.aprobadoEn)}</p>
+    </div>
+  )}
+
+  <!-- Evaluación -->
+  <div class="card mt-3 p-5">
+    <h2 class="font-semibold text-slate-900 mb-3">📋 Evaluación</h2>
+    <div class="grid grid-cols-1 gap-4 text-sm">
+      <div>
+        <div class="text-xs uppercase text-slate-500 mb-1">Justificación</div>
+        <textarea class="input proy-field" id="justificacion" data-field="justificacion" rows="2" disabled={!puedeEditar}>{p.justificacion ?? ""}</textarea>
+      </div>
+      <div>
+        <div class="text-xs uppercase text-slate-500 mb-1">Alcance</div>
+        <textarea class="input proy-field" id="alcance" data-field="alcance" rows="2" disabled={!puedeEditar}>{p.alcance ?? ""}</textarea>
+      </div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <div class="text-xs uppercase text-slate-500 mb-1">Factibilidad (técnica)</div>
+          <textarea class="input proy-field" id="factibilidad" data-field="factibilidad" rows="3" disabled={!puedeEditar}>{p.factibilidad ?? ""}</textarea>
+        </div>
+        <div>
+          <div class="text-xs uppercase text-slate-500 mb-1">Viabilidad (estratégica)</div>
+          <textarea class="input proy-field" id="viabilidad" data-field="viabilidad" rows="3" disabled={!puedeEditar}>{p.viabilidad ?? ""}</textarea>
+        </div>
+        <div>
+          <div class="text-xs uppercase text-slate-500 mb-1">Beneficios esperados</div>
+          <textarea class="input proy-field" id="beneficiosEsperados" data-field="beneficiosEsperados" rows="2" disabled={!puedeEditar}>{p.beneficiosEsperados ?? ""}</textarea>
+        </div>
+        <div>
+          <div class="text-xs uppercase text-slate-500 mb-1">Riesgos</div>
+          <textarea class="input proy-field" id="riesgos" data-field="riesgos" rows="2" disabled={!puedeEditar}>{p.riesgos ?? ""}</textarea>
+        </div>
+      </div>
+    </div>
+    {puedeEditar && <p class="mt-2 text-xs text-emerald-700">✓ Tus cambios se guardan automáticamente al escribir.</p>}
+  </div>
+
+  <!-- Plazos -->
+  <div class="card mt-3 p-5">
+    <h2 class="font-semibold text-slate-900 mb-3">📅 Plazos</h2>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-4 text-sm">
+      <div>
+        <label class="text-xs uppercase text-slate-500">Inicio estimado</label>
+        <input class="input proy-field text-sm" type="date" id="fechaInicioEstimada" data-field="fechaInicioEstimada" value={p.fechaInicioEstimada ?? ""} disabled={!puedeEditar} />
+      </div>
+      <div>
+        <label class="text-xs uppercase text-slate-500">Fin estimado</label>
+        <input class="input proy-field text-sm" type="date" id="fechaFinEstimada" data-field="fechaFinEstimada" value={p.fechaFinEstimada ?? ""} disabled={!puedeEditar} />
+      </div>
+      <div>
+        <label class="text-xs uppercase text-slate-500">Inicio real</label>
+        <input class="input text-sm bg-slate-100" type="text" value={fmtFechaSimple(p.fechaInicioReal)} disabled />
+      </div>
+      <div>
+        <label class="text-xs uppercase text-slate-500">Fin real</label>
+        <input class="input text-sm bg-slate-100" type="text" value={fmtFechaSimple(p.fechaFinReal)} disabled />
+      </div>
+    </div>
+  </div>
+
+  <!-- Presupuesto detallado -->
+  <div class="card mt-3 p-5">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="font-semibold text-slate-900">💰 Presupuesto detallado</h2>
+      {puedeEditar && <button id="btnAgregarItem" class="btn-secondary text-xs">+ Agregar línea</button>}
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs text-slate-500 border-b border-slate-200">
+            <th class="pb-2">Descripción</th>
+            <th class="pb-2">Categoría</th>
+            <th class="pb-2 text-right">Cant.</th>
+            <th class="pb-2">Unidad</th>
+            <th class="pb-2 text-right">Precio est.</th>
+            <th class="pb-2 text-right">Precio real</th>
+            <th class="pb-2">Proveedor</th>
+            {puedeEditar && <th class="pb-2"></th>}
+          </tr>
+        </thead>
+        <tbody id="tbPresupuesto">
+          {items.map((it) => {
+            const subtotalEst = (it.i.precioEstimado ?? 0) * (it.i.cantidad ?? 1);
+            const subtotalReal = it.i.precioReal != null ? it.i.precioReal * (it.i.cantidad ?? 1) : null;
+            return (
+              <tr class="border-b border-slate-100" data-item-id={it.i.id}>
+                <td class="py-2">{it.i.descripcion}{it.i.notas && <div class="text-xs text-slate-400">{it.i.notas}</div>}</td>
+                <td class="py-2 text-slate-500 text-xs capitalize">{it.i.categoria ?? "—"}</td>
+                <td class="py-2 text-right font-mono text-xs">{it.i.cantidad}</td>
+                <td class="py-2 text-slate-500 text-xs">{it.i.unidad ?? "—"}</td>
+                <td class="py-2 text-right font-mono">${subtotalEst.toFixed(2)}</td>
+                <td class="py-2 text-right font-mono" class:list={[subtotalReal != null ? (subtotalReal > subtotalEst ? "text-red-700" : "text-emerald-700") : "text-slate-400"]}>
+                  {subtotalReal != null ? `$${subtotalReal.toFixed(2)}` : "—"}
+                </td>
+                <td class="py-2 text-slate-500 text-xs">{it.prov?.nombre ?? "—"}</td>
+                {puedeEditar && (
+                  <td class="py-2 text-right">
+                    <button class="item-edit-btn text-xs text-brand-600 hover:underline" data-id={it.i.id}>Editar</button>
+                    <button class="item-del-btn text-xs text-red-500 hover:underline ml-2" data-id={it.i.id}>×</button>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+          {items.length === 0 && <tr><td colspan={puedeEditar ? 8 : 7} class="py-4 text-center text-slate-400 text-sm">Sin líneas de presupuesto.</td></tr>}
+        </tbody>
+        <tfoot>
+          <tr class="border-t-2 border-slate-300 font-semibold">
+            <td colspan="4" class="pt-2 text-right">TOTAL</td>
+            <td class="pt-2 text-right font-mono">${resumen.costoEstimado.toFixed(2)}</td>
+            <td class="pt-2 text-right font-mono" class:list={[resumen.desviacionAbs > 0 ? "text-red-700" : "text-emerald-700"]}>${resumen.costoReal.toFixed(2)}</td>
+            <td colspan={puedeEditar ? 2 : 1}></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Hitos -->
+  <div class="card mt-3 p-5">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="font-semibold text-slate-900">🎯 Hitos / Milestones</h2>
+      {puedeEditar && <button id="btnAgregarHito" class="btn-secondary text-xs">+ Agregar hito</button>}
+    </div>
+    <ul class="space-y-2" id="ulHitos">
+      {hitos.map((h) => (
+        <li class:list={["flex items-start gap-3 rounded-lg p-3", h.completado ? "bg-emerald-50" : "bg-slate-50"]} data-hito-id={h.id}>
+          <input type="checkbox" class="hito-check mt-0.5 h-5 w-5 cursor-pointer" data-id={h.id} checked={h.completado} disabled={!puedeEditar} />
+          <div class="flex-1">
+            <div class:list={["text-sm font-medium", h.completado && "text-slate-500 line-through"]}>{h.titulo}</div>
+            {h.descripcion && <div class="text-xs text-slate-500 mt-0.5">{h.descripcion}</div>}
+            {h.fechaObjetivo && (
+              <div class="text-[11px] text-slate-400 mt-1">
+                🎯 Objetivo: {fmtFechaSimple(h.fechaObjetivo)}
+                {h.completado && h.fechaCompletado && <> · ✓ {fmtFechaSimple(h.fechaCompletado)}</>}
+              </div>
+            )}
+          </div>
+          {puedeEditar && <button class="hito-del-btn text-xs text-red-500 hover:underline" data-id={h.id}>×</button>}
+        </li>
+      ))}
+      {hitos.length === 0 && <li class="text-sm text-slate-400 text-center py-4">Sin hitos definidos.</li>}
+    </ul>
+  </div>
+
+  <!-- OTs del proyecto -->
+  <div class="card mt-3 p-5">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h2 class="font-semibold text-slate-900">🛠 Órdenes de trabajo del proyecto</h2>
+      {puedeGenerarOT && <button id="btnGenerarOT" class="btn-secondary text-xs">+ Generar OT</button>}
+    </div>
+    {otsHijas.length === 0 ? (
+      <p class="text-sm text-slate-400 text-center py-4">Sin OTs generadas. Cuando apruebes el proyecto, podrás crear OTs para descomponer la ejecución.</p>
+    ) : (
+      <ul class="space-y-2">
+        {otsHijas.map((r) => (
+          <li class="flex items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50">
+            <a href={`/ordenes/${r.o.id}`} class="flex-1">
+              <span class="font-mono text-xs text-slate-400">#{r.o.id}</span>
+              <span class="ml-2 font-medium text-sm">{r.o.titulo}</span>
+              <div class="text-xs text-slate-500 mt-0.5">{r.u?.nombre ?? "Sin asignar"}</div>
+            </a>
+            <span class={`badge ${ESTADO_OT_COLOR[r.o.estado as any] ?? "bg-slate-100 text-slate-600"} text-[10px]`}>{ESTADO_OT_LABEL[r.o.estado as any] ?? r.o.estado}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
+  <!-- Adjuntos -->
+  <div class="card mt-3 p-5">
+    <h2 class="font-semibold text-slate-900 mb-3">📎 Adjuntos (cotizaciones, planos, documentos)</h2>
+    <div class="flex flex-wrap gap-3 mb-3">
+      {adjs.map((a) => (
+        <div class="relative group w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100" data-adj-id={a.id}>
+          <a href={`/api/proyectos/adjunto/${a.id}`} target="_blank" rel="noopener">
+            {a.contentType.startsWith("image/")
+              ? <img src={`/api/proyectos/adjunto/${a.id}`} class="w-full h-full object-cover" loading="lazy" alt={a.nombre} />
+              : <div class="w-full h-full flex items-center justify-center text-xs text-slate-500 px-1 text-center p-1"><span>📄 {a.nombre}</span></div>
+            }
+          </a>
+          {puedeEditar && (
+            <button class="adj-del-btn absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/60 text-white text-xs w-5 h-5 rounded-full" data-id={a.id}>×</button>
+          )}
+        </div>
+      ))}
+      {adjs.length === 0 && <p class="text-sm text-slate-400">Sin adjuntos.</p>}
+    </div>
+    {puedeEditar && (
+      <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100 w-fit">
+        <input type="file" id="adjInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
+        📎 Subir archivos
+      </label>
+    )}
+  </div>
+
+  <!-- Bitácora -->
+  <div class="card mt-3 p-5">
+    <h2 class="font-semibold text-slate-900 mb-3">💬 Bitácora ({coms.length})</h2>
+    <ul class="space-y-2">
+      {coms.map((c) => (
+        <li class="rounded-lg bg-slate-50 p-3">
+          <div class="text-xs text-slate-500">{c.autor?.nombre ?? "—"} · {fmtFechaLarga(c.c.createdAt)}</div>
+          <div class="mt-1 text-sm whitespace-pre-wrap">{c.c.texto}</div>
+        </li>
+      ))}
+      {coms.length === 0 && <li class="text-sm text-slate-400">Sin comentarios.</li>}
+    </ul>
+    <form id="comForm" class="mt-3 space-y-2">
+      <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario a la bitácora..." required></textarea>
+      <button class="btn-primary text-sm" type="submit">Agregar</button>
+    </form>
+  </div>
+
+  <!-- Modal aprobación -->
+  <div id="modalDecision" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+      <h2 id="modalDecTitulo" class="font-bold text-lg mb-3"></h2>
+      <label class="label">Notas <span class="text-red-500">*</span></label>
+      <textarea class="input" id="decisionNotas" rows="4" placeholder="Justifica la decisión..."></textarea>
+      <p id="decisionErr" class="hidden mt-2 text-sm text-red-600"></p>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnDecisionCancel" class="btn-secondary">Cancelar</button>
+        <button id="btnDecisionConfirmar" class="btn-primary">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal nuevo item presupuesto -->
+  <div id="modalItem" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+      <h2 class="font-bold text-lg mb-3">Línea de presupuesto</h2>
+      <input type="hidden" id="itemId" value="" />
+      <div class="space-y-3">
+        <div>
+          <label class="label">Descripción *</label>
+          <input class="input" id="itemDescripcion" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Categoría</label>
+            <select class="input" id="itemCategoria">
+              <option value="">—</option>
+              <option value="materiales">Materiales</option>
+              <option value="mano_obra">Mano de obra</option>
+              <option value="servicios">Servicios</option>
+              <option value="otros">Otros</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Proveedor</label>
+            <select class="input" id="itemProveedor">
+              <option value="">—</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="label">Cantidad</label>
+            <input class="input" id="itemCantidad" type="number" min="0.01" step="any" value="1" />
+          </div>
+          <div>
+            <label class="label">Unidad</label>
+            <input class="input" id="itemUnidad" placeholder="pcs, m, hora..." />
+          </div>
+          <div>
+            <label class="label">Precio est.</label>
+            <input class="input" id="itemPrecioEst" type="number" min="0" step="0.01" value="0" />
+          </div>
+        </div>
+        <div>
+          <label class="label">Precio real (al cierre)</label>
+          <input class="input" id="itemPrecioReal" type="number" min="0" step="0.01" />
+        </div>
+        <div>
+          <label class="label">Notas</label>
+          <input class="input" id="itemNotas" />
+        </div>
+      </div>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnItemCancel" class="btn-secondary">Cancelar</button>
+        <button id="btnItemSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal nuevo hito -->
+  <div id="modalHito" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+      <h2 class="font-bold text-lg mb-3">Nuevo hito</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="label">Título *</label>
+          <input class="input" id="hitoTitulo" />
+        </div>
+        <div>
+          <label class="label">Descripción</label>
+          <textarea class="input" id="hitoDescripcion" rows="2"></textarea>
+        </div>
+        <div>
+          <label class="label">Fecha objetivo</label>
+          <input class="input" id="hitoFechaObjetivo" type="date" />
+        </div>
+      </div>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnHitoCancel" class="btn-secondary">Cancelar</button>
+        <button id="btnHitoSave" class="btn-primary">Crear hito</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal generar OT -->
+  <div id="modalOT" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+      <h2 class="font-bold text-lg mb-3">Generar OT del proyecto</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="label">Título *</label>
+          <input class="input" id="otTitulo" placeholder="Ej: Instalación del equipo de aire" />
+        </div>
+        <div>
+          <label class="label">Descripción</label>
+          <textarea class="input" id="otDescripcion" rows="2"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Tipo</label>
+            <select class="input" id="otTipo">
+              <option value="correctivo" selected>Correctivo</option>
+              <option value="preventivo">Preventivo</option>
+              <option value="predictivo">Predictivo</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Prioridad</label>
+            <select class="input" id="otPrioridad">
+              <option value="baja">Baja</option>
+              <option value="media" selected>Media</option>
+              <option value="alta">Alta</option>
+              <option value="urgente">Urgente</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="label">Asignar a</label>
+          <select class="input" id="otAsignado">
+            <option value="">— Sin asignar —</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Vencimiento</label>
+          <input class="input" id="otVencimiento" type="datetime-local" />
+        </div>
+      </div>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnOTCancel" class="btn-secondary">Cancelar</button>
+        <button id="btnOTSave" class="btn-primary">Crear OT</button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script define:vars={{ proyectoId: id, esAdmin, puedeEditar, provsJson, tecnicosJson }}>
+  const provs = JSON.parse(provsJson);
+  const tecnicos = JSON.parse(tecnicosJson);
+
+  // ─── Auto-guardado de campos de evaluación + plazos ───────────────────────
+  let saveTimer = null;
+  const cambiosPendientes = {};
+  function programarGuardado(field, value) {
+    cambiosPendientes[field] = value === "" ? null : value;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      const payload = { ...cambiosPendientes };
+      for (const k of Object.keys(cambiosPendientes)) delete cambiosPendientes[k];
+      try {
+        await fetch(`/api/proyectos/${proyectoId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch {}
+    }, 1500);
+  }
+  document.querySelectorAll(".proy-field").forEach((el) => {
+    el.addEventListener("input", () => programarGuardado(el.dataset.field, el.value));
+    el.addEventListener("change", () => programarGuardado(el.dataset.field, el.value));
+  });
+
+  // ─── Aprobar / Rechazar ──────────────────────────────────────────────────
+  const modalDec = document.getElementById("modalDecision");
+  let decisionTipo = "aprobado";
+  function abrirModalDecision(tipo) {
+    decisionTipo = tipo;
+    document.getElementById("modalDecTitulo").textContent = tipo === "aprobado" ? "✅ Aprobar proyecto" : "❌ Rechazar proyecto";
+    document.getElementById("decisionNotas").value = "";
+    document.getElementById("decisionErr").classList.add("hidden");
+    modalDec.classList.remove("hidden");
+  }
+  document.getElementById("btnAprobar")?.addEventListener("click", () => abrirModalDecision("aprobado"));
+  document.getElementById("btnRechazar")?.addEventListener("click", () => abrirModalDecision("rechazado"));
+  document.getElementById("btnDecisionCancel")?.addEventListener("click", () => modalDec.classList.add("hidden"));
+  document.getElementById("btnDecisionConfirmar")?.addEventListener("click", async () => {
+    const notas = document.getElementById("decisionNotas").value.trim();
+    const err = document.getElementById("decisionErr");
+    if (notas.length < 5) {
+      err.textContent = "Las notas son obligatorias (mínimo 5 caracteres)";
+      err.classList.remove("hidden");
+      return;
+    }
+    const res = await fetch(`/api/proyectos/${proyectoId}/aprobar`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: decisionTipo, notas }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error"; err.classList.remove("hidden"); }
+  });
+
+  // ─── Estados directos ────────────────────────────────────────────────────
+  async function cambiarEstado(nuevoEstado, confirmMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    const res = await fetch(`/api/proyectos/${proyectoId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ estado: nuevoEstado }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "")); }
+  }
+  document.getElementById("btnCompletar")?.addEventListener("click", () => cambiarEstado("completado", "¿Marcar este proyecto como completado?"));
+  document.getElementById("btnPausar")?.addEventListener("click", () => cambiarEstado("en_pausa", "¿Pausar el proyecto?"));
+  document.getElementById("btnReanudar")?.addEventListener("click", () => cambiarEstado("en_ejecucion"));
+  document.getElementById("btnCancelar")?.addEventListener("click", () => cambiarEstado("cancelado", "¿Cancelar definitivamente este proyecto?"));
+
+  // ─── Comentarios ─────────────────────────────────────────────────────────
+  document.getElementById("comForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const t = document.getElementById("comTexto").value.trim();
+    if (!t) return;
+    const res = await fetch(`/api/proyectos/${proyectoId}/comentarios`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ texto: t }),
+    });
+    if (res.ok) location.reload();
+  });
+
+  // ─── Adjuntos ────────────────────────────────────────────────────────────
+  document.getElementById("adjInput")?.addEventListener("change", async (e) => {
+    const input = e.target;
+    for (const file of Array.from(input.files ?? [])) {
+      const fd = new FormData();
+      fd.append("file", file);
+      await fetch(`/api/proyectos/${proyectoId}/adjuntos`, { method: "POST", body: fd });
+    }
+    input.value = "";
+    location.reload();
+  });
+  document.querySelectorAll(".adj-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este adjunto?")) return;
+      await fetch(`/api/proyectos/${proyectoId}/adjuntos?adjuntoId=${btn.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    });
+  });
+
+  // ─── Items presupuesto ───────────────────────────────────────────────────
+  const modalItem = document.getElementById("modalItem");
+  const itemProvSelect = document.getElementById("itemProveedor");
+  provs.forEach((p) => { const o = new Option(p.nombre, String(p.id)); itemProvSelect.appendChild(o); });
+
+  function abrirModalItem(item) {
+    document.getElementById("itemId").value = item?.id ?? "";
+    document.getElementById("itemDescripcion").value = item?.descripcion ?? "";
+    document.getElementById("itemCategoria").value = item?.categoria ?? "";
+    document.getElementById("itemProveedor").value = item?.proveedorId ?? "";
+    document.getElementById("itemCantidad").value = item?.cantidad ?? 1;
+    document.getElementById("itemUnidad").value = item?.unidad ?? "";
+    document.getElementById("itemPrecioEst").value = item?.precioEstimado ?? 0;
+    document.getElementById("itemPrecioReal").value = item?.precioReal ?? "";
+    document.getElementById("itemNotas").value = item?.notas ?? "";
+    modalItem.classList.remove("hidden");
+  }
+  document.getElementById("btnAgregarItem")?.addEventListener("click", () => abrirModalItem(null));
+  document.getElementById("btnItemCancel")?.addEventListener("click", () => modalItem.classList.add("hidden"));
+  document.querySelectorAll(".item-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      // Cargar valores desde la fila (simplificación: solo abrir vacío y dejar editar)
+      const row = btn.closest("tr");
+      const item = {
+        id,
+        descripcion: row.querySelector("td:nth-child(1)").textContent.trim().split("\n")[0],
+      };
+      // Para datos exactos, llamamos API... mejor cargamos detalle
+      const res = await fetch(`/api/proyectos/${proyectoId}`);
+      const j = await res.json();
+      const found = (j.items ?? []).find((x) => x.id == id);
+      abrirModalItem(found ?? item);
+    });
+  });
+  document.querySelectorAll(".item-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar esta línea de presupuesto?")) return;
+      await fetch(`/api/proyectos/${proyectoId}/items/${btn.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    });
+  });
+  document.getElementById("btnItemSave")?.addEventListener("click", async () => {
+    const id = document.getElementById("itemId").value;
+    const v = (i) => document.getElementById(i).value;
+    const vt = (i) => v(i).trim();
+    const payload = {
+      descripcion: vt("itemDescripcion"),
+      categoria: vt("itemCategoria") || null,
+      cantidad: Number(v("itemCantidad")) || 1,
+      unidad: vt("itemUnidad") || null,
+      precioEstimado: Number(v("itemPrecioEst")) || 0,
+      precioReal: v("itemPrecioReal") ? Number(v("itemPrecioReal")) : null,
+      proveedorId: v("itemProveedor") ? Number(v("itemProveedor")) : null,
+      notas: vt("itemNotas") || null,
+    };
+    if (!payload.descripcion) { alert("La descripción es requerida"); return; }
+    const url = id ? `/api/proyectos/${proyectoId}/items/${id}` : `/api/proyectos/${proyectoId}/items`;
+    const res = await fetch(url, {
+      method: id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) location.reload();
+  });
+
+  // ─── Hitos ────────────────────────────────────────────────────────────────
+  const modalHito = document.getElementById("modalHito");
+  document.getElementById("btnAgregarHito")?.addEventListener("click", () => {
+    document.getElementById("hitoTitulo").value = "";
+    document.getElementById("hitoDescripcion").value = "";
+    document.getElementById("hitoFechaObjetivo").value = "";
+    modalHito.classList.remove("hidden");
+  });
+  document.getElementById("btnHitoCancel")?.addEventListener("click", () => modalHito.classList.add("hidden"));
+  document.getElementById("btnHitoSave")?.addEventListener("click", async () => {
+    const titulo = document.getElementById("hitoTitulo").value.trim();
+    if (!titulo) { alert("Título requerido"); return; }
+    const res = await fetch(`/api/proyectos/${proyectoId}/hitos`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        titulo,
+        descripcion: document.getElementById("hitoDescripcion").value.trim() || null,
+        fechaObjetivo: document.getElementById("hitoFechaObjetivo").value || null,
+      }),
+    });
+    if (res.ok) location.reload();
+  });
+  document.querySelectorAll(".hito-check").forEach((cb) => {
+    cb.addEventListener("change", async () => {
+      await fetch(`/api/proyectos/${proyectoId}/hitos/${cb.dataset.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ completado: cb.checked }),
+      });
+      location.reload();
+    });
+  });
+  document.querySelectorAll(".hito-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este hito?")) return;
+      await fetch(`/api/proyectos/${proyectoId}/hitos/${btn.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    });
+  });
+
+  // ─── Generar OT ──────────────────────────────────────────────────────────
+  const modalOT = document.getElementById("modalOT");
+  const otAsigSelect = document.getElementById("otAsignado");
+  tecnicos.forEach((t) => { otAsigSelect.appendChild(new Option(t.nombre, String(t.id))); });
+  document.getElementById("btnGenerarOT")?.addEventListener("click", () => {
+    document.getElementById("otTitulo").value = "";
+    document.getElementById("otDescripcion").value = "";
+    document.getElementById("otAsignado").value = "";
+    document.getElementById("otVencimiento").value = "";
+    modalOT.classList.remove("hidden");
+  });
+  document.getElementById("btnOTCancel")?.addEventListener("click", () => modalOT.classList.add("hidden"));
+  document.getElementById("btnOTSave")?.addEventListener("click", async () => {
+    const titulo = document.getElementById("otTitulo").value.trim();
+    if (!titulo) { alert("Título requerido"); return; }
+    const v = (i) => document.getElementById(i).value;
+    const payload = {
+      titulo,
+      descripcion: v("otDescripcion").trim() || null,
+      tipo: v("otTipo"),
+      prioridad: v("otPrioridad"),
+      asignadoA: v("otAsignado") ? Number(v("otAsignado")) : null,
+      vencimiento: v("otVencimiento") ? new Date(v("otVencimiento")).toISOString() : null,
+    };
+    const res = await fetch(`/api/proyectos/${proyectoId}/generar-ot`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const j = await res.json();
+      location.href = `/ordenes/${j.orden.id}`;
+    } else {
+      const j = await res.json().catch(() => ({}));
+      alert("Error: " + (j.error ?? ""));
+    }
+  });
+</script>

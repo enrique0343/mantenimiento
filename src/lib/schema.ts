@@ -162,6 +162,8 @@ export const ordenes = sqliteTable("ordenes", {
   firmaSolicitanteR2: text("firma_solicitante_r2"),
   firmaSolicitanteNombre: text("firma_solicitante_nombre"),
   firmaSolicitanteFecha: text("firma_solicitante_fecha"),
+  // Vínculo opcional a un proyecto (la OT es una tarea de un proyecto)
+  proyectoId: integer("proyecto_id").references((): any => proyectos.id, { onDelete: "set null" }),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -321,6 +323,7 @@ export const tickets = sqliteTable("tickets", {
   vencimientoSla: text("vencimiento_sla"),
   asignadoA: integer("asignado_a").references(() => usuarios.id),
   otId: integer("ot_id").references(() => ordenes.id),
+  proyectoId: integer("proyecto_id").references((): any => proyectos.id, { onDelete: "set null" }),
   resueltoEn: text("resuelto_en"),
   resolucionNotas: text("resolucion_notas"),
   tipoMantenimiento: text("tipo_mantenimiento", { enum: ["general", "biomedico"] }).default("general"),
@@ -760,3 +763,100 @@ export const checklistPlantillaItems = sqliteTable("checklist_plantilla_items", 
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type ChecklistPlantillaItem = typeof checklistPlantillaItems.$inferSelect;
+
+// ─── Proyectos (Fase 31) ─────────────────────────────────────────────────────
+// Para casos que requieren evaluación, aprobación y planificación más extensa
+// que una OT individual: instalaciones, remodelaciones, modernizaciones.
+export const proyectos = sqliteTable("proyectos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  estado: text("estado", {
+    enum: ["evaluacion", "aprobado", "rechazado", "en_ejecucion", "en_pausa", "completado", "cancelado"],
+  }).notNull().default("evaluacion"),
+  prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] }).notNull().default("media"),
+  ticketId: integer("ticket_id").references(() => tickets.id, { onDelete: "set null" }),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  ubicacionDetalle: text("ubicacion_detalle"),
+  activoId: integer("activo_id").references(() => activos.id),
+  // Evaluación
+  justificacion: text("justificacion"),
+  alcance: text("alcance"),
+  factibilidad: text("factibilidad"),
+  viabilidad: text("viabilidad"),
+  beneficiosEsperados: text("beneficios_esperados"),
+  riesgos: text("riesgos"),
+  // Plazos
+  fechaInicioEstimada: text("fecha_inicio_estimada"),
+  fechaFinEstimada: text("fecha_fin_estimada"),
+  fechaInicioReal: text("fecha_inicio_real"),
+  fechaFinReal: text("fecha_fin_real"),
+  // Presupuesto y avance
+  presupuestoEstimado: real("presupuesto_estimado").default(0),
+  avanceManual: integer("avance_manual"),
+  // Personas
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  aprobadoPor: integer("aprobado_por").references(() => usuarios.id),
+  aprobadoEn: text("aprobado_en"),
+  notasAprobacion: text("notas_aprobacion"),
+  cerradoPor: integer("cerrado_por").references(() => usuarios.id),
+  cerradoEn: text("cerrado_en"),
+  notasCierre: text("notas_cierre"),
+  leccionesAprendidas: text("lecciones_aprendidas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type Proyecto = typeof proyectos.$inferSelect;
+
+export const proyectoPresupuestoItems = sqliteTable("proyecto_presupuesto_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  proyectoId: integer("proyecto_id").notNull().references(() => proyectos.id, { onDelete: "cascade" }),
+  descripcion: text("descripcion").notNull(),
+  categoria: text("categoria"),
+  cantidad: real("cantidad").notNull().default(1),
+  unidad: text("unidad"),
+  precioEstimado: real("precio_estimado").notNull().default(0),
+  precioReal: real("precio_real"),
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
+  notas: text("notas"),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ProyectoPresupuestoItem = typeof proyectoPresupuestoItems.$inferSelect;
+
+export const proyectoHitos = sqliteTable("proyecto_hitos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  proyectoId: integer("proyecto_id").notNull().references(() => proyectos.id, { onDelete: "cascade" }),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  fechaObjetivo: text("fecha_objetivo"),
+  fechaCompletado: text("fecha_completado"),
+  completado: integer("completado", { mode: "boolean" }).notNull().default(false),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ProyectoHito = typeof proyectoHitos.$inferSelect;
+
+export const proyectoAdjuntos = sqliteTable("proyecto_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  proyectoId: integer("proyecto_id").notNull().references(() => proyectos.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria").default("general"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ProyectoAdjunto = typeof proyectoAdjuntos.$inferSelect;
+
+export const proyectoComentarios = sqliteTable("proyecto_comentarios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  proyectoId: integer("proyecto_id").notNull().references(() => proyectos.id, { onDelete: "cascade" }),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  texto: text("texto").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ProyectoComentario = typeof proyectoComentarios.$inferSelect;

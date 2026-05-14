@@ -99,8 +99,11 @@ export const PATCH: APIRoute = async (ctx) => {
   // automáticamente la OT con ese técnico, copiamos las fotos del ticket
   // como "antes" y enviamos el email de "Nueva orden para ti" al técnico.
   let nuevaOtId: number | null = null;
+  // Si el ticket está vinculado a un proyecto, NO auto-creamos OT. Las OTs
+  // del proyecto se generan desde el detalle del proyecto.
   const debeCrearOT =
     !actual.otId &&
+    !(actual as any).proyectoId &&
     parsed.data.asignadoA &&
     parsed.data.asignadoA !== actual.asignadoA;
 

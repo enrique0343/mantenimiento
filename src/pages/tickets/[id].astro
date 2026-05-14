@@ -5,6 +5,8 @@ import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios,
 import { eq, asc, and, inArray } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { puedeCrearProyecto } from "@/lib/proyectos";
+import { proyectos } from "@/lib/schema";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -44,6 +46,15 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZo
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
 const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
 const esAdmin = user.rol === "admin";
+const puedeConvertirAProyecto = puedeCrearProyecto(user.rol) && !t.otId && !t.proyectoId && t.estado !== "cerrado" && t.estado !== "descartado";
+
+// Si está vinculado a un proyecto, traemos info básica
+let proyectoVinc: { id: number; codigo: string; titulo: string; estado: string } | null = null;
+if (t.proyectoId) {
+  const [p] = await db.select({ id: proyectos.id, codigo: proyectos.codigo, titulo: proyectos.titulo, estado: proyectos.estado })
+    .from(proyectos).where(eq(proyectos.id, t.proyectoId)).limit(1);
+  proyectoVinc = p ?? null;
+}
 ---
 
 <Layout title={`Ticket #${t.id}`}>
@@ -78,6 +89,9 @@ const esAdmin = user.rol === "admin";
     </div>
     {t.otId && (
       <a href={`/ordenes/${t.otId}`} class="btn-secondary">Ver OT #{t.otId} →</a>
+    )}
+    {proyectoVinc && (
+      <a href={`/proyectos/${proyectoVinc.id}`} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
 
@@ -158,9 +172,21 @@ const esAdmin = user.rol === "admin";
             <button id="saveBtn" class="btn-primary w-full justify-center">Guardar</button>
             <p id="saveMsg" class="hidden text-xs"></p>
 
-            {!t.otId && (t.estado === "nuevo" || t.estado === "asignado") && (
+            {!t.otId && !t.proyectoId && (t.estado === "nuevo" || t.estado === "asignado") && (
               <div class="mt-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
                 💡 Al asignar un técnico se creará automáticamente la <strong>orden de trabajo</strong> y se le notificará por correo.
+              </div>
+            )}
+            {puedeConvertirAProyecto && (
+              <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
+                <p class="font-semibold text-sm">¿Es un trabajo grande?</p>
+                <p class="mt-1">Si el trabajo requiere evaluación, presupuesto o múltiples OTs (remodelaciones, instalaciones, traslados), conviértelo en proyecto en lugar de generar una OT directa.</p>
+                <a href={`/proyectos/nuevo?ticketId=${t.id}`} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
+              </div>
+            )}
+            {proyectoVinc && (
+              <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
+                📂 Este ticket está vinculado al proyecto <a href={`/proyectos/${proyectoVinc.id}`} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
               </div>
             )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (

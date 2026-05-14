@@ -375,6 +375,152 @@ export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) 
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PROYECTOS
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface ProyectoLite {
+  id: number;
+  codigo: string;
+  titulo: string;
+  descripcion?: string | null;
+  prioridad: string;
+  estado: string;
+  creadoPor?: number | null;
+  responsableId?: number | null;
+  ticketId?: number | null;
+  notasCierre?: string | null;
+}
+
+// Nuevo proyecto creado → email a todos los admins para revisar/aprobar
+export async function notificarProyectoCreado(ctx: APIContext, proyecto: ProyectoLite) {
+  const db = getDb(ctx);
+  const admins = await db.select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre })
+    .from(usuarios).where(eq(usuarios.rol, "admin"));
+  if (admins.length === 0) return;
+
+  const baseUrl = appUrl(ctx);
+  const link = `${baseUrl}/proyectos/${proyecto.id}`;
+  const subject = `[${proyecto.codigo}] Proyecto pendiente de evaluación: ${proyecto.titulo}`;
+
+  for (const a of admins) {
+    if (!a.email) continue;
+    const primer = (a.nombre ?? "").split(" ")[0] || a.nombre;
+    ctx.locals.runtime.ctx.waitUntil(
+      sendMail(ctx, {
+        to: a.email, subject,
+        html: emailLayout(
+          "Nuevo proyecto a evaluar",
+          `<p>Hola <strong>${primer}</strong>,</p>
+           <p>Se ha registrado un nuevo proyecto que requiere tu revisión y aprobación.</p>
+           <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
+           <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+             <li><strong>Prioridad:</strong> ${proyecto.prioridad}</li>
+             <li><strong>Estado:</strong> En evaluación</li>
+           </ul>
+           ${proyecto.descripcion ? `<p style="margin:0 0 6px 0"><strong>Descripción:</strong></p>
+             <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${proyecto.descripcion}</p>` : ""}
+           <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Revisar proyecto →</a></p>`
+        ),
+        tipo: "proyecto_creado", referencia: `proyecto:${proyecto.id}`,
+      }).catch(() => {})
+    );
+
+    await crearNotificacion(ctx, {
+      usuarioId: a.id, tipo: "proyecto_creado",
+      titulo: `Nuevo proyecto ${proyecto.codigo} a evaluar`,
+      mensaje: proyecto.titulo,
+      link: `/proyectos/${proyecto.id}`,
+    });
+  }
+}
+
+// Proyecto pasa a en_ejecucion → email al responsable
+export async function notificarProyectoEnEjecucion(ctx: APIContext, proyecto: ProyectoLite) {
+  if (!proyecto.responsableId) return;
+  const db = getDb(ctx);
+  const [resp] = await db.select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre })
+    .from(usuarios).where(eq(usuarios.id, proyecto.responsableId)).limit(1);
+  if (!resp?.email) return;
+
+  const baseUrl = appUrl(ctx);
+  const link = `${baseUrl}/proyectos/${proyecto.id}`;
+  const primer = (resp.nombre ?? "").split(" ")[0] || resp.nombre;
+
+  ctx.locals.runtime.ctx.waitUntil(
+    sendMail(ctx, {
+      to: resp.email,
+      subject: `[${proyecto.codigo}] Proyecto en ejecución: ${proyecto.titulo}`,
+      html: emailLayout(
+        "Proyecto en ejecución",
+        `<p>Hola <strong>${primer}</strong>,</p>
+         <p>El proyecto <strong>${proyecto.codigo} — ${proyecto.titulo}</strong> fue aprobado y entra en ejecución. Eres su responsable.</p>
+         <p>Desde el detalle del proyecto puedes generar las OTs hijas, registrar avance de hitos y dar seguimiento al presupuesto.</p>
+         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir proyecto →</a></p>
+         <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
+      ),
+      tipo: "proyecto_en_ejecucion", referencia: `proyecto:${proyecto.id}`,
+    }).catch(() => {})
+  );
+
+  await crearNotificacion(ctx, {
+    usuarioId: resp.id, tipo: "proyecto_en_ejecucion",
+    titulo: `Eres responsable de ${proyecto.codigo}`,
+    mensaje: proyecto.titulo,
+    link: `/proyectos/${proyecto.id}`,
+  });
+}
+
+// Proyecto completado → email al solicitante original (si vino de ticket)
+export async function notificarProyectoCompletado(ctx: APIContext, proyecto: ProyectoLite) {
+  if (!proyecto.ticketId) return;
+  const db = getDb(ctx);
+  const [t] = await db.select().from(tickets).where(eq(tickets.id, proyecto.ticketId)).limit(1);
+  if (!t?.solicitanteEmail) return;
+
+  const baseUrl = appUrl(ctx);
+  const primer = (t.solicitanteNombre ?? "").split(" ")[0] || t.solicitanteNombre;
+  const link = `${baseUrl}/p/ticket/${t.trackingToken}`;
+
+  ctx.locals.runtime.ctx.waitUntil(
+    sendMail(ctx, {
+      to: t.solicitanteEmail,
+      subject: `[${proyecto.codigo}] Proyecto completado — ${proyecto.titulo}`,
+      html: emailLayout(
+        "Proyecto completado",
+        `<p>Hola <strong>${primer}</strong>,</p>
+         <p>Te informamos que el proyecto originado por tu reporte <strong>Ticket #${t.id}</strong> ha sido completado.</p>
+         <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
+         ${proyecto.notasCierre ? `<p style="margin:0 0 6px 0"><strong>Notas de cierre:</strong></p>
+           <p style="white-space:pre-wrap;background:#f0fdf4;padding:12px;border-left:3px solid #16a34a;border-radius:4px;margin:0 0 18px 0">${proyecto.notasCierre}</p>` : ""}
+         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver mi reporte →</a></p>
+         <p style="margin-top:14px"><em>Gracias por confiar en el equipo de mantenimiento.</em></p>`
+      ),
+      tipo: "proyecto_completado", referencia: `proyecto:${proyecto.id}`,
+    }).catch(() => {})
+  );
+}
+
+// Dispatcher de proyectos por cambio de estado
+export async function disparadorProyecto(
+  ctx: APIContext,
+  proyecto: ProyectoLite,
+  estadoAnterior: string,
+  estadoNuevo: string
+) {
+  if (estadoAnterior === estadoNuevo) return;
+  const cambios: Promise<void>[] = [];
+  if (estadoNuevo === "en_ejecucion") {
+    cambios.push(notificarProyectoEnEjecucion(ctx, proyecto));
+  } else if (estadoNuevo === "completado") {
+    cambios.push(notificarProyectoCompletado(ctx, proyecto));
+  }
+  const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
+  for (const p of cambios) {
+    if (wait) wait(p); else await p.catch(() => {});
+  }
+}
+
 // ─── Dispatcher: dado un cambio de estado de OT, dispara las notificaciones ───
 export async function disparadorOT(
   ctx: APIContext,
