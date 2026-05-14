@@ -2,11 +2,14 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
+
+// Técnicos solo ven planes/actividades asignados a ellos
+const esTecnico = user.rol === "tecnico";
 
 // 1) Planes preventivos por equipo
 const planRows = await db
@@ -16,7 +19,9 @@ const planRows = await db
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(eq(planesMantenimiento.activo, true))
+  .where(esTecnico
+    ? and(eq(planesMantenimiento.activo, true), eq(planesMantenimiento.asignadoA, user.id))
+    : eq(planesMantenimiento.activo, true))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
 // 2) Actividades recurrentes
@@ -27,7 +32,9 @@ const actRows = await db
   .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
   .leftJoin(ubicaciones, eq(ubicaciones.id, actividades.ubicacionId))
-  .where(eq(actividades.activo, true))
+  .where(esTecnico
+    ? and(eq(actividades.activo, true), eq(actividades.asignadoA, user.id))
+    : eq(actividades.activo, true))
   .orderBy(asc(actividades.proximaFecha));
 
 // Unificar en un solo timeline

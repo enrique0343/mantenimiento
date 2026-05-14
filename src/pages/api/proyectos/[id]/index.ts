@@ -1,6 +1,6 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import {
   proyectos, proyectoPresupuestoItems, proyectoHitos, proyectoAdjuntos,
@@ -38,6 +38,13 @@ export const GET: APIRoute = async (ctx) => {
     .where(eq(proyectos.id, id))
     .limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
+
+  // Técnicos: solo si son responsables o tienen una OT hija asignada
+  if (user.rol === "tecnico" && row.p.responsableId !== user.id) {
+    const [mineOt] = await db.select({ id: ordenes.id }).from(ordenes)
+      .where(and(eq(ordenes.proyectoId, id), eq(ordenes.asignadoA, user.id))).limit(1);
+    if (!mineOt) return Response.json({ error: "Sin acceso" }, { status: 403 });
+  }
 
   const items = await db
     .select({ i: proyectoPresupuestoItems, prov: proveedores })

@@ -14,6 +14,7 @@ const rows = await db
   .from(solicitudesCompra)
   .leftJoin(usuarios, eq(usuarios.id, solicitudesCompra.creadoPor))
   .leftJoin(ordenes, eq(ordenes.id, solicitudesCompra.ordenId))
+  .where(user.rol === "tecnico" ? eq(solicitudesCompra.creadoPor, user.id) : undefined)
   .orderBy(desc(solicitudesCompra.id));
 
 const ESTADO_COLOR: Record<string, string> = {

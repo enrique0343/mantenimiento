@@ -14,6 +14,7 @@ const rows = await db
   .from(requisiciones)
   .leftJoin(proveedores, eq(proveedores.id, requisiciones.proveedorId))
   .leftJoin(usuarios, eq(usuarios.id, requisiciones.creadoPor))
+  .where(user.rol === "tecnico" ? eq(requisiciones.creadoPor, user.id) : undefined)
   .orderBy(desc(requisiciones.id));
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });

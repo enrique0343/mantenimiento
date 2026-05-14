@@ -1,8 +1,8 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { proyectos, usuarios } from "@/lib/schema";
-import { desc, eq } from "drizzle-orm";
+import { proyectos, usuarios, ordenes } from "@/lib/schema";
+import { desc, eq, or, inArray } from "drizzle-orm";
 import { ESTADO_PROYECTO_LABEL, ESTADO_PROYECTO_COLOR, puedeCrearProyecto } from "@/lib/proyectos";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { fmtFechaSimple } from "@/lib/datetime";
@@ -15,10 +15,21 @@ const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const verCerrados = url.searchParams.get("verCerrados") === "1";
 
+// Técnicos: solo proyectos donde son responsables o tienen OT hija
+let whereVisibilidad: any = undefined;
+if (user.rol === "tecnico") {
+  const idsOts = await db.select({ pid: ordenes.proyectoId }).from(ordenes).where(eq(ordenes.asignadoA, user.id));
+  const proyectoIds = Array.from(new Set(idsOts.map((r) => r.pid).filter((v): v is number => v != null)));
+  whereVisibilidad = proyectoIds.length > 0
+    ? or(eq(proyectos.responsableId, user.id), inArray(proyectos.id, proyectoIds))
+    : eq(proyectos.responsableId, user.id);
+}
+
 const rowsRaw = await db
   .select({ p: proyectos, creador: usuarios })
   .from(proyectos)
   .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
+  .where(whereVisibilidad)
   .orderBy(desc(proyectos.id));
 
 const ESTADOS_ACTIVOS = new Set(["evaluacion", "aprobado", "en_ejecucion", "en_pausa"]);

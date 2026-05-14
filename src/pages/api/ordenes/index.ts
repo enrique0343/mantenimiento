@@ -40,6 +40,8 @@ export const GET: APIRoute = async (ctx) => {
   const conditions = [];
   if (estado) conditions.push(eq(ordenes.estado, estado));
   if (asignado === "me") conditions.push(eq(ordenes.asignadoA, user.id));
+  // Restricción de visibilidad: técnicos solo ven sus OTs
+  if (user.rol === "tecnico") conditions.push(eq(ordenes.asignadoA, user.id));
 
   const rows = await db
     .select({

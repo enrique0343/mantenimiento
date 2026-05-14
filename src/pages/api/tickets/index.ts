@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, or, isNull } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { tickets, usuarios, sucursales, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
@@ -10,6 +10,11 @@ export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
   const db = getDb(ctx);
+
+  // Técnicos: solo asignados a él o sin asignar (para triaje)
+  const where = user.rol === "tecnico"
+    ? or(eq(tickets.asignadoA, user.id), isNull(tickets.asignadoA))
+    : undefined;
 
   const rows = await db
     .select({
@@ -22,6 +27,7 @@ export const GET: APIRoute = async (ctx) => {
     .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
     .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
     .leftJoin(activos, eq(activos.id, tickets.activoId))
+    .where(where)
     .orderBy(desc(tickets.id));
 
   return Response.json({
