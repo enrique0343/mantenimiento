@@ -129,8 +129,8 @@ const otsEnProceso = await db
 
   // ─── Fotos y documentos ───────────────────────────────────────────────────
   const pendingFiles: File[] = [];
-  const fileInput = document.getElementById("fileInput") as HTMLInputElement;
-  const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
+  const fileInput = document.getElementById("fileInput");
+  const cameraInput = document.getElementById("cameraInput");
   const preview = document.getElementById("fotos-preview")!;
   const countEl = document.getElementById("fotos-count")!;
 
@@ -187,17 +187,17 @@ const otsEnProceso = await db
     e.preventDefault();
     const err = document.getElementById("err")!;
     err.classList.add("hidden");
-    const btn = document.getElementById("btnGuardar") as HTMLButtonElement;
+    const btn = document.getElementById("btnGuardar");
     btn.disabled = true;
     btn.textContent = "Guardando...";
 
     // Recolectar ítems
-    const itemDivs = Array.from(container.querySelectorAll<HTMLElement>("[data-item]"));
+    const itemDivs = Array.from(container.querySelectorAll("[data-item]"));
     const items = itemDivs.map((d) => ({
-      descripcion: (d.querySelector(".item-desc") as HTMLInputElement).value.trim(),
-      cantidad: parseFloat((d.querySelector(".item-cant") as HTMLInputElement).value) || 1,
-      unidad: (d.querySelector(".item-unit") as HTMLInputElement).value.trim() || null,
-      notas: (d.querySelector(".item-notas") as HTMLInputElement).value.trim() || null,
+      descripcion: (d.querySelector(".item-desc")).value.trim(),
+      cantidad: parseFloat((d.querySelector(".item-cant")).value) || 1,
+      unidad: (d.querySelector(".item-unit")).value.trim() || null,
+      notas: (d.querySelector(".item-notas")).value.trim() || null,
     })).filter((i) => i.descripcion);
 
     if (!items.length) {
@@ -207,10 +207,10 @@ const otsEnProceso = await db
       return;
     }
 
-    const ordenVal = (document.getElementById("ordenId") as HTMLSelectElement).value;
+    const ordenVal = (document.getElementById("ordenId")).value;
     const payload = {
-      titulo: (document.getElementById("titulo") as HTMLInputElement).value.trim(),
-      descripcion: (document.getElementById("descripcion") as HTMLTextAreaElement).value.trim() || null,
+      titulo: (document.getElementById("titulo")).value.trim(),
+      descripcion: (document.getElementById("descripcion")).value.trim() || null,
       ordenId: ordenVal ? Number(ordenVal) : null,
       items,
     };

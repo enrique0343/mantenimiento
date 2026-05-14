@@ -318,8 +318,8 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   // ─── Editar ───────────────────────────────────────────────────────────────
   const modalEditar = document.getElementById("modalEditar");
   document.getElementById("btnEditar")?.addEventListener("click", () => {
-    (document.getElementById("editTitulo") as HTMLInputElement).value = sol.titulo;
-    (document.getElementById("editDesc") as HTMLTextAreaElement).value = sol.descripcion ?? "";
+    (document.getElementById("editTitulo")).value = sol.titulo;
+    (document.getElementById("editDesc")).value = sol.descripcion ?? "";
     renderEditItems();
     modalEditar?.classList.remove("hidden");
   });
@@ -349,13 +349,13 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   document.getElementById("btnAgregarItemEdit")?.addEventListener("click", () => addEditItem());
 
   document.getElementById("btnGuardarEditar")?.addEventListener("click", async () => {
-    const titulo = (document.getElementById("editTitulo") as HTMLInputElement).value.trim();
-    const descripcion = (document.getElementById("editDesc") as HTMLTextAreaElement).value.trim() || null;
-    const newItems = Array.from(editContainer.querySelectorAll<HTMLElement>("[data-edit-item]")).map((d) => ({
-      descripcion: (d.querySelector(".ei-desc") as HTMLInputElement).value.trim(),
-      cantidad: parseFloat((d.querySelector(".ei-cant") as HTMLInputElement).value) || 1,
-      unidad: (d.querySelector(".ei-unit") as HTMLInputElement).value.trim() || null,
-      notas: (d.querySelector(".ei-notas") as HTMLInputElement).value.trim() || null,
+    const titulo = (document.getElementById("editTitulo")).value.trim();
+    const descripcion = (document.getElementById("editDesc")).value.trim() || null;
+    const newItems = Array.from(editContainer.querySelectorAll("[data-edit-item]")).map((d) => ({
+      descripcion: (d.querySelector(".ei-desc")).value.trim(),
+      cantidad: parseFloat((d.querySelector(".ei-cant")).value) || 1,
+      unidad: (d.querySelector(".ei-unit")).value.trim() || null,
+      notas: (d.querySelector(".ei-notas")).value.trim() || null,
     })).filter((i) => i.descripcion);
 
     if (!titulo || !newItems.length) { alert("Título e ítems son requeridos"); return; }
@@ -370,7 +370,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   });
 
   // ─── Fotos y documentos ───────────────────────────────────────────────────
-  async function uploadFiles(input: HTMLInputElement) {
+  async function uploadFiles(input) {
     const files = Array.from(input.files ?? []);
     if (!files.length) return;
     for (const file of files) {
@@ -380,11 +380,11 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
     input.value = "";
     location.reload();
   }
-  document.getElementById("fileInput")?.addEventListener("change", (e) => uploadFiles(e.target as HTMLInputElement));
-  document.getElementById("cameraInput")?.addEventListener("change", (e) => uploadFiles(e.target as HTMLInputElement));
+  document.getElementById("fileInput")?.addEventListener("change", (e) => uploadFiles(e.target));
+  document.getElementById("cameraInput")?.addEventListener("change", (e) => uploadFiles(e.target));
   document.querySelectorAll(".btn-del-adj").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const adjId = (btn as HTMLElement).dataset.adjId;
+      const adjId = (btn).dataset.adjId;
       if (!confirm("¿Eliminar foto?")) return;
       await fetch(`/api/solicitudes-compra/${solId}/adjuntos?adjuntoId=${adjId}`, { method: "DELETE" });
       location.reload();
@@ -405,9 +405,9 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   });
   document.getElementById("btnCancelarEnvio")?.addEventListener("click", () => modalEnviar?.classList.add("hidden"));
   document.getElementById("btnConfirmarEnvio")?.addEventListener("click", async () => {
-    const ids = Array.from(document.querySelectorAll<HTMLInputElement>(".dest-cb:checked")).map((c) => Number(c.value));
-    const email = (document.getElementById("extraEmail") as HTMLInputElement).value.trim();
-    const nombre = (document.getElementById("extraNombre") as HTMLInputElement).value.trim();
+    const ids = Array.from(document.querySelectorAll(".dest-cb:checked")).map((c) => Number(c.value));
+    const email = (document.getElementById("extraEmail")).value.trim();
+    const nombre = (document.getElementById("extraNombre")).value.trim();
     const extras = email ? [{ email, nombre: nombre || undefined }] : [];
     if (!ids.length && !extras.length) { alert("Selecciona al menos un destinatario"); return; }
     const res = await fetch(`/api/solicitudes-compra/${solId}/enviar`, {
@@ -425,18 +425,18 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   document.getElementById("btnComprada")?.addEventListener("click", () => {
     accionResultado = "comprada";
     document.getElementById("modalResultadoTitulo")!.textContent = "✅ Marcar como comprada";
-    (document.getElementById("notasResultado") as HTMLTextAreaElement).value = "";
+    (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });
   document.getElementById("btnRechazada")?.addEventListener("click", () => {
     accionResultado = "rechazada";
     document.getElementById("modalResultadoTitulo")!.textContent = "❌ Rechazar solicitud";
-    (document.getElementById("notasResultado") as HTMLTextAreaElement).value = "";
+    (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });
   document.getElementById("btnCancelarResultado")?.addEventListener("click", () => modalResultado?.classList.add("hidden"));
   document.getElementById("btnConfirmarResultado")?.addEventListener("click", async () => {
-    const notas = (document.getElementById("notasResultado") as HTMLTextAreaElement).value.trim() || null;
+    const notas = (document.getElementById("notasResultado")).value.trim() || null;
     const res = await fetch(`/api/solicitudes-compra/${solId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
