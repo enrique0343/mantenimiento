@@ -125,6 +125,11 @@ export const ordenes = sqliteTable("ordenes", {
     .notNull()
     .default("abierta"),
   activoId: integer("activo_id").references(() => activos.id),
+  // Sucursal y ubicación opcionales — útil para OTs sin equipo o cuando
+  // queremos especificar el sitio aunque haya equipo.
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  ubicacionDetalle: text("ubicacion_detalle"),
   vehiculoId: integer("vehiculo_id").references((): any => vehiculos.id),
   actividadId: integer("actividad_id").references((): any => actividades.id),
   asignadoA: integer("asignado_a").references(() => usuarios.id),

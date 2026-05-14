@@ -78,29 +78,38 @@ const activosJson = JSON.stringify(activosList);
       </div>
     </div>
 
-    <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div class="flex items-center gap-3">
-        <input type="checkbox" id="conEquipo" checked />
-        <label for="conEquipo" class="text-sm font-medium text-slate-700">Asociar a un equipo</label>
-        <span class="text-xs text-slate-500">(desmarca para trabajos generales: limpieza, instalación, etc.)</span>
-      </div>
-      <div id="equipoBox" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+      <h3 class="font-semibold text-slate-900 text-sm">📍 Lugar a intervenir</h3>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <label class="label text-xs">1️⃣ Sucursal *</label>
+          <label class="label text-xs">Sucursal *</label>
           <select class="input text-sm" id="sucursalSel" required>
             <option value="">— Selecciona —</option>
             {sucursalesList.map((s) => <option value={s.id}>{s.nombre}</option>)}
           </select>
         </div>
         <div>
-          <label class="label text-xs">2️⃣ Ubicación *</label>
-          <select class="input text-sm" id="ubicacionSel" disabled required>
+          <label class="label text-xs">Ubicación <span class="text-slate-400 font-normal">(opcional)</span></label>
+          <select class="input text-sm" id="ubicacionSel" disabled>
             <option value="">Selecciona la sucursal primero</option>
           </select>
         </div>
-        <div>
-          <label class="label text-xs">3️⃣ Equipo *</label>
-          <select class="input text-sm" id="activoId" disabled required>
+      </div>
+      <div>
+        <label class="label text-xs">Detalle de ubicación <span class="text-slate-400 font-normal">(si no aparece arriba)</span></label>
+        <input class="input text-sm" id="ubicacionDetalle" placeholder="Ej: pasillo norte segundo piso, junto a la oficina del jefe..." />
+        <p class="mt-1 text-xs text-slate-500">Útil cuando la ubicación exacta no está catalogada o quieres dar más contexto al técnico.</p>
+      </div>
+
+      <div class="border-t border-slate-200 pt-3">
+        <div class="flex items-center gap-3">
+          <input type="checkbox" id="conEquipo" />
+          <label for="conEquipo" class="text-sm font-medium text-slate-700">¿Es para un equipo específico?</label>
+        </div>
+        <p class="text-xs text-slate-500 mt-1 ml-6">Marca esta casilla si la intervención es sobre un equipo registrado. Si es un trabajo general (limpieza, instalación, área), déjalo sin marcar.</p>
+        <div id="equipoBox" class="mt-3 hidden">
+          <label class="label text-xs">Equipo *</label>
+          <select class="input text-sm" id="activoId">
             <option value="">Selecciona la ubicación primero</option>
           </select>
         </div>
@@ -156,13 +165,14 @@ const activosJson = JSON.stringify(activosList);
     const ubSel = document.getElementById("ubicacionSel");
     const activoSel = document.getElementById("activoId");
 
+    // Sucursal SIEMPRE obligatoria. Ubicación opcional. Equipo solo si se marca el checkbox.
     conEquipoCk.addEventListener("change", () => {
       equipoBox.classList.toggle("hidden", !conEquipoCk.checked);
-      if (!conEquipoCk.checked) {
-        sucSel.value = ""; ubSel.value = ""; activoSel.value = "";
-        sucSel.required = false; ubSel.required = false; activoSel.required = false;
-      } else {
-        sucSel.required = true; ubSel.required = true; activoSel.required = true;
+      activoSel.required = conEquipoCk.checked;
+      if (!conEquipoCk.checked) activoSel.value = "";
+      else {
+        // Cuando se marca, repoblar equipos según ubicación actual
+        actualizarEquipos();
       }
     });
 
@@ -170,26 +180,26 @@ const activosJson = JSON.stringify(activosList);
     sucSel.addEventListener("change", () => {
       const sid = Number(sucSel.value);
       ubSel.innerHTML = "";
-      activoSel.innerHTML = "";
       if (!sid) {
         ubSel.disabled = true;
         ubSel.appendChild(new Option("Selecciona la sucursal primero", ""));
-        activoSel.disabled = true;
-        activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+        actualizarEquipos();
         return;
       }
       const ubs = UBICACIONES.filter((u) => u.sucursalId === sid);
       ubSel.disabled = ubs.length === 0;
-      ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones" : "— Selecciona —", ""));
+      ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones (usa el detalle)" : "— Selecciona —", ""));
       ubs.forEach((u) => ubSel.appendChild(new Option(`${u.nombre} (${u.tipo})`, String(u.id))));
-      activoSel.disabled = true;
-      activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+      actualizarEquipos();
     });
 
-    // Ubicación → puebla equipos
-    ubSel.addEventListener("change", () => {
-      const ubid = Number(ubSel.value);
+    // Ubicación → puebla equipos (si el checkbox de equipo está activo)
+    ubSel.addEventListener("change", actualizarEquipos);
+
+    function actualizarEquipos() {
       activoSel.innerHTML = "";
+      if (!conEquipoCk.checked) return;
+      const ubid = Number(ubSel.value);
       if (!ubid) {
         activoSel.disabled = true;
         activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
@@ -199,7 +209,7 @@ const activosJson = JSON.stringify(activosList);
       activoSel.disabled = eqs.length === 0;
       activoSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Selecciona el equipo —", ""));
       eqs.forEach((a) => activoSel.appendChild(new Option(`${a.codigo} · ${a.nombre}`, String(a.id))));
-    });
+    }
 
     // ─── Fotos pendientes (se suben tras crear la OT) ──────────────────────
     const pendingFotos = [];
@@ -239,10 +249,18 @@ const activosJson = JSON.stringify(activosList);
       const venc = v("vencimiento");
       const activoId = v("activoId");
       const asignadoA = v("asignadoA");
+      const sucursalId = v("sucursalSel");
+      const ubicacionId = v("ubicacionSel");
+      const ubicacionDetalle = v("ubicacionDetalle").trim();
       const checklistRaw = v("checklistRaw").trim();
 
+      if (!sucursalId) {
+        err.textContent = "La sucursal es obligatoria.";
+        err.classList.remove("hidden");
+        return;
+      }
       if (conEquipoCk.checked && !activoId) {
-        err.textContent = "Selecciona sucursal, ubicación y equipo, o desmarca 'Asociar a un equipo'.";
+        err.textContent = "Si marcas 'Es para un equipo específico', debes seleccionarlo. O desmárcalo si es un trabajo general.";
         err.classList.remove("hidden");
         return;
       }
@@ -258,6 +276,9 @@ const activosJson = JSON.stringify(activosList);
         descripcion: v("descripcion") || null,
         tipo: v("tipo"),
         prioridad: v("prioridad"),
+        sucursalId: Number(sucursalId),
+        ubicacionId: ubicacionId ? Number(ubicacionId) : null,
+        ubicacionDetalle: ubicacionDetalle || null,
         activoId: activoId ? Number(activoId) : null,
         asignadoA: asignadoA ? Number(asignadoA) : null,
         vencimiento: venc ? new Date(venc).toISOString() : null,

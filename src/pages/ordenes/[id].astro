@@ -34,6 +34,19 @@ const o = row.orden;
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
 
+// Si la OT NO tiene activo pero SÍ tiene sucursalId/ubicacionId propios
+// (porque se creó como trabajo general con sucursal/ubicación), los cargamos.
+let ordenSucursal: { id: number; nombre: string } | null = null;
+let ordenUbicacion: { id: number; nombre: string; tipo: string } | null = null;
+if (!row.activo && (o as any).sucursalId) {
+  const [s] = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.id, (o as any).sucursalId)).limit(1);
+  ordenSucursal = s ?? null;
+}
+if (!row.activo && (o as any).ubicacionId) {
+  const [u] = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo }).from(ubicaciones).where(eq(ubicaciones.id, (o as any).ubicacionId)).limit(1);
+  ordenUbicacion = u as any ?? null;
+}
+
 const [verifUsr] = o.verificadoPor
   ? await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, o.verificadoPor)).limit(1)
   : [null];
@@ -433,11 +446,32 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <div class="card p-5 border-l-4 border-slate-300">
           <div class="flex items-center justify-between">
             <div>
-              <div class="text-xs uppercase text-slate-500">Equipo</div>
-              <div class="text-slate-400 italic">Trabajo sin equipo asignado</div>
+              <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir (sin equipo)</h2>
+              <p class="text-xs text-slate-400 italic mt-0.5">Trabajo general — no asociado a un equipo registrado</p>
             </div>
             <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
           </div>
+          {(ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
+            <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+                <div class="mt-0.5">{ordenSucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+                <div class="mt-0.5">
+                  {ordenUbicacion?.nombre ?? <span class="text-slate-400">—</span>}
+                  {ordenUbicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({ordenUbicacion.tipo})</span>}
+                </div>
+              </div>
+              {(o as any).ubicacionDetalle && (
+                <div class="col-span-2">
+                  <div class="text-xs uppercase text-slate-500">📝 Detalle</div>
+                  <div class="mt-0.5 text-slate-700">{(o as any).ubicacionDetalle}</div>
+                </div>
+              )}
+            </div>
+          )}
           <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
               <label class="label text-xs">1️⃣ Sucursal</label>

@@ -18,6 +18,11 @@ const createSchema = z.object({
   descripcion: z.string().optional().nullable(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
+  // Sucursal obligatoria, ubicación opcional
+  sucursalId: z.number().int().positive(),
+  ubicacionId: z.number().int().positive().optional().nullable(),
+  ubicacionDetalle: z.string().optional().nullable(),
+  // Equipo opcional (puede haber OT sin equipo: trabajos generales)
   activoId: z.number().int().positive().optional().nullable(),
   asignadoA: z.number().int().positive().optional().nullable(),
   vencimiento: z.string().optional().nullable(),
