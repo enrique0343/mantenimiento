@@ -213,6 +213,18 @@ const isBio = a.tipo === "biomedico";
             {tecnicos.map((t) => <option value={t.id}>{t.nombre}</option>)}
           </select>
         </div>
+        <div class="sm:col-span-2 border-t border-slate-200 pt-3 mt-1">
+          <label class="label">📋 Plantilla de checklist <span class="text-slate-400 font-normal">(opcional pero recomendada)</span></label>
+          <select class="input" id="p_plantilla">
+            <option value="">— Sin plantilla (checklist vacío) —</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-500">Al seleccionar una plantilla, los puntos críticos se cargan abajo y podrás ajustarlos para este equipo específico.</p>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label">Puntos críticos del checklist</label>
+          <textarea id="p_checklist" class="input font-mono text-xs" rows="6" placeholder="Selecciona una plantilla arriba o escribe los puntos uno por línea&#10;Ej:&#10;Limpieza de filtros&#10;Verificación de gas refrigerante"></textarea>
+          <p class="mt-1 text-xs text-slate-500">Cada línea es un punto. El técnico debe marcar cada uno como OK, N/A o Desviación antes de cerrar la OT.</p>
+        </div>
       </div>
       <p id="p_err" class="mt-2 hidden text-sm text-red-600"></p>
       <div class="mt-3 flex gap-2">
@@ -384,6 +396,39 @@ const isBio = a.tipo === "biomedico";
 
   <script define:vars={{ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null }}>
     const $ = (id) => document.getElementById(id);
+    // Cache de plantillas para repoblar el textarea de checklist
+    let plantillasCache = [];
+
+    async function cargarPlantillas() {
+      try {
+        const res = await fetch("/api/checklist-plantillas?activas=1");
+        if (!res.ok) return;
+        const j = await res.json();
+        plantillasCache = j.plantillas ?? [];
+        const sel = $("p_plantilla");
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Sin plantilla (checklist vacío) —</option>';
+        for (const p of plantillasCache) {
+          const opt = document.createElement("option");
+          opt.value = String(p.id);
+          opt.textContent = `${p.nombre} (${p.items.length} puntos)`;
+          sel.appendChild(opt);
+        }
+      } catch {}
+    }
+
+    $("p_plantilla")?.addEventListener("change", () => {
+      const id = Number($("p_plantilla").value);
+      if (!id) return;
+      const p = plantillasCache.find((x) => x.id === id);
+      if (!p) return;
+      const textareaEl = $("p_checklist");
+      if (!textareaEl) return;
+      // Si hay contenido previo, confirmar antes de sobrescribir
+      if (textareaEl.value.trim() && !confirm("¿Reemplazar los puntos actuales con los de esta plantilla?")) return;
+      textareaEl.value = p.items.map((it) => it.texto).join("\n");
+    });
+
     $("newPlanBtn")?.addEventListener("click", () => {
       $("newPlanForm").classList.remove("hidden");
       // Pre-llenar título: "Mantenimiento preventivo {nombre equipo} {ubicación}"
@@ -400,12 +445,22 @@ const isBio = a.tipo === "biomedico";
         hoy.setHours(hoy.getHours() - 6); // ajuste UTC -> SV
         fechaEl.value = hoy.toISOString().slice(0, 10);
       }
+      // Cargar plantillas si aún no se cargaron
+      if (plantillasCache.length === 0) cargarPlantillas();
     });
     $("p_cancel")?.addEventListener("click", () => $("newPlanForm").classList.add("hidden"));
 
     $("p_save")?.addEventListener("click", async () => {
       const err = $("p_err");
       err.classList.add("hidden");
+      // Construir checklist desde el textarea (formato esperado por la API: [{texto}])
+      const checklistRaw = $("p_checklist")?.value?.trim() || "";
+      let checklist = null;
+      if (checklistRaw) {
+        const items = checklistRaw.split("\n").map((l) => l.trim()).filter(Boolean)
+          .map((texto) => ({ texto }));
+        if (items.length > 0) checklist = items;
+      }
       const payload = {
         titulo: $("p_titulo").value.trim(),
         descripcion: $("p_descripcion").value.trim() || null,
@@ -415,6 +470,7 @@ const isBio = a.tipo === "biomedico";
         prioridad: $("p_prioridad").value,
         horasEstimadas: $("p_horas").value ? Number($("p_horas").value) : null,
         asignadoA: $("p_asignado").value ? Number($("p_asignado").value) : null,
+        checklist,
       };
       if (!payload.titulo || !payload.proximaFecha) {
         err.textContent = "Titulo y proxima fecha son obligatorios";

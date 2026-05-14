@@ -1,8 +1,8 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { empresa, sucursales, ubicaciones, comprasDestinatarios } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { empresa, sucursales, ubicaciones, comprasDestinatarios, checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
+import { eq, asc, inArray } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -14,6 +14,17 @@ const [emp] = await db.select().from(empresa).limit(1);
 const sucRows = await db.select().from(sucursales).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
 const destRows = await db.select().from(comprasDestinatarios).orderBy(comprasDestinatarios.nombre);
+
+const plantillasRows = await db.select().from(checklistPlantillas).orderBy(asc(checklistPlantillas.nombre));
+const plantillasItemsRows = plantillasRows.length > 0
+  ? await db.select().from(checklistPlantillaItems)
+      .where(inArray(checklistPlantillaItems.plantillaId, plantillasRows.map((p) => p.id)))
+      .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id))
+  : [];
+const plantillas = plantillasRows.map((p) => ({
+  ...p,
+  items: plantillasItemsRows.filter((it) => it.plantillaId === p.id),
+}));
 
 const ubPorSucursal = (id: number) => ubRows.filter((u) => u.sucursalId === id);
 
@@ -35,12 +46,12 @@ const TIPOS_UB = [
 
   <!-- Tabs -->
   <div class="mt-4 flex gap-1 border-b border-slate-200 flex-wrap">
-    {["empresa", "sucursales", "correo", "compras"].map((t) => (
+    {["empresa", "sucursales", "correo", "compras", "checklists"].map((t) => (
       <button
         data-tab={t}
         class:list={["tab-btn px-4 py-2 text-sm font-medium rounded-t-md", t === "empresa" ? "bg-brand-50 text-brand-700 border border-b-white border-slate-200" : "text-slate-600 hover:bg-slate-100"]}
       >
-        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : t === "correo" ? "Correo electrónico" : "🛒 Destinatarios compras"}
+        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : t === "correo" ? "Correo electrónico" : t === "compras" ? "🛒 Destinatarios compras" : "📋 Plantillas checklist"}
       </button>
     ))}
   </div>
@@ -356,6 +367,80 @@ const TIPOS_UB = [
     </div>
   </div>
 
+  <!-- Tab: Plantillas de checklist -->
+  <div id="tab-checklists" class="tab-panel mt-4 hidden">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900">Plantillas de checklist</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Plantillas con puntos críticos para mantenimientos preventivos. Se usan al crear un plan en cada equipo.</p>
+      </div>
+      <button id="plant_newBtn" class="btn-primary">+ Nueva plantilla</button>
+    </div>
+
+    <div id="plant_form" class="card mt-3 hidden p-4">
+      <input type="hidden" id="plant_id" value="" />
+      <div class="grid grid-cols-1 gap-3">
+        <div>
+          <label class="label">Nombre *</label>
+          <input class="input" id="plant_nombre" placeholder="Ej: Aires acondicionados / Climatización" />
+        </div>
+        <div>
+          <label class="label">Descripción <span class="text-slate-400 font-normal">(opcional)</span></label>
+          <input class="input" id="plant_descripcion" placeholder="Ej: Para unidades AC split, paquete y central" />
+        </div>
+        <div>
+          <label class="label">Puntos críticos (un punto por línea)</label>
+          <textarea class="input font-mono text-sm" id="plant_items" rows="10" placeholder="Limpieza de filtros&#10;Verificación de gas refrigerante&#10;Apriete de conexiones eléctricas"></textarea>
+          <p class="mt-1 text-xs text-slate-500">Cada línea se convierte en un item del checklist. El técnico marcará cada uno como OK, N/A o Desviación.</p>
+        </div>
+      </div>
+      <p id="plant_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-3 flex gap-2">
+        <button id="plant_save" class="btn-primary">Guardar plantilla</button>
+        <button id="plant_cancel" class="btn-secondary">Cancelar</button>
+      </div>
+    </div>
+
+    <div class="mt-4 space-y-3">
+      {plantillas.length === 0 && <p class="text-sm text-slate-500 card p-4">Sin plantillas configuradas. Crea la primera.</p>}
+      {plantillas.map((p) => (
+        <div class="card overflow-hidden" data-plant-id={p.id}>
+          <div class="flex items-start justify-between px-4 py-3 gap-3">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class:list={["font-medium", !p.activa && "text-slate-400 line-through"]}>{p.nombre}</span>
+                {!p.activa && <span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">Inactiva</span>}
+                <span class="text-xs text-slate-400">{p.items.length} puntos</span>
+              </div>
+              {p.descripcion && <p class="text-xs text-slate-500 mt-0.5">{p.descripcion}</p>}
+              <details class="mt-2">
+                <summary class="cursor-pointer text-xs text-brand-600 hover:underline">Ver puntos</summary>
+                <ol class="mt-2 list-decimal pl-5 text-xs text-slate-700 space-y-1">
+                  {p.items.map((it) => <li>{it.texto}</li>)}
+                </ol>
+              </details>
+            </div>
+            <div class="flex flex-col items-end gap-1">
+              <button
+                class="plant-toggle-btn text-xs font-medium"
+                class:list={[p.activa ? "text-amber-600 hover:underline" : "text-emerald-600 hover:underline"]}
+                data-id={p.id} data-activa={String(p.activa)}
+              >
+                {p.activa ? "Desactivar" : "Activar"}
+              </button>
+              <button class="plant-edit-btn text-xs text-brand-600 hover:underline"
+                data-id={p.id} data-nombre={p.nombre} data-descripcion={p.descripcion ?? ""}
+                data-items={p.items.map((it) => it.texto).join("\n")}>
+                Editar
+              </button>
+              <button class="plant-del-btn text-xs text-red-500 hover:underline" data-id={p.id}>Eliminar</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+
   <script>
     // Tabs de proveedor
     document.querySelectorAll(".prov-tab").forEach((btn) => {
@@ -591,6 +676,72 @@ const TIPOS_UB = [
       if (!confirm("¿Eliminar este destinatario?")) return;
       await fetch(`/api/compras-destinatarios/${btn.dataset.id!}`, { method: "DELETE" });
       document.querySelector(`[data-dest-id="${btn.dataset.id!}"]`)?.remove();
+    });
+  });
+
+  // ── Plantillas de checklist CRUD ─────────────────────────────────────────
+  const plantForm = document.getElementById("plant_form")!;
+  const plantIdEl = document.getElementById("plant_id") as HTMLInputElement;
+  const pg = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value.trim();
+
+  document.getElementById("plant_newBtn")?.addEventListener("click", () => {
+    plantIdEl.value = "";
+    (document.getElementById("plant_nombre") as HTMLInputElement).value = "";
+    (document.getElementById("plant_descripcion") as HTMLInputElement).value = "";
+    (document.getElementById("plant_items") as HTMLTextAreaElement).value = "";
+    plantForm.classList.remove("hidden");
+    plantForm.scrollIntoView({ behavior: "smooth" });
+  });
+  document.getElementById("plant_cancel")?.addEventListener("click", () => plantForm.classList.add("hidden"));
+
+  document.querySelectorAll<HTMLButtonElement>(".plant-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      plantIdEl.value = btn.dataset.id!;
+      (document.getElementById("plant_nombre") as HTMLInputElement).value = btn.dataset.nombre ?? "";
+      (document.getElementById("plant_descripcion") as HTMLInputElement).value = btn.dataset.descripcion ?? "";
+      (document.getElementById("plant_items") as HTMLTextAreaElement).value = btn.dataset.items ?? "";
+      plantForm.classList.remove("hidden");
+      plantForm.scrollIntoView({ behavior: "smooth" });
+    });
+  });
+
+  document.getElementById("plant_save")?.addEventListener("click", async () => {
+    const err = document.getElementById("plant_err")!;
+    err.classList.add("hidden");
+    const nombre = pg("plant_nombre");
+    const descripcion = pg("plant_descripcion") || null;
+    const itemsRaw = pg("plant_items");
+    const items = itemsRaw.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!nombre) { err.textContent = "Nombre es requerido"; err.classList.remove("hidden"); return; }
+    if (items.length === 0) { err.textContent = "Agrega al menos un punto al checklist"; err.classList.remove("hidden"); return; }
+    const id = plantIdEl.value;
+    const payload = { nombre, descripcion, items };
+    const res = await fetch(id ? `/api/checklist-plantillas/${id}` : "/api/checklist-plantillas", {
+      method: id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.error ?? "Error al guardar"; err.classList.remove("hidden"); return; }
+    location.reload();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".plant-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const activa = btn.dataset.activa !== "true";
+      await fetch(`/api/checklist-plantillas/${btn.dataset.id!}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ activa }),
+      });
+      location.reload();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".plant-del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar esta plantilla? Esta acción no se puede deshacer.")) return;
+      await fetch(`/api/checklist-plantillas/${btn.dataset.id!}`, { method: "DELETE" });
+      document.querySelector(`[data-plant-id="${btn.dataset.id!}"]`)?.remove();
     });
   });
 </script>

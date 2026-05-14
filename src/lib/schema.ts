@@ -739,3 +739,24 @@ export const solicitudCompraDescargas = sqliteTable("solicitud_compra_descargas"
   descargadoEn: text("descargado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type SolicitudCompraDescarga = typeof solicitudCompraDescargas.$inferSelect;
+
+// ─── Plantillas de checklist (Fase 30) ───────────────────────────────────────
+// Plantillas gestionables desde /configuracion. Se usan para autocompletar
+// el checklist de un plan de mantenimiento preventivo según el tipo de equipo.
+export const checklistPlantillas = sqliteTable("checklist_plantillas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ChecklistPlantilla = typeof checklistPlantillas.$inferSelect;
+
+export const checklistPlantillaItems = sqliteTable("checklist_plantilla_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  plantillaId: integer("plantilla_id").notNull().references(() => checklistPlantillas.id, { onDelete: "cascade" }),
+  texto: text("texto").notNull(),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ChecklistPlantillaItem = typeof checklistPlantillaItems.$inferSelect;

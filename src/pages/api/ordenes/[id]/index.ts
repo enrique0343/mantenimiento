@@ -11,7 +11,7 @@ async function contarAdjuntos(db: any, ordenId: number, categoria: string): Prom
 }
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
-import { transicionesPermitidas, type EstadoOT } from "@/lib/ordenes";
+import { transicionesPermitidas, parseChecklist, validarChecklistParaCierre, type EstadoOT } from "@/lib/ordenes";
 import { siguienteFecha } from "@/lib/frecuencias";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
@@ -123,6 +123,13 @@ export const PATCH: APIRoute = async (ctx) => {
           { error: "Debes adjuntar al menos una foto del estado final (después) para completar la OT." },
           { status: 400 }
         );
+      }
+      // Validación bloqueante de checklist: si la OT tiene checklist con
+      // items pendientes o desviaciones sin nota, NO se puede completar.
+      const checklist = parseChecklist(actual.checklistEjecucion);
+      const v = validarChecklistParaCierre(checklist);
+      if (!v.ok) {
+        return Response.json({ error: v.error }, { status: 400 });
       }
     }
 

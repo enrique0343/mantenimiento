@@ -582,27 +582,71 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <!-- Checklist -->
       {checklistItems.length > 0 && (
         <div class="card p-5">
-          <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-slate-900">Checklist de ejecución</h2>
-            <span class="text-xs text-slate-500">{progreso.hechos} / {progreso.total} ({progreso.pct}%)</span>
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h2 class="font-semibold text-slate-900">Checklist de puntos críticos</h2>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-slate-500">{progreso.hechos} / {progreso.total}</span>
+              {progreso.desviaciones > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">⚠ {progreso.desviaciones} desviación{progreso.desviaciones === 1 ? "" : "es"}</span>
+              )}
+              {progreso.pendientes > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">⏳ {progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
+              )}
+              <span id="ckAutosave" class="text-slate-400"></span>
+            </div>
           </div>
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
+          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes o desviaciones sin describir.</p>
           <ul id="checklistList" class="mt-4 space-y-2">
-            {checklistItems.map((it, idx) => (
-              <li class:list={["ck-row flex items-start gap-3 rounded-lg p-3 transition", it.hecho ? "bg-emerald-50" : "bg-slate-50", puedeEditar && "cursor-pointer active:bg-slate-200"]} data-idx={idx}>
-                <input type="checkbox" class="ck-item mt-0.5 h-5 w-5 cursor-pointer" data-idx={idx} checked={it.hecho} disabled={!puedeEditar} />
-                <div class="flex-1">
-                  <div class:list={["text-sm", it.hecho && "text-slate-500 line-through"]}>{it.texto}</div>
-                  {it.notas && <div class="text-xs text-slate-500">{it.notas}</div>}
-                </div>
-              </li>
-            ))}
+            {checklistItems.map((it, idx) => {
+              const filaColor =
+                it.estado === "ok" ? "bg-emerald-50 border border-emerald-200" :
+                it.estado === "na" ? "bg-slate-100 border border-slate-200" :
+                it.estado === "desviacion" ? "bg-amber-50 border border-amber-300" :
+                "bg-white border border-slate-200";
+              return (
+                <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
+                  <div class="text-sm font-medium text-slate-900">{it.texto}</div>
+                  {puedeEditar ? (
+                    <div class="mt-2 flex flex-wrap gap-1">
+                      {(["pendiente","ok","na","desviacion"] as const).map((e) => {
+                        const labels = { pendiente: "⏳ Pendiente", ok: "✅ OK", na: "⊘ N/A", desviacion: "⚠ Desviación" };
+                        const colors = {
+                          pendiente: it.estado === e ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+                          ok: it.estado === e ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+                          na: it.estado === e ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+                          desviacion: it.estado === e ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+                        };
+                        return (
+                          <button type="button" class={`ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`} data-idx={idx} data-estado={e}>{labels[e]}</button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div class="mt-1 text-xs">
+                      Estado: <span class="font-medium">{it.estado === "ok" ? "✅ OK" : it.estado === "na" ? "⊘ N/A" : it.estado === "desviacion" ? "⚠ Desviación" : "⏳ Pendiente"}</span>
+                    </div>
+                  )}
+                  <div class:list={["ck-nota-wrap mt-2", it.estado !== "desviacion" && "hidden"]} data-idx={idx}>
+                    <label class="text-xs text-slate-600 block mb-1">Describe la desviación <span class="text-red-500">*</span></label>
+                    <textarea
+                      class="ck-nota input text-sm w-full"
+                      rows="2"
+                      placeholder="Ej: el filtro estaba quebrado y se reemplazó por uno equivalente..."
+                      data-idx={idx}
+                      disabled={!puedeEditar}
+                    >{it.notas ?? ""}</textarea>
+                    <p class="mt-0.5 text-[11px] text-slate-400">Mínimo 10 caracteres.</p>
+                  </div>
+                  {it.notas && it.estado !== "desviacion" && (
+                    <div class="mt-1 text-xs text-slate-500">{it.notas}</div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
-          {puedeEditar && (
-            <button id="ckSave" class="btn-secondary mt-3 text-sm">Guardar checklist</button>
-          )}
         </div>
       )}
 
@@ -1172,45 +1216,91 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (r) location.reload();
     });
 
-    // Checklist: el checkbox y la fila completa son tap-targets
-    function actualizarFila(idx, hecho) {
+    // Checklist con 3 estados (ok / na / desviacion / pendiente).
+    // Normalizar items por si vienen del formato viejo {hecho:bool}.
+    checklist = (Array.isArray(checklist) ? checklist : []).map((it) => {
+      let estado = it.estado;
+      if (!["pendiente","ok","na","desviacion"].includes(estado)) {
+        estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
+      }
+      return { texto: it.texto, estado, notas: it.notas ?? "" };
+    });
+
+    function actualizarColorFila(idx) {
+      const it = checklist[idx];
       const row = document.querySelector(`.ck-row[data-idx="${idx}"]`);
-      if (!row) return;
-      const txt = row.querySelector(".text-sm");
-      if (hecho) {
-        row.classList.remove("bg-slate-50");
-        row.classList.add("bg-emerald-50");
-        txt?.classList.add("text-slate-500", "line-through");
-      } else {
-        row.classList.add("bg-slate-50");
-        row.classList.remove("bg-emerald-50");
-        txt?.classList.remove("text-slate-500", "line-through");
-      }
+      if (!row || !it) return;
+      // Limpiar clases anteriores
+      row.className = row.className
+        .replace(/bg-(emerald|slate|amber|white)-(50|100|200|300)/g, "")
+        .replace(/border-(emerald|slate|amber)-(200|300)/g, "");
+      const colorMap = {
+        ok: "bg-emerald-50 border border-emerald-200",
+        na: "bg-slate-100 border border-slate-200",
+        desviacion: "bg-amber-50 border border-amber-300",
+        pendiente: "bg-white border border-slate-200",
+      };
+      row.classList.add(...colorMap[it.estado].split(" "));
     }
-    document.querySelectorAll(".ck-item").forEach((el) => {
-      el.addEventListener("change", () => {
-        const idx = Number(el.dataset.idx);
-        if (checklist[idx]) checklist[idx].hecho = el.checked;
-        actualizarFila(idx, el.checked);
+
+    function actualizarBotonesEstado(idx) {
+      const it = checklist[idx];
+      if (!it) return;
+      document.querySelectorAll(`.ck-estado-btn[data-idx="${idx}"]`).forEach((btn) => {
+        const e = btn.dataset.estado;
+        const isActive = it.estado === e;
+        const colors = {
+          pendiente: isActive ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+          ok: isActive ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+          na: isActive ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+          desviacion: isActive ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+        };
+        btn.className = `ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`;
       });
-    });
-    document.querySelectorAll(".ck-row").forEach((row) => {
-      row.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT") return;
-        const cb = row.querySelector(".ck-item");
-        if (cb && !cb.disabled) {
-          cb.checked = !cb.checked;
-          cb.dispatchEvent(new Event("change"));
+    }
+
+    function actualizarNotaVisible(idx) {
+      const it = checklist[idx];
+      const wrap = document.querySelector(`.ck-nota-wrap[data-idx="${idx}"]`);
+      if (!wrap || !it) return;
+      wrap.classList.toggle("hidden", it.estado !== "desviacion");
+    }
+
+    let ckSaveTimer = null;
+    function programarGuardadoChecklist() {
+      const ind = $("ckAutosave");
+      if (ind) { ind.textContent = "⏳ Guardando…"; ind.className = "text-amber-600"; }
+      if (ckSaveTimer) clearTimeout(ckSaveTimer);
+      ckSaveTimer = setTimeout(async () => {
+        const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+        if (ind) {
+          ind.textContent = r ? "✓ Guardado" : "⚠ Sin guardar";
+          ind.className = r ? "text-emerald-600" : "text-red-600";
+          setTimeout(() => { ind.textContent = ""; }, 2000);
         }
+      }, 1000);
+    }
+
+    document.querySelectorAll(".ck-estado-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.idx);
+        const nuevoEstado = btn.dataset.estado;
+        if (!checklist[idx]) return;
+        checklist[idx].estado = nuevoEstado;
+        actualizarColorFila(idx);
+        actualizarBotonesEstado(idx);
+        actualizarNotaVisible(idx);
+        programarGuardadoChecklist();
       });
     });
-    $("ckSave")?.addEventListener("click", async () => {
-      const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
-      if (r) {
-        const btn = $("ckSave");
-        btn.textContent = "✓ Guardado";
-        setTimeout(() => (btn.textContent = "Guardar checklist"), 1500);
-      }
+
+    document.querySelectorAll(".ck-nota").forEach((ta) => {
+      ta.addEventListener("input", () => {
+        const idx = Number(ta.dataset.idx);
+        if (!checklist[idx]) return;
+        checklist[idx].notas = ta.value;
+        programarGuardadoChecklist();
+      });
     });
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
