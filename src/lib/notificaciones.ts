@@ -4,7 +4,7 @@
 import type { APIContext } from "astro";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { ordenes, usuarios, tickets, encuestasSatisfaccion } from "./schema";
+import { ordenes, usuarios, tickets, activos, encuestasSatisfaccion } from "./schema";
 import { sendMail, emailLayout } from "./email";
 import { sendTelegram } from "./telegram";
 import { crearNotificacion } from "./notif-app";
@@ -234,12 +234,21 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
 
   const baseUrl = appUrl(ctx);
   const encuestaUrl = `${baseUrl}/encuesta/${token}`;
-  const otUrl = `${baseUrl}/ordenes/${orden.id}`;
   const primerNombreSol = (sol.nombre ?? "").split(" ")[0] || sol.nombre;
 
-  // Nombre del técnico para mostrarlo en la prosa de reconocimiento
+  // Nombre del técnico para mostrarlo en la prosa
   const asg = await obtenerAsignado(ctx, orden);
   const nombreTec = asg?.nombre ?? "el equipo de Mantenimiento";
+
+  // Link al portal público si vino de ticket; si no, al detalle interno
+  const url = tk?.trackingToken
+    ? `${baseUrl}/soporte/track/${tk.trackingToken}`
+    : `${baseUrl}/ordenes/${orden.id}`;
+  const inconformidadUrl = tk?.trackingToken ? `${baseUrl}/soporte/track/${tk.trackingToken}?inconformidad=1` : null;
+
+  const fechaCierre = (orden as any).completadaEn
+    ? fmtFechaLarga((orden as any).completadaEn)
+    : fmtFechaLarga(new Date());
 
   // Botones grandes con las 5 calificaciones (acceso directo)
   const stars = [1, 2, 3, 4, 5].map((n) => {
@@ -247,27 +256,123 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
     return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;border:1px solid #e2e8f0;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#64748b">${n}</span></a>`;
   }).join("");
 
+  // CORREO COMBINADO: cierre + encuesta en un solo mensaje
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Tu calificación define el próximo cambio en Mantenimiento`,
+    subject: `[OT #${orden.id}] Tu solicitud quedó resuelta — cuéntanos cómo nos fue`,
     html: emailLayout(
-      "Cuéntanos cómo nos fue",
+      "Tu solicitud quedó resuelta",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
-       <p>La orden <strong>#${orden.id} — ${orden.titulo}</strong> quedó cerrada. Antes de archivarla, te pedimos un favor de 10 segundos.</p>
-       <p style="margin:20px 0 8px 0;text-align:center;font-weight:600;color:#0a4082">¿Cómo te atendimos?</p>
+       <p>Te confirmamos que tu orden ya fue atendida.</p>
+       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
+         <li><strong>Técnico responsable:</strong> ${nombreTec}</li>
+         <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
+         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">✓ completada</span></li>
+       </ul>
+       ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
+         <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
+
+       <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+
+       <p style="margin:0 0 8px 0;text-align:center;font-weight:600;color:#0a4082;font-size:16px">¿Cómo te atendimos?</p>
+       <p style="margin:0 0 14px 0;text-align:center;font-size:13px;color:#64748b">Tu calificación define el próximo cambio en Mantenimiento. Solo te toma 10 segundos.</p>
        <div style="text-align:center;margin:8px 0 22px 0">${stars}</div>
        <p style="margin:0 0 6px 0"><strong>Qué pasa con tu voto:</strong></p>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          <li>Si calificas con <strong>4 o 5</strong>, le llega como reconocimiento al técnico <strong>${nombreTec}</strong> en su evaluación mensual.</li>
          <li>Si calificas con <strong>1, 2 o 3</strong>, entra al tablero de mejoras de Mantenimiento como caso a revisar esta semana.</li>
        </ul>
-       <p style="font-size:13px;color:#475569">Si quieres dejar un comentario adicional, hay un campo opcional al final.</p>
-       <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver detalle de la orden →</a></p>
-       <p style="margin-top:18px"><em>Cada voto que recibimos cambia algo. Gracias por tomarte el tiempo.</em></p>`
+
+       <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+
+       <p style="margin-top:14px"><strong>Tu validación nos importa.</strong> Si al verificar notas que el problema persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
+       <p style="margin:18px 0">
+         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">${tk?.trackingToken ? "Ver estado de tu solicitud →" : "Ver detalle de la orden →"}</a>
+         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
+       </p>
+       <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. Cada orden cerrada es una oportunidad de hacerlo mejor la próxima vez.</em></p>`
     ),
     tipo: "encuesta_satisfaccion",
     referencia: `orden:${orden.id}`,
   }).catch(() => {});
+}
+
+// ─── Notificación: OT cerrada → AVISO AL JEFE (#14) ──────────────────────────
+export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) {
+  const db = getDb(ctx);
+  // Determinar tipo del equipo (general/biomedico) para routing del jefe
+  let tipoEquipo: "general" | "biomedico" | null = null;
+  if ((orden as any).activoId) {
+    try {
+      const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, (orden as any).activoId)).limit(1);
+      tipoEquipo = (a?.tipo as any) ?? null;
+    } catch {}
+  }
+
+  // Buscar jefes que deban recibir el aviso
+  const jefes = await db.select().from(usuarios).where(eq(usuarios.rol, "jefe"));
+  const destinatarios = jefes.filter((j) => {
+    if (!tipoEquipo) return true;
+    const esp = j.especialidad;
+    return !esp || esp === "ambos" || esp === tipoEquipo;
+  });
+  if (destinatarios.length === 0) return;
+
+  const sol = await obtenerSolicitante(ctx, orden);
+  const asg = await obtenerAsignado(ctx, orden);
+  const nombreTec = asg?.nombre ?? "Sin asignar";
+  const otUrl = `${appUrl(ctx)}/ordenes/${orden.id}`;
+
+  const fechaCierre = (orden as any).completadaEn
+    ? fmtFechaLarga((orden as any).completadaEn)
+    : fmtFechaLarga(new Date());
+  const horas = (orden as any).horasTrabajadas != null
+    ? `${Number((orden as any).horasTrabajadas).toFixed(2)} h`
+    : "—";
+
+  const env = (ctx.locals as any)?.runtime?.env ?? {};
+  for (const jefe of destinatarios) {
+    if (!jefe.email) continue;
+    const primerNombre = (jefe.nombre ?? "").split(" ")[0] || jefe.nombre;
+    await sendMail(ctx, {
+      to: jefe.email,
+      subject: `[OT #${orden.id}] Trabajo finalizado por ${nombreTec}`,
+      html: emailLayout(
+        "Trabajo finalizado en tu radar",
+        `<p>Hola <strong>${primerNombre}</strong>,</p>
+         <p>Te avisamos que <strong>${nombreTec}</strong> acaba de cerrar la <strong>OT #${orden.id} — ${orden.titulo}</strong>.</p>
+
+         <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:15px">Datos del cierre</h3>
+         <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7;font-size:14px">
+           <li><strong>Técnico:</strong> ${nombreTec}</li>
+           <li><strong>Tipo:</strong> ${orden.tipo} · <strong>Prioridad:</strong> ${orden.prioridad}</li>
+           ${tipoEquipo ? `<li><strong>Especialidad:</strong> ${tipoEquipo === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</li>` : ""}
+           <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
+           <li><strong>Horas trabajadas:</strong> ${horas}</li>
+           ${sol ? `<li><strong>Solicitante:</strong> ${sol.nombre} &lt;${sol.email}&gt;</li>` : ""}
+         </ul>
+
+         ${orden.trabajosRealizados ? `<p style="margin:0 0 6px 0"><strong>Trabajos realizados:</strong></p>
+           <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 14px 0;font-size:13px">${orden.trabajosRealizados}</p>` : ""}
+         ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
+           <p style="white-space:pre-wrap;background:#f0fdf4;padding:12px;border-left:3px solid #16a34a;border-radius:4px;margin:0 0 14px 0;font-size:13px">${orden.solucionAplicada}</p>` : ""}
+
+         <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+         <p style="font-size:13px;color:#64748b;margin-top:14px">Esto es un aviso para tu monitoreo. El solicitante ya recibió la encuesta de satisfacción y tiene 48h para reportar inconformidad si algo no quedó bien.</p>`
+      ),
+      tipo: "ot_cerrada_jefe",
+      referencia: `orden:${orden.id}`,
+    }).catch(() => {});
+
+    // Notificación in-app
+    await crearNotificacion(ctx, {
+      usuarioId: jefe.id, tipo: "ot_cerrada_jefe",
+      titulo: `OT #${orden.id} cerrada por ${nombreTec}`,
+      mensaje: orden.titulo,
+      link: `/ordenes/${orden.id}`,
+    });
+  }
 }
 
 // ─── Dispatcher: dado un cambio de estado de OT, dispara las notificaciones ───
@@ -285,6 +390,7 @@ export async function disparadorOT(
     cambios.push(notificarOTCompletada(ctx, orden));
   } else if (estadoNuevo === "cerrada") {
     cambios.push(notificarOTCerradaConEncuesta(ctx, orden));
+    cambios.push(notificarOTCerradaJefe(ctx, orden));
   }
   // No bloquear la respuesta del API
   const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
