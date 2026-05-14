@@ -382,9 +382,23 @@ const isBio = a.tipo === "biomedico";
     )}
   </div>
 
-  <script define:vars={{ activoId: id }}>
+  <script define:vars={{ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre }}>
     const $ = (id) => document.getElementById(id);
-    $("newPlanBtn")?.addEventListener("click", () => $("newPlanForm").classList.remove("hidden"));
+    $("newPlanBtn")?.addEventListener("click", () => {
+      $("newPlanForm").classList.remove("hidden");
+      // Pre-llenar título con un default razonable basado en el equipo
+      const tituloEl = $("p_titulo");
+      if (tituloEl && !tituloEl.value) {
+        tituloEl.value = `Mantenimiento preventivo - ${activoCodigo} ${activoNombre}`.trim();
+      }
+      // Pre-llenar próxima fecha con hoy (hora SV)
+      const fechaEl = $("p_proxima");
+      if (fechaEl && !fechaEl.value) {
+        const hoy = new Date();
+        hoy.setHours(hoy.getHours() - 6); // ajuste UTC -> SV
+        fechaEl.value = hoy.toISOString().slice(0, 10);
+      }
+    });
     $("p_cancel")?.addEventListener("click", () => $("newPlanForm").classList.add("hidden"));
 
     $("p_save")?.addEventListener("click", async () => {
