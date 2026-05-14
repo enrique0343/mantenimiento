@@ -105,16 +105,41 @@ const ESTADO_LABEL: Record<string, string> = {
   </div>
 
   <script define:vars={{ sol, items, adjuntos }}>
+    async function cargarLogoBase64() {
+      try {
+        const res = await fetch("/api/empresa/logo");
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ data: reader.result, type: blob.type });
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+      } catch { return null; }
+    }
+
     document.getElementById("btnPdf")?.addEventListener("click", async () => {
       const { jsPDF } = await import("https://esm.sh/jspdf@2.5.1");
       const doc = new jsPDF();
-      let y = 20;
       const w = doc.internal.pageSize.width;
+      let y = 20;
+
+      // Logo en esquina superior derecha
+      const logo = await cargarLogoBase64();
+      if (logo && logo.data) {
+        try {
+          const fmt = logo.type.includes("png") ? "PNG" : logo.type.includes("jpeg") ? "JPEG" : "PNG";
+          doc.addImage(logo.data, fmt, w - 14 - 35, 8, 35, 18);
+        } catch (e) { console.warn("logo PDF:", e); }
+      }
 
       doc.setFontSize(16); doc.setFont(undefined, "bold");
       doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
       doc.setFontSize(10); doc.setFont(undefined, "normal");
       doc.text(`Estado: ${sol.estado}  ·  Fecha: ${new Date(sol.createdAt).toLocaleString("es")}`, 14, y); y += 10;
+
+      if (logo && logo.data && y < 32) y = 32;
 
       doc.setFont(undefined, "bold"); doc.setFontSize(12);
       doc.text(sol.titulo, 14, y); y += 7;
