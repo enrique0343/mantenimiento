@@ -326,7 +326,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   document.getElementById("btnCancelarEditar")?.addEventListener("click", () => modalEditar?.classList.add("hidden"));
 
   let editItemCount = 0;
-  const editContainer = document.getElementById("editItemsContainer")!;
+  const editContainer = document.getElementById("editItemsContainer");
   function renderEditItems() {
     editContainer.innerHTML = "";
     editItemCount = 0;
@@ -343,7 +343,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
       <input class="col-span-2 input text-sm ei-unit" value="${unit}" placeholder="Unidad" />
       <input class="col-span-2 input text-sm ei-notas" value="${notas}" placeholder="Notas" />
       <button type="button" class="ei-rm text-slate-400 hover:text-red-500 text-lg text-center">×</button>`;
-    div.querySelector(".ei-rm")!.addEventListener("click", () => div.remove());
+    div.querySelector(".ei-rm").addEventListener("click", () => div.remove());
     editContainer.appendChild(div);
   }
   document.getElementById("btnAgregarItemEdit")?.addEventListener("click", () => addEditItem());
@@ -393,7 +393,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
 
   // ─── Enviar ───────────────────────────────────────────────────────────────
   const modalEnviar = document.getElementById("modalEnviar");
-  const destList = document.getElementById("destList")!;
+  const destList = document.getElementById("destList");
   document.getElementById("btnEnviar")?.addEventListener("click", () => {
     destList.innerHTML = destinatarios.map((d) =>
       `<label class="flex items-center gap-2 text-sm p-2 rounded hover:bg-slate-50 cursor-pointer">
@@ -424,13 +424,13 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   let accionResultado = "";
   document.getElementById("btnComprada")?.addEventListener("click", () => {
     accionResultado = "comprada";
-    document.getElementById("modalResultadoTitulo")!.textContent = "✅ Marcar como comprada";
+    document.getElementById("modalResultadoTitulo").textContent = "✅ Marcar como comprada";
     (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });
   document.getElementById("btnRechazada")?.addEventListener("click", () => {
     accionResultado = "rechazada";
-    document.getElementById("modalResultadoTitulo")!.textContent = "❌ Rechazar solicitud";
+    document.getElementById("modalResultadoTitulo").textContent = "❌ Rechazar solicitud";
     (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });
