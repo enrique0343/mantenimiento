@@ -14,6 +14,7 @@ jobs:
         run: |
           response=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Origin: ${{ secrets.APP_URL }}" \
             "${{ secrets.APP_URL }}/api/cron/daily-digest")
           body=$(echo "$response" | sed '$d')
           status=$(echo "$response" | tail -n1)
@@ -28,6 +29,7 @@ jobs:
         run: |
           response=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Origin: ${{ secrets.APP_URL }}" \
             "${{ secrets.APP_URL }}/api/cron/recordatorio-encuestas")
           body=$(echo "$response" | sed '$d')
           status=$(echo "$response" | tail -n1)
@@ -42,6 +44,7 @@ jobs:
         run: |
           response=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Origin: ${{ secrets.APP_URL }}" \
             "${{ secrets.APP_URL }}/api/cron/generar-preventivos")
           body=$(echo "$response" | sed '$d')
           status=$(echo "$response" | tail -n1)

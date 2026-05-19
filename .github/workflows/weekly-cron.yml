@@ -14,6 +14,7 @@ jobs:
         run: |
           response=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Origin: ${{ secrets.APP_URL }}" \
             "${{ secrets.APP_URL }}/api/cron/weekly-satisfaccion")
           body=$(echo "$response" | sed '$d')
           status=$(echo "$response" | tail -n1)
