@@ -2,9 +2,10 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios } from "@/lib/schema";
+import { tickets, usuarios, activos, sucursales } from "@/lib/schema";
 import { generateTrackingToken, calcularVencimientoSla } from "@/lib/tickets";
 import { sendMail, emailLayout } from "@/lib/email";
+import { jefesNotificar } from "@/lib/especialidad";
 
 export const prerender = false;
 
@@ -15,7 +16,9 @@ const createSchema = z.object({
   asunto: z.string().min(3),
   descripcion: z.string().min(10),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).default("media"),
-  sucursalId: z.number().int().nullable().optional(),
+  tipoMantenimiento: z.enum(["general", "biomedico"]).default("general"),
+  sucursalId: z.number().int().positive(), // ahora obligatorio
+  ubicacionId: z.number().int().nullable().optional(),
   ubicacion: z.string().optional().nullable(),
   activoId: z.number().int().nullable().optional(),
 });
@@ -41,25 +44,50 @@ export const POST: APIRoute = async (ctx) => {
     })
     .returning();
 
-  // Notifica admins por email (best-effort, no bloquea respuesta)
+  // Notifica al jefe correcto según el tipo de equipo del ticket
   try {
-    const admins = await db
-      .select({ email: usuarios.email })
-      .from(usuarios)
-      .where(eq(usuarios.activo, true));
-    const adminEmails = admins.filter((a) => a.email).map((a) => a.email);
-    if (adminEmails.length > 0) {
+    // Tipo: usa el seleccionado por el solicitante, o deriva del activo si lo hay
+    let tipoEquipo: "general" | "biomedico" | null = (row.tipoMantenimiento as any) ?? null;
+    if (!tipoEquipo && row.activoId) {
+      const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, row.activoId)).limit(1);
+      tipoEquipo = a?.tipo as any ?? null;
+    }
+    const jefes = await jefesNotificar(ctx, tipoEquipo);
+    const jefesEmails = jefes.map((j) => j.email).filter(Boolean);
+    if (jefesEmails.length > 0) {
+      const tipoLabel = tipoEquipo === "biomedico" ? "🩺 Biomédico" : tipoEquipo === "general" ? "🔧 General" : "Sin clasificar";
+
+      // Resolver sucursal para más contexto
+      let sucursalNombre: string | null = null;
+      if (row.sucursalId) {
+        try {
+          const [s] = await db.select({ nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.id, row.sucursalId)).limit(1);
+          sucursalNombre = s?.nombre ?? null;
+        } catch {}
+      }
+
+      const env = (ctx.locals as any)?.runtime?.env ?? {};
+      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const ticketUrl = `${baseUrl}/tickets/${row.id}`;
+
       ctx.locals.runtime.ctx.waitUntil(
         sendMail(ctx, {
-          to: adminEmails,
-          subject: `[Soporte] Nuevo ticket #${row.id}: ${row.asunto}`,
+          to: jefesEmails,
+          subject: `[Soporte ${tipoLabel}] Nuevo ticket #${row.id}: ${row.asunto}`,
           html: emailLayout(
             `Nuevo ticket de soporte`,
-            `<p><strong>${row.solicitanteNombre}</strong> (${row.solicitanteEmail}) creó un ticket:</p>
-             <h3>${row.asunto}</h3>
-             <p style="white-space:pre-wrap">${row.descripcion}</p>
-             <p><strong>Prioridad:</strong> ${row.prioridad} · <strong>SLA:</strong> ${row.slaHoras}h</p>
-             <p><strong>Token:</strong> <code>${row.trackingToken}</code></p>`
+            `<h2 style="margin:0 0 8px 0;color:#0a4082;font-size:18px">${row.asunto}</h2>
+             <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 16px 0">${row.descripcion}</p>
+             <table style="width:100%;font-size:13px;border-collapse:collapse;margin:8px 0">
+               <tr><td style="padding:4px 0;color:#64748b;width:130px">Solicitante:</td><td><strong>${row.solicitanteNombre}</strong> &lt;${row.solicitanteEmail}&gt;</td></tr>
+               ${row.solicitanteTelefono ? `<tr><td style="padding:4px 0;color:#64748b">Teléfono:</td><td>${row.solicitanteTelefono}</td></tr>` : ""}
+               <tr><td style="padding:4px 0;color:#64748b">Tipo:</td><td>${tipoLabel}</td></tr>
+               ${sucursalNombre ? `<tr><td style="padding:4px 0;color:#64748b">Sucursal:</td><td>${sucursalNombre}</td></tr>` : ""}
+               ${row.ubicacion ? `<tr><td style="padding:4px 0;color:#64748b">Ubicación:</td><td>${row.ubicacion}</td></tr>` : ""}
+               <tr><td style="padding:4px 0;color:#64748b">Prioridad:</td><td><strong>${row.prioridad}</strong></td></tr>
+               <tr><td style="padding:4px 0;color:#64748b">SLA:</td><td>${row.slaHoras}h</td></tr>
+             </table>
+             <p style="margin-top:18px"><a href="${ticketUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver ticket y asignar →</a></p>`
           ),
           tipo: "ticket_nuevo",
           referencia: `ticket:${row.id}`,
@@ -68,16 +96,22 @@ export const POST: APIRoute = async (ctx) => {
     }
 
     // Confirmacion al solicitante
+    const env2 = (ctx.locals as any)?.runtime?.env ?? {};
+    const baseUrl2 = env2.APP_URL || "https://mantenimiento-49c.pages.dev";
+    const trackUrl = `${baseUrl2}/soporte/track/${row.trackingToken}`;
     ctx.locals.runtime.ctx.waitUntil(
       sendMail(ctx, {
         to: row.solicitanteEmail,
-        subject: `Tu ticket #${row.id} fue recibido`,
+        subject: `Recibimos tu solicitud — Ticket #${row.id}`,
         html: emailLayout(
           `Recibimos tu solicitud`,
           `<p>Hola <strong>${row.solicitanteNombre}</strong>,</p>
-           <p>Tu solicitud fue registrada con el código <code>${row.trackingToken}</code>.</p>
-           <p>Tiempo estimado de respuesta: <strong>${row.slaHoras} horas</strong>.</p>
-           <p>Puedes consultar el estado en cualquier momento desde nuestro portal de soporte.</p>`
+           <p>Gracias por tomarte el tiempo de reportarnos lo que está ocurriendo. Tu solicitud ya quedó en manos del equipo de Operaciones y la atenderemos con el cuidado que merece.</p>
+           <p>La registramos con el código <a href="${trackUrl}" style="font-family:monospace;background:#f1f5f9;padding:2px 8px;border-radius:4px;color:#0a4082;text-decoration:none;font-weight:600">${row.trackingToken}</a>, para que puedas darle seguimiento cuando lo necesites.</p>
+           <p>Trabajaremos para darte una respuesta dentro de las próximas <strong>${row.slaHoras} horas</strong>. Si el caso lo requiere, te contactaremos antes.</p>
+           <p style="margin:18px 0"><a href="${trackUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver estado de mi ticket →</a></p>
+           <p style="font-size:13px;color:#64748b">Si lo prefieres, también puedes consultar tu ticket o cualquier otro desde <a href="${baseUrl2}/soporte/track" style="color:#0a4082">el portal de soporte</a> usando tu código.</p>
+           <p style="margin-top:20px"><em>Estamos para servirte.</em></p>`
         ),
         tipo: "ticket_confirmacion",
         referencia: `ticket:${row.id}`,

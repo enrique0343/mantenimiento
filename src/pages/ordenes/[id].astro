@@ -1,8 +1,8 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ordenRepuestos, stock, empresa } from "@/lib/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra } from "@/lib/schema";
+import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
   transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
@@ -19,10 +19,12 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [row] = await db
-  .select({ orden: ordenes, activo: activos, asignado: usuarios })
+  .select({ orden: ordenes, activo: activos, asignado: usuarios, ubicacion: ubicaciones, sucursal: sucursales })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .where(eq(ordenes.id, id))
   .limit(1);
 
@@ -31,6 +33,19 @@ if (!row) return Astro.redirect("/ordenes");
 const o = row.orden;
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
+
+// Si la OT NO tiene activo pero SÍ tiene sucursalId/ubicacionId propios
+// (porque se creó como trabajo general con sucursal/ubicación), los cargamos.
+let ordenSucursal: { id: number; nombre: string } | null = null;
+let ordenUbicacion: { id: number; nombre: string; tipo: string } | null = null;
+if (!row.activo && (o as any).sucursalId) {
+  const [s] = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.id, (o as any).sucursalId)).limit(1);
+  ordenSucursal = s ?? null;
+}
+if (!row.activo && (o as any).ubicacionId) {
+  const [u] = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo }).from(ubicaciones).where(eq(ubicaciones.id, (o as any).ubicacionId)).limit(1);
+  ordenUbicacion = u as any ?? null;
+}
 
 const [verifUsr] = o.verificadoPor
   ? await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, o.verificadoPor)).limit(1)
@@ -50,14 +65,14 @@ const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
-// Repuestos consumidos en esta OT
+// Repuestos consumidos en esta OT (bodega única)
 const repuestosRows = await db
-  .select({ rep: ordenRepuestos, it: itemsTable, suc: sucursales })
+  .select({ rep: ordenRepuestos, it: itemsTable })
   .from(ordenRepuestos)
   .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
-  .leftJoin(sucursales, eq(sucursales.id, ordenRepuestos.sucursalId))
   .where(eq(ordenRepuestos.ordenId, id))
   .orderBy(desc(ordenRepuestos.id));
 
@@ -66,6 +81,12 @@ const totalRepuestos = repuestosRows.reduce(
   0
 );
 
+// Costo: mano de obra (horas × tarifa del técnico asignado) + repuestos
+const tarifaTecnico = Number((row.asignado as any)?.tarifaHora ?? 0);
+const horasTrab = Number(o.horasTrabajadas ?? 0);
+const costoManoObra = horasTrab * tarifaTecnico;
+const costoTotal = costoManoObra + totalRepuestos;
+
 // Para el formulario de agregar repuesto
 const itemsActivos = await db
   .select({ id: itemsTable.id, codigo: itemsTable.codigo, nombre: itemsTable.nombre, unidad: itemsTable.unidad, precio: itemsTable.precioReferencia })
@@ -73,28 +94,61 @@ const itemsActivos = await db
   .where(eq(itemsTable.activo, true))
   .orderBy(itemsTable.nombre);
 
-const sucursalesActivas = await db
-  .select({ id: sucursales.id, nombre: sucursales.nombre })
-  .from(sucursales)
-  .where(eq(sucursales.activa, true))
-  .orderBy(sucursales.nombre);
-
 const itemsRepJson = JSON.stringify(itemsActivos);
+
+// Selectores en cascada: sucursal → ubicación → equipo
+const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol);
+const activosLista = puedeAsignarActivo
+  ? await db
+      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
+      .from(activos)
+      .orderBy(asc(activos.codigo))
+  : [];
+const ubicacionesLista = puedeAsignarActivo
+  ? await db
+      .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+      .from(ubicaciones)
+      .where(eq(ubicaciones.activa, true))
+      .orderBy(asc(ubicaciones.nombre))
+  : [];
+const sucursalesLista = puedeAsignarActivo
+  ? await db
+      .select({ id: sucursales.id, nombre: sucursales.nombre })
+      .from(sucursales)
+      .where(eq(sucursales.activa, true))
+      .orderBy(asc(sucursales.nombre))
+  : [];
 
 const checklistItems = parseChecklist(o.checklistEjecucion);
 const progreso = progresoChecklist(checklistItems);
 
+// Solicitudes de compra vinculadas a esta OT
+const solicitudesVinculadas = await db
+  .select({ id: solicitudesCompra.id, codigo: solicitudesCompra.codigo, titulo: solicitudesCompra.titulo, estado: solicitudesCompra.estado })
+  .from(solicitudesCompra)
+  .where(eq(solicitudesCompra.ordenId, id));
+const puedeSolicitarCompra = (estadoActual === "en_proceso" || estadoActual === "en_espera") &&
+  ["admin", "jefe", "tecnico"].includes(user.rol);
+const verComprasSection = ["admin", "jefe", "tecnico"].includes(user.rol);
+
 const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
 const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
+
+// Las fotos "antes" SÍ se pueden subir desde el estado "abierta" (no requiere
+// haber pulsado Iniciar). El flujo correcto es: verificar lugar → foto antes
+// → Iniciar → trabajar → foto después. Bloqueadas solo en cerrada/cancelada.
+const puedeSubirAntes =
+  estadoActual !== "cerrada" && estadoActual !== "cancelada" &&
+  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && esAsignado));
 const puedeAsignar = puedeAsignarse(user.rol);
 
 const ESTADO_PROGRESO: Record<EstadoOT, number> = {
-  abierta: 1, en_proceso: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
+  abierta: 1, en_proceso: 2, en_espera: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
 };
 const stepActual = ESTADO_PROGRESO[estadoActual];
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
+const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
 
 const adjsAntes = adjs.filter((a) => a.categoria === "antes");
 const adjsDespues = adjs.filter((a) => a.categoria === "despues");
@@ -115,7 +169,153 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       </div>
       <p class="mt-1 text-sm text-slate-500">Orden #{o.id} - creada {fmt(o.createdAt)}</p>
     </div>
+    <div class="flex gap-2">
+      {user.rol === "admin" && (
+        <button id="historialBtn" type="button" class="btn-secondary text-sm">📜 Historial</button>
+      )}
+      {user.rol === "admin" && (
+        <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
+      )}
+    </div>
   </div>
+
+  {user.rol === "admin" && (
+    <div id="historialModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <div class="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+          <h2 class="font-bold text-lg">📜 Historial de la OT #{o.id}</h2>
+          <button id="closeHistorial" class="text-slate-400 hover:text-slate-600 text-xl">×</button>
+        </div>
+        <div id="historialContent" class="p-5">
+          <div class="text-center text-slate-400 py-6">Cargando...</div>
+        </div>
+      </div>
+    </div>
+
+    <script define:vars={{ otId: o.id }}>
+      const ACCION_ICON = {
+        create: "➕", update: "✏️", estado: "🔄", asignacion: "👤", delete: "🗑",
+      };
+      const ACCION_LABEL = {
+        create: "Creación", update: "Edición", estado: "Cambio de estado",
+        asignacion: "Asignación", delete: "Eliminación",
+      };
+
+      const historialBtn = document.getElementById("historialBtn");
+      const modal = document.getElementById("historialModal");
+      const content = document.getElementById("historialContent");
+      const closeBtn = document.getElementById("closeHistorial");
+
+      function fmtDate(s) {
+        if (!s) return "—";
+        return new Date(s).toLocaleString("es", { dateStyle: "medium", timeStyle: "short", timeZone: "America/El_Salvador" });
+      }
+      function escHtml(s) {
+        if (s == null) return "";
+        return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      }
+
+      historialBtn?.addEventListener("click", async () => {
+        modal.classList.remove("hidden");
+        content.innerHTML = '<div class="text-center text-slate-400 py-6">Cargando...</div>';
+        try {
+          const res = await fetch(`/api/ordenes/${otId}/historial`);
+          if (!res.ok) {
+            content.innerHTML = '<div class="text-red-600 py-4">Error al cargar el historial</div>';
+            return;
+          }
+          const j = await res.json();
+
+          let html = '';
+
+          // Origen
+          if (j.ticketOrigen) {
+            html += `<div class="mb-5 rounded-lg border-l-4 border-blue-400 bg-blue-50 p-4 text-sm">
+              <p class="text-xs font-semibold text-blue-700 uppercase mb-1">📨 Origen: Ticket público</p>
+              <p><strong>Solicitante:</strong> ${escHtml(j.ticketOrigen.solicitanteNombre)}</p>
+              <p><strong>Email:</strong> <a href="mailto:${escHtml(j.ticketOrigen.solicitanteEmail)}" class="text-blue-600 hover:underline">${escHtml(j.ticketOrigen.solicitanteEmail)}</a></p>
+              ${j.ticketOrigen.solicitanteTelefono ? `<p><strong>Teléfono:</strong> ${escHtml(j.ticketOrigen.solicitanteTelefono)}</p>` : ""}
+              <p><strong>Ticket #${j.ticketOrigen.id}:</strong> <a href="/tickets/${j.ticketOrigen.id}" class="text-blue-600 hover:underline">${escHtml(j.ticketOrigen.asunto)}</a></p>
+              <p class="text-xs text-slate-500 mt-1">Recibido: ${fmtDate(j.ticketOrigen.createdAt)}</p>
+            </div>`;
+          } else if (j.creador) {
+            html += `<div class="mb-5 rounded-lg border-l-4 border-slate-300 bg-slate-50 p-4 text-sm">
+              <p class="text-xs font-semibold text-slate-600 uppercase mb-1">📝 OT creada manualmente</p>
+              <p><strong>Por:</strong> ${escHtml(j.creador.nombre)} <span class="text-slate-500">&lt;${escHtml(j.creador.email)}&gt;</span></p>
+              <p class="text-xs text-slate-500 mt-1">Fecha: ${fmtDate(j.orden.createdAt)}</p>
+            </div>`;
+          }
+
+          // Hitos clave
+          html += '<div class="mb-5 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">';
+          [
+            ["Creada", j.orden.createdAt, "bg-slate-100"],
+            ["Iniciada", j.orden.iniciadaEn, "bg-amber-50"],
+            ["Completada", j.orden.completadaEn, "bg-emerald-50"],
+            ["Cerrada", j.orden.cerradoEn, "bg-slate-200"],
+          ].forEach(([lbl, t, cls]) => {
+            html += `<div class="${cls} rounded p-2">
+              <div class="text-xs uppercase text-slate-500">${lbl}</div>
+              <div class="text-xs">${fmtDate(t)}</div>
+            </div>`;
+          });
+          html += '</div>';
+
+          // Timeline de eventos
+          html += '<h3 class="font-semibold text-sm mb-2">Eventos registrados (' + j.eventos.length + ')</h3>';
+          if (j.eventos.length === 0) {
+            html += '<p class="text-sm text-slate-400">Sin eventos en el audit log.</p>';
+          } else {
+            html += '<ol class="space-y-2 border-l-2 border-slate-200 pl-4">';
+            j.eventos.forEach((ev) => {
+              const icon = ACCION_ICON[ev.accion] || "•";
+              const label = ACCION_LABEL[ev.accion] || ev.accion;
+              const color = ev.accion === "delete" ? "border-red-400" :
+                            ev.accion === "estado" ? "border-amber-400" :
+                            ev.accion === "asignacion" ? "border-purple-400" :
+                            ev.accion === "create" ? "border-emerald-400" : "border-slate-300";
+              html += `<li class="relative -ml-6 pl-6 border-l-2 ${color} pb-2">
+                <div class="absolute -left-[7px] top-1 w-3 h-3 rounded-full bg-white border-2 ${color}"></div>
+                <div class="flex items-baseline justify-between gap-2 flex-wrap">
+                  <span class="text-sm font-medium">${icon} ${escHtml(ev.resumen ?? label)}</span>
+                  <span class="text-xs text-slate-400 whitespace-nowrap">${fmtDate(ev.createdAt)}</span>
+                </div>
+                <div class="text-xs text-slate-500 mt-0.5">
+                  ${ev.usuario ? escHtml(ev.usuario.nombre) + ' <span class="text-slate-400">&lt;' + escHtml(ev.usuario.email) + '&gt;</span>' : '<em class="text-slate-400">sistema</em>'}
+                </div>
+                ${ev.cambios ? '<details class="mt-1"><summary class="cursor-pointer text-xs text-slate-400 hover:text-slate-600">Ver detalle de cambios</summary><pre class="mt-1 text-xs bg-slate-50 p-2 rounded overflow-x-auto">' + escHtml(JSON.stringify(ev.cambios, null, 2)) + '</pre></details>' : ''}
+              </li>`;
+            });
+            html += '</ol>';
+          }
+
+          content.innerHTML = html;
+        } catch (e) {
+          content.innerHTML = '<div class="text-red-600 py-4">Error: ' + escHtml(String(e)) + '</div>';
+        }
+      });
+
+      closeBtn?.addEventListener("click", () => modal.classList.add("hidden"));
+      modal?.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
+    </script>
+  )}
+
+  {estadoActual === "abierta" && (
+    <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
+      <strong>⚠ OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
+    </div>
+  )}
+  {estadoActual === "en_espera" && (
+    <div class="card mt-4 border-l-4 border-purple-500 bg-purple-50 p-4 text-sm text-purple-800">
+      <strong>⏸ OT en espera.</strong> La OT está pausada pendiente de compra u otro insumo.
+      {solicitudesVinculadas.length > 0 && (
+        <span> Solicitudes vinculadas: {solicitudesVinculadas.map((s) => (
+          <a href={`/solicitudes-compra/${s.id}`} class="ml-1 font-medium underline">{s.codigo} ({s.estado})</a>
+        ))}</span>
+      )}
+      {" "}Cuando tengas los materiales, pulsa <strong>"Reanudar"</strong> para continuar.
+    </div>
+  )}
 
   <!-- Wizard de estados -->
   {estadoActual !== "cancelada" && (
@@ -144,13 +344,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
                 s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
                 s === "verificada" ? "bg-teal-600 text-white hover:bg-teal-700" :
+                s === "en_espera" ? "bg-purple-600 text-white hover:bg-purple-700" :
                 "bg-brand-600 text-white hover:bg-brand-700",
               ]}
             >
               {s === "abierta" ? "↺ Reabrir" :
-               s === "en_proceso" ? "▶ Iniciar / Reanudar" :
-               s === "completada" ? "✓ Marcar finalizada" :
-               s === "verificada" ? "✓✓ Verificar" :
+               s === "en_proceso" ? (estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
+               s === "en_espera" ? "⏸ Poner en espera" :
+               s === "completada" ? "✓ Completar y cerrar" :
+               s === "verificada" ? "✓✓ Verificar y cerrar" :
                s === "cerrada" ? "🔒 Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
             </button>
@@ -166,48 +368,294 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <div class="card p-5">
         <h2 class="font-semibold text-slate-900">Descripción</h2>
         <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{o.descripcion || "Sin descripción."}</p>
+      </div>
 
-        <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div class="text-xs uppercase text-slate-500">Equipo</div>
-            <div>{row.activo ? <a class="text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>{row.activo.codigo} - {row.activo.nombre}</a> : <span class="text-slate-400">Trabajo sin equipo</span>}</div>
+      <!-- Tarjeta de identificación del equipo (verifica el lugar de intervención) -->
+      {row.activo && (
+        <div class="card p-5 border-l-4 border-blue-400">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir</h2>
+            {puedeAsignarActivo && (
+              <button id="editActivoBtn" type="button" class="text-xs text-brand-600 hover:underline">Cambiar equipo</button>
+            )}
           </div>
-          <div><div class="text-xs uppercase text-slate-500">Vencimiento</div><div>{fmtDate(o.vencimiento)}</div></div>
-          <div><div class="text-xs uppercase text-slate-500">Asignado</div><div>{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div></div>
-          <div><div class="text-xs uppercase text-slate-500">Completada</div><div>{fmt(o.completadaEn)}</div></div>
+          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div class="col-span-2">
+              <div class="text-xs uppercase text-slate-500">Equipo</div>
+              <div id="activoLabel" class="mt-0.5">
+                <a class="font-medium text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>
+                  {row.activo.codigo} · {row.activo.nombre}
+                </a>
+                <span class="ml-2 text-xs text-slate-500">
+                  {row.activo.tipo === "biomedico" ? "🩺 Biomédico" : "🔧 General"}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+              <div class="mt-0.5">{row.sucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+              <div class="mt-0.5">
+                {row.ubicacion?.nombre ?? row.activo.ubicacion ?? <span class="text-slate-400">—</span>}
+                {row.ubicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({row.ubicacion.tipo})</span>}
+              </div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">N° de serie</div>
+              <div class="mt-0.5 font-mono text-xs">{row.activo.serial ?? <span class="text-slate-400 font-sans">—</span>}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-slate-500">Marca / Modelo</div>
+              <div class="mt-0.5">{[row.activo.marca, row.activo.modelo].filter(Boolean).join(" / ") || <span class="text-slate-400">—</span>}</div>
+            </div>
+          </div>
+          {puedeAsignarActivo && (
+            <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div>
+                <label class="label text-xs">1️⃣ Sucursal</label>
+                <select id="sucSel" class="input text-sm">
+                  <option value="">— Selecciona —</option>
+                  {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
+                </select>
+              </div>
+              <div>
+                <label class="label text-xs">2️⃣ Ubicación</label>
+                <select id="ubSel" class="input text-sm" disabled>
+                  <option value="">Selecciona la sucursal</option>
+                </select>
+              </div>
+              <div>
+                <label class="label text-xs">3️⃣ Equipo</label>
+                <select id="activoSelect" class="input text-sm" disabled>
+                  <option value="">Selecciona la ubicación</option>
+                </select>
+              </div>
+              <div class="sm:col-span-3 flex items-center justify-end gap-2">
+                <p id="activoMsg" class="hidden mr-auto text-xs"></p>
+                <button id="activoCancel" type="button" class="btn-secondary text-sm">Cancelar</button>
+                <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {!row.activo && puedeAsignarActivo && (
+        <div class="card p-5 border-l-4 border-slate-300">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir (sin equipo)</h2>
+              <p class="text-xs text-slate-400 italic mt-0.5">Trabajo general — no asociado a un equipo registrado</p>
+            </div>
+            <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+          </div>
+          {(ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
+            <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+                <div class="mt-0.5">{ordenSucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+                <div class="mt-0.5">
+                  {ordenUbicacion?.nombre ?? <span class="text-slate-400">—</span>}
+                  {ordenUbicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({ordenUbicacion.tipo})</span>}
+                </div>
+              </div>
+              {(o as any).ubicacionDetalle && (
+                <div class="col-span-2">
+                  <div class="text-xs uppercase text-slate-500">📝 Detalle</div>
+                  <div class="mt-0.5 text-slate-700">{(o as any).ubicacionDetalle}</div>
+                </div>
+              )}
+            </div>
+          )}
+          <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div>
+              <label class="label text-xs">1️⃣ Sucursal</label>
+              <select id="sucSel" class="input text-sm">
+                <option value="">— Selecciona —</option>
+                {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">2️⃣ Ubicación</label>
+              <select id="ubSel" class="input text-sm" disabled>
+                <option value="">Selecciona la sucursal</option>
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">3️⃣ Equipo</label>
+              <select id="activoSelect" class="input text-sm" disabled>
+                <option value="">Selecciona la ubicación</option>
+              </select>
+            </div>
+            <div class="sm:col-span-3 flex items-center justify-end gap-2">
+              <p id="activoMsg" class="hidden mr-auto text-xs"></p>
+              <button id="activoCancel" type="button" class="btn-secondary text-sm">Cancelar</button>
+              <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <!-- Foto ANTES de la OT (verificación del estado inicial) -->
+      <div class="card p-5 border-l-4 border-blue-300">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-semibold text-slate-900">📷 Foto del estado inicial (antes)</h2>
+            <p class="mt-1 text-xs text-slate-500">Toma esta foto al llegar al sitio, antes de pulsar "Iniciar". Sirve como evidencia del estado en que se recibió el equipo.</p>
+          </div>
+          <span class="text-xs text-slate-500">{adjsAntes.length} foto(s)</span>
+        </div>
+
+        {adjsAntes.length > 0 && (
+          <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {adjsAntes.map((a) => (
+              <div class="relative group rounded bg-slate-50 p-2 text-xs">
+                {puedeSubirAntes && (
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                )}
+                {a.contentType.startsWith("image/") && (
+                  <a href={`/api/adjuntos/${a.id}`} target="_blank">
+                    <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
+                  </a>
+                )}
+                <a href={`/api/adjuntos/${a.id}`} target="_blank" class="block truncate font-medium text-brand-700 hover:underline">{a.nombre}</a>
+                <span class="text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {puedeSubirAntes && (
+          <form class="upForm mt-3" data-categoria="antes">
+            <label class="block">
+              <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">📷 {adjsAntes.length === 0 ? "Tomar foto del estado inicial" : "Agregar otra foto"}</span>
+            </label>
+            <button type="submit" class="hidden">Subir</button>
+          </form>
+        )}
+      </div>
+
+      <!-- Línea de tiempo de la OT -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">⏱ Tiempos</h2>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div>
+            <div class="text-xs uppercase text-slate-500">Asignado</div>
+            <div class="mt-0.5">{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Vencimiento</div>
+            <div class="mt-0.5">{fmtDate(o.vencimiento)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Iniciada</div>
+            <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-slate-500">Completada</div>
+            <div class="mt-0.5">{fmt(o.completadaEn)}</div>
+          </div>
+        </div>
+        {o.iniciadaEn && (
+          <div class:list={["mt-3 rounded px-3 py-2 text-xs", estadoActual === "en_espera" ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700"]}>
+            {o.completadaEn ? (
+              <>
+                ⏱ Duración real: <strong>{((new Date(o.completadaEn).getTime() - new Date(o.iniciadaEn).getTime()) / 3600_000).toFixed(2)} h</strong>
+                {(o.tiempoPausadoMin ?? 0) > 0 && <> · Pausado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>}
+                {o.horasTrabajadas != null && <> · Registradas: <strong>{Number(o.horasTrabajadas).toFixed(2)} h</strong></>}
+              </>
+            ) : estadoActual === "en_espera" ? (
+              <>⏸ OT pausada{o.pausadaEn ? ` desde ${fmt(o.pausadaEn)}` : ""}. Tiempo pausado acumulado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>
+            ) : (
+              <>⏱ En proceso desde {fmt(o.iniciadaEn)} — el cronómetro corre.</>
+            )}
+          </div>
+        )}
       </div>
 
       <!-- Checklist -->
       {checklistItems.length > 0 && (
         <div class="card p-5">
-          <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-slate-900">Checklist de ejecución</h2>
-            <span class="text-xs text-slate-500">{progreso.hechos} / {progreso.total} ({progreso.pct}%)</span>
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h2 class="font-semibold text-slate-900">Checklist de puntos críticos</h2>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="text-slate-500">{progreso.hechos} / {progreso.total}</span>
+              {progreso.desviaciones > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">⚠ {progreso.desviaciones} desviación{progreso.desviaciones === 1 ? "" : "es"}</span>
+              )}
+              {progreso.pendientes > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">⏳ {progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
+              )}
+              <span id="ckAutosave" class="text-slate-400"></span>
+            </div>
           </div>
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
+          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes o desviaciones sin describir.</p>
           <ul id="checklistList" class="mt-4 space-y-2">
-            {checklistItems.map((it, idx) => (
-              <li class="flex items-start gap-2 rounded bg-slate-50 p-2">
-                <input type="checkbox" class="ck-item mt-1" data-idx={idx} checked={it.hecho} disabled={!puedeEditar} />
-                <div class="flex-1">
-                  <div class="text-sm">{it.texto}</div>
-                  {it.notas && <div class="text-xs text-slate-500">{it.notas}</div>}
-                </div>
-              </li>
-            ))}
+            {checklistItems.map((it, idx) => {
+              const filaColor =
+                it.estado === "ok" ? "bg-emerald-50 border border-emerald-200" :
+                it.estado === "na" ? "bg-slate-100 border border-slate-200" :
+                it.estado === "desviacion" ? "bg-amber-50 border border-amber-300" :
+                "bg-white border border-slate-200";
+              return (
+                <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
+                  <div class="text-sm font-medium text-slate-900">{it.texto}</div>
+                  {puedeEditar ? (
+                    <div class="mt-2 flex flex-wrap gap-1">
+                      {(["pendiente","ok","na","desviacion"] as const).map((e) => {
+                        const labels = { pendiente: "⏳ Pendiente", ok: "✅ OK", na: "⊘ N/A", desviacion: "⚠ Desviación" };
+                        const colors = {
+                          pendiente: it.estado === e ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+                          ok: it.estado === e ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+                          na: it.estado === e ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+                          desviacion: it.estado === e ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+                        };
+                        return (
+                          <button type="button" class={`ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`} data-idx={idx} data-estado={e}>{labels[e]}</button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div class="mt-1 text-xs">
+                      Estado: <span class="font-medium">{it.estado === "ok" ? "✅ OK" : it.estado === "na" ? "⊘ N/A" : it.estado === "desviacion" ? "⚠ Desviación" : "⏳ Pendiente"}</span>
+                    </div>
+                  )}
+                  <div class:list={["ck-nota-wrap mt-2", it.estado !== "desviacion" && "hidden"]} data-idx={idx}>
+                    <label class="text-xs text-slate-600 block mb-1">Describe la desviación <span class="text-red-500">*</span></label>
+                    <textarea
+                      class="ck-nota input text-sm w-full"
+                      rows="2"
+                      placeholder="Ej: el filtro estaba quebrado y se reemplazó por uno equivalente..."
+                      data-idx={idx}
+                      disabled={!puedeEditar}
+                    >{it.notas ?? ""}</textarea>
+                    <p class="mt-0.5 text-[11px] text-slate-400">Mínimo 10 caracteres.</p>
+                  </div>
+                  {it.notas && it.estado !== "desviacion" && (
+                    <div class="mt-1 text-xs text-slate-500">{it.notas}</div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
-          {puedeEditar && (
-            <button id="ckSave" class="btn-secondary mt-3 text-sm">Guardar checklist</button>
-          )}
         </div>
       )}
 
       <!-- Trabajos realizados / causa raiz / solucion -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
+          <span id="autosaveIndicador" class="text-xs text-slate-400" data-status="idle"></span>
+        </div>
         <div class="mt-3 space-y-3 text-sm">
           <div>
             <label class="label">Trabajos realizados</label>
@@ -227,10 +675,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           )}
           <div>
             <label class="label">Horas trabajadas</label>
-            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32" value={o.horasTrabajadas ?? ""} disabled={!puedeEditar} />
+            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
+            <p class="mt-1 text-xs text-slate-500">🔒 Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
           </div>
           {puedeEditar && (
-            <button id="ejecSave" class="btn-primary text-sm">Guardar ejecución</button>
+            <div class="flex items-center gap-2 flex-wrap">
+              <p class="text-xs text-emerald-700 mr-auto">✓ Tus cambios se guardan automáticamente al escribir.</p>
+              <button id="ejecSave" class="btn-secondary text-xs">Guardar ahora</button>
+            </div>
           )}
           <p id="ejecMsg" class="hidden text-xs"></p>
         </div>
@@ -253,7 +705,6 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 <thead class="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th class="px-3 py-1.5">Item</th>
-                    <th class="px-3 py-1.5">Sucursal</th>
                     <th class="px-3 py-1.5 text-right">Cant.</th>
                     <th class="px-3 py-1.5 text-right">P. unit.</th>
                     <th class="px-3 py-1.5 text-right">Subtotal</th>
@@ -268,7 +719,6 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                         <td class="px-3 py-1.5">
                           <a class="text-brand-700 hover:underline" href={`/inventario/${r.it?.id}`}>{r.it?.codigo} · {r.it?.nombre}</a>
                         </td>
-                        <td class="px-3 py-1.5 text-slate-600">{r.suc?.nombre ?? "—"}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{fmtCantidad(r.rep.cantidad, r.it?.unidad)}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{r.rep.precioUnitario != null ? `$${r.rep.precioUnitario.toFixed(2)}` : "—"}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{sub > 0 ? `$${sub.toFixed(2)}` : "—"}</td>
@@ -285,16 +735,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>
           )}
 
-          {puedeEditar && itemsActivos.length > 0 && sucursalesActivas.length > 0 && (
+          {puedeEditar && itemsActivos.length > 0 && (
             <div class="mt-4 rounded border border-dashed border-slate-300 p-3">
               <h3 class="mb-2 text-sm font-semibold text-slate-700">+ Registrar consumo</h3>
-              <div class="grid grid-cols-1 gap-2 sm:grid-cols-5">
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-4">
                 <select id="rep_item" class="input text-sm sm:col-span-2">
                   <option value="">— Item —</option>
                   {itemsActivos.map((it) => <option value={it.id} data-precio={it.precio ?? ""} data-unidad={it.unidad}>{it.codigo} · {it.nombre}</option>)}
-                </select>
-                <select id="rep_suc" class="input text-sm">
-                  {sucursalesActivas.map((s) => <option value={s.id}>{s.nombre}</option>)}
                 </select>
                 <input id="rep_cant" type="number" min="0" step="0.01" placeholder="Cantidad" class="input text-sm" />
                 <input id="rep_precio" type="number" min="0" step="0.01" placeholder="Precio unit. (opcional)" class="input text-sm" />
@@ -305,6 +752,81 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </div>
               <p id="rep_msg" class="mt-2 hidden text-xs"></p>
             </div>
+          )}
+        </div>
+      )}
+
+      <!-- Costo total estimado de la OT -->
+      {/* Costo solo visible para admin/jefe (técnicos no lo ven) */}
+      {(user.rol === "admin" || user.rol === "jefe") && (costoManoObra > 0 || totalRepuestos > 0) && (
+        <div class="card p-5 border-l-4 border-emerald-500">
+          <div class="flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900">💰 Costo de la OT</h2>
+            <span class="text-xs text-slate-500">Estimado</span>
+          </div>
+          <dl class="mt-3 space-y-1.5 text-sm">
+            <div class="flex justify-between">
+              <dt class="text-slate-600">Mano de obra</dt>
+              <dd class="font-mono">
+                {horasTrab.toFixed(1)}h × ${tarifaTecnico.toFixed(2)}/h
+                <span class="ml-2 font-bold text-slate-700">${costoManoObra.toFixed(2)}</span>
+              </dd>
+            </div>
+            <div class="flex justify-between">
+              <dt class="text-slate-600">Repuestos consumidos</dt>
+              <dd class="font-mono font-bold text-slate-700">${totalRepuestos.toFixed(2)}</dd>
+            </div>
+            <div class="flex justify-between border-t border-slate-200 pt-2">
+              <dt class="font-semibold text-slate-900">Total</dt>
+              <dd class="font-mono text-lg font-bold text-emerald-700">${costoTotal.toFixed(2)}</dd>
+            </div>
+          </dl>
+          {tarifaTecnico === 0 && row.asignado && (
+            <p class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-700">
+              ⚠ El técnico asignado no tiene tarifa horaria configurada. Configúrala en <a href="/usuarios" class="font-medium underline">Usuarios</a> para calcular el costo de mano de obra.
+            </p>
+          )}
+        </div>
+      )}
+
+      <!-- Foto DESPUÉS (estado final) — visible cuando OT está en proceso o más allá -->
+      {estadoActual !== "abierta" && estadoActual !== "cancelada" && (
+        <div class="card p-5 border-l-4 border-emerald-300">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="font-semibold text-slate-900">📸 Foto del estado final (después)</h2>
+              <p class="mt-1 text-xs text-slate-500">Toma foto antes de pulsar "Completar". Es obligatoria para cerrar el trabajo.</p>
+            </div>
+            <span class="text-xs text-slate-500">{adjsDespues.length} foto(s)</span>
+          </div>
+
+          {adjsDespues.length > 0 && (
+            <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {adjsDespues.map((a) => (
+                <div class="relative group rounded bg-slate-50 p-2 text-xs">
+                  {puedeEditar && (
+                    <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                  )}
+                  {a.contentType.startsWith("image/") && (
+                    <a href={`/api/adjuntos/${a.id}`} target="_blank">
+                      <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
+                    </a>
+                  )}
+                  <a href={`/api/adjuntos/${a.id}`} target="_blank" class="block truncate font-medium text-brand-700 hover:underline">{a.nombre}</a>
+                  <span class="text-slate-500">{(a.tamano / 1024).toFixed(1)} KB</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {puedeEditar && (
+            <form class="upForm mt-3" data-categoria="despues">
+              <label class="block">
+                <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+                <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center bg-emerald-600 hover:bg-emerald-700">📸 {adjsDespues.length === 0 ? "Tomar foto del estado final" : "Agregar otra foto"}</span>
+              </label>
+              <button type="submit" class="hidden">Subir</button>
+            </form>
           )}
         </div>
       )}
@@ -348,8 +870,64 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 <option value={t.id} selected={o.asignadoA === t.id}>{t.nombre} ({t.rol})</option>
               ))}
             </select>
+            {o.asignadoA && (
+              <div>
+                <label class="text-xs text-slate-500 block mb-1">Motivo de reasignación <span class="text-slate-400">(opcional)</span></label>
+                <input class="input text-sm" id="motivoReasignacion" placeholder="Ej: Cobertura por ausencia, mejor especialidad…" />
+                <p class="mt-0.5 text-[11px] text-slate-400">Se incluye en el correo al técnico nuevo. Déjalo vacío si no aplica.</p>
+              </div>
+            )}
             <button id="asignarBtn" class="btn-secondary w-full justify-center">Guardar asignación</button>
           </div>
+        </div>
+      )}
+
+      <!-- Solicitudes de compra vinculadas -->
+      {verComprasSection && (
+        <div class="card p-5">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="font-semibold text-slate-900">🛒 Compras</h2>
+            {puedeSolicitarCompra && (
+              <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`} class="text-xs text-brand-600 hover:underline font-medium">
+                + Nueva solicitud
+              </a>
+            )}
+          </div>
+
+          {!puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
+            <div class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              {estadoActual === "abierta"
+                ? <>⚠ Pulsa <strong>"Iniciar"</strong> para activar la OT y poder solicitar compras de contingencia.</>
+                : <>Esta OT está en estado <strong>{ESTADO_LABEL[estadoActual]}</strong>. Solo se pueden generar solicitudes mientras la OT está en proceso o en espera.</>
+              }
+            </div>
+          )}
+
+          {solicitudesVinculadas.map((s) => {
+            const sc = {
+              borrador: "bg-slate-100 text-slate-600", enviada: "bg-blue-100 text-blue-700",
+              comprada: "bg-emerald-100 text-emerald-700", rechazada: "bg-red-100 text-red-700",
+              cancelada: "bg-slate-200 text-slate-500",
+            } as const;
+            const sl = {
+              borrador: "Borrador", enviada: "Enviada", comprada: "Comprada", rechazada: "Rechazada", cancelada: "Cancelada",
+            } as const;
+            return (
+              <a href={`/solicitudes-compra/${s.id}`} class="mt-2 flex items-center justify-between rounded-lg bg-slate-50 p-2 text-sm hover:bg-slate-100 no-underline block">
+                <div>
+                  <span class="font-mono text-xs text-slate-400">{s.codigo}</span>
+                  <p class="text-sm font-medium text-slate-800 truncate">{s.titulo}</p>
+                </div>
+                <span class:list={["ml-2 shrink-0 text-xs px-2 py-0.5 rounded-full font-medium", sc[s.estado]]}>{sl[s.estado]}</span>
+              </a>
+            );
+          })}
+          {puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
+            <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`}
+               class="mt-2 flex items-center justify-center gap-2 rounded-lg border border-dashed border-purple-300 p-3 text-sm text-purple-600 hover:bg-purple-50 no-underline">
+              🛒 Solicitar compra de contingencia
+            </a>
+          )}
         </div>
       )}
 
@@ -364,21 +942,26 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </li>
           ))}
         </ul>
-        <form id="comForm" class="mt-3 space-y-2">
-          <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
-          <button class="btn-primary w-full justify-center" type="submit">Comentar</button>
-        </form>
+        {puedeEditar ? (
+          <form id="comForm" class="mt-3 space-y-2">
+            <textarea id="comTexto" class="input" rows="2" placeholder="Agregar comentario..." required></textarea>
+            <button class="btn-primary w-full justify-center" type="submit">Comentar</button>
+          </form>
+        ) : (
+          <p class="mt-3 text-xs text-slate-400">
+            {estadoActual === "abierta" ? "⚠ Inicia la OT para agregar comentarios" : "Comentarios bloqueados en este estado"}
+          </p>
+        )}
       </div>
     </div>
   </div>
 
-  <!-- Adjuntos categorizados -->
+  <!-- Documentos y archivos generales (las fotos antes/después están en sus tarjetas) -->
   <div class="mt-6 card p-5">
-    <h2 class="font-semibold text-slate-900">Adjuntos ({adjs.length})</h2>
-    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <h2 class="font-semibold text-slate-900">Documentos y archivos ({adjsDocumento.length + adjsGeneral.length})</h2>
+    <p class="text-xs text-slate-500">Para subir manuales, facturas u otros archivos. Las fotos antes/después están en sus secciones correspondientes.</p>
+    <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
       {([
-        { key: "antes", label: "📷 Antes", color: "bg-blue-50", items: adjsAntes },
-        { key: "despues", label: "📸 Después", color: "bg-emerald-50", items: adjsDespues },
         { key: "documento", label: "📄 Documentos", color: "bg-amber-50", items: adjsDocumento },
         { key: "general", label: "📎 General", color: "bg-slate-50", items: adjsGeneral },
       ] as const).map((cat) => (
@@ -390,7 +973,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <ul class="space-y-1">
             {cat.items.length === 0 && <li class="text-xs text-slate-400">Vacío.</li>}
             {cat.items.map((a) => (
-              <li class="rounded bg-white p-2 text-xs">
+              <li class="relative group rounded bg-white p-2 text-xs">
+                {puedeEditar && (
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                )}
                 {a.contentType.startsWith("image/") && (
                   <a href={`/api/adjuntos/${a.id}`} target="_blank">
                     <img src={`/api/adjuntos/${a.id}`} alt={a.nombre} class="mb-1 h-24 w-full rounded object-cover" loading="lazy" />
@@ -403,10 +989,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </li>
             ))}
           </ul>
-          <form class="upForm mt-2" data-categoria={cat.key}>
-            <input type="file" class="block w-full text-xs upFile" required />
-            <button type="submit" class="btn-secondary mt-1 w-full justify-center text-xs">Subir</button>
-          </form>
+          {puedeEditar && (
+            <form class="upForm mt-2 space-y-1" data-categoria={cat.key}>
+              <label class="block">
+                <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
+                <span class="btn-secondary w-full justify-center py-2 text-xs cursor-pointer block text-center">📷 Tomar foto / subir archivo</span>
+              </label>
+              <button type="submit" class="hidden">Subir</button>
+            </form>
+          )}
         </div>
       ))}
     </div>
@@ -432,7 +1023,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <div class="mt-2">
                 <img src={`/api/firmas/${o.id}/${rol}`} alt={`Firma ${rol}`} class="h-20 w-full rounded bg-white object-contain" />
                 <div class="mt-1 text-xs text-slate-600"><strong>{nombre}</strong></div>
-                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es") : ""}</div>
+                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es", { timeZone: "America/El_Salvador" }) : ""}</div>
                 <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>
               </div>
             ) : (
@@ -465,17 +1056,26 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   <!-- Modal verificacion (capturar notas) -->
   <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
     <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-      <h3 class="font-semibold text-slate-900">Verificar orden</h3>
-      <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. Puedes agregar observaciones.</p>
+      <h3 class="font-semibold text-slate-900">Verificar y cerrar orden</h3>
+      <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. La OT pasará a <strong>cerrada</strong> y se enviará la encuesta de satisfacción al solicitante. Puedes agregar observaciones.</p>
       <textarea id="verifNotas" class="input mt-3" rows="3" placeholder="Notas de verificación (opcional)"></textarea>
       <div class="mt-3 flex justify-end gap-2">
         <button id="verifCancel" class="btn-secondary">Cancelar</button>
-        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Confirmar verificación</button>
+        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Verificar y cerrar</button>
       </div>
     </div>
   </div>
 
-  <script define:vars={{ id, checklistJson: o.checklistEjecucion ?? null, itemsRepJson }}>
+  <script define:vars={{
+    id,
+    checklistJson: o.checklistEjecucion ?? null,
+    itemsRepJson,
+    ubicacionesData: ubicacionesLista,
+    activosData: activosLista,
+    sucursalActualId: row.sucursal?.id ?? null,
+    ubicacionActualId: row.ubicacion?.id ?? null,
+    activoActualId: row.activo?.id ?? null,
+  }}>
     const $ = (id) => document.getElementById(id);
     let checklist = checklistJson ? JSON.parse(checklistJson) : [];
 
@@ -492,6 +1092,91 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
       return await res.json();
     }
+
+    // ── Asignar / cambiar equipo (en cascada: sucursal → ubicación → equipo)
+    (function () {
+      const sucSel = $("sucSel");
+      const ubSel = $("ubSel");
+      const acSel = $("activoSelect");
+      if (!sucSel || !ubSel || !acSel) return;
+
+      function poblarUbicaciones(sucId, preselectUbId) {
+        ubSel.innerHTML = "";
+        if (!sucId) {
+          ubSel.disabled = true;
+          ubSel.appendChild(new Option("Selecciona la sucursal", ""));
+          poblarActivos(null, null);
+          return;
+        }
+        const ubs = (ubicacionesData || []).filter((u) => u.sucursalId === sucId);
+        ubSel.disabled = ubs.length === 0;
+        ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones" : "— Selecciona —", ""));
+        ubs.forEach((u) => {
+          const opt = new Option(`${u.nombre} (${u.tipo})`, String(u.id));
+          if (u.id === preselectUbId) opt.selected = true;
+          ubSel.appendChild(opt);
+        });
+        poblarActivos(preselectUbId ?? null, activoActualId);
+      }
+
+      function poblarActivos(ubId, preselectActivoId) {
+        acSel.innerHTML = "";
+        if (!ubId) {
+          acSel.disabled = true;
+          acSel.appendChild(new Option("Selecciona la ubicación", ""));
+          return;
+        }
+        const eqs = (activosData || []).filter((a) => a.ubicacionId === ubId);
+        acSel.disabled = eqs.length === 0;
+        acSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Sin equipo —", ""));
+        eqs.forEach((a) => {
+          const opt = new Option(`${a.codigo} · ${a.nombre}`, String(a.id));
+          if (a.id === preselectActivoId) opt.selected = true;
+          acSel.appendChild(opt);
+        });
+      }
+
+      sucSel.addEventListener("change", () => {
+        const sid = Number(sucSel.value) || null;
+        poblarUbicaciones(sid, null);
+      });
+      ubSel.addEventListener("change", () => {
+        const uid = Number(ubSel.value) || null;
+        poblarActivos(uid, null);
+      });
+
+      $("editActivoBtn")?.addEventListener("click", () => {
+        $("activoEditor")?.classList.remove("hidden");
+        $("editActivoBtn").classList.add("hidden");
+        // Pre-seleccionar el actual si lo hay
+        if (sucursalActualId) {
+          sucSel.value = String(sucursalActualId);
+          poblarUbicaciones(sucursalActualId, ubicacionActualId);
+        }
+      });
+      $("activoCancel")?.addEventListener("click", () => {
+        $("activoEditor")?.classList.add("hidden");
+        $("editActivoBtn").classList.remove("hidden");
+      });
+      $("activoSave")?.addEventListener("click", async () => {
+        const newId = acSel.value ? Number(acSel.value) : null;
+        const msg = $("activoMsg");
+        msg.classList.add("hidden");
+        const r = await patchOrden({ activoId: newId });
+        if (r) location.reload();
+      });
+    })();
+
+    // Eliminar OT (solo admin)
+    $("deleteOtBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar esta OT permanentemente?\n\nEsta acción borra la OT, sus comentarios y adjuntos. Si vino de un plan o actividad recurrente, el cron podrá generar otra en el siguiente ciclo. No se puede deshacer.")) return;
+      const r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
+      if (r.ok) {
+        location.href = "/ordenes";
+      } else {
+        alert("Error al eliminar la OT");
+      }
+    });
 
     // Transiciones
     document.querySelectorAll("[data-transition]").forEach((btn) => {
@@ -523,42 +1208,228 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // Asignacion
     $("asignarBtn")?.addEventListener("click", async () => {
       const v = $("asignadoA").value;
-      const r = await patchOrden({ asignadoA: v ? Number(v) : null });
+      const motivoEl = $("motivoReasignacion");
+      const motivo = motivoEl ? motivoEl.value.trim() : "";
+      const payload = { asignadoA: v ? Number(v) : null };
+      if (motivo) payload.motivoReasignacion = motivo;
+      const r = await patchOrden(payload);
       if (r) location.reload();
     });
 
-    // Checklist
-    document.querySelectorAll(".ck-item").forEach((el) => {
-      el.addEventListener("change", () => {
-        const idx = Number(el.dataset.idx);
-        if (checklist[idx]) checklist[idx].hecho = el.checked;
-      });
-    });
-    $("ckSave")?.addEventListener("click", async () => {
-      const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
-      if (r) {
-        const btn = $("ckSave");
-        btn.textContent = "✓ Guardado";
-        setTimeout(() => (btn.textContent = "Guardar checklist"), 1500);
+    // Checklist con 3 estados (ok / na / desviacion / pendiente).
+    // Normalizar items por si vienen del formato viejo {hecho:bool}.
+    checklist = (Array.isArray(checklist) ? checklist : []).map((it) => {
+      let estado = it.estado;
+      if (!["pendiente","ok","na","desviacion"].includes(estado)) {
+        estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
       }
+      return { texto: it.texto, estado, notas: it.notas ?? "" };
     });
 
-    // Ejecucion
-    $("ejecSave")?.addEventListener("click", async () => {
-      const msg = $("ejecMsg");
-      msg.classList.add("hidden");
-      const horas = $("horasTrabajadas")?.value;
-      const payload = {
+    function actualizarColorFila(idx) {
+      const it = checklist[idx];
+      const row = document.querySelector(`.ck-row[data-idx="${idx}"]`);
+      if (!row || !it) return;
+      // Limpiar clases anteriores
+      row.className = row.className
+        .replace(/bg-(emerald|slate|amber|white)-(50|100|200|300)/g, "")
+        .replace(/border-(emerald|slate|amber)-(200|300)/g, "");
+      const colorMap = {
+        ok: "bg-emerald-50 border border-emerald-200",
+        na: "bg-slate-100 border border-slate-200",
+        desviacion: "bg-amber-50 border border-amber-300",
+        pendiente: "bg-white border border-slate-200",
+      };
+      row.classList.add(...colorMap[it.estado].split(" "));
+    }
+
+    function actualizarBotonesEstado(idx) {
+      const it = checklist[idx];
+      if (!it) return;
+      document.querySelectorAll(`.ck-estado-btn[data-idx="${idx}"]`).forEach((btn) => {
+        const e = btn.dataset.estado;
+        const isActive = it.estado === e;
+        const colors = {
+          pendiente: isActive ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+          ok: isActive ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+          na: isActive ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
+          desviacion: isActive ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+        };
+        btn.className = `ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`;
+      });
+    }
+
+    function actualizarNotaVisible(idx) {
+      const it = checklist[idx];
+      const wrap = document.querySelector(`.ck-nota-wrap[data-idx="${idx}"]`);
+      if (!wrap || !it) return;
+      wrap.classList.toggle("hidden", it.estado !== "desviacion");
+    }
+
+    let ckSaveTimer = null;
+    function programarGuardadoChecklist() {
+      const ind = $("ckAutosave");
+      if (ind) { ind.textContent = "⏳ Guardando…"; ind.className = "text-amber-600"; }
+      if (ckSaveTimer) clearTimeout(ckSaveTimer);
+      ckSaveTimer = setTimeout(async () => {
+        const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+        if (ind) {
+          ind.textContent = r ? "✓ Guardado" : "⚠ Sin guardar";
+          ind.className = r ? "text-emerald-600" : "text-red-600";
+          setTimeout(() => { ind.textContent = ""; }, 2000);
+        }
+      }, 1000);
+    }
+
+    document.querySelectorAll(".ck-estado-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.idx);
+        const nuevoEstado = btn.dataset.estado;
+        if (!checklist[idx]) return;
+        checklist[idx].estado = nuevoEstado;
+        actualizarColorFila(idx);
+        actualizarBotonesEstado(idx);
+        actualizarNotaVisible(idx);
+        programarGuardadoChecklist();
+      });
+    });
+
+    document.querySelectorAll(".ck-nota").forEach((ta) => {
+      ta.addEventListener("input", () => {
+        const idx = Number(ta.dataset.idx);
+        if (!checklist[idx]) return;
+        checklist[idx].notas = ta.value;
+        programarGuardadoChecklist();
+      });
+    });
+
+    // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
+    const STORAGE_KEY = `ot-${id}-draft`;
+    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada"];
+    const ejecIndicador = $("autosaveIndicador");
+
+    function setIndicador(estado, texto) {
+      if (!ejecIndicador) return;
+      ejecIndicador.dataset.status = estado;
+      ejecIndicador.textContent = texto;
+      const colores = {
+        idle: "text-slate-400",
+        guardando: "text-amber-600",
+        guardado: "text-emerald-600",
+        error: "text-red-600",
+        offline: "text-amber-700",
+      };
+      ejecIndicador.className = "text-xs " + (colores[estado] || colores.idle);
+    }
+
+    function leerEjecPayload() {
+      // horasTrabajadas se calcula en el servidor automaticamente al cerrar.
+      // No se envia desde el cliente.
+      return {
         trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
         causaRaiz: $("causaRaiz")?.value?.trim() || null,
         solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
-        horasTrabajadas: horas ? Number(horas) : null,
       };
-      const r = await patchOrden(payload);
-      if (r) {
-        msg.textContent = "✓ Guardado";
-        msg.className = "text-xs text-emerald-600";
-        msg.classList.remove("hidden");
+    }
+
+    function guardarLocal(payload) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, savedAt: Date.now() }));
+      } catch {}
+    }
+    function limpiarLocal() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    }
+
+    let debounceTimer = null;
+    let inFlight = false;
+    let pending = false;
+
+    async function ejecutarGuardado() {
+      if (inFlight) { pending = true; return; }
+      inFlight = true;
+      setIndicador("guardando", "⏳ Guardando…");
+      const payload = leerEjecPayload();
+      // Backup local antes de mandar al servidor
+      guardarLocal(payload);
+      try {
+        const r = await patchOrden(payload);
+        if (r) {
+          limpiarLocal();
+          setIndicador("guardado", "✓ Guardado");
+          setTimeout(() => { if (ejecIndicador?.dataset.status === "guardado") setIndicador("idle", ""); }, 2000);
+        } else {
+          setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+        }
+      } catch {
+        setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+      } finally {
+        inFlight = false;
+        if (pending) { pending = false; ejecutarGuardado(); }
+      }
+    }
+
+    function programarGuardado() {
+      // Mostrar inmediatamente que hay cambios pendientes
+      setIndicador("guardando", "✏️ Editando…");
+      // Backup local instantáneo
+      guardarLocal(leerEjecPayload());
+      // Debounce 1.5s
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(ejecutarGuardado, 1500);
+    }
+
+    // Conectar listeners a cada campo de ejecución
+    ejecFields.forEach((fieldId) => {
+      const el = $(fieldId);
+      if (!el || el.disabled) return;
+      el.addEventListener("input", programarGuardado);
+      el.addEventListener("change", programarGuardado);
+    });
+
+    // Botón "Guardar ahora" (forzar sin esperar el debounce)
+    $("ejecSave")?.addEventListener("click", async () => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      await ejecutarGuardado();
+    });
+
+    // Al cargar la página: si hay un draft local más reciente que el servidor,
+    // ofrecer restaurarlo
+    (function checkDraftLocal() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const { payload, savedAt } = JSON.parse(raw);
+        if (!payload) return;
+        // Comparar con valores actuales del DOM (que vienen del servidor)
+        const actualTrab = ($("trabajosRealizados")?.value || "").trim();
+        const actualCausa = ($("causaRaiz")?.value || "").trim();
+        const actualSol = ($("solucionAplicada")?.value || "").trim();
+        const cambios = (
+          (payload.trabajosRealizados ?? "") !== actualTrab ||
+          (payload.causaRaiz ?? "") !== actualCausa ||
+          (payload.solucionAplicada ?? "") !== actualSol
+        );
+        if (!cambios) { limpiarLocal(); return; }
+        const fechaSave = new Date(savedAt).toLocaleString("es", { timeZone: "America/El_Salvador" });
+        const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
+        if (confirm(mensaje)) {
+          if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
+          if ($("causaRaiz") && payload.causaRaiz != null) $("causaRaiz").value = payload.causaRaiz;
+          if ($("solucionAplicada") && payload.solucionAplicada != null) $("solucionAplicada").value = payload.solucionAplicada;
+          // Disparar guardado inmediato al servidor
+          ejecutarGuardado();
+        } else {
+          limpiarLocal();
+        }
+      } catch {}
+    })();
+
+    // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
+    window.addEventListener("beforeunload", (e) => {
+      if (debounceTimer || inFlight) {
+        e.preventDefault();
+        e.returnValue = "";
       }
     });
 
@@ -588,18 +1459,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const msg = $("rep_msg");
       msg.classList.add("hidden");
       const itemId = Number($("rep_item").value);
-      const sucursalId = Number($("rep_suc").value);
       const cantidad = Number($("rep_cant").value);
       const precio = $("rep_precio").value;
-      if (!itemId || !sucursalId || !cantidad || cantidad <= 0) {
-        msg.textContent = "Completa item, sucursal y cantidad.";
+      if (!itemId || !cantidad || cantidad <= 0) {
+        msg.textContent = "Completa item y cantidad.";
         msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return;
       }
       const res = await fetch(`/api/ordenes/${id}/repuestos`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          itemId, sucursalId, cantidad,
+          itemId, cantidad,
           precioUnitario: precio ? Number(precio) : null,
           notas: $("rep_notas").value.trim() || null,
         }),
@@ -620,14 +1490,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
     });
 
-    // Subida de adjuntos por categoria
-    document.querySelectorAll(".upForm").forEach((form) => {
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const err = $("upErr");
-        err.classList.add("hidden");
-        const file = form.querySelector(".upFile").files[0];
-        if (!file) return;
+    // Subida de adjuntos por categoría — auto-upload al seleccionar archivo
+    async function subirAdjunto(form, file) {
+      const err = $("upErr");
+      err.classList.add("hidden");
+      const btn = form.querySelector("button[type=submit]");
+      if (btn) { btn.disabled = true; btn.textContent = "⏳ Subiendo…"; }
+      try {
         const fd = new FormData();
         fd.append("file", file);
         fd.append("categoria", form.dataset.categoria);
@@ -636,15 +1505,48 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           const j = await res.json().catch(() => ({}));
           err.textContent = j.error || "Error al subir";
           err.classList.remove("hidden");
+          if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
           return;
         }
         location.reload();
+      } catch (e) {
+        err.textContent = "Error de red al subir";
+        err.classList.remove("hidden");
+        if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
+      }
+    }
+
+    document.querySelectorAll(".upForm").forEach((form) => {
+      const fileInput = form.querySelector(".upFile");
+      // Submit manual (botón) — opcional
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const file = fileInput.files[0];
+        if (file) subirAdjunto(form, file);
+      });
+      // Auto-upload al seleccionar archivo (cámara o explorador)
+      fileInput?.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        if (file) subirAdjunto(form, file);
+      });
+    });
+
+    // Eliminar adjuntos individuales
+    document.querySelectorAll(".adj-del-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm("¿Eliminar esta foto/archivo? Esta acción no se puede deshacer.")) return;
+        const adjId = btn.dataset.id;
+        const r = await fetch(`/api/adjuntos/${adjId}`, { method: "DELETE" });
+        if (r.ok) location.reload();
+        else alert("Error al eliminar el archivo");
       });
     });
   </script>
 
   <!-- Firmas + PDF -->
-  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, sucursal: r.suc?.nombre, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
+  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
     const $ = (s) => document.getElementById(s);
     const modal = $("firmaModal");
     const canvas = $("firmaCanvas");
@@ -733,7 +1635,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       } catch { return null; }
     }
 
-    function fmt(s) { return s ? new Date(s).toLocaleString("es") : "—"; }
+    function fmt(s) { return s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—"; }
 
     $("pdfBtn").addEventListener("click", async () => {
       $("pdfBtn").disabled = true;
@@ -837,12 +1739,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           if (y > 240) { doc.addPage(); y = M; }
           doc.setFont("helvetica", "bold"); doc.text("Repuestos consumidos", M, y); y += 5;
           doc.setFontSize(8);
-          doc.text("Item", M, y); doc.text("Sucursal", 90, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
+          doc.text("Item", M, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
           doc.setLineWidth(0.2); doc.line(M, y - 2, W - M, y - 2);
           doc.setFont("helvetica", "normal");
           repuestos.forEach((r) => {
-            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 40), M, y);
-            doc.text(String(r.sucursal ?? "—").slice(0, 25), 90, y);
+            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 60), M, y);
             doc.text(String(r.cantidad), 140, y);
             doc.text(r.precio != null ? `$${r.precio.toFixed(2)}` : "—", 160, y);
             doc.text(r.precio != null ? `$${(r.precio * r.cantidad).toFixed(2)}` : "—", 185, y);
@@ -918,7 +1819,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         for (let p = 1; p <= pages; p++) {
           doc.setPage(p);
           doc.setFontSize(7); doc.setTextColor(120);
-          doc.text(`Generado ${new Date().toLocaleString("es")} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
+          doc.text(`Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
         }
 
         doc.save(`OT-${ordenData.id}.pdf`);

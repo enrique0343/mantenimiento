@@ -1,0 +1,138 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { encuestasSatisfaccion, ordenes } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const token = Astro.params.token!;
+const db = getDb(Astro);
+
+const [enc] = await db
+  .select({ e: encuestasSatisfaccion, o: ordenes })
+  .from(encuestasSatisfaccion)
+  .leftJoin(ordenes, eq(ordenes.id, encuestasSatisfaccion.ordenId))
+  .where(eq(encuestasSatisfaccion.token, token))
+  .limit(1);
+
+const url = new URL(Astro.request.url);
+const calificacionPreseleccion = Number(url.searchParams.get("c"));
+const valida = enc && !enc.e.respondidaEn;
+---
+
+<Layout title="Encuesta de satisfacción" hideNav={true}>
+  <div class="mx-auto mt-6 max-w-xl">
+    {!enc && (
+      <div class="card border-l-4 border-red-500 p-5">
+        <h1 class="font-bold text-red-700">Encuesta no encontrada</h1>
+        <p class="mt-2 text-sm text-slate-600">El enlace no es válido o ha expirado.</p>
+      </div>
+    )}
+
+    {enc && enc.e.respondidaEn && (
+      <div class="card border-l-4 border-emerald-500 p-5">
+        <h1 class="font-bold text-emerald-700">¡Gracias!</h1>
+        <p class="mt-2 text-sm text-slate-600">
+          Ya recibimos tu respuesta el {new Date(enc.e.respondidaEn).toLocaleString("es", { timeZone: "America/El_Salvador" })}.
+          Si necesitas ajustar algo, escríbele directamente al equipo de mantenimiento.
+        </p>
+        <div class="mt-3 rounded bg-slate-50 p-3 text-sm">
+          <div>Calificación: <span class="font-bold text-2xl">{enc.e.calificacion}/5</span></div>
+          {enc.e.comentario && (
+            <div class="mt-2 text-slate-600">
+              <div class="text-xs uppercase">Tu comentario</div>
+              <p class="whitespace-pre-wrap">{enc.e.comentario}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {valida && (
+      <div class="card p-6">
+        <h1 class="text-2xl font-bold">¿Cómo calificas el servicio?</h1>
+        {enc.o && (
+          <p class="mt-1 text-sm text-slate-500">
+            Orden #{enc.o.id} · {enc.o.titulo}
+          </p>
+        )}
+        <p class="mt-3 text-sm text-slate-600">
+          Hola <strong>{enc.e.destinatarioNombre ?? "—"}</strong>, tu opinión nos ayuda a mejorar.
+        </p>
+
+        <form id="form" class="mt-5 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-2">Calificación (1-5)</label>
+            <div class="flex justify-between gap-2">
+              {[
+                { n: 1, e: "😞", l: "Pésimo" },
+                { n: 2, e: "😕", l: "Malo" },
+                { n: 3, e: "😬", l: "Regular" },
+                { n: 4, e: "🙂", l: "Bueno" },
+                { n: 5, e: "😎", l: "Excelente" },
+              ].map((s) => (
+                <label class="flex-1">
+                  <input type="radio" name="cal" value={s.n} class="peer sr-only" checked={calificacionPreseleccion === s.n} />
+                  <div class="cursor-pointer rounded-lg border-2 border-slate-200 p-3 text-center transition peer-checked:border-brand-500 peer-checked:bg-brand-50 hover:border-slate-300">
+                    <div class="text-3xl">{s.e}</div>
+                    <div class="mt-1 text-xs font-medium text-slate-600">{s.l}</div>
+                    <div class="mt-0.5 text-[10px] text-slate-400">{s.n}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-2">Comentario (opcional)</label>
+            <textarea id="comentario" class="input w-full" rows="4" placeholder="¿Qué podemos mejorar? ¿Qué hicimos bien?"></textarea>
+          </div>
+
+          <p id="msg" class="hidden text-sm"></p>
+          <button class="btn-primary w-full" type="submit">Enviar respuesta</button>
+        </form>
+      </div>
+    )}
+  </div>
+
+  <script define:vars={{ token }}>
+    document.getElementById("form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById("msg");
+      msg.classList.add("hidden");
+      const cal = document.querySelector('input[name="cal"]:checked');
+      if (!cal) {
+        msg.textContent = "Por favor selecciona una calificación.";
+        msg.className = "text-sm text-red-600";
+        msg.classList.remove("hidden");
+        return;
+      }
+      const calNum = Number(cal.value);
+      const comentario = document.getElementById("comentario").value.trim();
+      // Si la calificación no es la máxima, pedimos detalles concretos.
+      if (calNum < 5 && comentario.length < 15) {
+        msg.innerHTML = "Cuéntanos un poco más qué falló para que podamos mejorar 🙏";
+        msg.className = "text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2";
+        msg.classList.remove("hidden");
+        document.getElementById("comentario").focus();
+        return;
+      }
+      const res = await fetch(`/api/encuestas/${token}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          calificacion: calNum,
+          comentario: comentario || null,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        msg.textContent = typeof j.error === "string" ? j.error : "Error al enviar";
+        msg.className = "text-sm text-red-600";
+        msg.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+  </script>
+</Layout>

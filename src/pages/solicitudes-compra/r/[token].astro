@@ -1,0 +1,176 @@
+---
+// Página pública — accesible con token sin autenticación
+// Registra la descarga del PDF y muestra la solicitud
+export const prerender = false;
+
+const token = Astro.params.token!;
+// Fetch de datos + tracking de acceso via API
+const apiUrl = `${Astro.url.origin}/api/solicitudes-compra/r/${token}`;
+const res = await fetch(apiUrl, {
+  headers: {
+    "cf-connecting-ip": Astro.request.headers.get("cf-connecting-ip") ?? "",
+    "x-forwarded-for": Astro.request.headers.get("x-forwarded-for") ?? "",
+    "user-agent": Astro.request.headers.get("user-agent") ?? "",
+  },
+});
+if (!res.ok) return Astro.redirect("/login");
+
+const data = await res.json();
+const { solicitud: sol, items, adjuntos, envio } = data;
+
+const ESTADO_LABEL: Record<string, string> = {
+  borrador: "Borrador", enviada: "Enviada", comprada: "Comprada",
+  rechazada: "Rechazada", cancelada: "Cancelada",
+};
+---
+
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{sol.codigo} — Solicitud de Compra</title>
+  <link rel="stylesheet" href="/styles/global.css" />
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f1f5f9; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 20px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    th { font-size: 12px; color: #64748b; font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 500; }
+    .btn-pdf { background: #1e40af; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 500; }
+    .btn-pdf:hover { background: #1d3a9e; }
+  </style>
+</head>
+<body class="min-h-full py-8">
+  <div class="max-w-3xl mx-auto px-4 space-y-4">
+
+    <div class="text-center mb-6">
+      <p class="text-slate-500 text-sm">Avante Mantenimiento</p>
+      <h1 class="text-2xl font-bold mt-1">{sol.codigo} — Solicitud de Compra</h1>
+      {envio.destinatarioNombre && <p class="text-slate-500 text-sm mt-1">Enviada a: {envio.destinatarioNombre}</p>}
+    </div>
+
+    <div class="card">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <span class="badge" style="background:#dbeafe;color:#1e40af">{ESTADO_LABEL[sol.estado] ?? sol.estado}</span>
+          <h2 class="text-lg font-bold mt-2">{sol.titulo}</h2>
+          {sol.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{sol.descripcion}</p>}
+          <p class="mt-2 text-xs text-slate-400">Generada: {new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
+        </div>
+        <button class="btn-pdf" id="btnPdf">📄 Descargar PDF</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="font-semibold mb-3">Ítems solicitados</h2>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Descripción</th><th style="text-align:right">Cant.</th><th>Unidad</th><th>Notas</th>
+        </tr></thead>
+        <tbody>
+          {items.map((item: any, i: number) => (
+            <tr>
+              <td style="color:#94a3b8;font-size:12px">{i + 1}</td>
+              <td style="font-weight:500">{item.descripcion}</td>
+              <td style="text-align:right">{item.cantidad}</td>
+              <td style="color:#64748b">{item.unidad ?? "—"}</td>
+              <td style="color:#94a3b8;font-size:12px">{item.notas ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {adjuntos.length > 0 && (
+      <div class="card">
+        <h2 class="font-semibold mb-3">Fotos de referencia</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:12px">
+          {adjuntos.map((a: any) => (
+            <div style="width:120px;height:120px;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;background:#f8fafc">
+              {a.contentType.startsWith("image/")
+                ? <img src={`/api/solicitudes-compra/adjunto/${a.id}`} style="width:100%;height:100%;object-fit:cover" loading="lazy" alt={a.nombre} />
+                : <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;color:#64748b;padding:4px;text-align:center">{a.nombre}</div>
+              }
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <p class="text-center text-xs text-slate-400">
+      Este enlace es personal. Se registra su acceso para trazabilidad.
+    </p>
+  </div>
+
+  <script define:vars={{ sol, items, adjuntos }}>
+    async function cargarLogoBase64() {
+      try {
+        const res = await fetch("/api/empresa/logo");
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ data: reader.result, type: blob.type });
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+      } catch { return null; }
+    }
+
+    document.getElementById("btnPdf")?.addEventListener("click", async () => {
+      const { jsPDF } = await import("https://esm.sh/jspdf@2.5.1");
+      const doc = new jsPDF();
+      const w = doc.internal.pageSize.width;
+      let y = 20;
+
+      // Logo en esquina superior derecha
+      const logo = await cargarLogoBase64();
+      if (logo && logo.data) {
+        try {
+          const fmt = logo.type.includes("png") ? "PNG" : logo.type.includes("jpeg") ? "JPEG" : "PNG";
+          doc.addImage(logo.data, fmt, w - 14 - 35, 8, 35, 18);
+        } catch (e) { console.warn("logo PDF:", e); }
+      }
+
+      doc.setFontSize(16); doc.setFont(undefined, "bold");
+      doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
+      doc.setFontSize(10); doc.setFont(undefined, "normal");
+      doc.text(`Estado: ${sol.estado}  ·  Fecha: ${new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}`, 14, y); y += 10;
+
+      if (logo && logo.data && y < 32) y = 32;
+
+      doc.setFont(undefined, "bold"); doc.setFontSize(12);
+      doc.text(sol.titulo, 14, y); y += 7;
+      if (sol.descripcion) {
+        doc.setFont(undefined, "normal"); doc.setFontSize(9);
+        const lines = doc.splitTextToSize(sol.descripcion, w - 28);
+        doc.text(lines, 14, y); y += lines.length * 5 + 4;
+      }
+
+      y += 4;
+      doc.setFontSize(11); doc.setFont(undefined, "bold");
+      doc.text("Ítems solicitados", 14, y); y += 7;
+      doc.setFontSize(9);
+      doc.text("#", 14, y); doc.text("Descripción", 22, y);
+      doc.text("Cant.", w - 50, y, { align: "right" });
+      doc.text("Unidad", w - 14, y, { align: "right" }); y += 5;
+      doc.setFont(undefined, "normal");
+      doc.setDrawColor(200); doc.line(14, y, w - 14, y); y += 3;
+
+      items.forEach((item, i) => {
+        doc.text(String(i + 1), 14, y);
+        const descLines = doc.splitTextToSize(item.descripcion, w - 80);
+        doc.text(descLines, 22, y);
+        doc.text(String(item.cantidad), w - 50, y, { align: "right" });
+        doc.text(item.unidad ?? "—", w - 14, y, { align: "right" });
+        y += Math.max(descLines.length * 5, 7);
+        if (y > 270) { doc.addPage(); y = 20; }
+      });
+
+      doc.save(`${sol.codigo}.pdf`);
+    });
+  </script>
+</body>
+</html>

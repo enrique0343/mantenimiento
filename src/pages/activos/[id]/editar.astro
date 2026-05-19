@@ -1,0 +1,292 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, sucursales, ubicaciones, proveedores } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/activos");
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(`/activos/${id}`);
+
+const db = getDb(Astro);
+const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
+if (!a) return Astro.redirect("/activos");
+
+// Determina sucursal actual a partir de la ubicación (si la tiene)
+let sucursalActualId: number | null = null;
+if (a.ubicacionId) {
+  const [u] = await db.select({ sucursalId: ubicaciones.sucursalId }).from(ubicaciones).where(eq(ubicaciones.id, a.ubicacionId)).limit(1);
+  sucursalActualId = u?.sucursalId ?? null;
+}
+
+const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+const ubRows = await db.select().from(ubicaciones).where(eq(ubicaciones.activa, true));
+const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+
+const ubJson = JSON.stringify(ubRows);
+---
+
+<Layout title={`Editar · ${a.nombre}`}>
+  <a href={`/activos/${id}`} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
+  <h1 class="mt-2 text-2xl font-bold">Editar equipo</h1>
+  <p class="text-sm text-slate-500 font-mono">{a.codigo}</p>
+
+  <form id="form" class="card mt-4 space-y-5 p-5">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label">Tipo *</label>
+        <select class="input" id="tipo">
+          <option value="general" selected={a.tipo === "general"}>General / Industrial</option>
+          <option value="biomedico" selected={a.tipo === "biomedico"}>Biomédico</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Categoría</label>
+        <input class="input" id="categoria" list="categoriasList" value={a.categoria ?? ""} />
+        <datalist id="categoriasList"></datalist>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo.</p>
+      </div>
+      <div>
+        <label class="label">Código *</label>
+        <input class="input" id="codigo" required value={a.codigo} />
+      </div>
+      <div>
+        <label class="label">Número de activo</label>
+        <input class="input" id="numeroActivo" value={a.numeroActivo ?? ""} />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Nombre *</label>
+        <input class="input" id="nombre" required value={a.nombre} />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label">Descripción</label>
+        <textarea class="input" id="descripcion" rows="2">{a.descripcion ?? ""}</textarea>
+      </div>
+      <div>
+        <label class="label">Marca</label>
+        <input class="input" id="marca" value={a.marca ?? ""} />
+      </div>
+      <div>
+        <label class="label">Modelo</label>
+        <input class="input" id="modelo" value={a.modelo ?? ""} />
+      </div>
+      <div>
+        <label class="label">Número de serie</label>
+        <input class="input" id="serial" value={a.serial ?? ""} />
+      </div>
+      <div>
+        <label class="label">Año</label>
+        <input class="input" id="anio" type="number" min="1900" max="2100" value={a.anio ?? ""} />
+      </div>
+
+      {sucRows.length > 0 && (
+        <>
+          <div>
+            <label class="label">Sucursal</label>
+            <select class="input" id="sucursalSel">
+              <option value="">— Seleccionar —</option>
+              {sucRows.map((s) => <option value={s.id} selected={s.id === sucursalActualId}>{s.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label">Ubicación</label>
+            <select class="input" id="ubicacionSel">
+              <option value="">— Seleccionar —</option>
+            </select>
+          </div>
+        </>
+      )}
+
+      <div class="sm:col-span-2">
+        <label class="label">Detalle de ubicación / texto libre</label>
+        <input class="input" id="ubicacion" value={a.ubicacion ?? ""} />
+      </div>
+
+      <div>
+        <label class="label">Estado</label>
+        <select class="input" id="estado">
+          <option value="operativo" selected={a.estado === "operativo"}>Operativo</option>
+          <option value="averiado" selected={a.estado === "averiado"}>Averiado</option>
+          <option value="mantenimiento" selected={a.estado === "mantenimiento"}>En mantenimiento</option>
+          <option value="baja" selected={a.estado === "baja"}>Dado de baja</option>
+        </select>
+      </div>
+
+      {provRows.length > 0 && (
+        <div>
+          <label class="label">Proveedor / Fabricante</label>
+          <select class="input" id="proveedorSel">
+            <option value="">— Sin proveedor —</option>
+            {provRows.map((p) => <option value={p.id} selected={p.id === a.proveedorId}>{p.nombre}</option>)}
+          </select>
+        </div>
+      )}
+    </div>
+
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-amber-700">⏱ SLA del equipo (horas para completar OT)</h2>
+      <p class="text-xs text-slate-500 mb-3">Define el tiempo máximo según la prioridad. Usado para calcular vencimientos automáticos en nuevas OT.</p>
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div>
+          <label class="label">🔴 Urgente</label>
+          <input class="input" id="slaUrgenteHoras" type="number" min="0" value={a.slaUrgenteHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟠 Alta</label>
+          <input class="input" id="slaAltaHoras" type="number" min="0" value={a.slaAltaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟡 Media</label>
+          <input class="input" id="slaMediaHoras" type="number" min="0" value={a.slaMediaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟢 Baja</label>
+          <input class="input" id="slaBajaHoras" type="number" min="0" value={a.slaBajaHoras} />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="bioFields" class:list={["border-t border-slate-200 pt-5", a.tipo !== "biomedico" && "hidden"]}>
+      <h2 class="mb-3 font-semibold text-purple-700">Datos biomédicos</h2>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Registro sanitario (DNM)</label>
+          <input class="input" id="registroSanitario" value={a.registroSanitario ?? ""} />
+        </div>
+        <div>
+          <label class="label">Clase de riesgo</label>
+          <select class="input" id="claseRiesgo">
+            <option value="">- Sin clasificar -</option>
+            <option value="I" selected={a.claseRiesgo === "I"}>Clase I</option>
+            <option value="IIa" selected={a.claseRiesgo === "IIa"}>Clase IIa</option>
+            <option value="IIb" selected={a.claseRiesgo === "IIb"}>Clase IIb</option>
+            <option value="III" selected={a.claseRiesgo === "III"}>Clase III</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Última calibración</label>
+          <input class="input" id="ultimaCalibracion" type="date" value={a.ultimaCalibracion ?? ""} />
+        </div>
+        <div>
+          <label class="label">Próxima calibración</label>
+          <input class="input" id="proximaCalibracion" type="date" value={a.proximaCalibracion ?? ""} />
+        </div>
+      </div>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit">Guardar cambios</button>
+      <a class="btn-secondary" href={`/activos/${id}`}>Cancelar</a>
+    </div>
+  </form>
+
+  <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
+    const allUbs = JSON.parse(ubJson);
+
+    // Tipo biomédico toggle
+    const tipoSel = document.getElementById("tipo");
+    const bioFields = document.getElementById("bioFields");
+    const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
+
+    // Categorías dinámicas
+    const catList = document.getElementById("categoriasList");
+    const refreshCategorias = () => {
+      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
+      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
+    };
+    refreshCategorias();
+    tipoSel?.addEventListener("change", refreshCategorias);
+    tipoSel?.addEventListener("change", toggleBio);
+
+    // Sucursal → ubicación
+    const sucEl = document.getElementById("sucursalSel");
+    const ubEl = document.getElementById("ubicacionSel");
+
+    function poblarUbicaciones(sucId, selectId) {
+      if (!ubEl) return;
+      const filtered = sucId ? allUbs.filter((u) => u.sucursalId === sucId) : [];
+      ubEl.innerHTML = '<option value="">— Seleccionar —</option>';
+      filtered.forEach((u) => {
+        const o = document.createElement("option");
+        o.value = u.id;
+        o.textContent = `${u.nombre} (${u.tipo})`;
+        if (u.id === selectId) o.selected = true;
+        ubEl.appendChild(o);
+      });
+    }
+
+    if (sucEl) {
+      // Inicializa con la sucursal actual y selecciona la ubicación actual
+      poblarUbicaciones(sucursalActualId, ubicacionActualId);
+      sucEl.addEventListener("change", () => {
+        poblarUbicaciones(Number(sucEl.value) || null, null);
+      });
+    }
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      err.classList.add("hidden");
+      const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
+      const sv = (id) => document.getElementById(id)?.value ?? "";
+      const num = (id) => { const x = sv(id); return x === "" ? null : Number(x); };
+      const isBio = sv("tipo") === "biomedico";
+      const ubVal = ubEl?.value;
+      const provVal = document.getElementById("proveedorSel")?.value;
+
+      const payload = {
+        codigo: v("codigo"),
+        nombre: v("nombre"),
+        descripcion: v("descripcion") || null,
+        ubicacion: v("ubicacion") || null,
+        estado: sv("estado"),
+        tipo: sv("tipo"),
+        categoria: v("categoria") || null,
+        numeroActivo: v("numeroActivo") || null,
+        marca: v("marca") || null,
+        modelo: v("modelo") || null,
+        serial: v("serial") || null,
+        anio: num("anio"),
+        ubicacionId: ubVal ? Number(ubVal) : null,
+        proveedorId: provVal ? Number(provVal) : null,
+        slaUrgenteHoras: Number(sv("slaUrgenteHoras") || 4),
+        slaAltaHoras: Number(sv("slaAltaHoras") || 24),
+        slaMediaHoras: Number(sv("slaMediaHoras") || 72),
+        slaBajaHoras: Number(sv("slaBajaHoras") || 168),
+      };
+      if (isBio) {
+        payload.registroSanitario = v("registroSanitario") || null;
+        payload.claseRiesgo = sv("claseRiesgo") || null;
+        payload.ultimaCalibracion = v("ultimaCalibracion") || null;
+        payload.proximaCalibracion = v("proximaCalibracion") || null;
+      } else {
+        payload.registroSanitario = null;
+        payload.claseRiesgo = null;
+        payload.ultimaCalibracion = null;
+        payload.proximaCalibracion = null;
+      }
+
+      const res = await fetch(`/api/activos/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+        err.classList.remove("hidden");
+        return;
+      }
+      location.href = `/activos/${id}`;
+    });
+  </script>
+</Layout>

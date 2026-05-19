@@ -1,0 +1,147 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import inventario from "@/data/inventario.json";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin") return Astro.redirect("/");
+
+const data = inventario as {
+  sucursales: { nombre: string; codigo: string; ubicaciones: string[] }[];
+  equipos: { codigo: string; nombre: string; marca: string | null; modelo: string | null; sucursal: string; ubicacion: string }[];
+};
+
+const totalSuc = data.sucursales.length;
+const totalUb = data.sucursales.reduce((s, x) => s + x.ubicaciones.length, 0);
+const totalEq = data.equipos.length;
+---
+
+<Layout title="Import inventario">
+  <a href="/" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Import masivo: Inventario AC Avante</h1>
+  <p class="text-sm text-slate-500">Crea sucursales, ubicaciones y equipos a partir del archivo INVENTARIO_LIMPIO.xlsx con plan preventivo automático.</p>
+
+  <div class="card mt-4 p-5">
+    <h2 class="font-semibold">Resumen del archivo</h2>
+    <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
+      <div class="rounded bg-blue-50 p-3 text-center">
+        <div class="text-2xl font-bold text-blue-700">{totalSuc}</div>
+        <div class="text-xs text-slate-600">sucursales</div>
+      </div>
+      <div class="rounded bg-emerald-50 p-3 text-center">
+        <div class="text-2xl font-bold text-emerald-700">{totalUb}</div>
+        <div class="text-xs text-slate-600">ubicaciones</div>
+      </div>
+      <div class="rounded bg-amber-50 p-3 text-center">
+        <div class="text-2xl font-bold text-amber-700">{totalEq}</div>
+        <div class="text-xs text-slate-600">equipos AC</div>
+      </div>
+    </div>
+
+    <details class="mt-4">
+      <summary class="cursor-pointer text-sm font-medium text-slate-700">Ver desglose por sucursal</summary>
+      <ul class="mt-2 space-y-1 text-sm">
+        {data.sucursales.map((s) => (
+          <li class="flex justify-between rounded bg-slate-50 px-3 py-1.5">
+            <span><strong>{s.codigo}</strong> · {s.nombre}</span>
+            <span class="text-xs text-slate-500">{s.ubicaciones.length} ubicaciones</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  </div>
+
+  <div class="card mt-4 p-5">
+    <h2 class="font-semibold">Configuración del import</h2>
+    <p class="text-xs text-slate-500">El proceso es <strong>idempotente</strong>: si la sucursal/ubicación/equipo ya existe, no se duplica. Las próximas fechas de mantenimiento se distribuyen para no concentrar todas las OTs el mismo día.</p>
+
+    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div>
+        <label class="label">Frecuencia de mantenimiento preventivo</label>
+        <select class="input" id="frecuencia">
+          <option value="mensual">Mensual</option>
+          <option value="bimestral">Bimestral (2 meses)</option>
+          <option value="trimestral" selected>Trimestral (3 meses)</option>
+          <option value="semestral">Semestral (6 meses)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button id="dryBtn" class="btn-secondary">🔍 Simular (dry-run)</button>
+      <button id="runBtn" class="btn-primary">🚀 Ejecutar import</button>
+    </div>
+    <p class="mt-2 text-xs text-slate-500">"Simular" muestra qué se crearía sin tocar la base de datos.</p>
+  </div>
+
+  <div id="resultBox" class="card mt-4 hidden p-5">
+    <h2 class="font-semibold" id="resultTitle">Resultado</h2>
+    <div id="resultBody" class="mt-3 text-sm"></div>
+  </div>
+
+  <script>
+    const fmt = (n) => Number(n).toLocaleString("es", { timeZone: "America/El_Salvador" });
+
+    async function run(dry) {
+      const btn = dry ? document.getElementById("dryBtn") : document.getElementById("runBtn");
+      const btnTxt = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Procesando...";
+
+      const frec = (document.getElementById("frecuencia")).value;
+      const url = `/api/admin/import-inventario?frecuencia=${frec}${dry ? "&dryRun=1" : ""}`;
+      let res, j, txt;
+      try {
+        res = await fetch(url, { method: "POST" });
+        txt = await res.text();
+        try { j = JSON.parse(txt); } catch { j = null; }
+      } catch (e) {
+        res = { ok: false, status: 0 };
+        txt = String(e);
+      }
+
+      const box = document.getElementById("resultBox");
+      const body = document.getElementById("resultBody");
+      const title = document.getElementById("resultTitle");
+      box.classList.remove("hidden");
+
+      if (!res.ok || !j?.ok) {
+        title.textContent = `❌ Error (HTTP ${res.status})`;
+        const partialStats = j?.statsParcial ? `<div class="mt-3 rounded bg-amber-50 p-3 text-xs">Estado parcial al fallar:<ul class="ml-4 list-disc">
+          <li>Sucursales creadas: ${fmt(j.statsParcial.sucursalesCreadas)}</li>
+          <li>Ubicaciones creadas: ${fmt(j.statsParcial.ubicacionesCreadas)}</li>
+          <li>Equipos creados: ${fmt(j.statsParcial.equiposCreados)}</li>
+          <li>Planes creados: ${fmt(j.statsParcial.planesCreados)}</li>
+        </ul></div>` : "";
+        body.innerHTML = `
+          ${j?.etapa ? `<p class="text-sm"><strong>Etapa:</strong> <code>${j.etapa}</code></p>` : ""}
+          ${partialStats}
+          <pre class="mt-3 text-xs text-red-600 whitespace-pre-wrap">${j?.error ?? txt ?? "Sin respuesta"}\n\n${j?.stack ?? ""}</pre>
+        `;
+      } else {
+        title.textContent = dry ? "🔍 Simulación completa" : "✅ Import completo";
+        const s = j.stats;
+        body.innerHTML = `
+          <ul class="space-y-1">
+            <li>🏢 Sucursales: <strong>${fmt(s.sucursalesCreadas)}</strong> creadas, ${fmt(s.sucursalesExistentes)} ya existían</li>
+            <li>📍 Ubicaciones: <strong>${fmt(s.ubicacionesCreadas)}</strong> creadas, ${fmt(s.ubicacionesExistentes)} ya existían</li>
+            <li>🛠 Equipos: <strong>${fmt(s.equiposCreados)}</strong> creados, ${fmt(s.equiposExistentes)} ya existían</li>
+            <li>📋 Planes preventivos: <strong>${fmt(s.planesCreados)}</strong> creados</li>
+            ${s.errores.length > 0 ? `<li class="mt-3 text-red-600"><strong>${s.errores.length} errores:</strong><ul class="ml-4 list-disc text-xs">${s.errores.slice(0, 20).map((e) => `<li>${e}</li>`).join("")}</ul></li>` : ""}
+          </ul>
+          ${!dry ? `<div class="mt-4 flex gap-2">
+            <a href="/activos" class="btn-secondary text-sm">Ver equipos →</a>
+            <a href="/cronograma" class="btn-secondary text-sm">Ver cronograma →</a>
+          </div>` : ""}
+        `;
+      }
+      btn.disabled = false;
+      btn.textContent = btnTxt;
+    }
+
+    document.getElementById("dryBtn")?.addEventListener("click", () => run(true));
+    document.getElementById("runBtn")?.addEventListener("click", () => {
+      if (confirm("¿Ejecutar el import? Esta acción crea sucursales, ubicaciones y equipos en la base de datos.")) run(false);
+    });
+  </script>
+</Layout>

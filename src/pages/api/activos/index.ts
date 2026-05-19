@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { activos } from "@/lib/schema";
+import { activos, planesMantenimiento } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { desc } from "drizzle-orm";
+import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 
 export const prerender = false;
 
@@ -34,9 +35,20 @@ const baseSchema = {
   proximaCalibracion: z.string().nullable().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),
+  slaUrgenteHoras: z.number().int().nonnegative().optional(),
+  slaAltaHoras: z.number().int().nonnegative().optional(),
+  slaMediaHoras: z.number().int().nonnegative().optional(),
+  slaBajaHoras: z.number().int().nonnegative().optional(),
 };
 
-const createSchema = z.object(baseSchema);
+const createSchema = z.object({
+  ...baseSchema,
+  // Configuración opcional de mantenimiento preventivo automático
+  mantenimientoFrecuencia: z.enum(["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"]).optional().nullable(),
+  mantenimientoProximaFecha: z.string().optional().nullable(),
+  mantenimientoTitulo: z.string().optional().nullable(),
+  mantenimientoPrioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
+});
 
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
@@ -45,9 +57,23 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
-  const data = { ...parsed.data, qrCode: `QR-${parsed.data.codigo}` };
+  const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad, ...activoData } = parsed.data;
+  const data = { ...activoData, qrCode: `QR-${activoData.codigo}` };
   try {
     const [row] = await db.insert(activos).values(data).returning();
+
+    // Si se configuró mantenimiento preventivo automático, crea el plan
+    if (mantenimientoFrecuencia) {
+      const proxima = mantenimientoProximaFecha ?? siguienteFecha(new Date(), mantenimientoFrecuencia as Frecuencia);
+      await db.insert(planesMantenimiento).values({
+        activoId: row.id,
+        titulo: mantenimientoTitulo ?? `Mantenimiento preventivo ${mantenimientoFrecuencia}`,
+        frecuencia: mantenimientoFrecuencia as any,
+        proximaFecha: proxima,
+        prioridad: (mantenimientoPrioridad ?? "media") as any,
+      });
+    }
+
     return Response.json({ activo: row }, { status: 201 });
   } catch (e: any) {
     if (String(e?.message ?? "").includes("UNIQUE")) {

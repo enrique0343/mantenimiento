@@ -1,0 +1,53 @@
+name: Daily cron jobs
+
+on:
+  schedule:
+    # 12:00 UTC = 6:00 AM en El Salvador (UTC-6, sin DST)
+    - cron: "0 12 * * *"
+  workflow_dispatch:  # permite disparar manualmente desde la UI
+
+jobs:
+  daily-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar resumen diario (6 AM SV)
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/daily-digest")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::daily-digest fallo con HTTP $status"
+            exit 1
+          fi
+
+      - name: Disparar recordatorio de encuestas
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/recordatorio-encuestas")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::recordatorio-encuestas fallo con HTTP $status"
+            exit 1
+          fi
+
+      - name: Disparar generacion de preventivos
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/generar-preventivos")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::generar-preventivos fallo con HTTP $status"
+            exit 1
+          fi

@@ -1,0 +1,103 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { extintores, sucursales } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import { TIPO_AGENTE_LABEL, TIPO_AGENTE_COLOR, ESTADO_EXT_LABEL, ESTADO_EXT_COLOR, estadoVencimiento, ESTADO_VENC_COLOR, puedeVerSeguridad, puedeAdministrarSeguridad } from "@/lib/extintores";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerSeguridad(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const sucursalFiltro = url.searchParams.get("sucursal");
+const tipoFiltro = url.searchParams.get("tipo");
+
+const rowsRaw = await db
+  .select({ e: extintores, s: sucursales })
+  .from(extintores)
+  .leftJoin(sucursales, eq(sucursales.id, extintores.sucursalId))
+  .where(eq(extintores.activo, true))
+  .orderBy(desc(extintores.id));
+
+const rows = rowsRaw.filter((r) =>
+  (!sucursalFiltro || r.e.sucursalId === Number(sucursalFiltro)) &&
+  (!tipoFiltro || r.e.tipoAgente === tipoFiltro)
+);
+
+const sucursalesList = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+---
+
+<Layout title="Extintores">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <a href="/seguridad" class="text-sm text-slate-500 hover:underline">&larr; Seguridad</a>
+      <h1 class="text-2xl font-bold">Extintores</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
+    </div>
+    {puedeAdministrarSeguridad(user.rol) && (
+      <a href="/seguridad/extintores/nuevo" class="btn-primary">+ Nuevo extintor</a>
+    )}
+  </div>
+
+  <!-- Filtros -->
+  <div class="card mt-4 p-3">
+    <form class="flex flex-wrap items-end gap-3" method="get">
+      <div>
+        <label class="label text-xs">Sucursal</label>
+        <select name="sucursal" class="input text-sm">
+          <option value="">Todas</option>
+          {sucursalesList.map((s) => <option value={s.id} selected={String(s.id) === sucursalFiltro}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label text-xs">Tipo de agente</label>
+        <select name="tipo" class="input text-sm">
+          <option value="">Todos</option>
+          {Object.entries(TIPO_AGENTE_LABEL).map(([v, l]) => <option value={v} selected={v === tipoFiltro}>{l}</option>)}
+        </select>
+      </div>
+      <button class="btn-primary text-sm">Filtrar</button>
+      {(sucursalFiltro || tipoFiltro) && <a href="/seguridad/extintores" class="btn-secondary text-sm">Limpiar</a>}
+    </form>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2">Capacidad</th>
+          <th class="px-4 py-2">Sucursal</th>
+          <th class="px-4 py-2">Ubicación</th>
+          <th class="px-4 py-2">Próx. inspección</th>
+          <th class="px-4 py-2">Próx. recarga</th>
+          <th class="px-4 py-2">Próx. prueba</th>
+          <th class="px-4 py-2">Estado</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && <tr><td colspan="9" class="px-4 py-6 text-center text-slate-400">Sin extintores con esos filtros.</td></tr>}
+        {rows.map((r) => (
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2 font-mono text-xs">
+              <a class="text-brand-700 hover:underline" href={`/seguridad/extintores/${r.e.id}`}>{r.e.codigo}</a>
+            </td>
+            <td class="px-4 py-2"><span class={`badge ${TIPO_AGENTE_COLOR[r.e.tipoAgente]}`}>{r.e.tipoAgente.toUpperCase()}</span></td>
+            <td class="px-4 py-2 text-slate-600">{r.e.capacidad ? `${r.e.capacidad} ${r.e.capacidadUnidad}` : "—"}</td>
+            <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
+            <td class="px-4 py-2 text-slate-600 text-xs">{r.e.zona ? `${r.e.zona} · ` : ""}{r.e.ubicacionDetalle ?? ""}</td>
+            <td class:list={["px-4 py-2 text-xs", ESTADO_VENC_COLOR[estadoVencimiento(r.e.proximaInspeccion)]]}>{fmt(r.e.proximaInspeccion)}</td>
+            <td class:list={["px-4 py-2 text-xs", ESTADO_VENC_COLOR[estadoVencimiento(r.e.proximaRecarga)]]}>{fmt(r.e.proximaRecarga)}</td>
+            <td class:list={["px-4 py-2 text-xs", ESTADO_VENC_COLOR[estadoVencimiento(r.e.proximaPruebaHidrostatica)]]}>{fmt(r.e.proximaPruebaHidrostatica)}</td>
+            <td class="px-4 py-2"><span class={`badge ${ESTADO_EXT_COLOR[r.e.estado]}`}>{ESTADO_EXT_LABEL[r.e.estado]}</span></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>

@@ -82,7 +82,7 @@ while (cur <= endDate) {
   cur.setDate(cur.getDate() + 1);
 }
 
-const monthLabel = firstDay.toLocaleDateString("es", { month: "long", year: "numeric" });
+const monthLabel = firstDay.toLocaleDateString("es", { month: "long", year: "numeric", timeZone: "America/El_Salvador" });
 const prevDate = new Date(yy, mm - 2, 1);
 const nextDate = new Date(yy, mm, 1);
 const prevQ = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;

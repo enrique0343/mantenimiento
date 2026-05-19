@@ -2,38 +2,42 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { items, stock, proveedores } from "@/lib/schema";
-import { sql, eq, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { fmtCantidad } from "@/lib/inventario";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 
-// Items + stock total agregado por todas las sucursales
+// Items + stock (bodega única, una sola fila por item)
 const itemsRows = await db
   .select({ it: items, prov: proveedores })
   .from(items)
   .leftJoin(proveedores, eq(proveedores.id, items.proveedorPrincipalId))
   .orderBy(desc(items.id));
 
-const stockTotales = await db
-  .select({ itemId: stock.itemId, total: sql<number>`SUM(${stock.cantidad})` })
-  .from(stock)
-  .groupBy(stock.itemId);
-
+const stockRows = await db.select({ itemId: stock.itemId, cantidad: stock.cantidad }).from(stock);
 const stockMap = new Map<number, number>();
-for (const s of stockTotales) stockMap.set(s.itemId, Number(s.total ?? 0));
+for (const s of stockRows) stockMap.set(s.itemId, Number(s.cantidad ?? 0));
 
-const enriched = itemsRows.map((r) => ({
-  ...r.it,
-  proveedor: r.prov ? { id: r.prov.id, nombre: r.prov.nombre } : null,
-  stockActual: stockMap.get(r.it.id) ?? 0,
-  bajo: (stockMap.get(r.it.id) ?? 0) < r.it.stockMinimo,
-}));
+const enriched = itemsRows.map((r) => {
+  const stockActual = stockMap.get(r.it.id) ?? 0;
+  const bajo = stockActual < r.it.stockMinimo;
+  // Cantidad a comprar: si está bajo mínimo y hay máximo definido, sugerir reposición
+  const sugerenciaCompra = bajo && r.it.stockMaximo > 0 ? Math.max(0, r.it.stockMaximo - stockActual) : 0;
+  return {
+    ...r.it,
+    proveedor: r.prov ? { id: r.prov.id, nombre: r.prov.nombre } : null,
+    stockActual,
+    bajo,
+    sugerenciaCompra,
+  };
+});
 
 const activos = enriched.filter((i) => i.activo);
 const bajos = activos.filter((i) => i.bajo);
 const sinStock = activos.filter((i) => i.stockActual <= 0);
+const aReabastecer = activos.filter((i) => i.sugerenciaCompra > 0);
 
 const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
 ---
@@ -44,15 +48,22 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
       <h1 class="text-2xl font-bold">Inventario</h1>
       <p class="text-sm text-slate-500">{activos.length} items activos · {bajos.length} bajo stock mínimo · {sinStock.length} sin stock</p>
     </div>
-    {puedeCrear && (
-      <div class="flex gap-2">
-        <a href="/recepciones/nueva" class="btn-secondary">📦 Recepción</a>
-        <a href="/inventario/nuevo" class="btn-primary">+ Nuevo item</a>
-      </div>
-    )}
+    <div class="flex flex-wrap gap-2">
+      <a href="/requisiciones" class="btn-secondary">🛒 Requisiciones</a>
+      <a href="/recepciones" class="btn-secondary">📋 Recepciones</a>
+      {puedeCrear && (
+        <>
+          {aReabastecer.length > 0 && (
+            <a href="/requisiciones/nueva" class="btn-secondary !bg-orange-100 !text-orange-700">⚠ Reabastecer ({aReabastecer.length})</a>
+          )}
+          <a href="/recepciones/nueva" class="btn-secondary">📦 Nueva recepción</a>
+          <a href="/inventario/nuevo" class="btn-primary">+ Nuevo item</a>
+        </>
+      )}
+    </div>
   </div>
 
-  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+  <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">Items activos</div>
       <div class="mt-1 text-3xl font-bold text-brand-600">{activos.length}</div>
@@ -64,6 +75,10 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">Sin stock</div>
       <div class="mt-1 text-3xl font-bold text-red-600">{sinStock.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">A reabastecer</div>
+      <div class="mt-1 text-3xl font-bold text-orange-600">{aReabastecer.length}</div>
     </div>
   </div>
 
@@ -84,13 +99,14 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
           <th class="px-4 py-2">Categoría</th>
           <th class="px-4 py-2">Unidad</th>
           <th class="px-4 py-2 text-right">Stock</th>
-          <th class="px-4 py-2 text-right">Mínimo</th>
+          <th class="px-4 py-2 text-right">Mín / Máx</th>
+          <th class="px-4 py-2 text-right">A comprar</th>
           <th class="px-4 py-2">Proveedor</th>
         </tr>
       </thead>
       <tbody id="tbody" class="divide-y divide-slate-100">
         {enriched.length === 0 && (
-          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin items aún. Crea el primero.</td></tr>
+          <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin items aún. Crea el primero.</td></tr>
         )}
         {enriched.map((i) => (
           <tr class="searchable hover:bg-slate-50" data-search={`${i.codigo} ${i.nombre} ${i.categoria ?? ""}`.toLowerCase()} class:list={[!i.activo && "opacity-50"]}>
@@ -100,11 +116,18 @@ const puedeCrear = ["admin", "jefe", "tecnico"].includes(user.rol);
               {i.descripcion && <div class="text-xs text-slate-500 truncate">{i.descripcion}</div>}
             </td>
             <td class="px-4 py-2 text-slate-600">{i.categoria ?? "—"}</td>
-            <td class="px-4 py-2 text-slate-600">{i.unidad}</td>
+            <td class="px-4 py-2 text-slate-600">{i.unidad}{i.presentacion && <div class="text-xs text-slate-400">{i.presentacion}</div>}</td>
             <td class:list={["px-4 py-2 text-right font-mono", i.bajo ? "text-red-600 font-bold" : "text-slate-700"]}>
               {fmtCantidad(i.stockActual)}
             </td>
-            <td class="px-4 py-2 text-right font-mono text-slate-500">{fmtCantidad(i.stockMinimo)}</td>
+            <td class="px-4 py-2 text-right font-mono text-xs text-slate-500">{fmtCantidad(i.stockMinimo)} / {fmtCantidad(i.stockMaximo)}</td>
+            <td class="px-4 py-2 text-right font-mono">
+              {i.sugerenciaCompra > 0 ? (
+                <span class="text-orange-700 font-semibold">{fmtCantidad(i.sugerenciaCompra)}</span>
+              ) : (
+                <span class="text-slate-300">—</span>
+              )}
+            </td>
             <td class="px-4 py-2 text-slate-600">{i.proveedor?.nombre ?? "—"}</td>
           </tr>
         ))}

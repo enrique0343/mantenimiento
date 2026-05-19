@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, proveedores } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -32,8 +33,10 @@ const ubJson = JSON.stringify(ubRows);
         </select>
       </div>
       <div>
-        <label class="label">Categoria</label>
-        <input class="input" id="categoria" placeholder="Ej: Refrigeracion, Quirofano..." />
+        <label class="label">Categoría</label>
+        <input class="input" id="categoria" list="categoriasList" placeholder="Selecciona o escribe..." />
+        <datalist id="categoriasList"></datalist>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo (general / biomédico).</p>
       </div>
       <div>
         <label class="label">Codigo interno *</label>
@@ -113,6 +116,72 @@ const ubJson = JSON.stringify(ubRows);
       )}
     </div>
 
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-emerald-700">🛡️ Mantenimiento preventivo automático</h2>
+      <p class="text-xs text-slate-500 mb-3">Si configuras la frecuencia, el sistema generará automáticamente las órdenes preventivas en cada ciclo. Si después se hace un correctivo, el contador se reinicia automáticamente.</p>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Frecuencia de mantenimiento</label>
+          <select class="input" id="mantenimientoFrecuencia">
+            <option value="">— Sin programación automática —</option>
+            <option value="diaria">Diaria</option>
+            <option value="semanal">Semanal</option>
+            <option value="quincenal">Quincenal</option>
+            <option value="mensual">Mensual</option>
+            <option value="bimestral">Bimestral (2 meses)</option>
+            <option value="trimestral" selected>Trimestral (3 meses)</option>
+            <option value="semestral">Semestral (6 meses)</option>
+            <option value="anual">Anual</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Primera ejecución (próxima fecha)</label>
+          <input class="input" id="mantenimientoProximaFecha" type="date" />
+          <p class="text-xs text-slate-400 mt-1">Si lo dejas vacío, se calcula automáticamente desde hoy.</p>
+        </div>
+        <div>
+          <label class="label">Prioridad de la OT</label>
+          <select class="input" id="mantenimientoPrioridad">
+            <option value="baja">Baja</option>
+            <option value="media" selected>Media</option>
+            <option value="alta">Alta</option>
+            <option value="urgente">Urgente</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Título del plan (opcional)</label>
+          <input class="input" id="mantenimientoTitulo" placeholder="Ej: Limpieza filtros y revisión general" />
+        </div>
+      </div>
+    </div>
+
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-amber-700">⏱ SLA del equipo (horas para completar OT)</h2>
+      <p class="text-xs text-slate-500 mb-3">Define el tiempo máximo según la prioridad. La fecha de vencimiento de las nuevas OT se calculará automáticamente.</p>
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div>
+          <label class="label">🔴 Urgente</label>
+          <input class="input" id="slaUrgenteHoras" type="number" min="0" value="4" />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟠 Alta</label>
+          <input class="input" id="slaAltaHoras" type="number" min="0" value="24" />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟡 Media</label>
+          <input class="input" id="slaMediaHoras" type="number" min="0" value="72" />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+        <div>
+          <label class="label">🟢 Baja</label>
+          <input class="input" id="slaBajaHoras" type="number" min="0" value="168" />
+          <p class="mt-1 text-xs text-slate-400">horas</p>
+        </div>
+      </div>
+    </div>
+
     <div id="bioFields" class="hidden border-t border-slate-200 pt-5">
       <h2 class="mb-3 font-semibold text-purple-700">Datos biomedicos</h2>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -148,15 +217,24 @@ const ubJson = JSON.stringify(ubRows);
     </div>
   </form>
 
-  <script define:vars={{ ubJson }}>
+  <script define:vars={{ ubJson, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
     const allUbs = JSON.parse(ubJson);
 
     // Biomedico toggle
     const tipoSel = document.getElementById("tipo");
     const bioFields = document.getElementById("bioFields");
     const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
-    tipoSel?.addEventListener("change", toggleBio);
+
+    // Categorías dinámicas según tipo
+    const catList = document.getElementById("categoriasList");
+    const refreshCategorias = () => {
+      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
+      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
+    };
+
+    tipoSel?.addEventListener("change", () => { toggleBio(); refreshCategorias(); });
     toggleBio();
+    refreshCategorias();
 
     // Sucursal → ubicacion filter
     const sucursalSel = document.getElementById("sucursalSel");
@@ -199,12 +277,25 @@ const ubJson = JSON.stringify(ubRows);
         anio: v("anio") ? Number(v("anio")) : null,
         ubicacionId: sv("ubicacionSel") ? Number(sv("ubicacionSel")) : null,
         proveedorId: sv("proveedorSel") ? Number(sv("proveedorSel")) : null,
+        slaUrgenteHoras: Number(sv("slaUrgenteHoras") || 4),
+        slaAltaHoras: Number(sv("slaAltaHoras") || 24),
+        slaMediaHoras: Number(sv("slaMediaHoras") || 72),
+        slaBajaHoras: Number(sv("slaBajaHoras") || 168),
       };
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;
         payload.claseRiesgo = sv("claseRiesgo") || null;
         payload.ultimaCalibracion = v("ultimaCalibracion") || null;
         payload.proximaCalibracion = v("proximaCalibracion") || null;
+      }
+
+      // Mantenimiento preventivo auto
+      const frec = sv("mantenimientoFrecuencia");
+      if (frec) {
+        payload.mantenimientoFrecuencia = frec;
+        payload.mantenimientoProximaFecha = v("mantenimientoProximaFecha") || null;
+        payload.mantenimientoTitulo = v("mantenimientoTitulo") || null;
+        payload.mantenimientoPrioridad = sv("mantenimientoPrioridad") || "media";
       }
       const res = await fetch("/api/activos", {
         method: "POST",

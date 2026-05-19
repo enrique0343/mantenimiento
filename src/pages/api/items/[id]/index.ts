@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { items, stock, sucursales, movimientosInventario, usuarios, proveedores } from "@/lib/schema";
+import { items, stock, movimientosInventario, usuarios, proveedores } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
 export const prerender = false;
@@ -21,19 +21,14 @@ export const GET: APIRoute = async (ctx) => {
     .limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  // Stock por sucursal
-  const stockRows = await db
-    .select({ s: stock, suc: sucursales })
-    .from(stock)
-    .leftJoin(sucursales, eq(sucursales.id, stock.sucursalId))
-    .where(eq(stock.itemId, id));
+  // Stock (bodega única)
+  const stockRows = await db.select().from(stock).where(eq(stock.itemId, id));
 
   // Ultimos 50 movimientos
   const movRows = await db
-    .select({ m: movimientosInventario, u: usuarios, suc: sucursales })
+    .select({ m: movimientosInventario, u: usuarios })
     .from(movimientosInventario)
     .leftJoin(usuarios, eq(usuarios.id, movimientosInventario.usuarioId))
-    .leftJoin(sucursales, eq(sucursales.id, movimientosInventario.sucursalId))
     .where(eq(movimientosInventario.itemId, id))
     .orderBy(desc(movimientosInventario.id))
     .limit(50);
@@ -43,11 +38,10 @@ export const GET: APIRoute = async (ctx) => {
       ...row.item,
       proveedor: row.proveedor ? { id: row.proveedor.id, nombre: row.proveedor.nombre } : null,
     },
-    stock: stockRows.map((r) => ({ ...r.s, sucursal: r.suc ? { id: r.suc.id, nombre: r.suc.nombre } : null })),
+    stock: stockRows,
     movimientos: movRows.map((r) => ({
       ...r.m,
       usuario: r.u ? { id: r.u.id, nombre: r.u.nombre } : null,
-      sucursal: r.suc ? { id: r.suc.id, nombre: r.suc.nombre } : null,
     })),
   });
 };
@@ -59,6 +53,9 @@ const updateSchema = z.object({
   categoria: z.string().nullable().optional(),
   unidad: z.string().min(1).optional(),
   stockMinimo: z.number().nonnegative().optional(),
+  stockMaximo: z.number().nonnegative().optional(),
+  presentacion: z.string().nullable().optional(),
+  factorPresentacion: z.number().positive().optional(),
   proveedorPrincipalId: z.number().int().nullable().optional(),
   precioReferencia: z.number().nullable().optional(),
   activo: z.boolean().optional(),

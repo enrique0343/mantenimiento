@@ -36,3 +36,8 @@ body {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
   }
 }
+
+/* Highlight para snippets de búsqueda FTS */
+mark {
+  @apply bg-yellow-200 text-yellow-900 rounded px-0.5;
+}

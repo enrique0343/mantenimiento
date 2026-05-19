@@ -1,0 +1,168 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { proyectos, usuarios, ordenes } from "@/lib/schema";
+import { desc, eq, or, inArray } from "drizzle-orm";
+import { ESTADO_PROYECTO_LABEL, ESTADO_PROYECTO_COLOR, puedeCrearProyecto } from "@/lib/proyectos";
+import { PRIO_COLOR } from "@/lib/ordenes";
+import { fmtFechaSimple } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const url = new URL(Astro.request.url);
+const filtroEstado = url.searchParams.get("estado");
+const verCerrados = url.searchParams.get("verCerrados") === "1";
+
+// Técnicos: solo proyectos donde son responsables o tienen OT hija
+let whereVisibilidad: any = undefined;
+if (user.rol === "tecnico") {
+  const idsOts = await db.select({ pid: ordenes.proyectoId }).from(ordenes).where(eq(ordenes.asignadoA, user.id));
+  const proyectoIds = Array.from(new Set(idsOts.map((r) => r.pid).filter((v): v is number => v != null)));
+  whereVisibilidad = proyectoIds.length > 0
+    ? or(eq(proyectos.responsableId, user.id), inArray(proyectos.id, proyectoIds))
+    : eq(proyectos.responsableId, user.id);
+}
+
+const rowsRaw = await db
+  .select({ p: proyectos, creador: usuarios })
+  .from(proyectos)
+  .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
+  .where(whereVisibilidad)
+  .orderBy(desc(proyectos.id));
+
+const ESTADOS_ACTIVOS = new Set(["evaluacion", "aprobado", "en_ejecucion", "en_pausa"]);
+
+const rows = rowsRaw.filter((r) => {
+  if (filtroEstado && r.p.estado !== filtroEstado) return false;
+  if (!filtroEstado && !verCerrados && !ESTADOS_ACTIVOS.has(r.p.estado)) return false;
+  return true;
+});
+
+const conteo = rowsRaw.reduce<Record<string, number>>((acc, r) => {
+  acc[r.p.estado] = (acc[r.p.estado] ?? 0) + 1;
+  return acc;
+}, {});
+const conteoActivos = rowsRaw.filter((r) => ESTADOS_ACTIVOS.has(r.p.estado)).length;
+const conteoCerrados = rowsRaw.length - conteoActivos;
+
+const puedeCrear = puedeCrearProyecto(user.rol);
+---
+
+<Layout title="Proyectos">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📂 Proyectos</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
+    </div>
+    {puedeCrear && (
+      <a href="/proyectos/nuevo" class="btn-primary">+ Nuevo proyecto</a>
+    )}
+  </div>
+
+  <!-- Filtros por estado -->
+  <div class="mt-4 flex flex-wrap gap-1.5 text-xs">
+    <a href="/proyectos"
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerrados ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      ⚡ Activos ({conteoActivos})
+    </a>
+    <span class="text-slate-300">·</span>
+    <a href="/proyectos?estado=evaluacion"
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "evaluacion" ? "bg-amber-600 text-white" : "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"]}>
+      🟡 Evaluación ({conteo.evaluacion ?? 0})
+    </a>
+    <a href="/proyectos?estado=aprobado"
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "aprobado" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
+      🔵 Aprobados ({conteo.aprobado ?? 0})
+    </a>
+    <a href="/proyectos?estado=en_ejecucion"
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_ejecucion" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
+      🟢 En ejecución ({conteo.en_ejecucion ?? 0})
+    </a>
+    {(conteo.en_pausa ?? 0) > 0 && (
+      <a href="/proyectos?estado=en_pausa"
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_pausa" ? "bg-purple-600 text-white" : "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"]}>
+        🟣 En pausa ({conteo.en_pausa})
+      </a>
+    )}
+    <span class="text-slate-300">·</span>
+    {(["completado", "rechazado", "cancelado"] as const).map((s) => (
+      <a href={`/proyectos?estado=${s}`}
+         class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_PROYECTO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
+        {ESTADO_PROYECTO_LABEL[s]} ({conteo[s] ?? 0})
+      </a>
+    ))}
+    {!filtroEstado && (
+      <a href="/proyectos?verCerrados=1"
+         class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerrados ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
+        {verCerrados ? "🗂 Mostrando todos" : "🗂 Ver cerrados (" + conteoCerrados + ")"}
+      </a>
+    )}
+  </div>
+
+  <!-- Cards móvil -->
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden">
+    {rows.length === 0 && <div class="card p-6 text-center text-slate-400">Sin proyectos con esos filtros.</div>}
+    {rows.map(({ p, creador }) => {
+      const filaColor =
+        p.estado === "evaluacion" ? "border-l-4 border-amber-500" :
+        p.estado === "aprobado" ? "border-l-4 border-blue-500" :
+        p.estado === "en_ejecucion" ? "border-l-4 border-emerald-500" :
+        p.estado === "en_pausa" ? "border-l-4 border-purple-500" :
+        "border-l-4 border-transparent";
+      return (
+        <a href={`/proyectos/${p.id}`} class:list={["card block p-4 hover:bg-slate-50 active:bg-slate-100 no-underline", filaColor]}>
+          <div class="flex items-start justify-between gap-2">
+            <div class="font-mono text-xs text-slate-400">{p.codigo}</div>
+            <span class={`badge ${PRIO_COLOR[p.prioridad]} capitalize text-[10px]`}>{p.prioridad}</span>
+          </div>
+          <div class="mt-1 text-base font-semibold text-slate-900">{p.titulo}</div>
+          <div class="mt-2 flex items-center gap-1.5 flex-wrap">
+            <span class={`badge ${ESTADO_PROYECTO_COLOR[p.estado]} text-[10px]`}>{ESTADO_PROYECTO_LABEL[p.estado]}</span>
+            {creador && <span class="text-xs text-slate-500">por {creador.nombre}</span>}
+          </div>
+        </a>
+      );
+    })}
+  </div>
+
+  <!-- Tabla desktop -->
+  <div class="card mt-4 hidden sm:block overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Título</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Prioridad</th>
+          <th class="px-4 py-2">Creado por</th>
+          <th class="px-4 py-2">Fecha</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && <tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Sin proyectos.</td></tr>}
+        {rows.map(({ p, creador }) => {
+          const filaColor =
+            p.estado === "evaluacion" ? "border-l-4 border-amber-500" :
+            p.estado === "aprobado" ? "border-l-4 border-blue-500" :
+            p.estado === "en_ejecucion" ? "border-l-4 border-emerald-500" :
+            p.estado === "en_pausa" ? "border-l-4 border-purple-500" :
+            "border-l-4 border-transparent";
+          return (
+            <tr class:list={["hover:brightness-95", filaColor]}>
+              <td class="px-4 py-2 font-mono text-xs">{p.codigo}</td>
+              <td class="px-4 py-2">
+                <a class="font-medium text-slate-900 hover:underline" href={`/proyectos/${p.id}`}>{p.titulo}</a>
+              </td>
+              <td class="px-4 py-2"><span class={`badge ${ESTADO_PROYECTO_COLOR[p.estado]}`}>{ESTADO_PROYECTO_LABEL[p.estado]}</span></td>
+              <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[p.prioridad]} capitalize`}>{p.prioridad}</span></td>
+              <td class="px-4 py-2 text-slate-600">{creador?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-500">{fmtFechaSimple(p.createdAt)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Layout>

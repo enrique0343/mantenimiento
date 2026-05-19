@@ -1,10 +1,12 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, activos, ticketComentarios } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos } from "@/lib/schema";
+import { eq, asc, and, inArray } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { puedeCrearProyecto } from "@/lib/proyectos";
+import { proyectos } from "@/lib/schema";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -14,10 +16,11 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [r] = await db
-  .select({ t: tickets, a: usuarios, s: sucursales, act: activos })
+  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: activos })
   .from(tickets)
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, tickets.ubicacionId))
   .leftJoin(activos, eq(activos.id, tickets.activoId))
   .where(eq(tickets.id, id))
   .limit(1);
@@ -31,18 +34,47 @@ const coms = await db
   .where(eq(ticketComentarios.ticketId, id))
   .orderBy(asc(ticketComentarios.id));
 
+const adjs = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
+
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es") : "-");
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
 const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
+const esAdmin = user.rol === "admin";
+const puedeConvertirAProyecto = puedeCrearProyecto(user.rol) && !t.otId && !t.proyectoId && t.estado !== "cerrado" && t.estado !== "descartado";
+
+// Si está vinculado a un proyecto, traemos info básica
+let proyectoVinc: { id: number; codigo: string; titulo: string; estado: string } | null = null;
+if (t.proyectoId) {
+  const [p] = await db.select({ id: proyectos.id, codigo: proyectos.codigo, titulo: proyectos.titulo, estado: proyectos.estado })
+    .from(proyectos).where(eq(proyectos.id, t.proyectoId)).limit(1);
+  proyectoVinc = p ?? null;
+}
 ---
 
 <Layout title={`Ticket #${t.id}`}>
-  <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <div class="flex items-center justify-between">
+    <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    {esAdmin && (
+      <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
+    )}
+  </div>
+
+  {esAdmin && (
+    <script define:vars={{ ticketId: t.id }}>
+      document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
+        if (!confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")) return;
+        const res = await fetch(`/api/tickets/${ticketId}`, { method: "DELETE" });
+        if (res.ok) { location.href = "/tickets"; }
+        else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "desconocido")); }
+      });
+    </script>
+  )}
 
   <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
     <div>
@@ -58,6 +90,9 @@ const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
     {t.otId && (
       <a href={`/ordenes/${t.otId}`} class="btn-secondary">Ver OT #{t.otId} →</a>
     )}
+    {proyectoVinc && (
+      <a href={`/proyectos/${proyectoVinc.id}`} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
+    )}
   </div>
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -67,13 +102,29 @@ const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
       <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div>{t.tipoMantenimiento === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{t.ubicacion ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.ub?.nombre ?? "—"}{t.ubicacion && <span class="block text-xs text-slate-500">{t.ubicacion}</span>}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">SLA</div><div>{fmt(t.vencimientoSla)}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Creado</div><div>{fmt(t.createdAt)}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Resuelto</div><div>{fmt(t.resueltoEn)}</div></div>
       </div>
+
+      {adjs.length > 0 && (
+        <div class="mt-4">
+          <h3 class="text-sm font-semibold text-slate-900 mb-2">📷 Fotos adjuntas ({adjs.length})</h3>
+          <div class="flex flex-wrap gap-2">
+            {adjs.map((a) => (
+              <a href={`/api/tickets/adjunto/${a.id}`} target="_blank" rel="noopener"
+                 class="block w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 hover:opacity-80">
+                <img src={`/api/tickets/adjunto/${a.id}`} alt={a.nombre} class="w-full h-full object-cover" loading="lazy" />
+              </a>
+            ))}
+          </div>
+          <p class="mt-1 text-xs text-slate-400">Estas fotos se copiarán como evidencia "antes" al convertir el ticket en OT.</p>
+        </div>
+      )}
 
       {t.resolucionNotas && (
         <div class="mt-4 rounded-lg border-l-4 border-emerald-500 bg-emerald-50 p-3 text-sm">
@@ -121,8 +172,37 @@ const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
             <button id="saveBtn" class="btn-primary w-full justify-center">Guardar</button>
             <p id="saveMsg" class="hidden text-xs"></p>
 
+            {!t.otId && !t.proyectoId && (t.estado === "nuevo" || t.estado === "asignado") && (
+              <div class="mt-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
+                💡 Al asignar un técnico se creará automáticamente la <strong>orden de trabajo</strong> y se le notificará por correo.
+              </div>
+            )}
+            {puedeConvertirAProyecto && (
+              <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
+                <p class="font-semibold text-sm">¿Es un trabajo grande?</p>
+                <p class="mt-1">Si el trabajo requiere evaluación, presupuesto o múltiples OTs (remodelaciones, instalaciones, traslados), conviértelo en proyecto en lugar de generar una OT directa.</p>
+                <a href={`/proyectos/nuevo?ticketId=${t.id}`} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
+              </div>
+            )}
+            {proyectoVinc && (
+              <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
+                📂 Este ticket está vinculado al proyecto <a href={`/proyectos/${proyectoVinc.id}`} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
+              </div>
+            )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
-              <button id="convertBtn" class="btn-secondary w-full justify-center mt-2">⚙ Convertir en OT</button>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <button id="cerrarSinOtBtn" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
+                  Cerrar sin OT
+                </button>
+                <button id="descartarBtn" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">
+                  Descartar
+                </button>
+              </div>
+            )}
+            {t.otId && (
+              <div class="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800">
+                ✅ Este ticket ya tiene <a href={`/ordenes/${t.otId}`} class="font-bold underline">OT #{t.otId}</a> asociada.
+              </div>
             )}
           </div>
         </div>
@@ -171,21 +251,33 @@ const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
         body: JSON.stringify(payload),
       });
       if (!res.ok) { msg.textContent = "Error"; msg.className = "text-xs text-red-600"; msg.classList.remove("hidden"); return; }
-      location.reload();
+      const j = await res.json().catch(() => ({}));
+      if (j.otCreada) {
+        // Si se creó OT automáticamente, lleva al usuario directo a esa OT
+        location.href = `/ordenes/${j.otCreada}`;
+      } else {
+        location.reload();
+      }
     });
 
-    document.getElementById("convertBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Convertir este ticket en una orden de trabajo?")) return;
-      const asignadoA = document.getElementById("asignadoA").value;
-      const res = await fetch(`/api/tickets/${id}/convertir`, {
-        method: "POST",
+    document.getElementById("cerrarSinOtBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.")) return;
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ asignadoA: asignadoA ? Number(asignadoA) : null }),
+        body: JSON.stringify({ estado: "cerrado" }),
       });
-      if (res.ok) {
-        const j = await res.json();
-        location.href = `/ordenes/${j.orden.id}`;
-      }
+      if (res.ok) location.reload();
+    });
+
+    document.getElementById("descartarBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")) return;
+      const res = await fetch(`/api/tickets/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ estado: "descartado" }),
+      });
+      if (res.ok) location.reload();
     });
 
     document.getElementById("comForm")?.addEventListener("submit", async (e) => {

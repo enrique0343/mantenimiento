@@ -1,0 +1,92 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin") return Astro.redirect("/activos");
+---
+
+<Layout title="Importar equipos desde CSV">
+  <a href="/activos" class="text-sm text-slate-500 hover:underline">← Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Importar equipos desde CSV</h1>
+  <p class="text-sm text-slate-500">Sube un CSV con tus equipos. Podrás simular antes de ejecutar la importación.</p>
+
+  <div class="card mt-4 p-5 text-sm">
+    <h2 class="font-semibold">Formato esperado</h2>
+    <p class="mt-1 text-slate-600">Encabezados (primera fila). Solo <code>codigo</code> y <code>nombre</code> son obligatorios:</p>
+    <pre class="mt-2 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200">codigo,nombre,tipo,categoria,marca,modelo,serial,anio,estado,ubicacion_nombre,sucursal_nombre,descripcion
+ACX-0100,Aire Acondicionado 12000 BTU,general,Aires acondicionados,LG,LS-12V,SN12345,2023,operativo,Sala 3,Sucursal Centro,</pre>
+
+    <ul class="mt-3 list-disc pl-5 text-xs text-slate-600 space-y-1">
+      <li><strong>tipo:</strong> <code>general</code> o <code>biomedico</code> (default: general)</li>
+      <li><strong>estado:</strong> <code>operativo</code>, <code>averiado</code>, <code>mantenimiento</code> o <code>baja</code> (default: operativo)</li>
+      <li><strong>ubicacion_nombre:</strong> debe coincidir exactamente con una ubicación existente (mayús/minús no importan)</li>
+      <li>Códigos duplicados se omiten automáticamente</li>
+    </ul>
+  </div>
+
+  <div class="card mt-4 p-5">
+    <h2 class="font-semibold mb-3">Subir archivo</h2>
+    <input id="file" type="file" accept=".csv,text/csv" class="block w-full text-sm" />
+    <div class="mt-4 flex flex-wrap gap-2">
+      <button id="simBtn" class="btn-secondary text-sm" disabled>🔍 Simular (sin escribir DB)</button>
+      <button id="goBtn" class="btn-primary text-sm" disabled>🚀 Ejecutar importación</button>
+    </div>
+    <p id="msg" class="mt-3 hidden text-sm"></p>
+    <pre id="result" class="mt-4 hidden max-h-96 overflow-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200"></pre>
+  </div>
+
+  <script>
+    const file = document.getElementById("file") as HTMLInputElement;
+    const simBtn = document.getElementById("simBtn") as HTMLButtonElement;
+    const goBtn = document.getElementById("goBtn") as HTMLButtonElement;
+    const msg = document.getElementById("msg") as HTMLElement;
+    const result = document.getElementById("result") as HTMLElement;
+
+    let csvText = "";
+    file.addEventListener("change", async () => {
+      if (!file.files?.[0]) return;
+      csvText = await file.files[0].text();
+      simBtn.disabled = false;
+      goBtn.disabled = false;
+      msg.textContent = `Archivo cargado: ${file.files[0].name} (${(csvText.length / 1024).toFixed(1)} KB)`;
+      msg.className = "text-sm text-slate-600";
+      msg.classList.remove("hidden");
+    });
+
+    async function enviar(dryRun: boolean) {
+      msg.textContent = dryRun ? "Simulando..." : "Importando...";
+      msg.className = "text-sm text-blue-600";
+      msg.classList.remove("hidden");
+      result.classList.add("hidden");
+      try {
+        const r = await fetch("/api/admin/import-equipos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ csv: csvText, dryRun }),
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          msg.textContent = "✗ " + (typeof j.error === "string" ? j.error : "Error");
+          msg.className = "text-sm text-red-600";
+          return;
+        }
+        msg.textContent = dryRun
+          ? `✓ Simulación: ${j.aInsertar} a insertar, ${j.errores.length} errores`
+          : `✓ Importados: ${j.insertados} de ${j.filas} filas. ${j.errores.length} errores.`;
+        msg.className = "text-sm text-emerald-700";
+        result.textContent = JSON.stringify(j, null, 2);
+        result.classList.remove("hidden");
+      } catch (e) {
+        msg.textContent = "✗ Error de red";
+        msg.className = "text-sm text-red-600";
+      }
+    }
+
+    simBtn.addEventListener("click", () => enviar(true));
+    goBtn.addEventListener("click", () => {
+      if (!confirm("¿Ejecutar importación? Los registros nuevos se crearán en la base de datos.")) return;
+      enviar(false);
+    });
+  </script>
+</Layout>

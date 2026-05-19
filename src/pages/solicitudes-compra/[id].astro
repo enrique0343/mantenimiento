@@ -1,0 +1,490 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  solicitudesCompra, solicitudCompraItems, solicitudCompraAdjuntos,
+  solicitudCompraEnvios, solicitudCompraDescargas, usuarios, ordenes,
+  comprasDestinatarios,
+} from "@/lib/schema";
+import { eq } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
+
+const id = Number(Astro.params.id);
+const db = getDb(Astro);
+
+const [row] = await db
+  .select({ s: solicitudesCompra, u: usuarios, o: ordenes })
+  .from(solicitudesCompra)
+  .leftJoin(usuarios, eq(usuarios.id, solicitudesCompra.creadoPor))
+  .leftJoin(ordenes, eq(ordenes.id, solicitudesCompra.ordenId))
+  .where(eq(solicitudesCompra.id, id))
+  .limit(1);
+if (!row) return Astro.redirect("/solicitudes-compra");
+
+const { s: sol, u: creador, o: ot } = row;
+const items = await db.select().from(solicitudCompraItems)
+  .where(eq(solicitudCompraItems.solicitudId, id)).orderBy(solicitudCompraItems.orden);
+const adjuntos = await db.select().from(solicitudCompraAdjuntos)
+  .where(eq(solicitudCompraAdjuntos.solicitudId, id));
+const envios = await db.select().from(solicitudCompraEnvios)
+  .where(eq(solicitudCompraEnvios.solicitudId, id)).orderBy(solicitudCompraEnvios.enviadoEn);
+const descargas = envios.length
+  ? await db.select().from(solicitudCompraDescargas)
+      .where(eq(solicitudCompraDescargas.envioId, envios[0].id))
+  : [];
+const destinatarios = await db.select().from(comprasDestinatarios)
+  .where(eq(comprasDestinatarios.activo, true)).orderBy(comprasDestinatarios.nombre);
+
+const esBorrador = sol.estado === "borrador";
+const esAdmin = user.rol === "admin" || user.rol === "jefe";
+const puedeEditar = esBorrador && (esAdmin || sol.creadoPor === user.id);
+const puedeEnviar = esBorrador && esAdmin;
+const puedeResolver = sol.estado === "enviada" && esAdmin;
+
+const ESTADO_COLOR: Record<string, string> = {
+  borrador: "bg-slate-100 text-slate-600",
+  enviada:  "bg-blue-100 text-blue-700",
+  comprada: "bg-emerald-100 text-emerald-700",
+  rechazada:"bg-red-100 text-red-700",
+  cancelada:"bg-slate-200 text-slate-500",
+};
+const ESTADO_LABEL: Record<string, string> = {
+  borrador: "Borrador",
+  enviada:  "Enviada",
+  comprada: "Comprada ✓",
+  rechazada:"Rechazada",
+  cancelada:"Cancelada",
+};
+
+const solJson = JSON.stringify(sol);
+const itemsJson = JSON.stringify(items);
+const adjJson = JSON.stringify(adjuntos);
+const destJson = JSON.stringify(destinatarios);
+const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://mantenimiento-49c.pages.dev";
+---
+
+<Layout title={`${sol.codigo} — Solicitud de Compra`}>
+  <div class="flex items-center gap-2 flex-wrap mb-4">
+    <a href="/solicitudes-compra" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    {ot && <a href={`/ordenes/${ot.id}`} class="text-sm text-brand-600 hover:underline">Ver OT #{ot.id} →</a>}
+  </div>
+
+  <!-- Cabecera -->
+  <div class="card p-5 mb-4">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <div>
+        <div class="flex items-center gap-2 flex-wrap mb-1">
+          <span class="font-mono text-sm text-slate-500">{sol.codigo}</span>
+          <span class:list={["text-xs px-2 py-0.5 rounded-full font-medium", ESTADO_COLOR[sol.estado]]}>
+            {ESTADO_LABEL[sol.estado]}
+          </span>
+          {ot && (
+            <span class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+              OT #{ot.id}: {ot.titulo}
+            </span>
+          )}
+        </div>
+        <h1 class="text-xl font-bold">{sol.titulo}</h1>
+        {sol.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{sol.descripcion}</p>}
+        <p class="mt-2 text-xs text-slate-400">Creada por {creador?.nombre ?? "—"} · {new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        {puedeEditar && (
+          <button id="btnEditar" class="btn-secondary text-sm">✏️ Editar</button>
+        )}
+        {puedeEnviar && (
+          <button id="btnEnviar" class="btn-primary text-sm">📤 Enviar a compras</button>
+        )}
+        {puedeResolver && (
+          <>
+            <button id="btnComprada" class="btn-success text-sm">✅ Marcar comprada</button>
+            <button id="btnRechazada" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">❌ Rechazar</button>
+          </>
+        )}
+        {(esBorrador || sol.estado === "enviada") && esAdmin && (
+          <button id="btnCancelar" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50">Cancelar</button>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <!-- Ítems -->
+  <div class="card p-5 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">Ítems solicitados</h2>
+    </div>
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-slate-200 text-left text-xs text-slate-500">
+        <th class="pb-2 font-medium">#</th>
+        <th class="pb-2 font-medium">Descripción</th>
+        <th class="pb-2 font-medium text-right">Cantidad</th>
+        <th class="pb-2 font-medium">Unidad</th>
+        <th class="pb-2 font-medium">Notas</th>
+      </tr></thead>
+      <tbody id="tbItems">
+        {items.map((item, i) => (
+          <tr class="border-b border-slate-100 hover:bg-slate-50">
+            <td class="py-2 text-slate-400 text-xs">{i + 1}</td>
+            <td class="py-2 font-medium">{item.descripcion}</td>
+            <td class="py-2 text-right">{item.cantidad}</td>
+            <td class="py-2 text-slate-500">{item.unidad ?? "—"}</td>
+            <td class="py-2 text-slate-400 text-xs">{item.notas ?? ""}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    {items.length === 0 && <p class="text-sm text-slate-400 text-center py-4">Sin ítems.</p>}
+  </div>
+
+  <!-- Fotos adjuntas -->
+  <div class="card p-5 mb-4">
+    <h2 class="font-semibold mb-3">Fotos de referencia</h2>
+    <div id="fotos-grid" class="flex flex-wrap gap-3">
+      {adjuntos.map((a) => (
+        <div class="relative group w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100" data-adj-id={a.id}>
+          <a href={`/api/solicitudes-compra/adjunto/${a.id}`} target="_blank" rel="noopener">
+            {a.contentType.startsWith("image/")
+              ? <img src={`/api/solicitudes-compra/adjunto/${a.id}`} class="w-full h-full object-cover" loading="lazy" alt={a.nombre} />
+              : <div class="w-full h-full flex items-center justify-center text-xs text-slate-500 px-1 text-center">{a.nombre}</div>
+            }
+          </a>
+          {puedeEditar && (
+            <button
+              class="btn-del-adj absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center transition"
+              data-adj-id={a.id}
+            >×</button>
+          )}
+        </div>
+      ))}
+      {adjuntos.length === 0 && <p class="text-sm text-slate-400">Sin fotos adjuntas.</p>}
+    </div>
+    {puedeEditar && (
+      <div class="mt-3 flex flex-wrap gap-2">
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100">
+          <input type="file" id="fileInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
+          📎 Agregar archivos
+        </label>
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">
+          <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple class="hidden" />
+          📸 Cámara
+        </label>
+      </div>
+    )}
+  </div>
+
+  <!-- Envíos y tracking -->
+  {envios.length > 0 && (
+    <div class="card p-5 mb-4">
+      <h2 class="font-semibold mb-3">Historial de envíos</h2>
+      <div class="space-y-2">
+        {envios.map((e) => (
+          <div class="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm">
+            <div>
+              <p class="font-medium">{e.destinatarioNombre ?? e.destinatarioEmail}</p>
+              <p class="text-xs text-slate-400">{e.destinatarioEmail} · Enviado {new Date(e.enviadoEn).toLocaleString("es", { timeZone: "America/El_Salvador" })}</p>
+              <p class="mt-1 text-xs text-slate-500 font-mono break-all">{baseUrl}/solicitudes-compra/r/{e.token}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {sol.notasResultado && (
+    <div class="card p-4 mb-4 bg-slate-50">
+      <p class="text-xs font-medium text-slate-500 uppercase mb-1">Notas de resultado</p>
+      <p class="text-sm whitespace-pre-wrap">{sol.notasResultado}</p>
+    </div>
+  )}
+
+  <!-- Botón PDF -->
+  <div class="flex gap-2 mt-2">
+    <button id="btnPdf" class="btn-secondary text-sm">📄 Descargar PDF</button>
+  </div>
+
+  <!-- Modal editar -->
+  <div id="modalEditar" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+      <h2 class="font-bold text-lg mb-4">Editar solicitud</h2>
+      <div class="space-y-4">
+        <div>
+          <label class="label">Título *</label>
+          <input class="input" id="editTitulo" />
+        </div>
+        <div>
+          <label class="label">Descripción</label>
+          <textarea class="input" id="editDesc" rows="3"></textarea>
+        </div>
+        <div>
+          <h3 class="font-medium text-sm mb-2">Ítems</h3>
+          <div id="editItemsContainer" class="space-y-2"></div>
+          <button type="button" id="btnAgregarItemEdit" class="mt-2 text-sm text-brand-600 hover:underline">+ Agregar ítem</button>
+        </div>
+      </div>
+      <div class="mt-5 flex gap-2 justify-end">
+        <button id="btnCancelarEditar" class="btn-secondary">Cancelar</button>
+        <button id="btnGuardarEditar" class="btn-primary">Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal enviar -->
+  <div id="modalEnviar" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+      <h2 class="font-bold text-lg mb-4">Enviar solicitud a compras</h2>
+      <p class="text-sm text-slate-500 mb-4">Se generará un enlace único por destinatario con tracking de descarga.</p>
+      <div id="destList" class="space-y-2 max-h-48 overflow-y-auto mb-4"></div>
+      <div class="border-t pt-3">
+        <p class="text-xs font-medium text-slate-500 mb-2">Agregar destinatario ad-hoc</p>
+        <div class="flex gap-2">
+          <input class="input flex-1 text-sm" id="extraEmail" placeholder="email@ejemplo.com" type="email" />
+          <input class="input w-36 text-sm" id="extraNombre" placeholder="Nombre" />
+        </div>
+      </div>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnCancelarEnvio" class="btn-secondary">Cancelar</button>
+        <button id="btnConfirmarEnvio" class="btn-primary">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal resultado (comprada/rechazada) -->
+  <div id="modalResultado" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+      <h2 id="modalResultadoTitulo" class="font-bold text-lg mb-3"></h2>
+      <label class="label">Notas / comentarios <span class="text-slate-400 font-normal">(opcional)</span></label>
+      <textarea class="input" id="notasResultado" rows="3"></textarea>
+      <div class="mt-4 flex gap-2 justify-end">
+        <button id="btnCancelarResultado" class="btn-secondary">Cancelar</button>
+        <button id="btnConfirmarResultado" class="btn-primary">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script define:vars={{ solJson, itemsJson, adjJson, destJson, id }}>
+  const sol = JSON.parse(solJson);
+  let items = JSON.parse(itemsJson);
+  const destinatarios = JSON.parse(destJson);
+  const solId = id;
+
+  // ─── PDF ──────────────────────────────────────────────────────────────────
+  // Helper: descarga el logo de la empresa y lo convierte a data URL.
+  // Si no hay logo configurado, retorna null y el PDF sale sin él.
+  async function cargarLogoBase64() {
+    try {
+      const res = await fetch("/api/empresa/logo");
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ data: reader.result, type: blob.type });
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch { return null; }
+  }
+
+  document.getElementById("btnPdf")?.addEventListener("click", async () => {
+    const { jsPDF } = await import("https://esm.sh/jspdf@2.5.1");
+    const doc = new jsPDF();
+    const w = doc.internal.pageSize.width;
+    let y = 20;
+
+    // Logo en esquina superior derecha (si existe)
+    const logo = await cargarLogoBase64();
+    if (logo && logo.data) {
+      try {
+        // Formato: detecta PNG/JPEG/SVG por mime
+        const fmt = logo.type.includes("png") ? "PNG" : logo.type.includes("jpeg") ? "JPEG" : "PNG";
+        // Imagen 35mm ancho x 18mm alto, esquina superior derecha
+        doc.addImage(logo.data, fmt, w - 14 - 35, 8, 35, 18);
+      } catch (e) { console.warn("logo PDF:", e); }
+    }
+
+    doc.setFontSize(16); doc.setFont(undefined, "bold");
+    doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
+    doc.setFontSize(10); doc.setFont(undefined, "normal");
+    doc.text(`Estado: ${sol.estado}`, 14, y); y += 6;
+    doc.text(`Fecha: ${new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}`, 14, y); y += 10;
+
+    // Si pusimos logo, dejamos espacio vertical para no chocar con el título
+    if (logo && logo.data && y < 32) y = 32;
+
+    doc.setFont(undefined, "bold"); doc.text(sol.titulo, 14, y); y += 7;
+    if (sol.descripcion) {
+      doc.setFont(undefined, "normal"); doc.setFontSize(9);
+      const lines = doc.splitTextToSize(sol.descripcion, w - 28);
+      doc.text(lines, 14, y); y += lines.length * 5 + 4;
+    }
+
+    // Tabla de ítems
+    y += 2;
+    doc.setFontSize(11); doc.setFont(undefined, "bold");
+    doc.text("Ítems solicitados", 14, y); y += 7;
+    doc.setFontSize(9); doc.setFont(undefined, "bold");
+    doc.text("#", 14, y); doc.text("Descripción", 22, y);
+    doc.text("Cant.", w - 50, y, { align: "right" });
+    doc.text("Unidad", w - 14, y, { align: "right" }); y += 5;
+    doc.setFont(undefined, "normal");
+    doc.setDrawColor(200); doc.line(14, y, w - 14, y); y += 3;
+
+    items.forEach((item, i) => {
+      doc.text(String(i + 1), 14, y);
+      const descLines = doc.splitTextToSize(item.descripcion, w - 80);
+      doc.text(descLines, 22, y);
+      doc.text(String(item.cantidad), w - 50, y, { align: "right" });
+      doc.text(item.unidad ?? "—", w - 14, y, { align: "right" });
+      y += Math.max(descLines.length * 5, 7);
+      if (y > 270) { doc.addPage(); y = 20; }
+    });
+
+    doc.save(`${sol.codigo}.pdf`);
+  });
+
+  // ─── Editar ───────────────────────────────────────────────────────────────
+  const modalEditar = document.getElementById("modalEditar");
+  document.getElementById("btnEditar")?.addEventListener("click", () => {
+    (document.getElementById("editTitulo")).value = sol.titulo;
+    (document.getElementById("editDesc")).value = sol.descripcion ?? "";
+    renderEditItems();
+    modalEditar?.classList.remove("hidden");
+  });
+  document.getElementById("btnCancelarEditar")?.addEventListener("click", () => modalEditar?.classList.add("hidden"));
+
+  let editItemCount = 0;
+  const editContainer = document.getElementById("editItemsContainer");
+  function renderEditItems() {
+    editContainer.innerHTML = "";
+    editItemCount = 0;
+    items.forEach((it) => addEditItem(it.descripcion, String(it.cantidad), it.unidad ?? "", it.notas ?? ""));
+  }
+  function addEditItem(desc = "", cant = "1", unit = "", notas = "") {
+    editItemCount++;
+    const div = document.createElement("div");
+    div.className = "grid grid-cols-12 gap-1 items-center";
+    div.dataset.editItem = String(editItemCount);
+    div.innerHTML = `
+      <input class="col-span-5 input text-sm ei-desc" value="${desc}" placeholder="Descripción *" />
+      <input class="col-span-2 input text-sm ei-cant" type="number" min="0.01" step="any" value="${cant}" />
+      <input class="col-span-2 input text-sm ei-unit" value="${unit}" placeholder="Unidad" />
+      <input class="col-span-2 input text-sm ei-notas" value="${notas}" placeholder="Notas" />
+      <button type="button" class="ei-rm text-slate-400 hover:text-red-500 text-lg text-center">×</button>`;
+    div.querySelector(".ei-rm").addEventListener("click", () => div.remove());
+    editContainer.appendChild(div);
+  }
+  document.getElementById("btnAgregarItemEdit")?.addEventListener("click", () => addEditItem());
+
+  document.getElementById("btnGuardarEditar")?.addEventListener("click", async () => {
+    const titulo = (document.getElementById("editTitulo")).value.trim();
+    const descripcion = (document.getElementById("editDesc")).value.trim() || null;
+    const newItems = Array.from(editContainer.querySelectorAll("[data-edit-item]")).map((d) => ({
+      descripcion: (d.querySelector(".ei-desc")).value.trim(),
+      cantidad: parseFloat((d.querySelector(".ei-cant")).value) || 1,
+      unidad: (d.querySelector(".ei-unit")).value.trim() || null,
+      notas: (d.querySelector(".ei-notas")).value.trim() || null,
+    })).filter((i) => i.descripcion);
+
+    if (!titulo || !newItems.length) { alert("Título e ítems son requeridos"); return; }
+
+    const res = await fetch(`/api/solicitudes-compra/${solId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ titulo, descripcion, items: newItems }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); alert(j.error ?? "Error"); }
+  });
+
+  // ─── Fotos y documentos ───────────────────────────────────────────────────
+  async function uploadFiles(input) {
+    const files = Array.from(input.files ?? []);
+    if (!files.length) return;
+    for (const file of files) {
+      const fd = new FormData(); fd.append("file", file);
+      await fetch(`/api/solicitudes-compra/${solId}/adjuntos`, { method: "POST", body: fd });
+    }
+    input.value = "";
+    location.reload();
+  }
+  document.getElementById("fileInput")?.addEventListener("change", (e) => uploadFiles(e.target));
+  document.getElementById("cameraInput")?.addEventListener("change", (e) => uploadFiles(e.target));
+  document.querySelectorAll(".btn-del-adj").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const adjId = (btn).dataset.adjId;
+      if (!confirm("¿Eliminar foto?")) return;
+      await fetch(`/api/solicitudes-compra/${solId}/adjuntos?adjuntoId=${adjId}`, { method: "DELETE" });
+      location.reload();
+    });
+  });
+
+  // ─── Enviar ───────────────────────────────────────────────────────────────
+  const modalEnviar = document.getElementById("modalEnviar");
+  const destList = document.getElementById("destList");
+  document.getElementById("btnEnviar")?.addEventListener("click", () => {
+    destList.innerHTML = destinatarios.map((d) =>
+      `<label class="flex items-center gap-2 text-sm p-2 rounded hover:bg-slate-50 cursor-pointer">
+        <input type="checkbox" class="dest-cb" value="${d.id}" checked />
+        <span><strong>${d.nombre}</strong> <span class="text-slate-400">${d.email}</span>${d.cargo ? ` · <em>${d.cargo}</em>` : ""}</span>
+      </label>`
+    ).join("") || '<p class="text-sm text-slate-400">No hay destinatarios configurados. Ve a Configuración.</p>';
+    modalEnviar?.classList.remove("hidden");
+  });
+  document.getElementById("btnCancelarEnvio")?.addEventListener("click", () => modalEnviar?.classList.add("hidden"));
+  document.getElementById("btnConfirmarEnvio")?.addEventListener("click", async () => {
+    const ids = Array.from(document.querySelectorAll(".dest-cb:checked")).map((c) => Number(c.value));
+    const email = (document.getElementById("extraEmail")).value.trim();
+    const nombre = (document.getElementById("extraNombre")).value.trim();
+    const extras = email ? [{ email, nombre: nombre || undefined }] : [];
+    if (!ids.length && !extras.length) { alert("Selecciona al menos un destinatario"); return; }
+    const res = await fetch(`/api/solicitudes-compra/${solId}/enviar`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ destinatarioIds: ids, extras }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); alert(j.error ?? "Error al enviar"); }
+  });
+
+  // ─── Marcar comprada / rechazada ─────────────────────────────────────────
+  const modalResultado = document.getElementById("modalResultado");
+  let accionResultado = "";
+  document.getElementById("btnComprada")?.addEventListener("click", () => {
+    accionResultado = "comprada";
+    document.getElementById("modalResultadoTitulo").textContent = "✅ Marcar como comprada";
+    (document.getElementById("notasResultado")).value = "";
+    modalResultado?.classList.remove("hidden");
+  });
+  document.getElementById("btnRechazada")?.addEventListener("click", () => {
+    accionResultado = "rechazada";
+    document.getElementById("modalResultadoTitulo").textContent = "❌ Rechazar solicitud";
+    (document.getElementById("notasResultado")).value = "";
+    modalResultado?.classList.remove("hidden");
+  });
+  document.getElementById("btnCancelarResultado")?.addEventListener("click", () => modalResultado?.classList.add("hidden"));
+  document.getElementById("btnConfirmarResultado")?.addEventListener("click", async () => {
+    const notas = (document.getElementById("notasResultado")).value.trim() || null;
+    const res = await fetch(`/api/solicitudes-compra/${solId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ estado: accionResultado, notasResultado: notas }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); alert(j.error ?? "Error"); }
+  });
+
+  // ─── Cancelar solicitud ───────────────────────────────────────────────────
+  document.getElementById("btnCancelar")?.addEventListener("click", async () => {
+    if (!confirm("¿Cancelar esta solicitud?")) return;
+    const res = await fetch(`/api/solicitudes-compra/${solId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ estado: "cancelada" }),
+    });
+    if (res.ok) location.reload();
+    else { const j = await res.json().catch(() => ({})); alert(j.error ?? "Error"); }
+  });
+</script>

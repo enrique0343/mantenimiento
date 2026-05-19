@@ -1,13 +1,13 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, planesMantenimiento } from "@/lib/schema";
-import { sql, eq, and, lte, gte, asc } from "drizzle-orm";
+import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion } from "@/lib/schema";
+import { sql, eq, and, lte, gte, asc, isNotNull } from "drizzle-orm";
 export const prerender = false;
 
-// Tecnico → su panel personal
+// Tecnico y Motorista → su panel personal
 const user = Astro.locals.user;
-if (user?.rol === "tecnico") return Astro.redirect("/mi-panel");
+if (user?.rol === "tecnico" || user?.rol === "motorista") return Astro.redirect("/mi-panel");
 
 const db = getDb(Astro);
 
@@ -52,14 +52,32 @@ const total = (rows: { estado: string; n: number }[]) => rows.reduce((s, r) => s
 const get = (rows: { estado: string; n: number }[], k: string) =>
   Number(rows.find((r) => r.estado === k)?.n ?? 0);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es");
+// KPI de satisfacción (encuestas respondidas)
+const [satRow] = await db
+  .select({
+    n: sql<number>`COUNT(*)`,
+    avg: sql<number>`AVG(${encuestasSatisfaccion.calificacion})`,
+  })
+  .from(encuestasSatisfaccion)
+  .where(isNotNull(encuestasSatisfaccion.respondidaEn));
+
+const [satEnviadas] = await db
+  .select({ n: sql<number>`COUNT(*)` })
+  .from(encuestasSatisfaccion);
+
+const satN = Number(satRow?.n ?? 0);
+const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
+const satEnv = Number(satEnviadas?.n ?? 0);
+const satTasa = satEnv > 0 ? Math.round((satN / satEnv) * 100) : 0;
+
+const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 ---
 
 <Layout title="Dashboard">
   <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
   <p class="mt-1 text-sm text-slate-500">Resumen del estado del sistema</p>
 
-  <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
     <div class="card p-4">
       <div class="text-xs font-medium uppercase text-slate-500">Ordenes abiertas</div>
       <div class="mt-2 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
@@ -75,6 +93,20 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es");
     <div class="card p-4">
       <div class="text-xs font-medium uppercase text-slate-500">Vencidas</div>
       <div class="mt-2 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-medium uppercase text-slate-500">Satisfacción</div>
+      {satAvg != null ? (
+        <>
+          <div class="mt-2 text-3xl font-bold text-violet-600">{satAvg.toFixed(1)}<span class="text-base text-slate-400">/5</span></div>
+          <div class="mt-0.5 text-xs text-slate-500">{satN} de {satEnv} respondieron ({satTasa}%)</div>
+        </>
+      ) : (
+        <>
+          <div class="mt-2 text-2xl font-bold text-slate-300">—</div>
+          <div class="mt-0.5 text-xs text-slate-500">Sin encuestas aún</div>
+        </>
+      )}
     </div>
   </div>
 

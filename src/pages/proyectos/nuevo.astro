@@ -1,0 +1,247 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { sucursales, ubicaciones, activos, usuarios, tickets } from "@/lib/schema";
+import { asc, eq, and, inArray } from "drizzle-orm";
+import { puedeCrearProyecto } from "@/lib/proyectos";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeCrearProyecto(user.rol)) return Astro.redirect("/proyectos");
+
+const db = getDb(Astro);
+const sucs = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
+const ubs = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, tipo: ubicaciones.tipo }).from(ubicaciones).where(eq(ubicaciones.activa, true)).orderBy(asc(ubicaciones.nombre));
+const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol }).from(usuarios).where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "admin"]))).orderBy(asc(usuarios.nombre));
+
+// Si viene ?ticketId=X, pre-llenamos con datos del ticket
+const ticketId = Number(new URL(Astro.request.url).searchParams.get("ticketId") ?? 0) || null;
+let ticketPre: any = null;
+if (ticketId) {
+  const [t] = await db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
+  ticketPre = t ?? null;
+}
+
+const ubsJson = JSON.stringify(ubs);
+---
+
+<Layout title="Nuevo proyecto">
+  <a href="/proyectos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">📂 Nuevo proyecto</h1>
+  {ticketPre && (
+    <div class="mt-2 rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
+      Convirtiendo el <strong>Ticket #{ticketPre.id} — {ticketPre.asunto}</strong> en proyecto. Algunos campos vienen pre-llenados.
+    </div>
+  )}
+
+  <form id="form" class="mt-4 space-y-4">
+    <div class="card p-5 space-y-4">
+      <h2 class="font-semibold text-slate-900">Información general</h2>
+      <div>
+        <label class="label">Título *</label>
+        <input class="input" id="titulo" required value={ticketPre ? `[Ticket #${ticketPre.id}] ${ticketPre.asunto}` : ""} placeholder="Ej: Remodelación área de cocina principal" />
+      </div>
+      <div>
+        <label class="label">Descripción general</label>
+        <textarea class="input" id="descripcion" rows="3">{ticketPre ? `${ticketPre.descripcion}\n\n— Solicitante: ${ticketPre.solicitanteNombre} <${ticketPre.solicitanteEmail}>` : ""}</textarea>
+      </div>
+      <div>
+        <label class="label">Prioridad</label>
+        <select class="input w-40" id="prioridad">
+          <option value="baja">Baja</option>
+          <option value="media" selected={!ticketPre || ticketPre.prioridad === "media"}>Media</option>
+          <option value="alta" selected={ticketPre?.prioridad === "alta"}>Alta</option>
+          <option value="urgente" selected={ticketPre?.prioridad === "urgente"}>Urgente</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">📍 Ubicación</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label text-xs">Sucursal</label>
+          <select class="input text-sm" id="sucursalId">
+            <option value="">— Sin asignar —</option>
+            {sucs.map((s) => <option value={s.id} selected={ticketPre?.sucursalId === s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label text-xs">Ubicación</label>
+          <select class="input text-sm" id="ubicacionId" disabled>
+            <option value="">Selecciona la sucursal primero</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="label text-xs">Detalle de ubicación</label>
+        <input class="input text-sm" id="ubicacionDetalle" value={ticketPre?.ubicacion ?? ""} />
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">📋 Evaluación inicial</h2>
+      <p class="text-xs text-slate-500">Documenta la propuesta. El admin va a revisar esta información para aprobar el proyecto.</p>
+      <div>
+        <label class="label text-xs">Justificación (¿Por qué este proyecto?)</label>
+        <textarea class="input text-sm" id="justificacion" rows="2"></textarea>
+      </div>
+      <div>
+        <label class="label text-xs">Alcance (¿Qué incluye y qué NO incluye?)</label>
+        <textarea class="input text-sm" id="alcance" rows="2"></textarea>
+      </div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label text-xs">Análisis de factibilidad <span class="text-slate-400 font-normal">(técnico)</span></label>
+          <textarea class="input text-sm" id="factibilidad" rows="3" placeholder="¿Se puede hacer? ¿Qué recursos se necesitan? ¿Hay restricciones técnicas?"></textarea>
+        </div>
+        <div>
+          <label class="label text-xs">Análisis de viabilidad <span class="text-slate-400 font-normal">(estratégico)</span></label>
+          <textarea class="input text-sm" id="viabilidad" rows="3" placeholder="¿Tiene sentido hacerlo ahora? ¿Cuál es el ROI? ¿Prioridad relativa?"></textarea>
+        </div>
+        <div>
+          <label class="label text-xs">Beneficios esperados</label>
+          <textarea class="input text-sm" id="beneficiosEsperados" rows="2"></textarea>
+        </div>
+        <div>
+          <label class="label text-xs">Riesgos identificados</label>
+          <textarea class="input text-sm" id="riesgos" rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">📅 Plazos y presupuesto estimado</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label class="label text-xs">Inicio estimado</label>
+          <input class="input text-sm" id="fechaInicioEstimada" type="date" />
+        </div>
+        <div>
+          <label class="label text-xs">Fin estimado</label>
+          <input class="input text-sm" id="fechaFinEstimada" type="date" />
+        </div>
+        <div>
+          <label class="label text-xs">Presupuesto estimado ($)</label>
+          <input class="input text-sm" id="presupuestoEstimado" type="number" min="0" step="0.01" />
+        </div>
+      </div>
+      <div>
+        <label class="label text-xs">Responsable del proyecto</label>
+        <select class="input text-sm" id="responsableId">
+          <option value="">— Sin asignar —</option>
+          {tecnicos.map((t) => <option value={t.id}>{t.nombre} ({t.rol})</option>)}
+        </select>
+      </div>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit" id="btnSubmit">Crear proyecto en evaluación</button>
+      <a class="btn-secondary" href="/proyectos">Cancelar</a>
+    </div>
+  </form>
+
+  <script define:vars={{ ubsJson, ticketId, ticketPreSucursalId: ticketPre?.sucursalId ?? null, ticketPreUbicacionId: ticketPre?.ubicacionId ?? null }}>
+    const ALL_UBS = JSON.parse(ubsJson);
+    const sucSel = document.getElementById("sucursalId");
+    const ubSel = document.getElementById("ubicacionId");
+
+    function poblarUbicaciones(sid, preselectId) {
+      ubSel.innerHTML = "";
+      if (!sid) { ubSel.disabled = true; ubSel.appendChild(new Option("Selecciona la sucursal primero", "")); return; }
+      const opts = ALL_UBS.filter((u) => u.sucursalId === sid);
+      ubSel.disabled = opts.length === 0;
+      ubSel.appendChild(new Option(opts.length === 0 ? "Sin ubicaciones" : "— Sin asignar —", ""));
+      opts.forEach((u) => {
+        const o = new Option(`${u.nombre} (${u.tipo})`, String(u.id));
+        if (preselectId && u.id === preselectId) o.selected = true;
+        ubSel.appendChild(o);
+      });
+    }
+    sucSel.addEventListener("change", () => poblarUbicaciones(Number(sucSel.value), null));
+    // Si el ticket pre-llenó sucursal, poblar ubicaciones
+    if (ticketPreSucursalId) poblarUbicaciones(ticketPreSucursalId, ticketPreUbicacionId);
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      const btn = document.getElementById("btnSubmit");
+      err.classList.add("hidden");
+      btn.disabled = true; btn.textContent = "Guardando...";
+      const v = (id) => document.getElementById(id).value;
+      const vt = (id) => v(id).trim();
+
+      // Si viene de un ticket, usar el endpoint específico
+      let res;
+      if (ticketId) {
+        res = await fetch(`/api/proyectos/desde-ticket/${ticketId}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            titulo: vt("titulo"),
+            prioridad: v("prioridad"),
+            justificacion: vt("justificacion") || null,
+          }),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          // Después de crearlo, actualizar los campos extra que no acepta el endpoint
+          const proyId = j.proyecto.id;
+          await fetch(`/api/proyectos/${proyId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              descripcion: vt("descripcion") || null,
+              alcance: vt("alcance") || null,
+              factibilidad: vt("factibilidad") || null,
+              viabilidad: vt("viabilidad") || null,
+              beneficiosEsperados: vt("beneficiosEsperados") || null,
+              riesgos: vt("riesgos") || null,
+              fechaInicioEstimada: v("fechaInicioEstimada") || null,
+              fechaFinEstimada: v("fechaFinEstimada") || null,
+              presupuestoEstimado: v("presupuestoEstimado") ? Number(v("presupuestoEstimado")) : null,
+              responsableId: v("responsableId") ? Number(v("responsableId")) : null,
+            }),
+          });
+          location.href = `/proyectos/${proyId}`;
+          return;
+        }
+      } else {
+        const payload = {
+          titulo: vt("titulo"),
+          descripcion: vt("descripcion") || null,
+          prioridad: v("prioridad"),
+          sucursalId: v("sucursalId") ? Number(v("sucursalId")) : null,
+          ubicacionId: v("ubicacionId") ? Number(v("ubicacionId")) : null,
+          ubicacionDetalle: vt("ubicacionDetalle") || null,
+          justificacion: vt("justificacion") || null,
+          alcance: vt("alcance") || null,
+          factibilidad: vt("factibilidad") || null,
+          viabilidad: vt("viabilidad") || null,
+          beneficiosEsperados: vt("beneficiosEsperados") || null,
+          riesgos: vt("riesgos") || null,
+          fechaInicioEstimada: v("fechaInicioEstimada") || null,
+          fechaFinEstimada: v("fechaFinEstimada") || null,
+          presupuestoEstimado: v("presupuestoEstimado") ? Number(v("presupuestoEstimado")) : null,
+          responsableId: v("responsableId") ? Number(v("responsableId")) : null,
+        };
+        res = await fetch("/api/proyectos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          location.href = `/proyectos/${j.proyecto.id}`;
+          return;
+        }
+      }
+
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al crear el proyecto";
+      err.classList.remove("hidden");
+      btn.disabled = false; btn.textContent = "Crear proyecto en evaluación";
+    });
+  </script>
+</Layout>

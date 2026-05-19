@@ -1,16 +1,42 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, usuarios } from "@/lib/schema";
-import { asc, eq } from "drizzle-orm";
+import { activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
+import { asc, eq, and, inArray } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
-const activosList = await db.select().from(activos).orderBy(asc(activos.codigo));
+
+const activosList = await db
+  .select({
+    id: activos.id,
+    codigo: activos.codigo,
+    nombre: activos.nombre,
+    ubicacionId: activos.ubicacionId,
+  })
+  .from(activos)
+  .orderBy(asc(activos.codigo));
+
+const ubicacionesList = await db
+  .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursalId: ubicaciones.sucursalId })
+  .from(ubicaciones)
+  .where(eq(ubicaciones.activa, true))
+  .orderBy(asc(ubicaciones.nombre));
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
 const tecnicos = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
-  .where(eq(usuarios.activo, true));
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
+  .orderBy(asc(usuarios.nombre));
+
+const ubicacionesJson = JSON.stringify(ubicacionesList);
+const activosJson = JSON.stringify(activosList);
 ---
 
 <Layout title="Nueva orden">
@@ -48,21 +74,45 @@ const tecnicos = await db
       <div>
         <label class="label">Vencimiento</label>
         <input class="input" id="vencimiento" type="datetime-local" />
+        <p class="mt-1 text-xs text-slate-500">Se calcula desde el SLA del equipo si lo dejas vacío.</p>
       </div>
     </div>
 
-    <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div class="flex items-center gap-3">
-        <input type="checkbox" id="conEquipo" checked />
-        <label for="conEquipo" class="text-sm font-medium text-slate-700">Asociar a un equipo</label>
-        <span class="text-xs text-slate-500">(desmarca para trabajos generales: limpieza, instalación, etc.)</span>
+    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+      <h3 class="font-semibold text-slate-900 text-sm">📍 Lugar a intervenir</h3>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label text-xs">Sucursal *</label>
+          <select class="input text-sm" id="sucursalSel" required>
+            <option value="">— Selecciona —</option>
+            {sucursalesList.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label text-xs">Ubicación <span class="text-slate-400 font-normal">(opcional)</span></label>
+          <select class="input text-sm" id="ubicacionSel" disabled>
+            <option value="">Selecciona la sucursal primero</option>
+          </select>
+        </div>
       </div>
-      <div id="equipoBox" class="mt-3">
-        <label class="label">Equipo</label>
-        <select class="input" id="activoId">
-          <option value="">— Selecciona un equipo —</option>
-          {activosList.map((a) => <option value={a.id}>{a.codigo} - {a.nombre}</option>)}
-        </select>
+      <div>
+        <label class="label text-xs">Detalle de ubicación <span class="text-slate-400 font-normal">(si no aparece arriba)</span></label>
+        <input class="input text-sm" id="ubicacionDetalle" placeholder="Ej: pasillo norte segundo piso, junto a la oficina del jefe..." />
+        <p class="mt-1 text-xs text-slate-500">Útil cuando la ubicación exacta no está catalogada o quieres dar más contexto al técnico.</p>
+      </div>
+
+      <div class="border-t border-slate-200 pt-3">
+        <div class="flex items-center gap-3">
+          <input type="checkbox" id="conEquipo" />
+          <label for="conEquipo" class="text-sm font-medium text-slate-700">¿Es para un equipo específico?</label>
+        </div>
+        <p class="text-xs text-slate-500 mt-1 ml-6">Marca esta casilla si la intervención es sobre un equipo registrado. Si es un trabajo general (limpieza, instalación, área), déjalo sin marcar.</p>
+        <div id="equipoBox" class="mt-3 hidden">
+          <label class="label text-xs">Equipo *</label>
+          <select class="input text-sm" id="activoId">
+            <option value="">Selecciona la ubicación primero</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -81,6 +131,23 @@ const tecnicos = await db
       <textarea id="checklistRaw" class="input mt-2" rows="4" placeholder="Limpiar filtros&#10;Verificar tensión de bandas&#10;Revisar nivel de aceite"></textarea>
     </details>
 
+    <!-- Fotos del estado inicial (antes) -->
+    <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
+      <h2 class="text-sm font-semibold text-slate-900">📷 Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
+      <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área antes de iniciar. Se guardarán como evidencia "antes" en la OT.</p>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
+          <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
+          📎 Seleccionar fotos
+        </label>
+        <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
+          <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
+          📸 Cámara
+        </label>
+      </div>
+      <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
+    </div>
+
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit">Crear orden</button>
@@ -88,37 +155,130 @@ const tecnicos = await db
     </div>
   </form>
 
-  <script>
-    const conEquipoCk = document.getElementById("conEquipo") as HTMLInputElement;
-    const equipoBox = document.getElementById("equipoBox") as HTMLElement;
-    const activoSel = document.getElementById("activoId") as HTMLSelectElement;
+  <script define:vars={{ ubicacionesJson, activosJson }}>
+    const UBICACIONES = JSON.parse(ubicacionesJson);
+    const ACTIVOS = JSON.parse(activosJson);
+
+    const conEquipoCk = document.getElementById("conEquipo");
+    const equipoBox = document.getElementById("equipoBox");
+    const sucSel = document.getElementById("sucursalSel");
+    const ubSel = document.getElementById("ubicacionSel");
+    const activoSel = document.getElementById("activoId");
+
+    // Sucursal SIEMPRE obligatoria. Ubicación opcional. Equipo solo si se marca el checkbox.
     conEquipoCk.addEventListener("change", () => {
       equipoBox.classList.toggle("hidden", !conEquipoCk.checked);
+      activoSel.required = conEquipoCk.checked;
       if (!conEquipoCk.checked) activoSel.value = "";
+      else {
+        // Cuando se marca, repoblar equipos según ubicación actual
+        actualizarEquipos();
+      }
     });
 
-    const form = document.getElementById("form") as HTMLFormElement;
-    const err = document.getElementById("err") as HTMLElement;
+    // Sucursal → puebla ubicaciones
+    sucSel.addEventListener("change", () => {
+      const sid = Number(sucSel.value);
+      ubSel.innerHTML = "";
+      if (!sid) {
+        ubSel.disabled = true;
+        ubSel.appendChild(new Option("Selecciona la sucursal primero", ""));
+        actualizarEquipos();
+        return;
+      }
+      const ubs = UBICACIONES.filter((u) => u.sucursalId === sid);
+      ubSel.disabled = ubs.length === 0;
+      ubSel.appendChild(new Option(ubs.length === 0 ? "Sin ubicaciones (usa el detalle)" : "— Selecciona —", ""));
+      ubs.forEach((u) => ubSel.appendChild(new Option(`${u.nombre} (${u.tipo})`, String(u.id))));
+      actualizarEquipos();
+    });
+
+    // Ubicación → puebla equipos (si el checkbox de equipo está activo)
+    ubSel.addEventListener("change", actualizarEquipos);
+
+    function actualizarEquipos() {
+      activoSel.innerHTML = "";
+      if (!conEquipoCk.checked) return;
+      const ubid = Number(ubSel.value);
+      if (!ubid) {
+        activoSel.disabled = true;
+        activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
+        return;
+      }
+      const eqs = ACTIVOS.filter((a) => a.ubicacionId === ubid);
+      activoSel.disabled = eqs.length === 0;
+      activoSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Selecciona el equipo —", ""));
+      eqs.forEach((a) => activoSel.appendChild(new Option(`${a.codigo} · ${a.nombre}`, String(a.id))));
+    }
+
+    // ─── Fotos pendientes (se suben tras crear la OT) ──────────────────────
+    const pendingFotos = [];
+    const fotoFile = document.getElementById("fotoFile");
+    const fotoCamara = document.getElementById("fotoCamara");
+    const fotosPreview = document.getElementById("fotosPreview");
+    function addFotos(files) {
+      for (const f of Array.from(files)) {
+        pendingFotos.push(f);
+        const thumb = document.createElement("div");
+        thumb.className = "relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-white";
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(f);
+        img.className = "w-full h-full object-cover";
+        thumb.appendChild(img);
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.textContent = "×";
+        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+        rm.addEventListener("click", () => {
+          const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
+          thumb.remove();
+        });
+        thumb.appendChild(rm);
+        fotosPreview.appendChild(thumb);
+      }
+    }
+    fotoFile?.addEventListener("change", () => { addFotos(fotoFile.files); fotoFile.value = ""; });
+    fotoCamara?.addEventListener("change", () => { addFotos(fotoCamara.files); fotoCamara.value = ""; });
+
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       err.classList.add("hidden");
-      const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
+      const v = (id) => document.getElementById(id).value;
       const venc = v("vencimiento");
       const activoId = v("activoId");
       const asignadoA = v("asignadoA");
+      const sucursalId = v("sucursalSel");
+      const ubicacionId = v("ubicacionSel");
+      const ubicacionDetalle = v("ubicacionDetalle").trim();
       const checklistRaw = v("checklistRaw").trim();
 
-      let checklistEjecucion: string | null = null;
+      if (!sucursalId) {
+        err.textContent = "La sucursal es obligatoria.";
+        err.classList.remove("hidden");
+        return;
+      }
+      if (conEquipoCk.checked && !activoId) {
+        err.textContent = "Si marcas 'Es para un equipo específico', debes seleccionarlo. O desmárcalo si es un trabajo general.";
+        err.classList.remove("hidden");
+        return;
+      }
+
+      let checklistEjecucion = null;
       if (checklistRaw) {
         const items = checklistRaw.split("\n").map((l) => l.trim()).filter(Boolean).map((texto) => ({ texto, hecho: false }));
         if (items.length > 0) checklistEjecucion = JSON.stringify(items);
       }
 
-      const payload: any = {
+      const payload = {
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
         tipo: v("tipo"),
         prioridad: v("prioridad"),
+        sucursalId: Number(sucursalId),
+        ubicacionId: ubicacionId ? Number(ubicacionId) : null,
+        ubicacionDetalle: ubicacionDetalle || null,
         activoId: activoId ? Number(activoId) : null,
         asignadoA: asignadoA ? Number(asignadoA) : null,
         vencimiento: venc ? new Date(venc).toISOString() : null,
@@ -136,7 +296,17 @@ const tecnicos = await db
         return;
       }
       const j = await res.json();
-      location.href = `/ordenes/${j.orden.id}`;
+      const otId = j.orden.id;
+
+      // Subir fotos pendientes como categoría "antes"
+      for (const f of pendingFotos) {
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("categoria", "antes");
+        await fetch(`/api/ordenes/${otId}/adjuntos`, { method: "POST", body: fd }).catch(() => {});
+      }
+
+      location.href = `/ordenes/${otId}`;
     });
   </script>
 </Layout>

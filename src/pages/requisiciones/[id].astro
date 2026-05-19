@@ -1,0 +1,246 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { requisiciones, requisicionItems, items as itemsTable, proveedores, usuarios } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { REQ_LABEL, REQ_COLOR, transicionesReq, type EstadoReq } from "@/lib/requisiciones";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/requisiciones");
+
+const user = Astro.locals.user!;
+const db = getDb(Astro);
+
+const [r] = await db
+  .select({ rec: requisiciones, p: proveedores, u: usuarios })
+  .from(requisiciones)
+  .leftJoin(proveedores, eq(proveedores.id, requisiciones.proveedorId))
+  .leftJoin(usuarios, eq(usuarios.id, requisiciones.creadoPor))
+  .where(eq(requisiciones.id, id))
+  .limit(1);
+if (!r) return Astro.redirect("/requisiciones");
+
+const lineas = await db
+  .select({ li: requisicionItems, it: itemsTable })
+  .from(requisicionItems)
+  .leftJoin(itemsTable, eq(itemsTable.id, requisicionItems.itemId))
+  .where(eq(requisicionItems.requisicionId, id));
+
+const req = r.rec;
+const estado = req.estado as EstadoReq;
+const transiciones = transicionesReq(estado, user.rol);
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
+const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") && ["admin", "jefe", "tecnico"].includes(user.rol);
+---
+
+<Layout title={`Requisición ${req.numero}`}>
+  <a href="/requisiciones" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <div class="flex items-center gap-3">
+        <h1 class="text-2xl font-bold font-mono">{req.numero}</h1>
+        <span class={`badge ${REQ_COLOR[estado]}`}>{REQ_LABEL[estado]}</span>
+        {req.origen === "auto_stock_minimo" && <span class="badge bg-amber-100 text-amber-700">⚠ Auto stock mínimo</span>}
+      </div>
+      <p class="mt-1 text-sm text-slate-500">
+        Solicitada {fmt(req.fechaSolicitud)} por {r.u?.nombre ?? "—"}
+        {req.fechaNecesidad && <> · Necesidad: {fmt(req.fechaNecesidad)}</>}
+      </p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {transiciones.map((t) => (
+        <button data-trans={t} class:list={["btn-secondary text-sm", t === "aprobada" && "!bg-emerald-600 !text-white", t === "rechazada" && "!bg-red-600 !text-white", t === "enviada" && "!bg-brand-600 !text-white"]}>
+          {REQ_LABEL[t]}
+        </button>
+      ))}
+      {puedeRecibir && <button id="recibirBtn" class="btn-primary text-sm">📥 Recibir</button>}
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="card p-4 text-sm">
+      <div class="text-xs uppercase text-slate-500">Proveedor</div>
+      <div class="font-medium">{r.p?.nombre ?? <span class="text-slate-400">— Sin proveedor —</span>}</div>
+    </div>
+    <div class="card p-4 text-sm">
+      <div class="text-xs uppercase text-slate-500">Total estimado</div>
+      <div class="font-mono text-lg font-bold text-brand-700">{req.total != null ? `$${req.total.toFixed(2)}` : "—"}</div>
+    </div>
+    <div class="card p-4 text-sm">
+      <div class="text-xs uppercase text-slate-500">Aprobación</div>
+      <div>{req.aprobadoEn ? fmt(req.aprobadoEn) : <span class="text-slate-400">Pendiente</span>}</div>
+    </div>
+  </div>
+
+  {req.notas && (
+    <div class="card mt-4 p-4 text-sm">
+      <div class="text-xs uppercase text-slate-500 mb-1">Notas</div>
+      <p class="whitespace-pre-wrap">{req.notas}</p>
+    </div>
+  )}
+
+  {req.rechazadoMotivo && (
+    <div class="card mt-4 border-l-4 border-red-500 p-4 text-sm">
+      <div class="text-xs uppercase text-red-600 mb-1">Motivo de rechazo</div>
+      <p class="whitespace-pre-wrap text-red-700">{req.rechazadoMotivo}</p>
+    </div>
+  )}
+
+  <div class="card mt-4 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Items ({lineas.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Item</th>
+          <th class="px-4 py-2 text-right">Solicitado</th>
+          <th class="px-4 py-2 text-right">Recibido</th>
+          <th class="px-4 py-2 text-right">Pendiente</th>
+          <th class="px-4 py-2 text-right">Precio unit.</th>
+          <th class="px-4 py-2 text-right">Subtotal</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {lineas.map((l) => {
+          const pendiente = l.li.cantidad - l.li.cantidadRecibida;
+          return (
+            <tr>
+              <td class="px-4 py-2">
+                {l.it ? <span><span class="font-mono text-xs">{l.it.codigo}</span> · {l.it.nombre}</span> : "—"}
+              </td>
+              <td class="px-4 py-2 text-right font-mono">{l.li.cantidad} {l.it?.unidad}</td>
+              <td class:list={["px-4 py-2 text-right font-mono", l.li.cantidadRecibida >= l.li.cantidad ? "text-emerald-700" : "text-amber-600"]}>
+                {l.li.cantidadRecibida}
+              </td>
+              <td class="px-4 py-2 text-right font-mono text-slate-500">{pendiente}</td>
+              <td class="px-4 py-2 text-right font-mono">{l.li.precioUnitario != null ? `$${l.li.precioUnitario.toFixed(2)}` : "—"}</td>
+              <td class="px-4 py-2 text-right font-mono">{l.li.precioUnitario != null ? `$${(l.li.precioUnitario * l.li.cantidad).toFixed(2)}` : "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Modal recibir -->
+  {puedeRecibir && (
+    <div id="recibirModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+      <div class="card max-w-2xl w-full p-5">
+        <h3 class="font-semibold text-lg">📥 Recibir mercancía</h3>
+        <p class="mt-1 text-sm text-slate-500">Indica las cantidades efectivamente recibidas. Se sumarán al inventario.</p>
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label class="label">Fecha *</label>
+            <input class="input" id="rec_fecha" type="date" required />
+          </div>
+          <div>
+            <label class="label">Número de factura</label>
+            <input class="input" id="rec_factura" placeholder="FACT-..." />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label">Notas</label>
+            <textarea class="input" id="rec_notas" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="mt-3 overflow-x-auto rounded border border-slate-200">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-50 text-xs"><tr>
+              <th class="px-3 py-2">Item</th>
+              <th class="px-3 py-2 text-right">Pendiente</th>
+              <th class="px-3 py-2 w-32">Cant. a recibir</th>
+            </tr></thead>
+            <tbody>
+              {lineas.filter(l => l.li.cantidad - l.li.cantidadRecibida > 0).map((l) => {
+                const pendiente = l.li.cantidad - l.li.cantidadRecibida;
+                return (
+                  <tr>
+                    <td class="px-3 py-1.5 text-xs">{l.it?.codigo} · {l.it?.nombre}</td>
+                    <td class="px-3 py-1.5 text-right font-mono">{pendiente}</td>
+                    <td class="px-3 py-1.5"><input type="number" min="0" max={pendiente} step="0.01" value={pendiente} class="input rec-cant text-sm" data-linea={l.li.id} data-precio={l.li.precioUnitario ?? ""} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p id="rec_msg" class="hidden mt-2 text-sm"></p>
+        <div class="mt-3 flex justify-end gap-2">
+          <button id="rec_cancel" class="btn-secondary text-sm">Cancelar</button>
+          <button id="rec_save" class="btn-primary text-sm">Confirmar recepción</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <script define:vars={{ id }}>
+    // Transiciones de estado
+    document.querySelectorAll("[data-trans]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const estado = btn.dataset.trans;
+        let body = { estado };
+        if (estado === "rechazada") {
+          const motivo = prompt("Motivo de rechazo:");
+          if (!motivo) return;
+          body.rechazadoMotivo = motivo;
+        }
+        const res = await fetch(`/api/requisiciones/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          alert(typeof j.error === "string" ? j.error : "Error");
+          return;
+        }
+        location.reload();
+      });
+    });
+
+    // Modal recibir
+    const modal = document.getElementById("recibirModal");
+    document.getElementById("recibirBtn")?.addEventListener("click", () => {
+      document.getElementById("rec_fecha").value = new Date().toISOString().slice(0, 10);
+      modal.classList.remove("hidden");
+    });
+    document.getElementById("rec_cancel")?.addEventListener("click", () => modal.classList.add("hidden"));
+
+    document.getElementById("rec_save")?.addEventListener("click", async () => {
+      const msg = document.getElementById("rec_msg");
+      msg.classList.add("hidden");
+      const recepciones = [];
+      document.querySelectorAll(".rec-cant").forEach((inp) => {
+        const cant = Number(inp.value);
+        if (cant > 0) {
+          const precio = inp.dataset.precio;
+          recepciones.push({
+            lineaId: Number(inp.dataset.linea),
+            cantidad: cant,
+            precioUnitario: precio ? Number(precio) : null,
+          });
+        }
+      });
+      if (recepciones.length === 0) {
+        msg.textContent = "Indica al menos una cantidad mayor a cero."; msg.className = "text-sm text-red-600"; msg.classList.remove("hidden"); return;
+      }
+      const payload = {
+        fecha: document.getElementById("rec_fecha").value,
+        numeroFactura: document.getElementById("rec_factura").value.trim() || null,
+        notas: document.getElementById("rec_notas").value.trim() || null,
+        recepciones,
+      };
+      const res = await fetch(`/api/requisiciones/${id}/recibir`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        msg.textContent = typeof j.error === "string" ? j.error : "Error";
+        msg.className = "text-sm text-red-600"; msg.classList.remove("hidden"); return;
+      }
+      location.reload();
+    });
+  </script>
+</Layout>

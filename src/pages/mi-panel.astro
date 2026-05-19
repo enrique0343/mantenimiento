@@ -1,189 +1,433 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, planesMantenimiento } from "@/lib/schema";
-import { eq, and, desc, gte, sql, isNotNull, lte } from "drizzle-orm";
+import { ordenes, activos, planesMantenimiento, vehiculos, viajes, tickets, sucursales } from "@/lib/schema";
+import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { fmtKm, fmtDuracion } from "@/lib/flota";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
+const esMotorista = user.rol === "motorista";
 
-// OTs activas asignadas a mi
-const misActivas = await db
-  .select({ o: ordenes, a: activos })
-  .from(ordenes)
-  .leftJoin(activos, eq(activos.id, ordenes.activoId))
-  .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'completada')`))
-  .orderBy(desc(ordenes.prioridad), ordenes.vencimiento);
-
-// Planes preventivos asignados a mi
-const misPlanes = await db
-  .select({ p: planesMantenimiento, a: activos })
-  .from(planesMantenimiento)
-  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-  .where(and(eq(planesMantenimiento.asignadoA, user.id), eq(planesMantenimiento.activo, true)))
-  .orderBy(planesMantenimiento.proximaFecha)
-  .limit(10);
-
-// Stats: completadas este mes
 const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
-const completadasMes = await db
-  .select({ n: sql<number>`count(*)` })
-  .from(ordenes)
-  .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
-const nCompletadas = Number(completadasMes[0]?.n ?? 0);
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 
-// Total horas trabajadas (mes)
-const horasMes = await db
-  .select({ h: sql<number>`SUM(COALESCE(${ordenes.horasTrabajadas}, 0))` })
-  .from(ordenes)
-  .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
-const totalHoras = Number(horasMes[0]?.h ?? 0);
+// === DATOS PARA MOTORISTA ===
+let miViaje: any = null;
+let disponibles: any[] = [];
+let misViajes: any[] = [];
+let totalKmMes = 0;
+let totalViajesMes = 0;
 
-// % a tiempo: completadas antes del vencimiento
-const aTiempoRows = await db
-  .select({ n: sql<number>`count(*)` })
-  .from(ordenes)
-  .where(and(
-    eq(ordenes.asignadoA, user.id),
-    isNotNull(ordenes.completadaEn),
-    isNotNull(ordenes.vencimiento),
-    gte(ordenes.completadaEn, inicioMes),
-    sql`${ordenes.completadaEn} <= ${ordenes.vencimiento}`,
-  ));
-const aTiempo = Number(aTiempoRows[0]?.n ?? 0);
-const pctATiempo = nCompletadas > 0 ? Math.round((aTiempo / nCompletadas) * 100) : 100;
+if (esMotorista) {
+  const [v0] = await db
+    .select({ v: viajes, veh: vehiculos })
+    .from(viajes)
+    .leftJoin(vehiculos, eq(vehiculos.id, viajes.vehiculoId))
+    .where(and(eq(viajes.motoristaId, user.id), eq(viajes.estado, "en_curso")))
+    .limit(1);
+  miViaje = v0 ?? null;
 
-// Gamificacion: nivel basico segun completadas totales
-const totalCompletadasRows = await db
-  .select({ n: sql<number>`count(*)` })
-  .from(ordenes)
-  .where(and(eq(ordenes.asignadoA, user.id), isNotNull(ordenes.completadaEn)));
-const totalCompletadasGlobal = Number(totalCompletadasRows[0]?.n ?? 0);
+  disponibles = await db
+    .select()
+    .from(vehiculos)
+    .where(and(eq(vehiculos.estado, "disponible"), eq(vehiculos.activo, true)))
+    .orderBy(vehiculos.codigo);
 
-const NIVELES = [
-  { min: 0, nombre: "Aprendiz", emoji: "🔧" },
-  { min: 10, nombre: "Operador", emoji: "⚙️" },
-  { min: 25, nombre: "Técnico", emoji: "🛠️" },
-  { min: 50, nombre: "Especialista", emoji: "🏅" },
-  { min: 100, nombre: "Maestro", emoji: "🏆" },
-  { min: 250, nombre: "Leyenda", emoji: "👑" },
-];
-const nivelActual = [...NIVELES].reverse().find((n) => totalCompletadasGlobal >= n.min) ?? NIVELES[0];
-const nivelSiguiente = NIVELES.find((n) => totalCompletadasGlobal < n.min);
-const pctSiguiente = nivelSiguiente
-  ? Math.round(((totalCompletadasGlobal - nivelActual.min) / (nivelSiguiente.min - nivelActual.min)) * 100)
-  : 100;
+  misViajes = await db
+    .select({ v: viajes, veh: vehiculos })
+    .from(viajes)
+    .leftJoin(vehiculos, eq(vehiculos.id, viajes.vehiculoId))
+    .where(eq(viajes.motoristaId, user.id))
+    .orderBy(desc(viajes.id))
+    .limit(20);
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es") : "—");
+  const stats = await db
+    .select({
+      totalKm: sql<number>`SUM(COALESCE(${viajes.kmRecorrido}, 0))`,
+      totalViajes: sql<number>`count(*)`,
+    })
+    .from(viajes)
+    .where(and(eq(viajes.motoristaId, user.id), gte(viajes.inicio, inicioMes), eq(viajes.estado, "finalizado")));
+  totalKmMes = Number(stats[0]?.totalKm ?? 0);
+  totalViajesMes = Number(stats[0]?.totalViajes ?? 0);
+}
+
+// === DATOS PARA TÉCNICO ===
+let misActivas: any[] = [];
+let misPlanes: any[] = [];
+let misTickets: any[] = [];
+let nCompletadas = 0;
+let totalHoras = 0;
+let pctATiempo = 100;
+let totalCompletadasGlobal = 0;
+let nivelActual: any = { min: 0, nombre: "Aprendiz", emoji: "🔧" };
+let nivelSiguiente: any = null;
+let pctSiguiente = 100;
+
+if (!esMotorista) {
+  misActivas = await db
+    .select({ o: ordenes, a: activos })
+    .from(ordenes)
+    .leftJoin(activos, eq(activos.id, ordenes.activoId))
+    .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
+    .orderBy(desc(ordenes.prioridad), ordenes.vencimiento);
+
+  // Tickets asignados al técnico que aún no estén resueltos/cerrados
+  misTickets = await db
+    .select({ t: tickets, s: sucursales })
+    .from(tickets)
+    .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
+    .where(and(eq(tickets.asignadoA, user.id), sql`${tickets.estado} IN ('nuevo', 'asignado', 'en_proceso')`))
+    .orderBy(desc(tickets.prioridad), tickets.vencimientoSla);
+
+  misPlanes = await db
+    .select({ p: planesMantenimiento, a: activos })
+    .from(planesMantenimiento)
+    .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+    .where(and(eq(planesMantenimiento.asignadoA, user.id), eq(planesMantenimiento.activo, true)))
+    .orderBy(planesMantenimiento.proximaFecha)
+    .limit(10);
+
+  const completadasMes = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(ordenes)
+    .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+  nCompletadas = Number(completadasMes[0]?.n ?? 0);
+
+  const horasMes = await db
+    .select({ h: sql<number>`SUM(COALESCE(${ordenes.horasTrabajadas}, 0))` })
+    .from(ordenes)
+    .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+  totalHoras = Number(horasMes[0]?.h ?? 0);
+
+  const aTiempoRows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(ordenes)
+    .where(and(
+      eq(ordenes.asignadoA, user.id),
+      isNotNull(ordenes.completadaEn),
+      isNotNull(ordenes.vencimiento),
+      gte(ordenes.completadaEn, inicioMes),
+      sql`${ordenes.completadaEn} <= ${ordenes.vencimiento}`,
+    ));
+  const aTiempo = Number(aTiempoRows[0]?.n ?? 0);
+  pctATiempo = nCompletadas > 0 ? Math.round((aTiempo / nCompletadas) * 100) : 100;
+
+  const totalCompletadasRows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(ordenes)
+    .where(and(eq(ordenes.asignadoA, user.id), isNotNull(ordenes.completadaEn)));
+  totalCompletadasGlobal = Number(totalCompletadasRows[0]?.n ?? 0);
+
+  const NIVELES = [
+    { min: 0, nombre: "Aprendiz", emoji: "🔧" },
+    { min: 10, nombre: "Operador", emoji: "⚙️" },
+    { min: 25, nombre: "Técnico", emoji: "🛠️" },
+    { min: 50, nombre: "Especialista", emoji: "🏅" },
+    { min: 100, nombre: "Maestro", emoji: "🏆" },
+    { min: 250, nombre: "Leyenda", emoji: "👑" },
+  ];
+  nivelActual = [...NIVELES].reverse().find((n) => totalCompletadasGlobal >= n.min) ?? NIVELES[0];
+  nivelSiguiente = NIVELES.find((n) => totalCompletadasGlobal < n.min);
+  pctSiguiente = nivelSiguiente
+    ? Math.round(((totalCompletadasGlobal - nivelActual.min) / (nivelSiguiente.min - nivelActual.min)) * 100)
+    : 100;
+}
 ---
 
-<Layout title="Mi panel">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} 👋</h1>
-      <p class="text-sm text-slate-500">Resumen personal del mes</p>
-    </div>
-    <div class="card flex items-center gap-3 px-4 py-2">
-      <span class="text-3xl">{nivelActual.emoji}</span>
-      <div>
-        <div class="text-xs text-slate-500">Nivel</div>
-        <div class="text-sm font-bold">{nivelActual.nombre}</div>
-        {nivelSiguiente && (
-          <div class="text-[10px] text-slate-400">{totalCompletadasGlobal}/{nivelSiguiente.min} → {nivelSiguiente.nombre}</div>
+<Layout title={esMotorista ? "Mi panel · Motorista" : "Mi panel"}>
+  {esMotorista ? (
+    <>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} 🚗</h1>
+          <p class="text-sm text-slate-500">Panel de motorista</p>
+        </div>
+      </div>
+
+      {miViaje && (
+        <div class="card mt-4 border-l-4 border-amber-500 p-5">
+          <h2 class="font-semibold text-amber-700">🚗 Tienes un viaje en curso</h2>
+          <p class="mt-2 text-sm">
+            <strong>{miViaje.veh?.placa}</strong> — {miViaje.veh?.marca} {miViaje.veh?.modelo}
+            <br />
+            Inicio: {fmtFull(miViaje.v.inicio)} · Destino: {miViaje.v.destino ?? "—"}
+          </p>
+          <a href={`/vehiculo/qr/${miViaje.veh?.qrToken}`} class="btn-primary mt-3 inline-block">Ir al viaje →</a>
+        </div>
+      )}
+
+      <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">Vehículos disponibles</div>
+          <div class="mt-1 text-3xl font-bold text-emerald-600">{disponibles.length}</div>
+        </div>
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">Viajes (mes)</div>
+          <div class="mt-1 text-3xl font-bold text-brand-600">{totalViajesMes}</div>
+        </div>
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">Km recorridos (mes)</div>
+          <div class="mt-1 text-3xl font-bold text-amber-600">{fmtKm(totalKmMes)}</div>
+        </div>
+      </div>
+
+      <div class="card mt-6 overflow-hidden">
+        <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Vehículos disponibles ({disponibles.length})</h2></div>
+        {disponibles.length === 0 && <div class="px-5 pb-4 text-sm text-slate-500">No hay vehículos disponibles ahora.</div>}
+        <ul class="divide-y divide-slate-100">
+          {disponibles.map((v: any) => (
+            <li class="flex items-center justify-between px-5 py-3 hover:bg-slate-50">
+              <div>
+                <a href={`/vehiculo/qr/${v.qrToken}`} class="font-medium text-brand-700 hover:underline">
+                  {v.placa} — {v.marca} {v.modelo}
+                </a>
+                <div class="text-xs text-slate-500">{v.codigo} · {fmtKm(v.kilometrajeActual)}</div>
+              </div>
+              <a href={`/vehiculo/qr/${v.qrToken}`} class="btn-primary text-sm">Iniciar viaje →</a>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div class="mt-6">
+        <h2 class="mb-2 font-semibold">Mis últimos viajes</h2>
+        {misViajes.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">Sin viajes aún.</div>
+        ) : (
+          <>
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misViajes.map((r: any) => (
+                <div class="card p-3">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="font-semibold">{r.veh?.placa}</div>
+                    <span class:list={["badge text-[10px]", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span>
+                  </div>
+                  <div class="mt-1 text-xs text-slate-500">{fmtFull(r.v.inicio)}</div>
+                  {r.v.destino && <div class="mt-0.5 text-sm text-slate-700">📍 {r.v.destino}</div>}
+                  <div class="mt-2 flex items-center justify-between text-xs">
+                    <span class="font-mono text-slate-600">🛣 {r.v.kmRecorrido ? `${r.v.kmRecorrido.toFixed(1)} km` : "—"}</span>
+                    <span class="font-mono text-slate-600">⏱ {fmtDuracion(r.v.duracionMin)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">Inicio</th>
+                    <th class="px-4 py-2">Vehículo</th>
+                    <th class="px-4 py-2">Destino</th>
+                    <th class="px-4 py-2 text-right">Km</th>
+                    <th class="px-4 py-2 text-right">Duración</th>
+                    <th class="px-4 py-2">Estado</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misViajes.map((r: any) => (
+                    <tr>
+                      <td class="px-4 py-2 text-xs">{fmtFull(r.v.inicio)}</td>
+                      <td class="px-4 py-2">{r.veh?.placa}</td>
+                      <td class="px-4 py-2 text-slate-600">{r.v.destino ?? "—"}</td>
+                      <td class="px-4 py-2 text-right font-mono">{r.v.kmRecorrido ? r.v.kmRecorrido.toFixed(1) : "—"}</td>
+                      <td class="px-4 py-2 text-right font-mono">{fmtDuracion(r.v.duracionMin)}</td>
+                      <td class="px-4 py-2"><span class:list={["badge", r.v.estado === "en_curso" ? "bg-amber-100 text-amber-700" : r.v.estado === "finalizado" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"]}>{r.v.estado}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
-    </div>
-  </div>
-
-  <!-- Stats personales -->
-  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-    <div class="card p-4">
-      <div class="text-xs uppercase text-slate-500">OTs activas</div>
-      <div class="mt-1 text-3xl font-bold text-brand-600">{misActivas.length}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs uppercase text-slate-500">Completadas (mes)</div>
-      <div class="mt-1 text-3xl font-bold text-emerald-600">{nCompletadas}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs uppercase text-slate-500">Horas (mes)</div>
-      <div class="mt-1 text-3xl font-bold text-amber-600">{totalHoras.toFixed(1)}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs uppercase text-slate-500">% a tiempo</div>
-      <div class:list={["mt-1 text-3xl font-bold", pctATiempo >= 80 ? "text-emerald-600" : pctATiempo >= 60 ? "text-amber-600" : "text-red-600"]}>{pctATiempo}%</div>
-    </div>
-  </div>
-
-  {nivelSiguiente && (
-    <div class="card mt-4 p-4">
-      <div class="flex items-center justify-between">
-        <span class="text-sm font-medium text-slate-700">Progreso al siguiente nivel</span>
-        <span class="text-xs text-slate-500">{nivelSiguiente.emoji} {nivelSiguiente.nombre} en {nivelSiguiente.min - totalCompletadasGlobal} OTs</span>
+    </>
+  ) : (
+    <>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} 👋</h1>
+          <p class="text-sm text-slate-500">Resumen personal del mes</p>
+        </div>
+        <div class="card flex items-center gap-3 px-4 py-2">
+          <span class="text-3xl">{nivelActual.emoji}</span>
+          <div>
+            <div class="text-xs text-slate-500">Nivel</div>
+            <div class="text-sm font-bold">{nivelActual.nombre}</div>
+            {nivelSiguiente && (
+              <div class="text-[10px] text-slate-400">{totalCompletadasGlobal}/{nivelSiguiente.min} → {nivelSiguiente.nombre}</div>
+            )}
+          </div>
+        </div>
       </div>
-      <div class="mt-2 h-3 overflow-hidden rounded bg-slate-100">
-        <div class="h-full bg-gradient-to-r from-brand-500 to-emerald-500" style={`width: ${pctSiguiente}%`}></div>
+
+      <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">OTs activas</div>
+          <div class="mt-1 text-3xl font-bold text-brand-600">{misActivas.length}</div>
+        </div>
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">Completadas (mes)</div>
+          <div class="mt-1 text-3xl font-bold text-emerald-600">{nCompletadas}</div>
+        </div>
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">Horas (mes)</div>
+          <div class="mt-1 text-3xl font-bold text-amber-600">{totalHoras.toFixed(1)}</div>
+        </div>
+        <div class="card p-4">
+          <div class="text-xs uppercase text-slate-500">% a tiempo</div>
+          <div class:list={["mt-1 text-3xl font-bold", pctATiempo >= 80 ? "text-emerald-600" : pctATiempo >= 60 ? "text-amber-600" : "text-red-600"]}>{pctATiempo}%</div>
+        </div>
       </div>
-    </div>
+
+      {nivelSiguiente && (
+        <div class="card mt-4 p-4">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-slate-700">Progreso al siguiente nivel</span>
+            <span class="text-xs text-slate-500">{nivelSiguiente.emoji} {nivelSiguiente.nombre} en {nivelSiguiente.min - totalCompletadasGlobal} OTs</span>
+          </div>
+          <div class="mt-2 h-3 overflow-hidden rounded bg-slate-100">
+            <div class="h-full bg-gradient-to-r from-brand-500 to-emerald-500" style={`width: ${pctSiguiente}%`}></div>
+          </div>
+        </div>
+      )}
+
+      <div class="mt-6">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Mis OTs activas ({misActivas.length})</h2>
+        </div>
+        {misActivas.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">No tienes OTs activas.</div>
+        ) : (
+          <>
+            {/* Cards en móvil */}
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misActivas.map((r: any) => (
+                <a href={`/ordenes/${r.o.id}`} class="card block p-4 hover:bg-slate-50 active:bg-slate-100">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="font-mono text-xs text-slate-400">#{r.o.id}</div>
+                    <span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize text-[10px]`}>{r.o.prioridad}</span>
+                  </div>
+                  <div class="mt-1 text-base font-semibold text-brand-700">{r.o.titulo}</div>
+                  {r.a && <div class="mt-1 text-xs text-slate-500">🛠 {r.a.codigo} · {r.a.nombre}</div>}
+                  <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span>
+                    <span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span>
+                    {r.o.vencimiento && (
+                      <span class="text-xs text-slate-500">⏱ {fmt(r.o.vencimiento)}</span>
+                    )}
+                  </div>
+                </a>
+              ))}
+            </div>
+            {/* Tabla en desktop */}
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">#</th>
+                    <th class="px-4 py-2">Título</th>
+                    <th class="px-4 py-2">Equipo</th>
+                    <th class="px-4 py-2">Tipo</th>
+                    <th class="px-4 py-2">Prioridad</th>
+                    <th class="px-4 py-2">Estado</th>
+                    <th class="px-4 py-2">Vence</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misActivas.map((r: any) => (
+                    <tr class="hover:bg-slate-50">
+                      <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
+                      <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
+                      <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
+                      <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span></td>
+                      <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize`}>{r.o.prioridad}</span></td>
+                      <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span></td>
+                      <td class="px-4 py-2 text-xs text-slate-600">{fmt(r.o.vencimiento)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      {misTickets.length > 0 && (
+        <div class="mt-6">
+          <h2 class="mb-2 font-semibold text-slate-900">🎫 Mis tickets asignados ({misTickets.length})</h2>
+          <div class="card overflow-hidden">
+            <ul class="divide-y divide-slate-100">
+              {misTickets.map((r: any) => (
+                <li class="px-4 py-2.5 hover:bg-slate-50">
+                  <a href={`/tickets/${r.t.id}`} class="block">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                      <span class="font-mono text-xs text-slate-400">#{r.t.id}</span>
+                      <div class="flex gap-1.5">
+                        <span class={`badge ${PRIO_COLOR[r.t.prioridad]} capitalize text-xs`}>{r.t.prioridad}</span>
+                        <span class="badge bg-slate-100 text-slate-700 text-xs capitalize">{r.t.estado.replace("_", " ")}</span>
+                      </div>
+                    </div>
+                    <div class="mt-1 font-medium text-sm text-slate-800 truncate">{r.t.asunto}</div>
+                    <div class="text-xs text-slate-500 truncate">
+                      {r.t.solicitanteNombre} · {r.s?.nombre ?? "—"}
+                      {r.t.tipoMantenimiento === "biomedico" ? " · 🩺 Biomédico" : " · 🔧 General"}
+                    </div>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <div class="mt-6">
+        <h2 class="mb-2 font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2>
+        {misPlanes.length === 0 ? (
+          <div class="card px-4 py-6 text-center text-slate-400">Sin planes asignados.</div>
+        ) : (
+          <>
+            <div class="grid grid-cols-1 gap-3 sm:hidden">
+              {misPlanes.map((r: any) => (
+                <a href={`/activos/${r.a?.id}`} class="card block p-4 hover:bg-slate-50">
+                  <div class="text-base font-semibold text-brand-700">{r.p.titulo}</div>
+                  <div class="mt-1 text-xs text-slate-500">{r.a?.codigo} · {r.a?.nombre}</div>
+                  <div class="mt-2 flex items-center justify-between text-xs">
+                    <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600 capitalize">{r.p.frecuencia}</span>
+                    <span class="text-slate-700">📅 {fmt(r.p.proximaFecha)}</span>
+                  </div>
+                </a>
+              ))}
+            </div>
+            <div class="card hidden overflow-hidden sm:block">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2">Plan</th>
+                    <th class="px-4 py-2">Equipo</th>
+                    <th class="px-4 py-2">Frecuencia</th>
+                    <th class="px-4 py-2">Próxima fecha</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {misPlanes.map((r: any) => (
+                    <tr class="hover:bg-slate-50">
+                      <td class="px-4 py-2">{r.p.titulo}</td>
+                      <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/activos/${r.a?.id}`}>{r.a?.codigo}</a></td>
+                      <td class="px-4 py-2 capitalize text-slate-600">{r.p.frecuencia}</td>
+                      <td class="px-4 py-2 text-slate-700">{fmt(r.p.proximaFecha)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </>
   )}
-
-  <!-- Mis OTs activas -->
-  <div class="mt-6 card overflow-hidden">
-    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Mis OTs activas ({misActivas.length})</h2></div>
-    <table class="w-full text-left text-sm">
-      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-        <tr>
-          <th class="px-4 py-2">#</th>
-          <th class="px-4 py-2">Título</th>
-          <th class="px-4 py-2">Equipo</th>
-          <th class="px-4 py-2">Tipo</th>
-          <th class="px-4 py-2">Prioridad</th>
-          <th class="px-4 py-2">Estado</th>
-          <th class="px-4 py-2">Vence</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {misActivas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No tienes OTs activas.</td></tr>}
-        {misActivas.map((r) => (
-          <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
-            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
-            <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
-            <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo]} capitalize`}>{r.o.tipo}</span></td>
-            <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize`}>{r.o.prioridad}</span></td>
-            <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span></td>
-            <td class="px-4 py-2 text-xs text-slate-600">{fmt(r.o.vencimiento)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Mis planes -->
-  <div class="mt-6 card overflow-hidden">
-    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-slate-900">Próximos planes asignados ({misPlanes.length})</h2></div>
-    <table class="w-full text-left text-sm">
-      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-        <tr>
-          <th class="px-4 py-2">Plan</th>
-          <th class="px-4 py-2">Equipo</th>
-          <th class="px-4 py-2">Frecuencia</th>
-          <th class="px-4 py-2">Próxima fecha</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {misPlanes.length === 0 && <tr><td colspan="4" class="px-4 py-6 text-center text-slate-400">Sin planes asignados.</td></tr>}
-        {misPlanes.map((r) => (
-          <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2">{r.p.titulo}</td>
-            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/activos/${r.a?.id}`}>{r.a?.codigo}</a></td>
-            <td class="px-4 py-2 capitalize text-slate-600">{r.p.frecuencia}</td>
-            <td class="px-4 py-2 text-slate-700">{fmt(r.p.proximaFecha)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
 </Layout>

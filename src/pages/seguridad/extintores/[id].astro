@@ -1,0 +1,311 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { extintores, extintorEventos, sucursales, ubicaciones, usuarios, proveedores } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import {
+  TIPO_AGENTE_LABEL, TIPO_AGENTE_COLOR, ESTADO_EXT_LABEL, ESTADO_EXT_COLOR,
+  TIPO_EVENTO_LABEL, TIPO_EVENTO_ICONO, estadoVencimiento, ESTADO_VENC_COLOR,
+  diasParaFecha, puedeVerSeguridad, puedeAdministrarSeguridad,
+} from "@/lib/extintores";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/seguridad/extintores");
+const user = Astro.locals.user!;
+if (!puedeVerSeguridad(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const [r] = await db
+  .select({ e: extintores, s: sucursales, u: ubicaciones })
+  .from(extintores)
+  .leftJoin(sucursales, eq(sucursales.id, extintores.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, extintores.ubicacionId))
+  .where(eq(extintores.id, id))
+  .limit(1);
+if (!r) return Astro.redirect("/seguridad/extintores");
+const e = r.e;
+
+const eventos = await db
+  .select({ ev: extintorEventos, u: usuarios, p: proveedores })
+  .from(extintorEventos)
+  .leftJoin(usuarios, eq(usuarios.id, extintorEventos.responsableId))
+  .leftJoin(proveedores, eq(proveedores.id, extintorEventos.proveedorId))
+  .where(eq(extintorEventos.extintorId, id))
+  .orderBy(desc(extintorEventos.fecha), desc(extintorEventos.id));
+
+const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+
+const admin = puedeAdministrarSeguridad(user.rol);
+
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
+
+const host = new URL(Astro.request.url).origin;
+const qrUrl = `${host}/seguridad/extintor/qr/${e.qrToken}`;
+
+// Estados visuales de vencimiento
+const stInsp = estadoVencimiento(e.proximaInspeccion);
+const stRec = estadoVencimiento(e.proximaRecarga);
+const stPrueba = estadoVencimiento(e.proximaPruebaHidrostatica);
+const dInsp = diasParaFecha(e.proximaInspeccion);
+const dRec = diasParaFecha(e.proximaRecarga);
+const dPrueba = diasParaFecha(e.proximaPruebaHidrostatica);
+---
+
+<Layout title={`Extintor ${e.codigo}`}>
+  <a href="/seguridad/extintores" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{e.codigo}</h1>
+        <span class={`badge ${TIPO_AGENTE_COLOR[e.tipoAgente]}`}>{TIPO_AGENTE_LABEL[e.tipoAgente]}</span>
+        <span class={`badge ${ESTADO_EXT_COLOR[e.estado]}`}>{ESTADO_EXT_LABEL[e.estado]}</span>
+      </div>
+      <p class="mt-1 text-sm text-slate-500">
+        {e.marca && <span>{e.marca} {e.modelo} · </span>}
+        {e.capacidad ? `${e.capacidad} ${e.capacidadUnidad}` : ""}
+        {e.numeroSerie && <span> · S/N {e.numeroSerie}</span>}
+      </p>
+    </div>
+  </div>
+
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <!-- Datos generales + ubicación -->
+    <div class="card lg:col-span-2 p-5">
+      <h2 class="font-semibold text-slate-900">Ubicación</h2>
+      <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+        <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.u?.nombre ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Zona</div><div>{e.zona ?? "—"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Detalle</div><div>{e.ubicacionDetalle ?? "—"}</div></div>
+      </div>
+      {e.notas && <p class="mt-3 whitespace-pre-wrap text-sm text-slate-600">{e.notas}</p>}
+    </div>
+
+    <!-- QR -->
+    <div class="card p-5 text-center">
+      <h2 class="font-semibold text-slate-900">QR del extintor</h2>
+      <p class="mt-1 text-xs text-slate-500">Imprime y pega en el extintor</p>
+      <div id="qrcode" class="mx-auto mt-3" style="max-width:180px"></div>
+      <p class="mt-2 break-all text-[10px] text-slate-400">{qrUrl}</p>
+      <button id="qrPrintBtn" class="btn-secondary mt-3 w-full justify-center text-sm">🖨 Imprimir</button>
+    </div>
+  </div>
+
+  <!-- Estado regulatorio -->
+  <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div class="card p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs uppercase text-slate-500">👁 Inspección visual</span>
+        <span class="text-[10px] text-slate-400">cada {e.diasInspeccion} días</span>
+      </div>
+      <div class="mt-1 text-sm">Última: <strong>{fmt(e.ultimaInspeccion)}</strong></div>
+      <div class:list={["text-sm", ESTADO_VENC_COLOR[stInsp]]}>
+        Próxima: {fmt(e.proximaInspeccion)}
+        {dInsp != null && stInsp === "vencido" && <span> (vencida hace {Math.abs(dInsp)}d)</span>}
+        {dInsp != null && stInsp === "proximo" && <span> (en {dInsp}d)</span>}
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs uppercase text-slate-500">🔋 Recarga</span>
+        <span class="text-[10px] text-slate-400">cada {e.mesesRecarga} meses</span>
+      </div>
+      <div class="mt-1 text-sm">Última: <strong>{fmt(e.ultimaRecarga)}</strong></div>
+      <div class:list={["text-sm", ESTADO_VENC_COLOR[stRec]]}>
+        Próxima: {fmt(e.proximaRecarga)}
+        {dRec != null && stRec === "vencido" && <span> (vencida hace {Math.abs(dRec)}d)</span>}
+        {dRec != null && stRec === "proximo" && <span> (en {dRec}d)</span>}
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs uppercase text-slate-500">💧 Prueba hidrostática</span>
+        <span class="text-[10px] text-slate-400">cada {e.aniosPrueba} años</span>
+      </div>
+      <div class="mt-1 text-sm">Última: <strong>{fmt(e.ultimaPruebaHidrostatica)}</strong></div>
+      <div class:list={["text-sm", ESTADO_VENC_COLOR[stPrueba]]}>
+        Próxima: {fmt(e.proximaPruebaHidrostatica)}
+        {dPrueba != null && stPrueba === "vencido" && <span> (vencida hace {Math.abs(dPrueba)}d)</span>}
+        {dPrueba != null && stPrueba === "proximo" && <span> (en {dPrueba}d)</span>}
+      </div>
+    </div>
+  </div>
+
+  <!-- Acciones rápidas -->
+  {admin && e.estado !== "baja" && (
+    <div class="card mt-6 p-5">
+      <h2 class="font-semibold text-slate-900">Registrar evento</h2>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <button class="evt-btn btn-primary text-sm" data-tipo="inspeccion">👁 Inspección visual</button>
+        <button class="evt-btn btn-primary text-sm" data-tipo="recarga">🔋 Recarga</button>
+        <button class="evt-btn btn-primary text-sm" data-tipo="prueba_hidrostatica">💧 Prueba hidrostática</button>
+        <button class="evt-btn btn-secondary text-sm" data-tipo="otro">+ Otro evento</button>
+        <button class="evt-btn btn-secondary text-sm bg-red-50 text-red-700 hover:bg-red-100" data-tipo="baja">🚫 Dar de baja</button>
+      </div>
+    </div>
+  )}
+
+  <!-- Historial -->
+  <div class="card mt-6 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Historial ({eventos.length} eventos)</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Fecha</th>
+          <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2">Responsable</th>
+          <th class="px-4 py-2">Proveedor</th>
+          <th class="px-4 py-2 text-right">Costo</th>
+          <th class="px-4 py-2">Notas</th>
+          <th class="px-4 py-2"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {eventos.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin eventos registrados.</td></tr>}
+        {eventos.map((x) => (
+          <tr>
+            <td class="px-4 py-2 text-xs">{fmt(x.ev.fecha)}</td>
+            <td class="px-4 py-2"><span class="font-medium">{TIPO_EVENTO_ICONO[x.ev.tipo]} {TIPO_EVENTO_LABEL[x.ev.tipo]}</span></td>
+            <td class="px-4 py-2 text-slate-600">{x.u?.nombre ?? "—"}</td>
+            <td class="px-4 py-2 text-slate-600">{x.p?.nombre ?? "—"}</td>
+            <td class="px-4 py-2 text-right font-mono">{x.ev.costo != null ? `$${x.ev.costo.toFixed(2)}` : "—"}</td>
+            <td class="px-4 py-2 text-xs text-slate-500">{x.ev.notas ?? "—"}</td>
+            <td class="px-4 py-2 text-right">
+              {x.ev.evidenciaR2 && <a href={`/api/seguridad/evidencia/${x.ev.id}`} target="_blank" class="text-xs text-brand-700 hover:underline">📎 Evidencia</a>}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Modal evento -->
+  <div id="evtModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 id="evtTitulo" class="font-semibold">Registrar evento</h3>
+      <div class="mt-3 space-y-3 text-sm">
+        <div>
+          <label class="label">Fecha *</label>
+          <input id="evt_fecha" class="input" type="date" required />
+        </div>
+        <div>
+          <label class="label">Proveedor (opcional)</label>
+          <select id="evt_proveedor" class="input">
+            <option value="">— Sin proveedor —</option>
+            {provRows.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Costo (opcional)</label>
+          <input id="evt_costo" class="input" type="number" min="0" step="0.01" />
+        </div>
+        <div>
+          <label class="label">Evidencia (foto)</label>
+          <input id="evt_evidencia" type="file" accept="image/*" capture="environment" class="block w-full text-sm" />
+        </div>
+        <div>
+          <label class="label">Notas</label>
+          <textarea id="evt_notas" class="input" rows="2"></textarea>
+        </div>
+        <p id="evt_proxima" class="text-xs text-slate-500"></p>
+        <p id="evt_err" class="hidden text-sm text-red-600"></p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="evtCancel" class="btn-secondary">Cancelar</button>
+        <button id="evtSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ id, qrUrl, frec: { diasInspeccion: e.diasInspeccion, mesesRecarga: e.mesesRecarga, aniosPrueba: e.aniosPrueba } }}>
+    // QR
+    (async () => {
+      try {
+        await new Promise((r, rj) => { const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"; s.onload = r; s.onerror = rj; document.head.appendChild(s); });
+        const canvas = document.createElement("canvas");
+        await window.QRCode.toCanvas(canvas, qrUrl, { width: 180, margin: 1 });
+        document.getElementById("qrcode").appendChild(canvas);
+      } catch {
+        // Fallback: genera QR via servicio público (no requiere JS local)
+        const img = document.createElement("img");
+        img.src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`;
+        img.alt = "QR";
+        document.getElementById("qrcode").appendChild(img);
+      }
+    })();
+
+    document.getElementById("qrPrintBtn")?.addEventListener("click", () => {
+      const w = window.open("", "_blank");
+      w.document.write(`<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>Extintor</h2><img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}" /><p style="font-size:12px;color:#666">${qrUrl}</p><script>window.onload=()=>window.print()</scr` + `ipt></body></html>`);
+    });
+
+    // Modal evento
+    let tipoActual = null;
+    const labels = { inspeccion: "Inspección visual", recarga: "Recarga", prueba_hidrostatica: "Prueba hidrostática", otro: "Otro evento", baja: "Dar de baja" };
+    document.querySelectorAll(".evt-btn").forEach((b) => b.addEventListener("click", () => {
+      tipoActual = b.dataset.tipo;
+      document.getElementById("evtTitulo").textContent = labels[tipoActual] ?? "Registrar evento";
+      document.getElementById("evt_fecha").value = new Date().toISOString().slice(0, 10);
+      document.getElementById("evt_costo").value = "";
+      document.getElementById("evt_notas").value = "";
+      document.getElementById("evt_evidencia").value = "";
+      // Calcula proxima fecha sugerida
+      const px = document.getElementById("evt_proxima");
+      const f = document.getElementById("evt_fecha").value;
+      px.textContent = "";
+      if (tipoActual === "inspeccion") {
+        const d = new Date(f); d.setDate(d.getDate() + frec.diasInspeccion);
+        px.textContent = `Próxima inspección: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
+      } else if (tipoActual === "recarga") {
+        const d = new Date(f); d.setMonth(d.getMonth() + frec.mesesRecarga);
+        px.textContent = `Próxima recarga: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
+      } else if (tipoActual === "prueba_hidrostatica") {
+        const d = new Date(f); d.setFullYear(d.getFullYear() + frec.aniosPrueba);
+        px.textContent = `Próxima prueba: ${d.toLocaleDateString("es", { timeZone: "America/El_Salvador" })}`;
+      }
+      document.getElementById("evtModal").classList.remove("hidden");
+      document.getElementById("evtModal").classList.add("flex");
+    }));
+
+    document.getElementById("evtCancel")?.addEventListener("click", () => {
+      document.getElementById("evtModal").classList.add("hidden");
+      document.getElementById("evtModal").classList.remove("flex");
+    });
+
+    function fileToDataUrl(f) {
+      return new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+    }
+
+    document.getElementById("evtSave")?.addEventListener("click", async () => {
+      const err = document.getElementById("evt_err");
+      err.classList.add("hidden");
+      const fecha = document.getElementById("evt_fecha").value;
+      if (!fecha) { err.textContent = "Fecha requerida"; err.classList.remove("hidden"); return; }
+      const file = document.getElementById("evt_evidencia").files[0];
+      const evidenciaBase64 = file ? await fileToDataUrl(file) : null;
+      const provV = document.getElementById("evt_proveedor").value;
+      const costoV = document.getElementById("evt_costo").value;
+      const payload = {
+        tipo: tipoActual,
+        fecha,
+        proveedorId: provV ? Number(provV) : null,
+        costo: costoV ? Number(costoV) : null,
+        notas: document.getElementById("evt_notas").value.trim() || null,
+        evidenciaBase64,
+      };
+      const res = await fetch(`/api/seguridad/extintores/${id}/evento`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al registrar";
+        err.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+  </script>
+</Layout>

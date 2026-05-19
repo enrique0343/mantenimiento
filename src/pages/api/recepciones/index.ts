@@ -1,10 +1,10 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { desc, eq, and } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   recepciones, recepcionItems, movimientosInventario, stock,
-  items as itemsTable, proveedores, sucursales, usuarios,
+  proveedores, usuarios,
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
@@ -15,17 +15,15 @@ export const GET: APIRoute = async (ctx) => {
   if (!user) return response;
   const db = getDb(ctx);
   const rows = await db
-    .select({ r: recepciones, p: proveedores, s: sucursales, u: usuarios })
+    .select({ r: recepciones, p: proveedores, u: usuarios })
     .from(recepciones)
     .leftJoin(proveedores, eq(proveedores.id, recepciones.proveedorId))
-    .leftJoin(sucursales, eq(sucursales.id, recepciones.sucursalId))
     .leftJoin(usuarios, eq(usuarios.id, recepciones.recibidoPor))
     .orderBy(desc(recepciones.id));
   return Response.json({
     recepciones: rows.map((r) => ({
       ...r.r,
       proveedor: r.p ? { id: r.p.id, nombre: r.p.nombre } : null,
-      sucursal: r.s ? { id: r.s.id, nombre: r.s.nombre } : null,
       recibido: r.u ? { id: r.u.id, nombre: r.u.nombre } : null,
     })),
   });
@@ -39,7 +37,6 @@ const itemLineSchema = z.object({
 
 const createSchema = z.object({
   proveedorId: z.number().int().positive().optional().nullable(),
-  sucursalId: z.number().int().positive(),
   numeroFactura: z.string().optional().nullable(),
   fecha: z.string().min(1), // YYYY-MM-DD
   notas: z.string().optional().nullable(),
@@ -63,7 +60,6 @@ export const POST: APIRoute = async (ctx) => {
     .insert(recepciones)
     .values({
       proveedorId: parsed.data.proveedorId ?? null,
-      sucursalId: parsed.data.sucursalId,
       numeroFactura: parsed.data.numeroFactura ?? null,
       fecha: parsed.data.fecha,
       total: total > 0 ? total : null,
@@ -83,7 +79,6 @@ export const POST: APIRoute = async (ctx) => {
 
     await db.insert(movimientosInventario).values({
       itemId: li.itemId,
-      sucursalId: parsed.data.sucursalId,
       tipo: "entrada",
       cantidad: li.cantidad,
       motivo: "recepcion",
@@ -92,11 +87,11 @@ export const POST: APIRoute = async (ctx) => {
       usuarioId: user.id,
     });
 
-    // Upsert stock
+    // Upsert stock (bodega única)
     const [actual] = await db
       .select()
       .from(stock)
-      .where(and(eq(stock.itemId, li.itemId), eq(stock.sucursalId, parsed.data.sucursalId)))
+      .where(eq(stock.itemId, li.itemId))
       .limit(1);
     if (actual) {
       await db
@@ -106,7 +101,6 @@ export const POST: APIRoute = async (ctx) => {
     } else {
       await db.insert(stock).values({
         itemId: li.itemId,
-        sucursalId: parsed.data.sucursalId,
         cantidad: li.cantidad,
       });
     }

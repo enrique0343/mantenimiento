@@ -1,0 +1,132 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const hoy = new Date().toISOString().slice(0, 10);
+const hace30 = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+
+const reportes = [
+  {
+    tipo: "ordenes",
+    titulo: "Órdenes de trabajo",
+    icono: "📋",
+    descripcion: "Lista completa de OTs con su estado, equipo, asignado, tiempos y solución aplicada.",
+    fechas: true,
+    estado: true,
+  },
+  {
+    tipo: "equipos",
+    titulo: "Equipos / Activos",
+    icono: "🛠",
+    descripcion: "Catálogo completo de equipos con ubicación, SLA, datos biomédicos y estado.",
+    fechas: false,
+  },
+  {
+    tipo: "inventario",
+    titulo: "Inventario",
+    icono: "📦",
+    descripcion: "Stock actual, mínimos, máximos, alertas de bajo stock y cantidad sugerida a comprar.",
+    fechas: false,
+  },
+  {
+    tipo: "movimientos",
+    titulo: "Movimientos de inventario",
+    icono: "📊",
+    descripcion: "Entradas, salidas y ajustes de stock con su origen (recepción, OT, manual).",
+    fechas: true,
+  },
+  {
+    tipo: "requisiciones",
+    titulo: "Requisiciones de compra",
+    icono: "🛒",
+    descripcion: "Solicitudes de compra con su estado, proveedor y monto.",
+    fechas: true,
+  },
+  {
+    tipo: "encuestas",
+    titulo: "Encuestas de satisfacción",
+    icono: "⭐",
+    descripcion: "Calificaciones recibidas por OT cerrada, con comentarios del solicitante.",
+    fechas: true,
+  },
+];
+---
+
+<Layout title="Reportes">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">Reportes</h1>
+      <p class="text-sm text-slate-500">Descarga datos en formato Excel/CSV. Incluye encabezados con UTF-8 (compatible con Office y Google Sheets).</p>
+    </div>
+    <a href="/kpis" class="btn-secondary">📊 Ver KPIs</a>
+  </div>
+
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    {reportes.map((r) => (
+      <div class="card p-5">
+        <div class="flex items-start gap-3">
+          <span class="text-3xl">{r.icono}</span>
+          <div class="flex-1">
+            <h2 class="font-semibold text-slate-900">{r.titulo}</h2>
+            <p class="mt-1 text-sm text-slate-500">{r.descripcion}</p>
+          </div>
+        </div>
+
+        <form data-tipo={r.tipo} class="report-form mt-4 space-y-3 text-sm">
+          {r.fechas && (
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="label text-xs">Desde</label>
+                <input type="date" class="input r-desde" value={hace30} />
+              </div>
+              <div>
+                <label class="label text-xs">Hasta</label>
+                <input type="date" class="input r-hasta" value={hoy} />
+              </div>
+            </div>
+          )}
+          {r.estado && (
+            <div>
+              <label class="label text-xs">Estado</label>
+              <select class="input r-estado">
+                <option value="">— Todos —</option>
+                <option value="abierta">Abiertas</option>
+                <option value="en_proceso">En proceso</option>
+                <option value="completada">Completadas</option>
+                <option value="verificada">Verificadas</option>
+                <option value="cerrada">Cerradas</option>
+                <option value="cancelada">Canceladas</option>
+              </select>
+            </div>
+          )}
+          <button type="submit" class="btn-primary w-full">⬇ Descargar CSV</button>
+        </form>
+      </div>
+    ))}
+  </div>
+
+  <div class="mt-6 card p-4 text-xs text-slate-500">
+    <p><strong>💡 Tip:</strong> Los archivos CSV se abren directo en Excel, Numbers o Google Sheets. Si los acentos se ven raros en Excel viejo, abre el archivo desde "Datos → Obtener datos externos" e indica encoding UTF-8.</p>
+  </div>
+
+  <script>
+    document.querySelectorAll<HTMLFormElement>("form.report-form").forEach((form) => {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const tipo = form.dataset.tipo!;
+        const desde = (form.querySelector(".r-desde") as HTMLInputElement | null)?.value ?? "";
+        const hasta = (form.querySelector(".r-hasta") as HTMLInputElement | null)?.value ?? "";
+        const estado = (form.querySelector(".r-estado") as HTMLSelectElement | null)?.value ?? "";
+        const params = new URLSearchParams();
+        if (desde) params.set("desde", desde);
+        if (hasta) params.set("hasta", hasta);
+        if (estado) params.set("estado", estado);
+        const url = `/api/reportes/${tipo}${params.toString() ? "?" + params.toString() : ""}`;
+        window.location.href = url;
+      });
+    });
+  </script>
+</Layout>

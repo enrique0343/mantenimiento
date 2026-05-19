@@ -1,0 +1,189 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { actividades, actividadCategorias, sucursales, ubicaciones, usuarios, proveedores, ordenes } from "@/lib/schema";
+import { eq, desc } from "drizzle-orm";
+import { estadoFecha, ESTADO_FECHA_COLOR, FRECUENCIA_LABEL, diasParaFecha, puedeAdministrarActividades } from "@/lib/actividades";
+import { ESTADO_LABEL, ESTADO_COLOR, PRIO_COLOR, parseChecklist, type EstadoOT } from "@/lib/ordenes";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/actividades");
+const user = Astro.locals.user!;
+
+const db = getDb(Astro);
+const [r] = await db
+  .select({ a: actividades, c: actividadCategorias, s: sucursales, u: ubicaciones, asignado: usuarios, prov: proveedores })
+  .from(actividades)
+  .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
+  .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, actividades.ubicacionId))
+  .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
+  .leftJoin(proveedores, eq(proveedores.id, actividades.proveedorExternoId))
+  .where(eq(actividades.id, id))
+  .limit(1);
+if (!r) return Astro.redirect("/actividades");
+const a = r.a;
+
+const ots = await db.select().from(ordenes).where(eq(ordenes.actividadId, id)).orderBy(desc(ordenes.id)).limit(20);
+
+const checklist = parseChecklist(a.checklist);
+const admin = puedeAdministrarActividades(user.rol);
+const fmt = (s: string | null) => (s ? new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const fmtFull = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—");
+const st = estadoFecha(a.proximaFecha, a.alertaDiasAntes);
+const dias = diasParaFecha(a.proximaFecha);
+---
+
+<Layout title={`Actividad ${a.codigo}`}>
+  <a href="/actividades" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{a.titulo}</h1>
+        {r.c && <span class="rounded bg-slate-100 px-2 py-0.5 text-xs">{r.c.icono} {r.c.nombre}</span>}
+        <span class={`badge ${PRIO_COLOR[a.prioridad]} capitalize`}>{a.prioridad}</span>
+      </div>
+      <p class="mt-1 font-mono text-xs text-slate-500">{a.codigo}</p>
+    </div>
+    <div class="text-right">
+      <div class="text-xs uppercase text-slate-500">Próxima ejecución</div>
+      <div class:list={["text-2xl font-bold", ESTADO_FECHA_COLOR[st]]}>
+        {fmt(a.proximaFecha)}
+      </div>
+      <div class="text-xs text-slate-500">
+        {dias != null && st === "vencido" && `vencida hace ${Math.abs(dias)}d`}
+        {dias != null && st === "proximo" && `en ${dias}d`}
+        {dias != null && st === "ok" && `en ${dias}d`}
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Detalles</h2>
+        {a.descripcion && <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{a.descripcion}</p>}
+        <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+          <div><div class="text-xs uppercase text-slate-500">Frecuencia</div><div>{FRECUENCIA_LABEL[a.frecuencia]}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Alerta</div><div>{a.alertaDiasAntes} días antes</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.u?.nombre ?? "—"}</div></div>
+          {a.ubicacionDetalle && <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Detalle</div><div>{a.ubicacionDetalle}</div></div>}
+          <div><div class="text-xs uppercase text-slate-500">Horas estimadas</div><div>{a.horasEstimadas ?? "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Última generación</div><div>{fmtFull(a.ultimaGeneracion)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Asignado</div><div>{r.asignado?.nombre ?? "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Proveedor externo</div><div>{r.prov?.nombre ?? "—"}</div></div>
+        </div>
+        {a.notas && <p class="mt-3 rounded bg-slate-50 p-3 text-sm text-slate-600 whitespace-pre-wrap">{a.notas}</p>}
+      </div>
+
+      {checklist.length > 0 && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Checklist plantilla</h2>
+          <p class="text-xs text-slate-500">Se copia a cada OT generada para que el técnico lo ejecute.</p>
+          <ul class="mt-3 space-y-1 text-sm">
+            {checklist.map((it) => <li class="flex items-start gap-2"><span class="text-slate-400">▢</span> {it.texto}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+
+    {admin && (
+      <div class="space-y-4">
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Acciones</h2>
+          <div class="mt-3 space-y-2">
+            <button id="generarBtn" class="btn-primary w-full justify-center text-sm">⚡ Generar OT ahora</button>
+            <button id="reprogramarBtn" class="btn-secondary w-full justify-center text-sm">📅 Reprogramar próxima fecha</button>
+            <button id="darBajaBtn" class="text-xs text-red-500 hover:underline">Dar de baja la actividad</button>
+          </div>
+          <p id="actMsg" class="mt-2 hidden text-xs"></p>
+        </div>
+      </div>
+    )}
+  </div>
+
+  <!-- OTs generadas -->
+  <div class="card mt-6 overflow-hidden">
+    <div class="px-5 pt-4 pb-2"><h2 class="font-semibold">Últimas OTs generadas ({ots.length})</h2></div>
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">#</th>
+          <th class="px-4 py-2">Título</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Vencimiento</th>
+          <th class="px-4 py-2">Completada</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {ots.length === 0 && <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Sin OTs aún. Se generarán al llegar la próxima fecha.</td></tr>}
+        {ots.map((o) => (
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2 font-mono text-xs">#{o.id}</td>
+            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${o.id}`}>{o.titulo}</a></td>
+            <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[o.estado as EstadoOT]}`}>{ESTADO_LABEL[o.estado as EstadoOT]}</span></td>
+            <td class="px-4 py-2 text-xs text-slate-600">{fmtFull(o.vencimiento)}</td>
+            <td class="px-4 py-2 text-xs text-slate-600">{fmtFull(o.completadaEn)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Modal reprogramar -->
+  <div id="reprogModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Reprogramar próxima fecha</h3>
+      <input id="r_fecha" type="date" class="input mt-3" />
+      <div class="mt-3 flex justify-end gap-2">
+        <button id="rCancel" class="btn-secondary">Cancelar</button>
+        <button id="rSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ id, proxFecha: a.proximaFecha }}>
+    const showMsg = (txt, ok) => {
+      const m = document.getElementById("actMsg");
+      m.textContent = txt;
+      m.className = `text-xs ${ok ? "text-emerald-600" : "text-red-600"}`;
+      m.classList.remove("hidden");
+    };
+
+    document.getElementById("generarBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Generar una OT inmediatamente para esta actividad?")) return;
+      const res = await fetch(`/api/actividades/${id}/generar-ot`, { method: "POST" });
+      if (!res.ok) { showMsg("Error al generar", false); return; }
+      const j = await res.json();
+      if (confirm(`OT #${j.orden.id} generada. ¿Abrirla?`)) location.href = `/ordenes/${j.orden.id}`;
+      else location.reload();
+    });
+
+    document.getElementById("reprogramarBtn")?.addEventListener("click", () => {
+      document.getElementById("r_fecha").value = proxFecha;
+      document.getElementById("reprogModal").classList.remove("hidden");
+      document.getElementById("reprogModal").classList.add("flex");
+    });
+    document.getElementById("rCancel")?.addEventListener("click", () => {
+      document.getElementById("reprogModal").classList.add("hidden");
+      document.getElementById("reprogModal").classList.remove("flex");
+    });
+    document.getElementById("rSave")?.addEventListener("click", async () => {
+      const fecha = document.getElementById("r_fecha").value;
+      if (!fecha) return;
+      const res = await fetch(`/api/actividades/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ proximaFecha: fecha }) });
+      if (!res.ok) { showMsg("Error al reprogramar", false); return; }
+      location.reload();
+    });
+
+    document.getElementById("darBajaBtn")?.addEventListener("click", async () => {
+      if (!confirm("¿Dar de baja esta actividad? Ya no generará OTs hasta que la reactives.")) return;
+      const res = await fetch(`/api/actividades/${id}`, { method: "DELETE" });
+      if (!res.ok) { showMsg("Error", false); return; }
+      location.href = "/actividades";
+    });
+  </script>
+</Layout>

@@ -1,0 +1,102 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { vehiculos, viajes, usuarios, vehiculoDocumentos } from "@/lib/schema";
+import { eq, and, desc, isNotNull } from "drizzle-orm";
+import { ESTADO_VEHICULO_LABEL, ESTADO_VEHICULO_COLOR, fmtKm, diasParaVencer, puedeVerFlota, puedeAdministrarFlota } from "@/lib/flota";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerFlota(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const rows = await db.select().from(vehiculos).where(eq(vehiculos.activo, true)).orderBy(vehiculos.codigo);
+
+// Viajes en curso para mostrar quien tiene cada vehiculo
+const enCurso = await db
+  .select({ v: viajes, m: usuarios })
+  .from(viajes)
+  .leftJoin(usuarios, eq(usuarios.id, viajes.motoristaId))
+  .where(eq(viajes.estado, "en_curso"));
+const viajeMap = new Map<number, { motorista: string | null; inicio: string }>();
+for (const r of enCurso) {
+  viajeMap.set(r.v.vehiculoId, { motorista: r.m?.nombre ?? null, inicio: r.v.inicio });
+}
+
+// Documentos vencidos / por vencer (todos los vehiculos)
+const docsRows = await db.select({ d: vehiculoDocumentos, v: vehiculos })
+  .from(vehiculoDocumentos)
+  .leftJoin(vehiculos, eq(vehiculos.id, vehiculoDocumentos.vehiculoId))
+  .where(isNotNull(vehiculoDocumentos.vencimiento));
+const docsConAlerta = docsRows
+  .map((r) => ({ ...r.d, vehiculo: r.v, dias: diasParaVencer(r.d.vencimiento) }))
+  .filter((d) => d.dias != null && d.dias < 30);
+
+const disponibles = rows.filter((v) => v.estado === "disponible").length;
+const enViaje = rows.filter((v) => v.estado === "en_viaje").length;
+const enMant = rows.filter((v) => v.estado === "mantenimiento").length;
+---
+
+<Layout title="Flota">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Flota</h1>
+      <p class="text-sm text-slate-500">{rows.length} vehículos · {disponibles} disponibles · {enViaje} en viaje · {enMant} en mantenimiento</p>
+    </div>
+    {puedeAdministrarFlota(user.rol) && (
+      <a href="/flota/nuevo" class="btn-primary">+ Nuevo vehículo</a>
+    )}
+  </div>
+
+  {docsConAlerta.length > 0 && (
+    <div class="card mt-4 border-l-4 border-amber-500 p-4">
+      <h2 class="font-semibold text-amber-700">⚠ Documentos por vencer ({docsConAlerta.length})</h2>
+      <ul class="mt-2 space-y-1 text-sm">
+        {docsConAlerta.map((d) => (
+          <li>
+            <a class="text-brand-700 hover:underline" href={`/flota/${d.vehiculo?.id}`}>{d.vehiculo?.placa ?? d.vehiculo?.codigo}</a>
+            · <span class="capitalize">{d.tipo.replace("_", " ")}</span>
+            · <strong class={d.dias! < 0 ? "text-red-600" : "text-amber-700"}>
+              {d.dias! < 0 ? `Vencido hace ${Math.abs(d.dias!)} días` : `Vence en ${d.dias} días`}
+            </strong>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+
+  <div class="card mt-4 overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Placa</th>
+          <th class="px-4 py-2">Vehículo</th>
+          <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2 text-right">Kilometraje</th>
+          <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">En uso por</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rows.length === 0 && (
+          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin vehículos aún.</td></tr>
+        )}
+        {rows.map((v) => {
+          const enUso = viajeMap.get(v.id);
+          return (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono text-xs">{v.codigo}</td>
+              <td class="px-4 py-2 font-medium">{v.placa}</td>
+              <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/flota/${v.id}`}>{v.marca} {v.modelo}{v.anio ? ` (${v.anio})` : ""}</a></td>
+              <td class="px-4 py-2 capitalize text-slate-600">{v.tipo}</td>
+              <td class="px-4 py-2 text-right font-mono">{fmtKm(v.kilometrajeActual)}</td>
+              <td class="px-4 py-2"><span class={`badge ${ESTADO_VEHICULO_COLOR[v.estado]}`}>{ESTADO_VEHICULO_LABEL[v.estado]}</span></td>
+              <td class="px-4 py-2 text-xs text-slate-500">{enUso ? `${enUso.motorista ?? "—"} · ${new Date(enUso.inicio).toLocaleString("es", { timeZone: "America/El_Salvador" })}` : "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Layout>

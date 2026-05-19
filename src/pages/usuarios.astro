@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { usuarios, sucursales, ROLES } from "@/lib/schema";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -10,44 +10,82 @@ if (user.rol !== "admin") return Astro.redirect("/");
 
 const db = getDb(Astro);
 const rows = await db
-  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo, sucursalId: usuarios.sucursalId })
+  .select({ id: usuarios.id, email: usuarios.email, nombre: usuarios.nombre, rol: usuarios.rol, especialidad: usuarios.especialidad, tarifaHora: usuarios.tarifaHora, activo: usuarios.activo, sucursalId: usuarios.sucursalId })
   .from(usuarios)
   .orderBy(desc(usuarios.id));
+
+const ESP_LABEL: Record<string, string> = {
+  general: "🔧 General",
+  biomedico: "🩺 Biomédico",
+  ambos: "🔧🩺 Ambos",
+};
 
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
 
 const ROL_LABEL: Record<string, string> = {
   admin: "Admin", jefe: "Jefe Mantenimiento", tecnico: "Técnico",
   proveedor: "Proveedor", solicitante: "Solicitante", visualizador: "Visualizador",
+  motorista: "Motorista",
 };
+
+const ROL_COLOR: Record<string, string> = {
+  admin: "bg-red-100 text-red-700",
+  jefe: "bg-amber-100 text-amber-700",
+  tecnico: "bg-blue-100 text-blue-700",
+  proveedor: "bg-purple-100 text-purple-700",
+  solicitante: "bg-slate-100 text-slate-600",
+  visualizador: "bg-slate-100 text-slate-500",
+  motorista: "bg-emerald-100 text-emerald-700",
+};
+
+const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
 ---
 
 <Layout title="Usuarios">
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold">Usuarios</h1>
-      <p class="text-sm text-slate-500">{rows.length} cuentas</p>
+      <p class="text-sm text-slate-500">{rows.length} cuentas · {rows.filter((r) => r.activo).length} activas</p>
     </div>
     <button id="newBtn" class="btn-primary">+ Nuevo usuario</button>
   </div>
 
+  <!-- Form crear -->
   <div id="newForm" class="card mt-4 hidden p-4">
-    <h2 class="mb-3 font-semibold" id="formTitle">Nuevo usuario</h2>
-    <input type="hidden" id="f_id" value="" />
+    <h2 class="mb-3 font-semibold">Nuevo usuario</h2>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <div><label class="label">Nombre</label><input class="input" id="f_nombre" /></div>
-      <div><label class="label">Email</label><input class="input" id="f_email" type="email" /></div>
-      <div><label class="label">Contraseña <span id="pwdNote" class="text-xs text-slate-400">(mín 6 caracteres)</span></label><input class="input" id="f_password" type="password" minlength="6" /></div>
+      <div><label class="label">Nombre *</label><input class="input" id="f_nombre" /></div>
+      <div><label class="label">Email *</label><input class="input" id="f_email" type="email" /></div>
       <div>
-        <label class="label">Rol</label>
+        <label class="label">Contraseña * <span class="text-xs text-slate-400">(mín 6 caracteres)</span></label>
+        <input class="input" id="f_password" type="password" minlength="6" />
+      </div>
+      <div>
+        <label class="label">Rol *</label>
         <select class="input" id="f_rol">
-          <option value="solicitante">Solicitante</option>
-          <option value="tecnico">Técnico</option>
-          <option value="jefe">Jefe de Mantenimiento</option>
-          <option value="proveedor">Proveedor</option>
-          <option value="visualizador">Visualizador</option>
           <option value="admin">Admin</option>
+          <option value="jefe">Jefe de mantenimiento</option>
+          <option value="tecnico" selected>Técnico</option>
+          <option value="proveedor">Proveedor (externo)</option>
+          <option value="motorista">Motorista</option>
+          <option value="solicitante">Solicitante</option>
+          <option value="visualizador">Visualizador</option>
         </select>
+      </div>
+      <div>
+        <label class="label">Especialidad</label>
+        <select class="input" id="f_especialidad">
+          <option value="">— Sin asignar —</option>
+          <option value="general">🔧 General</option>
+          <option value="biomedico">🩺 Biomédico</option>
+          <option value="ambos">🔧🩺 Ambos</option>
+        </select>
+        <p class="mt-1 text-xs text-slate-500">Para jefes/técnicos: filtra qué OTs y tickets verá.</p>
+      </div>
+      <div>
+        <label class="label">Tarifa por hora ($)</label>
+        <input class="input" id="f_tarifa" type="number" min="0" step="0.01" value="0" />
+        <p class="mt-1 text-xs text-slate-500">Costo de mano de obra: hora × tarifa = costo de OT.</p>
       </div>
       {sucRows.length > 0 && (
         <div>
@@ -66,6 +104,7 @@ const ROL_LABEL: Record<string, string> = {
     </div>
   </div>
 
+  <!-- Tabla -->
   <div class="card mt-4 overflow-hidden">
     <table class="w-full text-left text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
@@ -73,21 +112,47 @@ const ROL_LABEL: Record<string, string> = {
           <th class="px-4 py-2">Nombre</th>
           <th class="px-4 py-2">Email</th>
           <th class="px-4 py-2">Rol</th>
+          <th class="px-4 py-2">Especialidad</th>
+          <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2 text-right">Acciones</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.map((u) => (
-          <tr>
-            <td class="px-4 py-2">{u.nombre}</td>
+          <tr class:list={[!u.activo && "opacity-60"]}>
+            <td class="px-4 py-2 font-medium">{u.nombre}</td>
             <td class="px-4 py-2 text-slate-600">{u.email}</td>
             <td class="px-4 py-2">
-              <span class="rounded bg-slate-100 px-2 py-0.5 text-xs">{ROL_LABEL[u.rol] ?? u.rol}</span>
+              <span class={`badge ${ROL_COLOR[u.rol] ?? "bg-slate-100"}`}>{ROL_LABEL[u.rol] ?? u.rol}</span>
             </td>
+            <td class="px-4 py-2 text-xs">{u.especialidad ? ESP_LABEL[u.especialidad] : <span class="text-slate-400">—</span>}</td>
+            <td class="px-4 py-2 text-xs text-slate-600">{u.sucursalId ? sucMap.get(u.sucursalId) ?? "—" : "Todas"}</td>
             <td class="px-4 py-2">
               <span class={`badge ${u.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                 {u.activo ? "activo" : "inactivo"}
               </span>
+            </td>
+            <td class="px-4 py-2 text-right">
+              <button
+                class="edit-btn text-xs text-brand-600 hover:underline"
+                data-id={u.id}
+                data-nombre={u.nombre}
+                data-email={u.email}
+                data-rol={u.rol}
+                data-especialidad={u.especialidad ?? ""}
+                data-tarifa={u.tarifaHora ?? 0}
+                data-sucursal={u.sucursalId ?? ""}
+                data-activo={u.activo ? "1" : "0"}
+              >✎ Editar</button>
+              <button
+                class="pwd-btn ml-3 text-xs text-amber-600 hover:underline"
+                data-id={u.id}
+                data-nombre={u.nombre}
+              >🔑 Contraseña</button>
+              {u.id !== user.id && u.activo && (
+                <button class="del-btn ml-3 text-xs text-red-600 hover:underline" data-id={u.id} data-nombre={u.nombre}>🗑 Desactivar</button>
+              )}
             </td>
           </tr>
         ))}
@@ -95,34 +160,100 @@ const ROL_LABEL: Record<string, string> = {
     </table>
   </div>
 
+  <!-- Modal editar -->
+  <div id="editModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Editar usuario</h3>
+      <input type="hidden" id="e_id" />
+      <div class="mt-3 space-y-3 text-sm">
+        <div><label class="label">Nombre</label><input class="input" id="e_nombre" /></div>
+        <div><label class="label">Email</label><input class="input" id="e_email" type="email" /></div>
+        <div>
+          <label class="label">Rol</label>
+          <select class="input" id="e_rol">
+            <option value="admin">Admin</option>
+            <option value="jefe">Jefe de mantenimiento</option>
+            <option value="tecnico">Técnico</option>
+            <option value="proveedor">Proveedor</option>
+            <option value="motorista">Motorista</option>
+            <option value="solicitante">Solicitante</option>
+            <option value="visualizador">Visualizador</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Especialidad</label>
+          <select class="input" id="e_especialidad">
+            <option value="">— Sin asignar —</option>
+            <option value="general">🔧 General</option>
+            <option value="biomedico">🩺 Biomédico</option>
+            <option value="ambos">🔧🩺 Ambos</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Tarifa por hora ($)</label>
+          <input class="input" id="e_tarifa" type="number" min="0" step="0.01" />
+        </div>
+        {sucRows.length > 0 && (
+          <div>
+            <label class="label">Sucursal</label>
+            <select class="input" id="e_sucursal">
+              <option value="">— Todas —</option>
+              {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+            </select>
+          </div>
+        )}
+        <div>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" id="e_activo" />
+            <span class="text-sm">Activo</span>
+          </label>
+        </div>
+        <p id="e_err" class="hidden text-sm text-red-600"></p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="eCancel" class="btn-secondary">Cancelar</button>
+        <button id="eSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal contraseña -->
+  <div id="pwdModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
+    <div class="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
+      <h3 class="font-semibold">Resetear contraseña</h3>
+      <p class="mt-1 text-xs text-slate-500" id="pwd_user"></p>
+      <input type="hidden" id="pwd_id" />
+      <input class="input mt-3" id="pwd_new" type="password" placeholder="Nueva contraseña (mín 6)" minlength="6" />
+      <p id="pwd_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-3 flex justify-end gap-2">
+        <button id="pwdCancel" class="btn-secondary">Cancelar</button>
+        <button id="pwdSave" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
-    const form = document.getElementById("newForm")!;
 
-    document.getElementById("newBtn")?.addEventListener("click", () => {
-      $("f_id").value = ""; $("f_nombre").value = ""; $("f_email").value = ""; $("f_password").value = "";
-      document.getElementById("formTitle")!.textContent = "Nuevo usuario";
-      document.getElementById("pwdNote")!.textContent = "(mín 6 caracteres)";
-      form.classList.remove("hidden");
-    });
-    document.getElementById("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
-
+    // Crear nuevo
+    document.getElementById("newBtn")?.addEventListener("click", () => document.getElementById("newForm")?.classList.remove("hidden"));
+    document.getElementById("cancelBtn")?.addEventListener("click", () => document.getElementById("newForm")?.classList.add("hidden"));
     document.getElementById("saveBtn")?.addEventListener("click", async () => {
       const err = document.getElementById("formErr") as HTMLElement;
       err.classList.add("hidden");
+      const sucEl = document.getElementById("f_sucursal") as HTMLSelectElement | null;
+      const espEl = document.getElementById("f_especialidad") as HTMLSelectElement | null;
       const payload: any = {
         nombre: $("f_nombre").value.trim(),
         email: $("f_email").value.trim(),
         password: $("f_password").value,
         rol: ($("f_rol") as unknown as HTMLSelectElement).value,
       };
-      const sucEl = document.getElementById("f_sucursal") as HTMLSelectElement | null;
       if (sucEl?.value) payload.sucursalId = Number(sucEl.value);
-      const res = await fetch("/api/usuarios", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      if (espEl?.value) payload.especialidad = espEl.value;
+      const tarifaEl = document.getElementById("f_tarifa") as HTMLInputElement | null;
+      if (tarifaEl?.value) payload.tarifaHora = Number(tarifaEl.value);
+      const res = await fetch("/api/usuarios", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
@@ -130,6 +261,96 @@ const ROL_LABEL: Record<string, string> = {
         return;
       }
       location.reload();
+    });
+
+    // Editar
+    document.querySelectorAll<HTMLButtonElement>(".edit-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("e_id").value = btn.dataset.id!;
+        $("e_nombre").value = btn.dataset.nombre!;
+        $("e_email").value = btn.dataset.email!;
+        ($("e_rol") as unknown as HTMLSelectElement).value = btn.dataset.rol!;
+        const sucEl = document.getElementById("e_sucursal") as HTMLSelectElement | null;
+        if (sucEl) sucEl.value = btn.dataset.sucursal!;
+        const espEl = document.getElementById("e_especialidad") as HTMLSelectElement | null;
+        if (espEl) espEl.value = btn.dataset.especialidad ?? "";
+        const tarifaEl = document.getElementById("e_tarifa") as HTMLInputElement | null;
+        if (tarifaEl) tarifaEl.value = btn.dataset.tarifa ?? "0";
+        ($("e_activo") as HTMLInputElement).checked = btn.dataset.activo === "1";
+        document.getElementById("editModal")!.classList.remove("hidden");
+        document.getElementById("editModal")!.classList.add("flex");
+      });
+    });
+    document.getElementById("eCancel")?.addEventListener("click", () => {
+      document.getElementById("editModal")!.classList.add("hidden");
+      document.getElementById("editModal")!.classList.remove("flex");
+    });
+    document.getElementById("eSave")?.addEventListener("click", async () => {
+      const err = document.getElementById("e_err") as HTMLElement;
+      err.classList.add("hidden");
+      const id = $("e_id").value;
+      const sucEl = document.getElementById("e_sucursal") as HTMLSelectElement | null;
+      const espEl = document.getElementById("e_especialidad") as HTMLSelectElement | null;
+      const tarifaEl = document.getElementById("e_tarifa") as HTMLInputElement | null;
+      const payload: any = {
+        nombre: $("e_nombre").value.trim(),
+        email: $("e_email").value.trim(),
+        rol: ($("e_rol") as unknown as HTMLSelectElement).value,
+        especialidad: espEl?.value || null,
+        tarifaHora: tarifaEl?.value ? Number(tarifaEl.value) : 0,
+        activo: ($("e_activo") as HTMLInputElement).checked,
+      };
+      if (sucEl) payload.sucursalId = sucEl.value ? Number(sucEl.value) : null;
+      const res = await fetch(`/api/usuarios/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+        err.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+
+    // Contraseña
+    document.querySelectorAll<HTMLButtonElement>(".pwd-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("pwd_id").value = btn.dataset.id!;
+        document.getElementById("pwd_user")!.textContent = `Para: ${btn.dataset.nombre}`;
+        $("pwd_new").value = "";
+        document.getElementById("pwdModal")!.classList.remove("hidden");
+        document.getElementById("pwdModal")!.classList.add("flex");
+      });
+    });
+    document.getElementById("pwdCancel")?.addEventListener("click", () => {
+      document.getElementById("pwdModal")!.classList.add("hidden");
+      document.getElementById("pwdModal")!.classList.remove("flex");
+    });
+    document.getElementById("pwdSave")?.addEventListener("click", async () => {
+      const err = document.getElementById("pwd_err") as HTMLElement;
+      err.classList.add("hidden");
+      const pwd = $("pwd_new").value;
+      if (pwd.length < 6) { err.textContent = "Mínimo 6 caracteres"; err.classList.remove("hidden"); return; }
+      const id = $("pwd_id").value;
+      const res = await fetch(`/api/usuarios/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pwd }) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = typeof j.error === "string" ? j.error : "Error al cambiar contraseña";
+        err.classList.remove("hidden");
+        return;
+      }
+      alert("✓ Contraseña actualizada");
+      document.getElementById("pwdModal")!.classList.add("hidden");
+      document.getElementById("pwdModal")!.classList.remove("flex");
+    });
+
+    // Desactivar
+    document.querySelectorAll<HTMLButtonElement>(".del-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`¿Desactivar usuario "${btn.dataset.nombre}"? No podrá entrar al sistema, pero se conservan sus registros.`)) return;
+        const res = await fetch(`/api/usuarios/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) location.reload();
+        else alert("Error al desactivar");
+      });
     });
   </script>
 </Layout>

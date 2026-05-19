@@ -113,7 +113,7 @@ export async function getCurrentUser(ctx: APIContext) {
   const rows = await db.select().from(usuarios).where(eq(usuarios.id, data.sub)).limit(1);
   const u = rows[0];
   if (!u || !u.activo) return null;
-  return { id: u.id, email: u.email, nombre: u.nombre, rol: u.rol };
+  return { id: u.id, email: u.email, nombre: u.nombre, rol: u.rol, especialidad: u.especialidad ?? null };
 }
 
 export async function requireUser(ctx: APIContext, roles?: Array<Rol>) {

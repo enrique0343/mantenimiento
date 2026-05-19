@@ -12,10 +12,29 @@ interface Env {
   JWT_SECRET: string;
   CRON_SECRET: string;
   APP_NAME: string;
+  // Email config (cualquier proveedor compatible)
+  EMAIL_PROVIDER?: string;
+  EMAIL_FROM?: string;
+  EMAIL_FROM_NAME?: string;
+  // Microsoft 365
   M365_TENANT_ID?: string;
   M365_CLIENT_ID?: string;
   M365_CLIENT_SECRET?: string;
   M365_FROM_ADDRESS?: string;
+  // Otros proveedores
+  RESEND_API_KEY?: string;
+  SENDGRID_API_KEY?: string;
+  BREVO_API_KEY?: string;
+  SMTP2GO_API_KEY?: string;
+  // SMTP genérico
+  SMTP_HOST?: string;
+  SMTP_PORT?: string;
+  SMTP_USER?: string;
+  SMTP_PASS?: string;
+  // Telegram bot
+  TELEGRAM_BOT_TOKEN?: string;
+  // URL pública de la app (para links en emails y .ics)
+  APP_URL?: string;
 }
 
 declare namespace App {
@@ -25,6 +44,7 @@ declare namespace App {
       email: string;
       nombre: string;
       rol: import("./lib/schema").Rol;
+      especialidad: "general" | "biomedico" | "ambos" | null;
     };
   }
 }

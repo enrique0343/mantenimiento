@@ -12,30 +12,60 @@ const path = Astro.url.pathname;
 const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
 const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol === "tecnico";
+const isMotorista = user?.rol === "motorista";
+const verFlota = isAdminOrJefe || isMotorista;
+const esProveedor = user?.rol === "proveedor";
 
-const links = [
-  { href: user?.rol === "tecnico" ? "/mi-panel" : "/", label: user?.rol === "tecnico" ? "Mi panel" : "Dashboard" },
-  { href: "/kpis", label: "KPIs", show: isAdminOrJefe },
-  { href: "/ordenes", label: "Ordenes" },
-  { href: "/cronograma", label: "Cronograma" },
-  { href: "/planificador", label: "Planificador", show: isOperativo },
-  { href: "/activos", label: "Equipos" },
-  { href: "/tickets", label: "Tickets" },
-  { href: "/inventario", label: "Inventario" },
-  { href: "/recepciones", label: "Recepciones", show: isOperativo },
-  { href: "/proveedores", label: "Proveedores", show: isAdminOrJefe },
-  { href: "/usuarios", label: "Usuarios", show: isAdmin },
-  { href: "/configuracion", label: "Configuracion", show: isAdmin },
+interface Link { href: string; label: string; icon: string; show?: boolean }
+
+const motoLinks: Link[] = [
+  { href: "/mi-panel", label: "Mi panel",  icon: "🏠" },
+  { href: "/flota",    label: "Flota",     icon: "🚗" },
+  { href: "/tickets",  label: "Reportes",  icon: "🎫" },
 ];
 
+const homeHref  = user?.rol === "tecnico" ? "/mi-panel" : "/";
+const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
+
+const allLinks: Link[] = [
+  { href: homeHref,         label: homeLabel,       icon: "🏠" },
+  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
+  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
+  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
+  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
+  { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
+  { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
+  { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
+  { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
+  { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
+  { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
+  { href: "/requisiciones",      label: "Requisiciones", icon: "🛒", show: isOperativo },
+  { href: "/solicitudes-compra", label: "Compras",       icon: "🛍", show: isOperativo },
+  { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
+  { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
+  { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },
+  { href: "/planificador",  label: "Planificador",  icon: "🗓", show: isAdminOrJefe },
+  { href: "/proveedores",   label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
+  { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
+  { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
+];
+
+const navLinks = isMotorista
+  ? motoLinks
+  : allLinks.filter((l) => l.show === undefined || l.show);
+
 const ROL_LABEL: Record<string, string> = {
-  admin: "Admin",
-  jefe: "Jefe",
-  tecnico: "Técnico",
-  proveedor: "Proveedor",
-  solicitante: "Solicitante",
+  admin:        "Admin",
+  jefe:         "Jefe",
+  tecnico:      "Técnico",
+  proveedor:    "Proveedor",
+  solicitante:  "Solicitante",
   visualizador: "Visualizador",
+  motorista:    "Motorista",
 };
+
+const isActive = (href: string) =>
+  path === href || (href !== "/" && href.length > 1 && path.startsWith(href));
 ---
 
 <!doctype html>
@@ -44,52 +74,321 @@ const ROL_LABEL: Record<string, string> = {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <style>
+      body { margin: 0; }
+      .sidebar { width: 220px; min-width: 220px; }
+      @media (max-width: 768px) {
+        .sidebar { display: none; }
+        .sidebar.open { display: flex; position: fixed; inset: 0; z-index: 50; }
+        .main-content { margin-left: 0 !important; }
+      }
+    </style>
   </head>
-  <body class="min-h-screen">
-    {
-      !hideNav && user && (
-        <header class="border-b border-slate-200 bg-white">
-          <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-            <a href="/" class="text-lg font-bold text-brand-600">Mantenimiento</a>
-            <nav class="flex items-center gap-1">
-              {links
-                .filter((l) => l.show === undefined || l.show)
-                .map((l) => (
-                  <a
-                    href={l.href}
-                    class:list={[
-                      "rounded-md px-3 py-1.5 text-sm font-medium",
-                      path === l.href || (l.href !== "/" && path.startsWith(l.href))
-                        ? "bg-brand-50 text-brand-700"
-                        : "text-slate-700 hover:bg-slate-100",
-                    ]}
-                  >
-                    {l.label}
-                  </a>
-                ))}
-            </nav>
-            <div class="flex items-center gap-3">
-              <span class="text-sm text-slate-600">
-                {user.nombre}
-                <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
-                  {ROL_LABEL[user.rol] ?? user.rol}
-                </span>
-              </span>
-              <button id="logoutBtn" class="btn-secondary">Salir</button>
+  <body class="min-h-screen bg-slate-50">
+    {!hideNav && user ? (
+      <div class="flex min-h-screen">
+        <!-- Sidebar -->
+        <aside class="sidebar flex flex-col bg-slate-900 text-white" id="sidebar">
+          <!-- Logo -->
+          <div class="flex items-center gap-2 px-4 py-4 border-b border-slate-700">
+            <span class="text-xl">⚙️</span>
+            <a href="/" class="font-bold text-white text-sm leading-tight">Avante<br/><span class="text-slate-400 font-normal text-xs">Mantenimiento</span></a>
+          </div>
+
+          <!-- Nav links -->
+          <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+            {navLinks.map((l) => (
+              <a
+                href={l.href}
+                class:list={[
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  isActive(l.href)
+                    ? "bg-brand-600 text-white"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                ]}
+              >
+                <span class="text-base w-5 text-center">{l.icon}</span>
+                <span>{l.label}</span>
+              </a>
+            ))}
+          </nav>
+
+          <!-- Usuario + Salir -->
+          <div class="border-t border-slate-700 p-3">
+            <div class="text-xs text-slate-400 mb-1 px-1 truncate">{user.nombre}</div>
+            <div class="text-xs text-slate-500 px-1 mb-2">
+              <span class="rounded bg-slate-700 px-1.5 py-0.5">{ROL_LABEL[user.rol] ?? user.rol}</span>
+            </div>
+            <button id="logoutBtn" class="w-full rounded-lg px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors">
+              Cerrar sesión
+            </button>
+          </div>
+        </aside>
+
+        <!-- Contenido principal -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <!-- Topbar -->
+          <header class="flex items-center justify-between gap-3 bg-white border-b border-slate-200 px-4 py-3">
+            <button id="menuToggle" class="md:hidden text-slate-600 text-xl">☰</button>
+            <button id="searchOpen" class="flex flex-1 items-center gap-2 max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300">
+              <span>🔍</span><span class="truncate">Buscar (OT, equipo, ticket, item)…</span>
+              <span class="ml-auto hidden sm:inline rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 font-mono">⌘K</span>
+            </button>
+            <button id="bellBtn" class="relative rounded-full p-2 hover:bg-slate-100" title="Notificaciones">
+              <span class="text-xl">🔔</span>
+              <span id="bellBadge" class="hidden absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1"></span>
+            </button>
+            <a href="/perfil" class="hidden sm:inline text-xs text-slate-500 hover:text-slate-700">{user.nombre}</a>
+          </header>
+
+          <!-- Panel de notificaciones -->
+          <div id="bellPanel" class="hidden fixed top-14 right-4 z-50 w-80 max-h-[70vh] overflow-y-auto rounded-lg bg-white border border-slate-200 shadow-xl">
+            <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2">
+              <span class="font-semibold text-sm">Notificaciones</span>
+              <button id="bellMarkAll" class="text-xs text-brand-600 hover:underline">Marcar todas</button>
+            </div>
+            <div id="bellList" class="divide-y divide-slate-100 text-sm">
+              <div class="p-4 text-center text-slate-400">Cargando…</div>
             </div>
           </div>
-        </header>
-      )
-    }
-    <main class="mx-auto max-w-6xl px-4 py-6">
-      <slot />
-    </main>
-    <script>
-      const btn = document.getElementById("logoutBtn");
-      btn?.addEventListener("click", async () => {
+
+          <main class="flex-1 p-4 sm:p-6">
+            <slot />
+          </main>
+        </div>
+      </div>
+
+      <!-- Modal búsqueda global -->
+      <div id="searchModal" class="fixed inset-0 z-[100] hidden bg-black/40 p-4 sm:p-12">
+        <div class="mx-auto max-w-2xl rounded-xl bg-white shadow-2xl overflow-hidden">
+          <div class="border-b border-slate-200 px-4">
+            <input id="searchInput" type="text" placeholder="🔍 Buscar OT, equipo, ticket, item, requisición..." class="w-full border-0 bg-transparent py-3 text-base outline-none focus:ring-0" />
+          </div>
+          <div id="searchResults" class="max-h-[60vh] overflow-y-auto p-2 text-sm">
+            <p class="p-4 text-center text-slate-400">Escribe al menos 2 caracteres para buscar.</p>
+          </div>
+          <div class="border-t border-slate-200 px-4 py-2 text-[10px] text-slate-400 flex justify-between">
+            <span>↑↓ navegar · Enter abrir · ESC cerrar</span>
+            <button id="searchClose" class="hover:text-slate-700">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    ) : (
+      <main class="mx-auto max-w-7xl px-4 py-6">
+        <slot />
+      </main>
+    )}
+
+    <script is:inline>
+      document.getElementById("logoutBtn")?.addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/login";
       });
+      // ─── Búsqueda global (Cmd+K / Ctrl+K) ─────────────────────────────────
+      (function () {
+        var modal = document.getElementById("searchModal");
+        var input = document.getElementById("searchInput");
+        var results = document.getElementById("searchResults");
+        var openBtn = document.getElementById("searchOpen");
+        var closeBtn = document.getElementById("searchClose");
+        if (!modal || !input || !results) return;
+
+        function openModal() {
+          modal.classList.remove("hidden");
+          setTimeout(function () { input.focus(); }, 50);
+        }
+        function closeModal() {
+          modal.classList.add("hidden");
+          input.value = "";
+          results.innerHTML = '<p class="p-4 text-center text-slate-400">Escribe al menos 2 caracteres para buscar.</p>';
+        }
+        openBtn && openBtn.addEventListener("click", openModal);
+        closeBtn && closeBtn.addEventListener("click", closeModal);
+        modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+
+        document.addEventListener("keydown", function (e) {
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+            e.preventDefault();
+            modal.classList.contains("hidden") ? openModal() : closeModal();
+          }
+          if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
+        });
+
+        var t;
+        input.addEventListener("input", function () {
+          clearTimeout(t);
+          var q = input.value.trim();
+          if (q.length < 2) {
+            results.innerHTML = '<p class="p-4 text-center text-slate-400">Escribe al menos 2 caracteres.</p>';
+            return;
+          }
+          t = setTimeout(function () { buscar(q); }, 200);
+        });
+
+        function buscar(q) {
+          results.innerHTML = '<p class="p-4 text-center text-slate-400">Buscando…</p>';
+          fetch("/api/search?q=" + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (j) { renderResultados(j.resultados); })
+            .catch(function () { results.innerHTML = '<p class="p-4 text-center text-red-500">Error al buscar</p>'; });
+        }
+
+        function renderResultados(R) {
+          var groups = [
+            { key: "ordenes",       label: "Órdenes",       icon: "📋", link: function (r) { return "/ordenes/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.titulo); },        meta: function (r) { return r.tipo + " · " + r.estado; } },
+            { key: "equipos",       label: "Equipos",       icon: "🛠",  link: function (r) { return "/activos/" + r.id; },        title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.tipo + " · " + r.estado; } },
+            { key: "tickets",       label: "Tickets",       icon: "🎫", link: function (r) { return "/tickets/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.asunto); },        meta: function (r) { return r.estado; } },
+            { key: "items",         label: "Inventario",    icon: "📦", link: function (r) { return "/inventario/" + r.id; },     title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.unidad; } },
+            { key: "comentarios",   label: "Comentarios",   icon: "💬", link: function (r) { return "/ordenes/" + r.ordenId; },   title: function (r) { return "OT #" + r.ordenId + " · " + esc(r.ordenTitulo); }, meta: function (r) { return new Date(r.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" }); } },
+            { key: "requisiciones", label: "Requisiciones", icon: "🛒", link: function (r) { return "/requisiciones/" + r.id; }, title: function (r) { return esc(r.numero); },                            meta: function (r) { return r.estado; } },
+          ];
+          var html = "";
+          var totalRes = 0;
+          groups.forEach(function (g) {
+            var arr = R[g.key] || [];
+            if (arr.length === 0) return;
+            totalRes += arr.length;
+            html += '<div class="mb-2"><div class="px-3 py-1 text-[10px] uppercase font-semibold text-slate-400">' + g.icon + ' ' + g.label + '</div>';
+            arr.forEach(function (r) {
+              var snippet = r.snippet
+                ? '<div class="text-xs text-slate-600 mt-0.5">' + r.snippet + '</div>'
+                : '';
+              html += '<a href="' + g.link(r) + '" class="block rounded px-3 py-2 hover:bg-slate-100"><div class="font-medium text-sm text-slate-800">' + g.title(r) + '</div>' + snippet + '<div class="text-[10px] text-slate-500 mt-0.5">' + g.meta(r) + '</div></a>';
+            });
+            html += '</div>';
+          });
+          if (totalRes === 0) {
+            results.innerHTML = '<p class="p-4 text-center text-slate-400">Sin resultados.</p>';
+          } else {
+            results.innerHTML = html;
+          }
+        }
+        function esc(s) {
+          return String(s || "").replace(/[&<>"']/g, function (c) {
+            return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+          });
+        }
+      })();
+
+      // ─── Campana de notificaciones in-app ─────────────────────────────────
+      (function () {
+        var btn = document.getElementById("bellBtn");
+        var panel = document.getElementById("bellPanel");
+        var badge = document.getElementById("bellBadge");
+        var list = document.getElementById("bellList");
+        var markAll = document.getElementById("bellMarkAll");
+        if (!btn || !panel || !badge || !list) return;
+
+        function fmtRel(iso) {
+          var d = new Date(iso);
+          var diff = (Date.now() - d.getTime()) / 1000;
+          if (diff < 60) return "ahora";
+          if (diff < 3600) return Math.floor(diff / 60) + " min";
+          if (diff < 86400) return Math.floor(diff / 3600) + " h";
+          if (diff < 604800) return Math.floor(diff / 86400) + " d";
+          return d.toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+        }
+
+        function render(notifs) {
+          if (!notifs || notifs.length === 0) {
+            list.innerHTML = '<div class="p-6 text-center text-slate-400">Sin notificaciones</div>';
+            return;
+          }
+          list.innerHTML = notifs.map(function (n) {
+            var bg = n.leida ? "" : "bg-blue-50";
+            var dot = n.leida ? "" : '<span class="inline-block h-2 w-2 rounded-full bg-blue-500 mr-1"></span>';
+            var content =
+              '<div class="flex items-start gap-2">' +
+                dot +
+                '<div class="flex-1 min-w-0">' +
+                  '<div class="font-medium text-slate-800 truncate">' + escapeHtml(n.titulo) + '</div>' +
+                  (n.mensaje ? '<div class="text-xs text-slate-600 mt-0.5">' + escapeHtml(n.mensaje) + '</div>' : '') +
+                  '<div class="text-[10px] text-slate-400 mt-1">' + fmtRel(n.createdAt) + '</div>' +
+                '</div>' +
+              '</div>';
+            if (n.link) {
+              return '<a href="' + n.link + '" class="block px-3 py-2 hover:bg-slate-50 ' + bg + '" data-nid="' + n.id + '">' + content + '</a>';
+            }
+            return '<div class="block px-3 py-2 ' + bg + '" data-nid="' + n.id + '">' + content + '</div>';
+          }).join("");
+
+          list.querySelectorAll("[data-nid]").forEach(function (el) {
+            el.addEventListener("click", function () {
+              var id = el.getAttribute("data-nid");
+              fetch("/api/notificaciones", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ id: Number(id) }),
+              }).catch(function () {});
+            });
+          });
+        }
+
+        function escapeHtml(s) {
+          return String(s || "").replace(/[&<>"']/g, function (c) {
+            return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+          });
+        }
+
+        function refresh() {
+          fetch("/api/notificaciones")
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              var n = Number(j.noLeidas || 0);
+              if (n > 0) {
+                badge.textContent = n > 99 ? "99+" : String(n);
+                badge.classList.remove("hidden");
+              } else {
+                badge.classList.add("hidden");
+              }
+              render(j.notificaciones || []);
+            }).catch(function () {});
+        }
+
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          panel.classList.toggle("hidden");
+          if (!panel.classList.contains("hidden")) refresh();
+        });
+
+        document.addEventListener("click", function (e) {
+          if (!panel.classList.contains("hidden") && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+            panel.classList.add("hidden");
+          }
+        });
+
+        markAll && markAll.addEventListener("click", function () {
+          fetch("/api/notificaciones", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "marcar_todas_leidas" }),
+          }).then(refresh).catch(function () {});
+        });
+
+        // Refrescar al cargar y cada 60 segundos
+        refresh();
+        setInterval(refresh, 60000);
+      })();
+
+      // Toggle sidebar en móvil + cerrar al hacer tap afuera o al navegar
+      var toggle = document.getElementById("menuToggle");
+      var sidebar = document.getElementById("sidebar");
+      if (toggle && sidebar) {
+        toggle.addEventListener("click", function (e) {
+          e.stopPropagation();
+          sidebar.classList.toggle("open");
+        });
+        // Tap fuera cierra
+        document.addEventListener("click", function (e) {
+          if (sidebar.classList.contains("open") && !sidebar.contains(e.target) && e.target !== toggle) {
+            sidebar.classList.remove("open");
+          }
+        });
+        // Tap en cualquier link del sidebar lo cierra
+        sidebar.querySelectorAll("a").forEach(function (a) {
+          a.addEventListener("click", function () { sidebar.classList.remove("open"); });
+        });
+      }
     </script>
   </body>
 </html>

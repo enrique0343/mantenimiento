@@ -1,14 +1,18 @@
 ---
 import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
-import { sucursales, empresa } from "@/lib/schema";
+import { sucursales, ubicaciones, empresa } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 export const prerender = false;
 
 const db = getDb(Astro);
 const [emp] = await db.select().from(empresa).limit(1);
+const tieneLogo = !!emp?.logoR2Key;
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
   .from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
+const ubRows = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, tipo: ubicaciones.tipo })
+  .from(ubicaciones).where(eq(ubicaciones.activa, true)).orderBy(ubicaciones.nombre);
+const ubJson = JSON.stringify(ubRows);
 ---
 
 <!doctype html>
@@ -21,7 +25,10 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
   <body class="min-h-screen bg-slate-50">
     <header class="border-b border-slate-200 bg-white">
       <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
-        <h1 class="text-lg font-bold text-brand-600">{emp?.nombre ?? "Soporte"}</h1>
+        {tieneLogo
+          ? <img src="/api/empresa/logo" alt={emp?.nombre ?? "Logo"} class="h-10 w-auto max-w-[200px] object-contain" />
+          : <h1 class="text-lg font-bold text-brand-600">{emp?.nombre ?? "Soporte"}</h1>
+        }
         <a href="/soporte/track" class="text-sm text-brand-700 hover:underline">¿Ya enviaste un ticket? Consultar estado →</a>
       </div>
     </header>
@@ -36,8 +43,8 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
       </div>
 
       <div id="formBox">
-        <h2 class="text-2xl font-bold">Solicitar soporte / mantenimiento</h2>
-        <p class="mt-1 text-sm text-slate-600">Completa el formulario y nuestro equipo te atenderá lo antes posible.</p>
+        <h2 class="text-2xl font-bold">Cuéntanos qué necesita atención</h2>
+        <p class="mt-1 text-sm text-slate-600">Si llegaste hasta aquí es porque algo dejó de funcionar. Gracias por detenerte a contárnoslo; lo resolvemos juntos.</p>
 
         <form id="form" class="card mt-5 space-y-4 p-5">
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -54,6 +61,13 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
               <input class="input" id="solicitanteTelefono" type="tel" />
             </div>
             <div>
+              <label class="label">Tipo de mantenimiento *</label>
+              <select class="input" id="tipoMantenimiento" required>
+                <option value="general">🔧 General (instalaciones, áreas, equipos comunes)</option>
+                <option value="biomedico">🩺 Biomédico (equipos médicos, hospitalarios)</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
               <label class="label">Prioridad</label>
               <select class="input" id="prioridad">
                 <option value="baja">Baja (asunto rutinario)</option>
@@ -72,34 +86,112 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
             <textarea class="input" id="descripcion" rows="5" required minlength="10" placeholder="¿Qué está fallando? ¿Cuándo empezó? ¿Qué equipo o área se ve afectado?"></textarea>
           </div>
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {sucRows.length > 0 && (
-              <div>
-                <label class="label">Sucursal</label>
-                <select class="input" id="sucursalId">
-                  <option value="">— Seleccionar —</option>
-                  {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
-                </select>
-              </div>
-            )}
             <div>
-              <label class="label">Ubicación específica</label>
-              <input class="input" id="ubicacion" placeholder="Ej: Sala 3, Piso 2 - Quirófano A" />
+              <label class="label">Sucursal *</label>
+              <select class="input" id="sucursalId" required>
+                <option value="">— Seleccionar —</option>
+                {sucRows.map((s) => <option value={s.id}>{s.nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label">Ubicación <span class="text-slate-400 font-normal">(opcional)</span></label>
+              <select class="input" id="ubicacionId">
+                <option value="">— Selecciona primero la sucursal —</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label">Detalle adicional de ubicación (opcional)</label>
+              <input class="input" id="ubicacion" placeholder="Ej: junto a la puerta, esquina noreste, mesa 4..." />
             </div>
           </div>
+
+          <!-- Fotos del estado actual -->
+          <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
+            <h3 class="text-sm font-semibold text-slate-900">📷 Fotos del problema <span class="text-slate-400 font-normal">(opcional, recomendado)</span></h3>
+            <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área. Nos ayudará a diagnosticar más rápido y servirán como evidencia "antes" del trabajo.</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
+                <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
+                📎 Seleccionar fotos
+              </label>
+              <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
+                <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
+                📸 Cámara
+              </label>
+            </div>
+            <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
+          </div>
+
           <p id="err" class="hidden text-sm text-red-600"></p>
-          <button class="btn-primary w-full justify-center" type="submit">Enviar solicitud</button>
+          <button class="btn-primary w-full justify-center" id="btnSubmit" type="submit">Enviar solicitud</button>
+          <p class="text-center text-xs text-slate-400 mt-3">Gerencia de Operaciones &bull; Avante Complejo Hospitalario</p>
         </form>
       </div>
     </main>
 
-    <script>
+    <script define:vars={{ ubJson }}>
+      const allUbs = JSON.parse(ubJson);
+      const sucEl = document.getElementById("sucursalId");
+      const ubEl = document.getElementById("ubicacionId");
+      sucEl?.addEventListener("change", () => {
+        const sid = Number(sucEl.value);
+        const filtered = sid ? allUbs.filter((u) => u.sucursalId === sid) : [];
+        ubEl.innerHTML = sid
+          ? '<option value="">— Seleccionar ubicación —</option>'
+          : '<option value="">— Selecciona primero la sucursal —</option>';
+        filtered.forEach((u) => {
+          const o = document.createElement("option");
+          o.value = u.id;
+          o.textContent = u.nombre;
+          ubEl.appendChild(o);
+        });
+      });
+
+      // ─── Fotos pendientes ──────────────────────────────────────────────
+      const pendingFotos = [];
+      const fotoFile = document.getElementById("fotoFile");
+      const fotoCamara = document.getElementById("fotoCamara");
+      const fotosPreview = document.getElementById("fotosPreview");
+      function addFotos(files) {
+        for (const f of Array.from(files)) {
+          pendingFotos.push(f);
+          const thumb = document.createElement("div");
+          thumb.className = "relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-white";
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(f);
+          img.className = "w-full h-full object-cover";
+          thumb.appendChild(img);
+          const rm = document.createElement("button");
+          rm.type = "button";
+          rm.textContent = "×";
+          rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+          rm.addEventListener("click", () => {
+            const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
+            thumb.remove();
+          });
+          thumb.appendChild(rm);
+          fotosPreview.appendChild(thumb);
+        }
+      }
+      fotoFile?.addEventListener("change", () => { addFotos(fotoFile.files); fotoFile.value = ""; });
+      fotoCamara?.addEventListener("change", () => { addFotos(fotoCamara.files); fotoCamara.value = ""; });
+
       const form = document.getElementById("form");
       form?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const err = document.getElementById("err");
+        const btn = document.getElementById("btnSubmit");
         err.classList.add("hidden");
         const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
-        const sucEl = document.getElementById("sucursalId");
+
+        if (!sucEl?.value) {
+          err.textContent = "La sucursal es obligatoria.";
+          err.classList.remove("hidden");
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = "Enviando...";
         const payload = {
           solicitanteNombre: v("solicitanteNombre"),
           solicitanteEmail: v("solicitanteEmail"),
@@ -107,8 +199,10 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
           asunto: v("asunto"),
           descripcion: v("descripcion"),
           prioridad: v("prioridad"),
+          tipoMantenimiento: v("tipoMantenimiento"),
           ubicacion: v("ubicacion") || null,
-          sucursalId: sucEl?.value ? Number(sucEl.value) : null,
+          sucursalId: Number(sucEl.value),
+          ubicacionId: ubEl?.value ? Number(ubEl.value) : null,
         };
         const res = await fetch("/api/tickets/publico", {
           method: "POST",
@@ -119,12 +213,25 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
           const j = await res.json().catch(() => ({}));
           err.textContent = "No pudimos enviar tu solicitud. Verifica los campos e intenta de nuevo.";
           err.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = "Enviar solicitud";
           return;
         }
         const j = await res.json();
+        const token = j.ticket.trackingToken;
+
+        // Subir fotos pendientes (best-effort)
+        if (pendingFotos.length > 0) {
+          btn.textContent = "Subiendo fotos...";
+          for (const f of pendingFotos) {
+            const fd = new FormData();
+            fd.append("file", f);
+            await fetch(`/api/tickets/publico/${token}/foto`, { method: "POST", body: fd }).catch(() => {});
+          }
+        }
+
         const slaH = { urgente: 2, alta: 8, media: 24, baja: 72 }[payload.prioridad] || 24;
         document.getElementById("formBox").classList.add("hidden");
-        document.getElementById("trackToken").textContent = j.ticket.trackingToken;
+        document.getElementById("trackToken").textContent = token;
         document.getElementById("slaInfo").textContent = `${slaH} horas`;
         document.getElementById("successBox").classList.remove("hidden");
       });
