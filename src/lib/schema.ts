@@ -639,6 +639,9 @@ export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
   respondidaEn: text("respondida_en"),
   enviadaEn: text("enviada_en").notNull().default(sql`CURRENT_TIMESTAMP`),
   recordatorioEnviadoEn: text("recordatorio_enviado_en"),
+  leidaPor: integer("leida_por").references(() => usuarios.id),
+  leidaEn: text("leida_en"),
+  respuestaJefe: text("respuesta_jefe"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type EncuestaSatisfaccion = typeof encuestasSatisfaccion.$inferSelect;

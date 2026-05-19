@@ -1,0 +1,25 @@
+name: Weekly cron jobs
+
+on:
+  schedule:
+    # Lunes 12:00 UTC = Lunes 6:00 AM El Salvador
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+jobs:
+  weekly-satisfaccion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar resumen semanal de satisfaccion
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/weekly-satisfaccion")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::weekly-satisfaccion fallo con HTTP $status"
+            exit 1
+          fi

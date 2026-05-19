@@ -14,6 +14,7 @@ const url = new URL(Astro.request.url);
 const filtroTec = url.searchParams.get("tecnico");
 const filtroCal = url.searchParams.get("cal");
 const soloComentadas = url.searchParams.get("conComentario") === "1";
+const soloNoLeidas = url.searchParams.get("noLeidas") === "1";
 
 // Técnicos para filtro (cualquiera que tenga al menos una encuesta)
 const tecnicos = await db
@@ -39,9 +40,19 @@ const rowsAll = await db
   .where(and(...conds))
   .orderBy(desc(encuestasSatisfaccion.respondidaEn));
 
-const rows = soloComentadas
-  ? rowsAll.filter((r) => (r.e.comentario ?? "").trim().length > 0)
-  : rowsAll;
+let rows = rowsAll;
+if (soloComentadas) rows = rows.filter((r) => (r.e.comentario ?? "").trim().length > 0);
+if (soloNoLeidas) rows = rows.filter((r) => !r.e.leidaEn);
+
+// Conteos para badge en filtros
+const bajasSinLeer = rowsAll.filter((r) =>
+  (r.e.calificacion ?? 5) <= 3 && (r.e.comentario ?? "").trim().length > 0 && !r.e.leidaEn
+).length;
+
+// Construir querystring para CSV manteniendo filtros activos
+const csvParams = new URLSearchParams();
+if (filtroTec) csvParams.set("tecnico", filtroTec);
+if (filtroCal) csvParams.set("cal", filtroCal);
 
 // KPIs (sobre el set filtrado por técnico/calificación pero sin el "solo comentadas")
 const total = rowsAll.length;
@@ -89,8 +100,9 @@ const rankingList = Array.from(ranking.values())
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">⭐ Encuestas de satisfacción</h1>
-      <p class="text-sm text-slate-500">{total} respondidas · {pendientes} pendientes</p>
+      <p class="text-sm text-slate-500">{total} respondidas · {pendientes} pendientes{bajasSinLeer > 0 ? ` · ⚠ ${bajasSinLeer} bajas sin atender` : ""}</p>
     </div>
+    <a href={`/api/encuestas/export?${csvParams.toString()}`} class="btn-secondary text-sm">⬇ Exportar CSV</a>
   </div>
 
   <!-- KPIs -->
@@ -187,8 +199,12 @@ const rankingList = Array.from(ranking.values())
       <input type="checkbox" name="conComentario" value="1" checked={soloComentadas} />
       <span class="text-slate-700">Solo con comentario</span>
     </label>
+    <label class="flex items-center gap-2">
+      <input type="checkbox" name="noLeidas" value="1" checked={soloNoLeidas} />
+      <span class="text-slate-700">Solo no leídas</span>
+    </label>
     <button type="submit" class="btn-primary">Filtrar</button>
-    {(filtroTec || filtroCal || soloComentadas) && (
+    {(filtroTec || filtroCal || soloComentadas || soloNoLeidas) && (
       <a href="/satisfaccion" class="btn-secondary">Limpiar</a>
     )}
   </form>
@@ -204,16 +220,18 @@ const rankingList = Array.from(ranking.values())
           <th class="px-4 py-2">Evaluado por</th>
           <th class="px-4 py-2 text-center">Calificación</th>
           <th class="px-4 py-2">Comentario</th>
+          <th class="px-4 py-2 text-center">Acción</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && (
-          <tr><td colspan="6" class="px-4 py-8 text-center text-slate-400">Sin respuestas con esos filtros.</td></tr>
+          <tr><td colspan="7" class="px-4 py-8 text-center text-slate-400">Sin respuestas con esos filtros.</td></tr>
         )}
         {rows.map(({ e, o, tec }) => {
           const s = STARS[e.calificacion ?? 0] ?? { emoji: "—", label: "—", color: "bg-slate-100 text-slate-500 border-slate-200" };
+          const esBaja = e.calificacion && e.calificacion <= 3;
           return (
-            <tr class:list={["hover:bg-slate-50", e.calificacion && e.calificacion <= 3 ? "bg-red-50/40" : ""]}>
+            <tr class:list={["hover:bg-slate-50", esBaja && !e.leidaEn ? "bg-red-50/40" : ""]}>
               <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{fmtFechaSimple(e.respondidaEn)}</td>
               <td class="px-4 py-2">
                 {o ? <a href={`/ordenes/${o.id}`} class="text-brand-600 hover:underline">#{o.id} — {o.titulo}</a> : <span class="text-slate-400">—</span>}
@@ -230,6 +248,25 @@ const rankingList = Array.from(ranking.values())
               </td>
               <td class="px-4 py-2 text-slate-700 max-w-xl">
                 {e.comentario ? <p class="whitespace-pre-wrap">{e.comentario}</p> : <span class="text-slate-300 text-xs italic">sin comentario</span>}
+                {e.respuestaJefe && (
+                  <div class="mt-2 rounded border-l-2 border-blue-400 bg-blue-50 p-2 text-xs text-slate-700">
+                    <div class="font-semibold text-blue-800">Respuesta del jefe:</div>
+                    <p class="whitespace-pre-wrap">{e.respuestaJefe}</p>
+                  </div>
+                )}
+              </td>
+              <td class="px-4 py-2 text-center whitespace-nowrap">
+                {e.leidaEn ? (
+                  <button type="button" class="text-xs text-emerald-700 hover:underline btn-atender"
+                          data-token={e.token} data-comentario={e.respuestaJefe ?? ""} data-leida="1">
+                    ✓ Atendida
+                  </button>
+                ) : (
+                  <button type="button" class="text-xs text-amber-700 hover:underline btn-atender"
+                          data-token={e.token} data-comentario={e.respuestaJefe ?? ""} data-leida="0">
+                    Atender
+                  </button>
+                )}
               </td>
             </tr>
           );
@@ -259,9 +296,89 @@ const rankingList = Array.from(ranking.values())
             {e.comentario && (
               <p class="mt-2 rounded-md bg-slate-50 p-2 text-sm text-slate-700 whitespace-pre-wrap">{e.comentario}</p>
             )}
+            {e.respuestaJefe && (
+              <div class="mt-2 rounded border-l-2 border-blue-400 bg-blue-50 p-2 text-xs text-slate-700">
+                <div class="font-semibold text-blue-800">Respuesta del jefe:</div>
+                <p class="whitespace-pre-wrap">{e.respuestaJefe}</p>
+              </div>
+            )}
+            <button type="button" class="mt-2 text-xs btn-atender" data-token={e.token} data-comentario={e.respuestaJefe ?? ""} data-leida={e.leidaEn ? "1" : "0"}>
+              {e.leidaEn ? "✓ Atendida — editar" : "📝 Atender"}
+            </button>
           </div>
         );
       })}
     </div>
   </div>
+
+  <!-- Modal atender encuesta -->
+  <div id="modalAtender" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+      <div class="p-5">
+        <h3 class="text-lg font-bold text-slate-900">Atender encuesta</h3>
+        <p class="mt-1 text-xs text-slate-500">Registra qué acción tomaste (opcional). Marcarla como atendida la saca del filtro de "no leídas".</p>
+        <textarea id="modalRespuesta" class="input mt-3 w-full" rows="4" placeholder="Ej: Hablé con el técnico, le indicamos que en próximos servicios..."></textarea>
+        <div class="mt-4 flex justify-between gap-2">
+          <button type="button" id="modalDesmarcar" class="text-xs text-slate-500 hover:underline hidden">Desmarcar como atendida</button>
+          <div class="flex gap-2 ml-auto">
+            <button type="button" id="modalCancelar" class="btn-secondary text-sm">Cancelar</button>
+            <button type="button" id="modalGuardar" class="btn-primary text-sm">Guardar y marcar atendida</button>
+          </div>
+        </div>
+        <p id="modalError" class="hidden mt-2 text-xs text-red-600"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let tokenActivo = null;
+    const modal = document.getElementById("modalAtender");
+    const ta = document.getElementById("modalRespuesta");
+    const btnDesmarcar = document.getElementById("modalDesmarcar");
+    const errBox = document.getElementById("modalError");
+
+    function abrir(token, comentarioActual, yaLeida) {
+      tokenActivo = token;
+      ta.value = comentarioActual || "";
+      btnDesmarcar.classList.toggle("hidden", !yaLeida);
+      errBox.classList.add("hidden");
+      modal.classList.remove("hidden");
+      ta.focus();
+    }
+    function cerrar() { modal.classList.add("hidden"); tokenActivo = null; }
+
+    document.querySelectorAll(".btn-atender").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        abrir(btn.dataset.token, btn.dataset.comentario, btn.dataset.leida === "1");
+      });
+    });
+    document.getElementById("modalCancelar")?.addEventListener("click", cerrar);
+    modal?.addEventListener("click", (e) => { if (e.target === modal) cerrar(); });
+
+    document.getElementById("modalGuardar")?.addEventListener("click", async () => {
+      if (!tokenActivo) return;
+      const res = await fetch(`/api/encuestas/${tokenActivo}/seguimiento`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ leida: true, respuestaJefe: ta.value.trim() || null }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        errBox.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+        errBox.classList.remove("hidden");
+        return;
+      }
+      location.reload();
+    });
+
+    btnDesmarcar?.addEventListener("click", async () => {
+      if (!tokenActivo) return;
+      const res = await fetch(`/api/encuestas/${tokenActivo}/seguimiento`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ leida: false }),
+      });
+      if (res.ok) location.reload();
+    });
+  </script>
 </Layout>
