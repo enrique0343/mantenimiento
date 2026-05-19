@@ -107,12 +107,22 @@ const valida = enc && !enc.e.respondidaEn;
         msg.classList.remove("hidden");
         return;
       }
+      const calNum = Number(cal.value);
+      const comentario = document.getElementById("comentario").value.trim();
+      // Si la calificación no es la máxima, pedimos detalles concretos.
+      if (calNum < 5 && comentario.length < 15) {
+        msg.innerHTML = "Cuéntanos un poco más qué falló para que podamos mejorar 🙏";
+        msg.className = "text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2";
+        msg.classList.remove("hidden");
+        document.getElementById("comentario").focus();
+        return;
+      }
       const res = await fetch(`/api/encuestas/${token}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          calificacion: Number(cal.value),
-          comentario: document.getElementById("comentario").value.trim() || null,
+          calificacion: calNum,
+          comentario: comentario || null,
         }),
       });
       if (!res.ok) {
