@@ -1,8 +1,9 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion } from "@/lib/schema";
-import { sql, eq, and, lte, gte, asc, isNotNull } from "drizzle-orm";
+import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion, contratosMantenimiento, proveedores } from "@/lib/schema";
+import { sql, eq, and, lte, gte, asc, isNotNull, inArray, desc } from "drizzle-orm";
+import { diasParaVencer } from "@/lib/contratos";
 export const prerender = false;
 
 // Tecnico y Motorista → su panel personal
@@ -71,6 +72,26 @@ const satEnv = Number(satEnviadas?.n ?? 0);
 const satTasa = satEnv > 0 ? Math.round((satN / satEnv) * 100) : 0;
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+
+// Contratos próximos a vencer (próximos 90 días)
+const limite90d = new Date(Date.now() + 90 * 86400_000).toISOString().slice(0, 10);
+const contratosProximosRaw = await db
+  .select({ c: contratosMantenimiento, prov: proveedores })
+  .from(contratosMantenimiento)
+  .leftJoin(proveedores, eq(proveedores.id, contratosMantenimiento.proveedorId))
+  .where(and(
+    inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]),
+    lte(contratosMantenimiento.fechaFin, limite90d),
+    gte(contratosMantenimiento.fechaFin, hoy),
+  ))
+  .orderBy(asc(contratosMantenimiento.fechaFin))
+  .limit(5);
+const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
+  const d = diasParaVencer(c.fechaFin);
+  const color = d > 60 ? "text-amber-600" : d > 30 ? "text-orange-600" : "text-red-600";
+  const diasLabel = d === 0 ? "Vence hoy" : `${d} día${d === 1 ? "" : "s"}`;
+  return { c, prov, d, color, diasLabel };
+});
 ---
 
 <Layout title="Dashboard">
@@ -148,4 +169,27 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "Ame
       </div>
     </div>
   </div>
+
+  {contratosProximos.length > 0 && (
+    <div class="card mt-6 p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-slate-900">📜 Contratos próximos a vencer</h2>
+        <a href="/contratos?proximos=90" class="text-sm text-brand-600 hover:underline">Ver todos →</a>
+      </div>
+      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+        {contratosProximos.map(({ c, prov, color, diasLabel }) => (
+          <li class="flex items-center justify-between gap-2 py-2">
+            <a href={`/contratos/${c.id}`} class="text-brand-600 hover:underline">
+              <span class="font-mono text-xs text-slate-400 mr-2">{c.codigo}</span>
+              <span class="font-medium text-slate-900">{c.nombre}</span>
+            </a>
+            <div class="text-right">
+              <div class={`text-xs font-semibold ${color}`}>{diasLabel}</div>
+              <div class="text-[10px] text-slate-500">{prov?.nombre ?? "—"}</div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
 </Layout>

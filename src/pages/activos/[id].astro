@@ -1,10 +1,11 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog } from "@/lib/schema";
+import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos } from "@/lib/schema";
 import { eq, asc, desc, and, inArray } from "drizzle-orm";
 import { FRECUENCIAS } from "@/lib/frecuencias";
 import { labelCampo } from "@/lib/audit";
+import { ESTADO_CONTRATO_LABEL, ESTADO_CONTRATO_COLOR, diasParaVencer } from "@/lib/contratos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -83,6 +84,32 @@ function parsearCambios(json: string | null) {
   } catch { return []; }
 }
 const isBio = a.tipo === "biomedico";
+
+// Contratos vigentes/por vencer que cubren este equipo
+const contratosActivoRaw = await db
+  .select({ c: contratosMantenimiento, prov: proveedores })
+  .from(contratoEquipos)
+  .innerJoin(contratosMantenimiento, eq(contratosMantenimiento.id, contratoEquipos.contratoId))
+  .leftJoin(proveedores, eq(proveedores.id, contratosMantenimiento.proveedorId))
+  .where(and(
+    eq(contratoEquipos.activoId, a.id),
+    inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]),
+  ))
+  .orderBy(asc(contratosMantenimiento.fechaFin));
+
+const contratosActivo = contratosActivoRaw.map(({ c, prov }) => {
+  const d = diasParaVencer(c.fechaFin);
+  let colorBadge = "bg-emerald-100 text-emerald-700";
+  if (c.estado === "por_vencer") {
+    colorBadge = d > 60 ? "bg-amber-100 text-amber-700"
+      : d > 30 ? "bg-orange-100 text-orange-700"
+      : "bg-red-100 text-red-700";
+  }
+  const labelBadge = c.estado === "por_vencer"
+    ? (d > 0 ? `Vence en ${d}d` : "Vencido")
+    : ESTADO_CONTRATO_LABEL[c.estado as keyof typeof ESTADO_CONTRATO_LABEL];
+  return { c, prov, colorBadge, labelBadge };
+});
 ---
 
 <Layout title={a.nombre}>
@@ -171,6 +198,24 @@ const isBio = a.tipo === "biomedico";
         <div class="capitalize">{a.estado}</div>
       </div>
     </div>
+
+    {contratosActivo.length > 0 && (
+      <div class="card p-5">
+        <h2 class="font-semibold">📜 Contratos de mantenimiento</h2>
+        <ul class="mt-3 space-y-2 text-sm">
+          {contratosActivo.map(({ c, prov, colorBadge, labelBadge }) => (
+            <li class="border-l-2 border-slate-200 pl-3">
+              <a href={`/contratos/${c.id}`} class="text-brand-600 hover:underline font-medium">{c.codigo}</a>
+              <div class="text-xs text-slate-600">{c.nombre}</div>
+              <div class="text-xs text-slate-500">{prov?.nombre ?? "—"}</div>
+              <div class="mt-1">
+                <span class={`badge text-[10px] ${colorBadge}`}>{labelBadge}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
   </div>
 
   <div class="mt-4 flex flex-wrap gap-2">

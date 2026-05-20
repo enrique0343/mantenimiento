@@ -1,0 +1,266 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { proveedores, usuarios, activos, sucursales, ubicaciones } from "@/lib/schema";
+import { asc, eq, and, inArray, ne } from "drizzle-orm";
+import { puedeGestionarContratos } from "@/lib/contratos";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeGestionarContratos(user.rol)) return Astro.redirect("/contratos");
+
+const db = getDb(Astro);
+const provs = await db.select({ id: proveedores.id, nombre: proveedores.nombre })
+  .from(proveedores).orderBy(asc(proveedores.nombre));
+const responsables = await db.select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+  .from(usuarios)
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["admin", "jefe"])))
+  .orderBy(asc(usuarios.nombre));
+// Sucursal se obtiene vía ubicaciones (activos no la tiene directa)
+const equiposRaw = await db
+  .select({
+    id: activos.id, codigo: activos.codigo, nombre: activos.nombre,
+    sucursalId: ubicaciones.sucursalId,
+  })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .where(ne(activos.estado, "baja"))
+  .orderBy(asc(activos.codigo));
+const equipos = equiposRaw;
+const sucs = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales).orderBy(asc(sucursales.nombre));
+
+const equiposJson = JSON.stringify(equipos);
+const sucursalesJson = JSON.stringify(sucs);
+---
+
+<Layout title="Nuevo contrato">
+  <a href="/contratos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">📜 Nuevo contrato</h1>
+
+  <form id="form" class="mt-4 space-y-4">
+    <div class="card p-5 space-y-4">
+      <h2 class="font-semibold text-slate-900">Información general</h2>
+      <div>
+        <label class="label">Nombre del contrato *</label>
+        <input class="input" id="nombre" required placeholder="Ej: Mantenimiento preventivo AC Edificio A" />
+      </div>
+      <div>
+        <label class="label">Descripción</label>
+        <textarea class="input" id="descripcion" rows="2"></textarea>
+      </div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label">Proveedor *</label>
+          <select class="input" id="proveedorId" required>
+            <option value="">— Selecciona —</option>
+            {provs.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Tipo</label>
+          <select class="input" id="tipo">
+            <option value="preventivo" selected>Preventivo</option>
+            <option value="correctivo">Correctivo</option>
+            <option value="integral">Integral</option>
+            <option value="garantia">Garantía</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="label">Alcance (qué incluye / qué no)</label>
+        <textarea class="input" id="alcance" rows="3" placeholder="Ej: Incluye mantenimiento preventivo trimestral, cambio de filtros, gas refrigerante hasta 5kg. NO incluye reparaciones mayores ni reemplazo de compresor."></textarea>
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">📅 Plazos y costo</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label class="label">Fecha inicio *</label>
+          <input class="input" id="fechaInicio" type="date" required />
+        </div>
+        <div>
+          <label class="label">Fecha fin *</label>
+          <input class="input" id="fechaFin" type="date" required />
+        </div>
+        <div>
+          <label class="label">Costo ($) *</label>
+          <input class="input" id="costo" type="number" min="0" step="0.01" required value="0" />
+        </div>
+      </div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label">Periodicidad del costo</label>
+          <select class="input" id="periodicidadCosto">
+            <option value="mensual">Mensual</option>
+            <option value="trimestral">Trimestral</option>
+            <option value="semestral">Semestral</option>
+            <option value="anual" selected>Anual</option>
+            <option value="unico">Pago único</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Número de contrato (del proveedor)</label>
+          <input class="input" id="numeroContratoExterno" placeholder="Folio o referencia" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">👤 Contacto del proveedor</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label class="label">Nombre del contacto</label>
+          <input class="input" id="contactoProveedor" />
+        </div>
+        <div>
+          <label class="label">Teléfono</label>
+          <input class="input" id="telefonoContacto" />
+        </div>
+        <div>
+          <label class="label">Email</label>
+          <input class="input" id="emailContacto" type="email" />
+        </div>
+      </div>
+      <div>
+        <label class="label">Responsable interno (jefe a cargo del contrato)</label>
+        <select class="input" id="responsableId">
+          <option value="">— Sin asignar —</option>
+          {responsables.map((u) => <option value={u.id}>{u.nombre} ({u.rol})</option>)}
+        </select>
+      </div>
+    </div>
+
+    <div class="card p-5 space-y-3">
+      <h2 class="font-semibold text-slate-900">🛠 Equipos cubiertos *</h2>
+      <p class="text-xs text-slate-500">Selecciona los equipos que el contrato cubre. Puedes filtrar por sucursal.</p>
+      <div class="flex gap-2">
+        <select class="input text-sm flex-1" id="filtroSucursal">
+          <option value="">Todas las sucursales</option>
+          {sucs.map((s) => <option value={s.id}>{s.nombre}</option>)}
+        </select>
+        <input class="input text-sm flex-1" id="filtroNombre" placeholder="Buscar por código o nombre..." />
+      </div>
+      <div id="equiposLista" class="max-h-72 overflow-y-auto border border-slate-200 rounded-lg p-2 text-sm space-y-1">
+      </div>
+      <div id="equiposSeleccionados" class="flex flex-wrap gap-1.5 text-xs"></div>
+    </div>
+
+    <div class="card p-5">
+      <label class="label">Notas adicionales</label>
+      <textarea class="input" id="notas" rows="2"></textarea>
+    </div>
+
+    <p id="err" class="hidden text-sm text-red-600"></p>
+    <div class="flex gap-2">
+      <button class="btn-primary" type="submit" id="btnSubmit">Crear contrato</button>
+      <a class="btn-secondary" href="/contratos">Cancelar</a>
+    </div>
+  </form>
+
+  <script define:vars={{ equiposJson, sucursalesJson }}>
+    const ALL = JSON.parse(equiposJson);
+    const seleccionados = new Set();
+    const listaEl = document.getElementById("equiposLista");
+    const chipsEl = document.getElementById("equiposSeleccionados");
+    const filtroSucEl = document.getElementById("filtroSucursal");
+    const filtroNomEl = document.getElementById("filtroNombre");
+
+    function renderLista() {
+      const sid = filtroSucEl.value ? Number(filtroSucEl.value) : null;
+      const q = filtroNomEl.value.trim().toLowerCase();
+      const filtrados = ALL.filter((e) => {
+        if (sid && e.sucursalId !== sid) return false;
+        if (q && !`${e.codigo} ${e.nombre}`.toLowerCase().includes(q)) return false;
+        return true;
+      }).slice(0, 100);
+      listaEl.innerHTML = "";
+      if (filtrados.length === 0) {
+        listaEl.innerHTML = '<div class="text-xs text-slate-400 p-2">Sin equipos con esos filtros.</div>';
+        return;
+      }
+      for (const e of filtrados) {
+        const checked = seleccionados.has(e.id) ? "checked" : "";
+        const row = document.createElement("label");
+        row.className = "flex items-center gap-2 hover:bg-slate-50 px-2 py-1 rounded cursor-pointer";
+        row.innerHTML = `<input type="checkbox" data-id="${e.id}" ${checked}>
+          <span class="font-mono text-xs text-slate-400">${e.codigo}</span>
+          <span class="text-slate-700">${e.nombre}</span>`;
+        row.querySelector("input").addEventListener("change", (ev) => {
+          if (ev.target.checked) seleccionados.add(e.id); else seleccionados.delete(e.id);
+          renderChips();
+        });
+        listaEl.appendChild(row);
+      }
+    }
+    function renderChips() {
+      chipsEl.innerHTML = "";
+      for (const id of seleccionados) {
+        const e = ALL.find((x) => x.id === id);
+        if (!e) continue;
+        const chip = document.createElement("span");
+        chip.className = "inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5";
+        chip.innerHTML = `${e.codigo} <button type="button" class="text-emerald-600 font-bold">×</button>`;
+        chip.querySelector("button").addEventListener("click", () => {
+          seleccionados.delete(id);
+          renderLista();
+          renderChips();
+        });
+        chipsEl.appendChild(chip);
+      }
+    }
+    filtroSucEl.addEventListener("change", renderLista);
+    filtroNomEl.addEventListener("input", renderLista);
+    renderLista();
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      const btn = document.getElementById("btnSubmit");
+      err.classList.add("hidden");
+
+      if (seleccionados.size === 0) {
+        err.textContent = "Debes seleccionar al menos un equipo.";
+        err.classList.remove("hidden");
+        return;
+      }
+
+      btn.disabled = true; btn.textContent = "Guardando...";
+      const v = (id) => document.getElementById(id).value;
+      const vt = (id) => v(id).trim();
+      const payload = {
+        nombre: vt("nombre"),
+        descripcion: vt("descripcion") || null,
+        proveedorId: Number(v("proveedorId")),
+        tipo: v("tipo"),
+        alcance: vt("alcance") || null,
+        fechaInicio: v("fechaInicio"),
+        fechaFin: v("fechaFin"),
+        costo: Number(v("costo") || 0),
+        periodicidadCosto: v("periodicidadCosto"),
+        numeroContratoExterno: vt("numeroContratoExterno") || null,
+        contactoProveedor: vt("contactoProveedor") || null,
+        telefonoContacto: vt("telefonoContacto") || null,
+        emailContacto: vt("emailContacto") || null,
+        responsableId: v("responsableId") ? Number(v("responsableId")) : null,
+        notas: vt("notas") || null,
+        equipoIds: Array.from(seleccionados),
+      };
+      const res = await fetch("/api/contratos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        location.href = `/contratos/${j.contrato.id}`;
+        return;
+      }
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al crear el contrato";
+      err.classList.remove("hidden");
+      btn.disabled = false; btn.textContent = "Crear contrato";
+    });
+  </script>
+</Layout>

@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, real, primaryKey, index } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const ROLES = ["admin", "jefe", "tecnico", "proveedor", "solicitante", "visualizador", "motorista"] as const;
@@ -863,3 +863,65 @@ export const proyectoComentarios = sqliteTable("proyecto_comentarios", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type ProyectoComentario = typeof proyectoComentarios.$inferSelect;
+
+// ─── Contratos de mantenimiento (Fase 33) ────────────────────────────────────
+export const contratosMantenimiento = sqliteTable("contratos_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  proveedorId: integer("proveedor_id").notNull().references(() => proveedores.id),
+  tipo: text("tipo").notNull().default("preventivo"),
+  alcance: text("alcance"),
+  fechaInicio: text("fecha_inicio").notNull(),
+  fechaFin: text("fecha_fin").notNull(),
+  costo: real("costo").notNull().default(0),
+  periodicidadCosto: text("periodicidad_costo").default("anual"),
+  numeroContratoExterno: text("numero_contrato_externo"),
+  contactoProveedor: text("contacto_proveedor"),
+  telefonoContacto: text("telefono_contacto"),
+  emailContacto: text("email_contacto"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  estado: text("estado").notNull().default("vigente"),
+  renovacionDeId: integer("renovacion_de_id").references((): any => contratosMantenimiento.id),
+  notas: text("notas"),
+  notasRenovacion: text("notas_renovacion"),
+  notasCancelacion: text("notas_cancelacion"),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  alerta90dEnviadaEn: text("alerta_90d_enviada_en"),
+  alerta60dEnviadaEn: text("alerta_60d_enviada_en"),
+  alerta30dEnviadaEn: text("alerta_30d_enviada_en"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+});
+export type ContratoMantenimiento = typeof contratosMantenimiento.$inferSelect;
+
+export const contratoEquipos = sqliteTable("contrato_equipos", {
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.contratoId, t.activoId] }),
+}));
+export type ContratoEquipo = typeof contratoEquipos.$inferSelect;
+
+export const contratoAdjuntos = sqliteTable("contrato_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria").default("contrato"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ContratoAdjunto = typeof contratoAdjuntos.$inferSelect;
+
+export const contratoComentarios = sqliteTable("contrato_comentarios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  texto: text("texto").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ContratoComentario = typeof contratoComentarios.$inferSelect;

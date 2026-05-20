@@ -33,6 +33,7 @@ const allLinks: Link[] = [
   { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
   { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
   { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
+  { href: "/contratos",     label: "Contratos",     icon: "📜", show: isAdminOrJefe },
   { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
   { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
   { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },

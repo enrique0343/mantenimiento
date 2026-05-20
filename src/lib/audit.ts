@@ -4,7 +4,7 @@ import { getDb } from "./db";
 import { auditLog } from "./schema";
 
 export type Accion = "create" | "update" | "delete" | "estado" | "asignacion";
-export type Entidad = "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto";
+export type Entidad = "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto" | "contrato";
 
 export interface DiffEntry {
   antes: unknown;
