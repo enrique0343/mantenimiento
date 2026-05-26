@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, and, isNotNull, asc } from "drizzle-orm";
+import { eq, or, asc } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -15,7 +15,7 @@ const rows = await db
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(eq(activos.tipo, "biomedico"))
+  .where(or(eq(activos.tipo, "biomedico"), eq(activos.requiereCalibracion, true)))
   .orderBy(asc(activos.proximaCalibracion));
 
 const hoy = new Date().toISOString().slice(0, 10);
@@ -124,7 +124,7 @@ const claseColor: Record<string, string> = {
                 {fmt(r.a.proximaCalibracion)}
               </td>
               <td class="px-4 py-2 text-right">
-                <button class="cal-btn text-xs text-brand-600 hover:underline" data-id={r.a.id} data-codigo={r.a.codigo} data-nombre={r.a.nombre}>📝 Registrar</button>
+                <a href={`/activos/${r.a.id}#calibraciones`} class="text-xs text-brand-600 hover:underline">📝 Registrar</a>
               </td>
             </tr>
           ))}
@@ -132,88 +132,4 @@ const claseColor: Record<string, string> = {
       </table>
     </div>
   ))}
-
-  <!-- Modal registrar calibración -->
-  <div id="calModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4">
-    <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-      <h3 class="font-semibold">Registrar calibración</h3>
-      <p id="cal_equipo" class="mt-1 text-sm text-slate-500"></p>
-      <input type="hidden" id="cal_id" />
-      <div class="mt-3 space-y-3 text-sm">
-        <div>
-          <label class="label">Fecha de calibración *</label>
-          <input id="cal_fecha" type="date" class="input" required />
-        </div>
-        <div>
-          <label class="label">Próxima calibración *</label>
-          <input id="cal_proxima" type="date" class="input" required />
-          <p class="mt-1 text-xs text-slate-500">Por defecto, 1 año después.</p>
-        </div>
-      </div>
-      <p id="cal_msg" class="mt-2 hidden text-sm"></p>
-      <div class="mt-4 flex justify-end gap-2">
-        <button id="cal_cancel" class="btn-secondary">Cancelar</button>
-        <button id="cal_save" class="btn-primary">Guardar</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const modal = document.getElementById("calModal")!;
-    const fechaIn = document.getElementById("cal_fecha") as HTMLInputElement;
-    const proxIn = document.getElementById("cal_proxima") as HTMLInputElement;
-    const idIn = document.getElementById("cal_id") as HTMLInputElement;
-    const eqLbl = document.getElementById("cal_equipo")!;
-    const msg = document.getElementById("cal_msg")!;
-
-    document.querySelectorAll<HTMLButtonElement>(".cal-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        idIn.value = btn.dataset.id!;
-        eqLbl.textContent = `${btn.dataset.codigo} · ${btn.dataset.nombre}`;
-        const today = new Date().toISOString().slice(0, 10);
-        fechaIn.value = today;
-        const next = new Date();
-        next.setFullYear(next.getFullYear() + 1);
-        proxIn.value = next.toISOString().slice(0, 10);
-        modal.classList.remove("hidden");
-        modal.classList.add("flex");
-      });
-    });
-    document.getElementById("cal_cancel")?.addEventListener("click", () => {
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
-    });
-    fechaIn.addEventListener("change", () => {
-      // Si se cambia la fecha de calibración, sumar 1 año a la próxima
-      if (!fechaIn.value) return;
-      const d = new Date(fechaIn.value);
-      d.setFullYear(d.getFullYear() + 1);
-      proxIn.value = d.toISOString().slice(0, 10);
-    });
-    document.getElementById("cal_save")?.addEventListener("click", async () => {
-      msg.classList.add("hidden");
-      if (!fechaIn.value || !proxIn.value) {
-        msg.textContent = "Completa ambas fechas.";
-        msg.className = "text-sm text-red-600 mt-2";
-        msg.classList.remove("hidden");
-        return;
-      }
-      const r = await fetch(`/api/activos/${idIn.value}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ultimaCalibracion: fechaIn.value,
-          proximaCalibracion: proxIn.value,
-        }),
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        msg.textContent = "Error: " + (typeof j.error === "string" ? j.error : "no se pudo guardar");
-        msg.className = "text-sm text-red-600 mt-2";
-        msg.classList.remove("hidden");
-        return;
-      }
-      location.reload();
-    });
-  </script>
 </Layout>

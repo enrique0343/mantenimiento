@@ -1,9 +1,10 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { sucursales, ubicaciones, proveedores } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
+import { eq, and, inArray, asc } from "drizzle-orm";
 import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
+import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -15,6 +16,11 @@ const db = getDb(Astro);
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
 const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+const userRows = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+  .from(usuarios)
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "admin"])))
+  .orderBy(asc(usuarios.nombre));
 
 const ubJson = JSON.stringify(ubRows);
 ---
@@ -114,6 +120,45 @@ const ubJson = JSON.stringify(ubRows);
           </select>
         </div>
       )}
+    </div>
+
+    <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-brand-700">🏷 Datos patrimoniales y criticidad (JCI)</h2>
+      <p class="text-xs text-slate-500 mb-3">Trazabilidad del ciclo de vida y prioridad operativa del equipo. La criticidad indica cuánto tolera estar fuera de servicio.</p>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Fecha de adquisición</label>
+          <input class="input" id="fechaAdquisicion" type="date" />
+        </div>
+        <div>
+          <label class="label">Vida útil estimada (años)</label>
+          <input class="input" id="vidaUtilAnios" type="number" min="0" max="100" placeholder="Ej: 10" />
+        </div>
+        <div>
+          <label class="label">Valor de adquisición (USD)</label>
+          <input class="input" id="valorAdquisicion" type="number" min="0" step="0.01" />
+        </div>
+        <div>
+          <label class="label">Responsable del equipo</label>
+          <select class="input" id="responsableSel">
+            <option value="">— Sin asignar —</option>
+            {userRows.map((u) => <option value={u.id}>{u.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Criticidad operacional *</label>
+          <select class="input" id="criticidadOperacional">
+            {(["alta", "media", "baja"] as const).map((c) => (
+              <option value={c} selected={c === "media"}>{CRITICIDAD_LABEL[c]}</option>
+            ))}
+          </select>
+          <p class="mt-1 text-xs text-slate-500" id="critDesc">{CRITICIDAD_DESC.media}</p>
+        </div>
+        <div class="flex items-center gap-2 pt-6">
+          <input type="checkbox" id="requiereCalibracion" class="h-4 w-4" />
+          <label for="requiereCalibracion" class="text-sm text-slate-700">Requiere calibración (aunque no sea biomédico)</label>
+        </div>
+      </div>
     </div>
 
     <div class="border-t border-slate-200 pt-5">
@@ -217,8 +262,15 @@ const ubJson = JSON.stringify(ubRows);
     </div>
   </form>
 
-  <script define:vars={{ ubJson, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
+  <script define:vars={{ ubJson, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO, critDescJson: CRITICIDAD_DESC }}>
     const allUbs = JSON.parse(ubJson);
+
+    // Descripción de criticidad operacional
+    const critSel = document.getElementById("criticidadOperacional");
+    const critDescEl = document.getElementById("critDesc");
+    critSel?.addEventListener("change", () => {
+      if (critDescEl) critDescEl.textContent = critDescJson[critSel.value] ?? "";
+    });
 
     // Biomedico toggle
     const tipoSel = document.getElementById("tipo");
@@ -281,6 +333,12 @@ const ubJson = JSON.stringify(ubRows);
         slaAltaHoras: Number(sv("slaAltaHoras") || 24),
         slaMediaHoras: Number(sv("slaMediaHoras") || 72),
         slaBajaHoras: Number(sv("slaBajaHoras") || 168),
+        fechaAdquisicion: v("fechaAdquisicion") || null,
+        vidaUtilAnios: v("vidaUtilAnios") ? Number(v("vidaUtilAnios")) : null,
+        valorAdquisicion: v("valorAdquisicion") ? Number(v("valorAdquisicion")) : null,
+        responsableId: sv("responsableSel") ? Number(sv("responsableSel")) : null,
+        criticidadOperacional: sv("criticidadOperacional") || "media",
+        requiereCalibracion: document.getElementById("requiereCalibracion")?.checked ?? false,
       };
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;

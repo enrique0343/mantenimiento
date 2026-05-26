@@ -3,10 +3,11 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
   activos, ordenes, usuarios, comentarios, ordenRepuestos, items as itemsTable,
-  movimientosInventario, encuestasSatisfaccion,
+  movimientosInventario, encuestasSatisfaccion, calibraciones, proveedores,
 } from "@/lib/schema";
 import { eq, desc, and, sql, isNotNull, gte } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -207,18 +208,29 @@ for (const r of repuestos) {
     icono: "🔧",
   });
 }
-if (a.tipo === "biomedico") {
-  if (a.ultimaCalibracion) {
-    eventos.push({
-      fecha: a.ultimaCalibracion,
-      tipo: "calibracion",
-      titulo: `Calibración registrada`,
-      detalle: a.proximaCalibracion ? `Próxima: ${new Date(a.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
-      meta: a.claseRiesgo ? `Clase ${a.claseRiesgo}` : "",
-      color: "border-purple-500",
-      icono: "🩺",
-    });
-  }
+// Calibraciones con trazabilidad metrológica (tabla calibraciones, Fase 34)
+const calibracionesRows = await db
+  .select({ c: calibraciones, lab: proveedores })
+  .from(calibraciones)
+  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
+  .where(eq(calibraciones.activoId, id))
+  .orderBy(desc(calibraciones.fechaCalibracion));
+for (const { c, lab } of calibracionesRows) {
+  const labNombre = lab?.nombre ?? c.laboratorioExterno;
+  const detalle = [
+    c.proximaCalibracion ? `Próxima: ${new Date(c.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
+    c.patronReferencia ? `Patrón: ${c.patronReferencia}` : "",
+  ].filter(Boolean).join(" · ");
+  eventos.push({
+    fecha: c.fechaCalibracion,
+    tipo: "calibracion",
+    titulo: `Calibración: ${RESULTADO_CALIB_LABEL[c.resultado]}`,
+    detalle,
+    meta: [labNombre, c.numeroCertificado ? `Cert. ${c.numeroCertificado}` : ""].filter(Boolean).join(" · "),
+    link: c.certificadoR2Key ? `/api/calibraciones/certificado/${c.id}` : undefined,
+    color: c.resultado === "no_conforme" ? "border-red-500" : "border-purple-500",
+    icono: "🔬",
+  });
 }
 
 eventos.sort((a, b) => b.fecha.localeCompare(a.fecha));

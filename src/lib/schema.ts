@@ -51,6 +51,10 @@ export const proveedores = sqliteTable("proveedores", {
   email: text("email"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   notas: text("notas"),
+  // Laboratorio de calibración acreditado (JCI FMS.8 — cadena metrológica)
+  esLaboratorioAcreditado: integer("es_laboratorio_acreditado", { mode: "boolean" }).notNull().default(false),
+  acreditacionOrgano: text("acreditacion_organo"),
+  acreditacionVigencia: text("acreditacion_vigencia"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -97,6 +101,15 @@ export const activos = sqliteTable("activos", {
   qrCode: text("qr_code").unique(),
   // Tipo de equipo
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
+  // Datos patrimoniales (JCI FMS.8 — ciclo de vida del equipo)
+  fechaAdquisicion: text("fecha_adquisicion"),
+  vidaUtilAnios: integer("vida_util_anios"),
+  valorAdquisicion: real("valor_adquisicion"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  // Criticidad operacional (tolerancia a downtime), distinta de claseRiesgo regulatoria
+  criticidadOperacional: text("criticidad_operacional", { enum: ["alta", "media", "baja"] }).default("media"),
+  // Equipo no biomédico que igual requiere calibración (balanzas, manómetros…)
+  requiereCalibracion: integer("requiere_calibracion", { mode: "boolean" }).notNull().default(false),
   // Campos biomedicos
   registroSanitario: text("registro_sanitario"),
   claseRiesgo: text("clase_riesgo", { enum: ["I", "IIa", "IIb", "III"] }),
@@ -925,3 +938,37 @@ export const contratoComentarios = sqliteTable("contrato_comentarios", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type ContratoComentario = typeof contratoComentarios.$inferSelect;
+
+// ─── Calibraciones con trazabilidad metrológica (Fase 34 — JCI FMS.8) ────────
+export const calibraciones = sqliteTable("calibraciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  fechaCalibracion: text("fecha_calibracion").notNull(),
+  proximaCalibracion: text("proxima_calibracion"),
+  laboratorioId: integer("laboratorio_id").references(() => proveedores.id),
+  laboratorioExterno: text("laboratorio_externo"),
+  numeroCertificado: text("numero_certificado"),
+  patronReferencia: text("patron_referencia"),
+  resultado: text("resultado", { enum: ["conforme", "conforme_con_ajuste", "no_conforme"] }).notNull().default("conforme"),
+  incertidumbre: text("incertidumbre"),
+  certificadoR2Key: text("certificado_r2_key"),
+  realizadoPor: text("realizado_por"),
+  notas: text("notas"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type Calibracion = typeof calibraciones.$inferSelect;
+
+// ─── Documentos del equipo (ficha técnica, manual, garantía…) (Fase 34) ──────
+export const activoDocumentos = sqliteTable("activo_documentos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria").default("ficha_tecnica"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ActivoDocumento = typeof activoDocumentos.$inferSelect;
