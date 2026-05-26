@@ -101,7 +101,18 @@ export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: Esta
 
 // Checklist parsing helpers
 export type ChecklistEstado = "pendiente" | "ok" | "na" | "desviacion";
-export type ChecklistItem = { texto: string; estado: ChecklistEstado; notas?: string };
+export type ChecklistItem = {
+  texto: string;
+  estado: ChecklistEstado;
+  notas?: string;
+  // Procedimiento estándar (Fase 35): metadata heredada de la plantilla.
+  criterio?: string;       // criterio de aceptación (valor/condición esperada)
+  bloqueante?: boolean;    // punto crítico: una desviación impide cerrar la OT
+  minutos?: number;        // tiempo estimado del paso
+  materiales?: string;     // herramientas/materiales requeridos
+  // Ejecución: lo que el técnico registró frente al criterio.
+  valorMedido?: string;
+};
 
 const ESTADOS_VALIDOS: ChecklistEstado[] = ["pendiente", "ok", "na", "desviacion"];
 
@@ -123,10 +134,16 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
         } else {
           estado = "pendiente";
         }
+        const minutos = Number(it?.minutos);
         return {
           texto,
           estado,
           notas: it?.notas ? String(it.notas) : undefined,
+          criterio: it?.criterio ? String(it.criterio) : undefined,
+          bloqueante: it?.bloqueante === true || it?.bloqueante === 1,
+          minutos: Number.isFinite(minutos) && minutos > 0 ? minutos : undefined,
+          materiales: it?.materiales ? String(it.materiales) : undefined,
+          valorMedido: it?.valorMedido ? String(it.valorMedido) : undefined,
         };
       })
       .filter((it) => it.texto.length > 0);
@@ -135,19 +152,28 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
   }
 }
 
-export function progresoChecklist(items: ChecklistItem[]): { hechos: number; total: number; pct: number; desviaciones: number; pendientes: number } {
+// Suma del tiempo estimado de todos los pasos con minutos definidos.
+export function minutosEstimadosChecklist(items: ChecklistItem[]): number {
+  return items.reduce((s, i) => s + (i.minutos ?? 0), 0);
+}
+
+export function progresoChecklist(items: ChecklistItem[]): { hechos: number; total: number; pct: number; desviaciones: number; pendientes: number; bloqueantesAbiertos: number } {
   const total = items.length;
   const hechos = items.filter((i) => i.estado === "ok" || i.estado === "na" || i.estado === "desviacion").length;
   const desviaciones = items.filter((i) => i.estado === "desviacion").length;
   const pendientes = items.filter((i) => i.estado === "pendiente").length;
+  // Puntos críticos en desviación: impiden devolver el equipo a servicio.
+  const bloqueantesAbiertos = items.filter((i) => i.bloqueante && i.estado === "desviacion").length;
   const pct = total === 0 ? 0 : Math.round((hechos / total) * 100);
-  return { hechos, total, pct, desviaciones, pendientes };
+  return { hechos, total, pct, desviaciones, pendientes, bloqueantesAbiertos };
 }
 
 // Valida si el checklist permite cerrar la OT.
 // Reglas:
 //   - No puede haber items en estado "pendiente"
 //   - Los items en "desviacion" deben tener notas (mín 10 chars)
+//   - Un punto crítico (bloqueante) en "desviacion" impide cerrar: el equipo no
+//     debe volver a servicio; requiere resolver el punto o escalar a correctivo.
 export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolean; error?: string } {
   if (items.length === 0) return { ok: true };
   const pendientes = items.filter((i) => i.estado === "pendiente");
@@ -157,6 +183,10 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
   const desvSinNota = items.filter((i) => i.estado === "desviacion" && (!i.notas || i.notas.trim().length < 10));
   if (desvSinNota.length > 0) {
     return { ok: false, error: `No puedes completar: hay ${desvSinNota.length} desviación${desvSinNota.length === 1 ? "" : "es"} sin describir. Cada desviación necesita una nota de al menos 10 caracteres.` };
+  }
+  const bloqueantes = items.filter((i) => i.bloqueante && i.estado === "desviacion");
+  if (bloqueantes.length > 0) {
+    return { ok: false, error: `No puedes completar: hay ${bloqueantes.length} punto${bloqueantes.length === 1 ? "" : "s"} crítico${bloqueantes.length === 1 ? "" : "s"} en desviación. El equipo no puede volver a servicio: resuelve el punto (márcalo OK) o escala a un correctivo.` };
   }
   return { ok: true };
 }

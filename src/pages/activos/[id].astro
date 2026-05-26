@@ -484,6 +484,7 @@ const documentosRows = await db.select().from(activoDocumentos).where(eq(activoD
             <option value="">— Sin plantilla (checklist vacío) —</option>
           </select>
           <p class="mt-1 text-xs text-slate-500">Al seleccionar una plantilla, los puntos críticos se cargan abajo y podrás ajustarlos para este equipo específico.</p>
+          <p id="p_plantillaHint" class="mt-1 text-xs text-brand-600"></p>
         </div>
         <div class="sm:col-span-2">
           <label class="label">Puntos críticos del checklist</label>
@@ -663,6 +664,9 @@ const documentosRows = await db.select().from(activoDocumentos).where(eq(activoD
     const $ = (id) => document.getElementById(id);
     // Cache de plantillas para repoblar el textarea de checklist
     let plantillasCache = [];
+    // Metadata del procedimiento por texto de paso (criterio, bloqueante, etc.),
+    // poblada al elegir una plantilla, para no perderla al guardar el plan.
+    let plantillaMetaByTexto = {};
 
     async function cargarPlantillas() {
       try {
@@ -692,6 +696,20 @@ const documentosRows = await db.select().from(activoDocumentos).where(eq(activoD
       // Si hay contenido previo, confirmar antes de sobrescribir
       if (textareaEl.value.trim() && !confirm("¿Reemplazar los puntos actuales con los de esta plantilla?")) return;
       textareaEl.value = p.items.map((it) => it.texto).join("\n");
+      // Guardar la metadata del procedimiento por texto de paso
+      plantillaMetaByTexto = {};
+      for (const it of p.items) {
+        plantillaMetaByTexto[it.texto.trim()] = {
+          criterio: it.criterioAceptacion ?? null,
+          bloqueante: !!it.bloqueante,
+          minutos: it.minutosEstimados ?? null,
+          materiales: it.materiales ?? null,
+        };
+      }
+      const crit = p.items.filter((it) => it.criterioAceptacion).length;
+      const blo = p.items.filter((it) => it.bloqueante).length;
+      const hint = $("p_plantillaHint");
+      if (hint) hint.textContent = `Procedimiento cargado: ${p.items.length} pasos · ${crit} con criterio · ${blo} crítico(s). Cada paso conserva su criterio y tiempo al generar la OT.`;
     });
 
     $("newPlanBtn")?.addEventListener("click", () => {
@@ -723,7 +741,10 @@ const documentosRows = await db.select().from(activoDocumentos).where(eq(activoD
       let checklist = null;
       if (checklistRaw) {
         const items = checklistRaw.split("\n").map((l) => l.trim()).filter(Boolean)
-          .map((texto) => ({ texto }));
+          .map((texto) => {
+            const meta = plantillaMetaByTexto[texto];
+            return meta ? { texto, ...meta } : { texto };
+          });
         if (items.length > 0) checklist = items;
       }
       const payload = {

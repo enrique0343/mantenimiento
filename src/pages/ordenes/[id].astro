@@ -592,13 +592,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               {progreso.pendientes > 0 && (
                 <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">⏳ {progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
               )}
+              {progreso.bloqueantesAbiertos > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-red-600 text-white font-medium">🔴 {progreso.bloqueantesAbiertos} crítico{progreso.bloqueantesAbiertos === 1 ? "" : "s"} en desviación</span>
+              )}
               <span id="ckAutosave" class="text-slate-400"></span>
             </div>
           </div>
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
-          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes o desviaciones sin describir.</p>
+          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => {
               const filaColor =
@@ -608,7 +611,23 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 "bg-white border border-slate-200";
               return (
                 <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
-                  <div class="text-sm font-medium text-slate-900">{it.texto}</div>
+                  <div class="text-sm font-medium text-slate-900">
+                    {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">🔴 CRÍTICO</span>}
+                    {it.texto}
+                  </div>
+                  {(it.criterio || it.minutos || it.materiales) && (
+                    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">🎯 Criterio: {it.criterio}</span>}
+                      {it.minutos && <span class="text-slate-500">⏱ {it.minutos} min</span>}
+                      {it.materiales && <span class="text-slate-500">🧰 {it.materiales}</span>}
+                    </div>
+                  )}
+                  {it.criterio && (
+                    <div class="mt-2">
+                      <label class="mb-1 block text-xs text-slate-600">Valor medido / resultado</label>
+                      <input class="ck-valor input text-sm w-full max-w-xs" data-idx={idx} value={it.valorMedido ?? ""} placeholder="Ej: 125 psi" disabled={!puedeEditar} />
+                    </div>
+                  )}
                   {puedeEditar ? (
                     <div class="mt-2 flex flex-wrap gap-1">
                       {(["pendiente","ok","na","desviacion"] as const).map((e) => {
@@ -1223,7 +1242,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!["pendiente","ok","na","desviacion"].includes(estado)) {
         estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
       }
-      return { texto: it.texto, estado, notas: it.notas ?? "" };
+      // Preservar la metadata del procedimiento estándar (no perderla al guardar).
+      return {
+        texto: it.texto, estado, notas: it.notas ?? "",
+        criterio: it.criterio ?? null,
+        bloqueante: it.bloqueante === true || it.bloqueante === 1,
+        minutos: it.minutos ?? null,
+        materiales: it.materiales ?? null,
+        valorMedido: it.valorMedido ?? "",
+      };
     });
 
     function actualizarColorFila(idx) {
@@ -1299,6 +1326,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const idx = Number(ta.dataset.idx);
         if (!checklist[idx]) return;
         checklist[idx].notas = ta.value;
+        programarGuardadoChecklist();
+      });
+    });
+
+    document.querySelectorAll(".ck-valor").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const idx = Number(inp.dataset.idx);
+        if (!checklist[idx]) return;
+        checklist[idx].valorMedido = inp.value;
         programarGuardadoChecklist();
       });
     });
@@ -1728,7 +1764,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           doc.setFont("helvetica", "bold"); doc.text("Checklist", M, y); y += 5;
           doc.setFont("helvetica", "normal");
           checklistItems.forEach((it) => {
-            doc.text(`${it.hecho ? "[X]" : "[ ]"} ${it.texto}`, M, y); y += 4.5;
+            const mark = it.estado === "ok" ? "[OK]" : it.estado === "na" ? "[N/A]" : it.estado === "desviacion" ? "[DESV]" : "[ ]";
+            doc.text(`${mark} ${it.texto}${it.bloqueante ? " (CRITICO)" : ""}`, M, y); y += 4.5;
+            const det = [it.criterio ? `Criterio: ${it.criterio}` : "", it.valorMedido ? `Medido: ${it.valorMedido}` : ""].filter(Boolean).join("   |   ");
+            if (det) {
+              doc.setTextColor(110); doc.setFontSize(8);
+              const lines = doc.splitTextToSize(det, W - M * 2 - 6);
+              doc.text(lines, M + 6, y); y += lines.length * 3.6;
+              doc.setFontSize(10); doc.setTextColor(0);
+            }
+            if (it.notas) {
+              doc.setTextColor(110); doc.setFontSize(8);
+              const lines = doc.splitTextToSize(`Nota: ${it.notas}`, W - M * 2 - 6);
+              doc.text(lines, M + 6, y); y += lines.length * 3.6;
+              doc.setFontSize(10); doc.setTextColor(0);
+            }
             if (y > 280) { doc.addPage(); y = M; }
           });
           y += 2;

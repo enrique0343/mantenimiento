@@ -27,7 +27,13 @@ const updateSchema = z.object({
   alertaDiasAntes: z.number().int().min(0).max(90).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   horasEstimadas: z.number().positive().nullable().optional(),
-  checklist: z.array(z.object({ texto: z.string() })).optional(),
+  checklist: z.array(z.object({
+    texto: z.string(),
+    criterio: z.string().nullable().optional(),
+    bloqueante: z.boolean().optional(),
+    minutos: z.number().nullable().optional(),
+    materiales: z.string().nullable().optional(),
+  })).optional(),
   asignadoA: z.number().int().positive().nullable().optional(),
   activo: z.boolean().optional(),
 });

@@ -40,15 +40,40 @@ export const GET: APIRoute = async (ctx) => {
   });
 };
 
+// Un item puede venir como string simple (compat) o como objeto enriquecido.
+const itemSchema = z.union([
+  z.string().min(1),
+  z.object({
+    texto: z.string().min(1),
+    criterioAceptacion: z.string().nullable().optional(),
+    bloqueante: z.boolean().optional(),
+    minutosEstimados: z.number().int().positive().nullable().optional(),
+    materiales: z.string().nullable().optional(),
+  }),
+]);
+
+function normalizarItem(raw: z.infer<typeof itemSchema>, orden: number, plantillaId: number) {
+  const it = typeof raw === "string" ? { texto: raw } : raw;
+  return {
+    plantillaId,
+    texto: it.texto,
+    criterioAceptacion: ("criterioAceptacion" in it ? it.criterioAceptacion : null) ?? null,
+    bloqueante: ("bloqueante" in it ? it.bloqueante : false) ?? false,
+    minutosEstimados: ("minutosEstimados" in it ? it.minutosEstimados : null) ?? null,
+    materiales: ("materiales" in it ? it.materiales : null) ?? null,
+    orden,
+  };
+}
+
 const createSchema = z.object({
   nombre: z.string().min(1),
   descripcion: z.string().nullable().optional(),
-  items: z.array(z.string().min(1)).default([]),
+  items: z.array(itemSchema).default([]),
 });
 
 // POST: crear plantilla (solo admin)
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
@@ -62,11 +87,7 @@ export const POST: APIRoute = async (ctx) => {
 
   if (parsed.data.items.length) {
     await db.insert(checklistPlantillaItems).values(
-      parsed.data.items.map((texto, orden) => ({
-        plantillaId: plantilla.id,
-        texto,
-        orden,
-      }))
+      parsed.data.items.map((raw, orden) => normalizarItem(raw, orden, plantilla.id))
     );
   }
   return Response.json({ plantilla }, { status: 201 });

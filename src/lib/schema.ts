@@ -775,6 +775,12 @@ export const checklistPlantillaItems = sqliteTable("checklist_plantilla_items", 
   id: integer("id").primaryKey({ autoIncrement: true }),
   plantillaId: integer("plantilla_id").notNull().references(() => checklistPlantillas.id, { onDelete: "cascade" }),
   texto: text("texto").notNull(),
+  // Fase 35 (procedimientos JCI): criterio de aceptación, punto crítico,
+  // tiempo estimado y recursos requeridos por paso.
+  criterioAceptacion: text("criterio_aceptacion"),
+  bloqueante: integer("bloqueante", { mode: "boolean" }).notNull().default(false),
+  minutosEstimados: integer("minutos_estimados"),
+  materiales: text("materiales"),
   orden: integer("orden").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
