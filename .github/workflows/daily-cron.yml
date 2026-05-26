@@ -54,3 +54,18 @@ jobs:
             echo "::error::generar-preventivos fallo con HTTP $status"
             exit 1
           fi
+
+      - name: Capturar snapshot mensual de KPIs
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Origin: ${{ secrets.APP_URL }}" \
+            "${{ secrets.APP_URL }}/api/cron/snapshot-kpis")
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+          echo "Status: $status"
+          echo "Body: $body"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::snapshot-kpis fallo con HTTP $status"
+            exit 1
+          fi

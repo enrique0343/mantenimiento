@@ -1,12 +1,14 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion } from "@/lib/schema";
-import { eq, and, sql, isNotNull, desc, gte } from "drizzle-orm";
+import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion, metricasKpi } from "@/lib/schema";
+import { eq, and, sql, isNotNull, desc, gte, inArray } from "drizzle-orm";
+import { SCOPES, SCOPE_LABEL, ultimosPeriodos } from "@/lib/metricas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+const esAdmin = user.rol === "admin";
 
 const db = getDb(Astro);
 const now = new Date();
@@ -157,6 +159,40 @@ const maxTendencia = Math.max(1, ...tendencia.map((t) => Math.max(t.completadas,
 const TIPO_LABEL = { preventivo: "Preventivo", correctivo: "Correctivo", predictivo: "Predictivo" };
 function pct(n: number) { return Math.round(n * 100) / 100; }
 function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(h)} h`; }
+
+// ─── Indicadores JCI persistidos (Fase 36): tendencia documentada ────────────
+const periodos12 = ultimosPeriodos(12);
+const metricasRows = await db.select().from(metricasKpi).where(inArray(metricasKpi.periodo, periodos12));
+const serie: Record<string, Record<string, typeof metricasRows[number]>> = { global: {}, general: {}, biomedico: {} };
+for (const r of metricasRows) { (serie[r.scope] ??= {})[r.periodo] = r; }
+const hayMetricas = metricasRows.length > 0;
+const periodosConDatos = periodos12.filter((p) => metricasRows.some((r) => r.periodo === p));
+const ultimoPeriodo = periodosConDatos[periodosConDatos.length - 1] ?? null;
+const metricasJson = JSON.stringify({ periodos: periodos12, serie });
+
+function mesLabel(periodo: string): string {
+  const [y, m] = periodo.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  return d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(y).slice(2);
+}
+function fmtKpiH(h: number | null): string {
+  if (h == null) return "—";
+  if (h >= 48) return `${(h / 24).toFixed(1)} d`;
+  return h < 1 ? `${(h * 60).toFixed(0)} min` : `${h.toFixed(1)} h`;
+}
+function colorPct(v: number | null, bueno: number, regular: number): string {
+  if (v == null) return "text-slate-300";
+  return v >= bueno ? "text-emerald-600" : v >= regular ? "text-amber-600" : "text-red-600";
+}
+// Definición de los 6 indicadores para la tabla de tendencia.
+const KPIS_DEF = [
+  { key: "cumplimientoPreventivo", label: "Cumplimiento preventivo", fmt: (v: any) => v == null ? "—" : `${pct(v)}%` },
+  { key: "disponibilidadPct", label: "Disponibilidad", fmt: (v: any) => v == null ? "—" : `${pct(v)}%` },
+  { key: "mttrHoras", label: "MTTR", fmt: fmtKpiH },
+  { key: "mtbfHoras", label: "MTBF", fmt: fmtKpiH },
+  { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v: any) => v == null ? "—" : String(v) },
+  { key: "costoPorActivo", label: "Costo por activo", fmt: (v: any) => v == null ? "—" : `$${Number(v).toFixed(2)}` },
+] as const;
 ---
 
 <Layout title="KPIs">
@@ -165,8 +201,110 @@ function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(
       <h1 class="text-2xl font-bold">Indicadores de mantenimiento</h1>
       <p class="text-sm text-slate-500">Vista ejecutiva · ventana: últimos 30 días / año en curso</p>
     </div>
-    <a href="/reportes" class="btn-secondary">📑 Descargar reportes</a>
+    <div class="flex flex-wrap gap-2">
+      <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>📄 Reporte JCI (PDF)</button>
+      <a href="/reportes" class="btn-secondary">📑 Reportes CSV</a>
+    </div>
   </div>
+
+  <!-- ─── Indicadores JCI con tendencia documentada (persistidos) ─── -->
+  <section class="card mt-4 p-5">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">📊 Indicadores JCI con tendencia</h2>
+        <p class="text-xs text-slate-500">Snapshot mensual persistido — evidencia auditable de "medir y mejorar" (FMS). {ultimoPeriodo ? `Último período: ${mesLabel(ultimoPeriodo)}` : ""}</p>
+      </div>
+      {esAdmin && (
+        <div class="flex flex-wrap gap-2">
+          <button id="capturarBtn" class="btn-secondary text-xs">📸 Capturar mes actual</button>
+          <button id="recalcularBtn" class="btn-secondary text-xs">♻ Recalcular 12 meses</button>
+        </div>
+      )}
+    </div>
+
+    {!hayMetricas ? (
+      <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        Aún no hay snapshots de KPIs. {esAdmin ? "Pulsa «Recalcular 12 meses» para generar la tendencia histórica desde las OTs existentes." : "Pide a un administrador que ejecute el recálculo histórico."}
+      </div>
+    ) : (
+      <>
+        <!-- Tabs de alcance -->
+        <div class="mt-4 flex gap-1 border-b border-slate-200">
+          {SCOPES.map((s) => (
+            <button class="scope-tab px-3 py-1.5 text-sm font-medium border-b-2 -mb-px" data-scope={s}
+              class:list={[s === "global" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"]}>
+              {SCOPE_LABEL[s]}
+            </button>
+          ))}
+        </div>
+
+        {SCOPES.map((scope) => {
+          const latest = ultimoPeriodo ? serie[scope]?.[ultimoPeriodo] : null;
+          return (
+            <div class="scope-panel mt-4" data-scope={scope} class:list={[scope !== "global" && "hidden"]}>
+              <!-- Tarjetas del último período -->
+              <div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">Cumpl. preventivo</div>
+                  <div class:list={["mt-1 text-2xl font-bold", colorPct(latest?.cumplimientoPreventivo ?? null, 90, 70)]}>{latest?.cumplimientoPreventivo != null ? `${pct(latest.cumplimientoPreventivo)}%` : "—"}</div>
+                  <div class="text-[11px] text-slate-500">{latest?.preventivosProgramados ?? 0} programados</div>
+                </div>
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">Disponibilidad</div>
+                  <div class:list={["mt-1 text-2xl font-bold", colorPct(latest?.disponibilidadPct ?? null, 95, 85)]}>{latest?.disponibilidadPct != null ? `${pct(latest.disponibilidadPct)}%` : "—"}</div>
+                  <div class="text-[11px] text-slate-500">{latest?.numActivos ?? 0} equipos</div>
+                </div>
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">MTTR</div>
+                  <div class="mt-1 text-2xl font-bold text-blue-600">{fmtKpiH(latest?.mttrHoras ?? null)}</div>
+                  <div class="text-[11px] text-slate-500">Reparación</div>
+                </div>
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">MTBF</div>
+                  <div class="mt-1 text-2xl font-bold text-purple-600">{fmtKpiH(latest?.mtbfHoras ?? null)}</div>
+                  <div class="text-[11px] text-slate-500">Entre fallas</div>
+                </div>
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">Backlog correctivos</div>
+                  <div class="mt-1 text-2xl font-bold text-red-600">{latest?.backlogCorrectivos ?? "—"}</div>
+                  <div class="text-[11px] text-slate-500">Abiertos fin de mes</div>
+                </div>
+                <div class="card p-4">
+                  <div class="text-xs uppercase text-slate-500">Costo por activo</div>
+                  <div class="mt-1 text-2xl font-bold text-slate-700">{latest?.costoPorActivo != null ? `$${Number(latest.costoPorActivo).toFixed(0)}` : "—"}</div>
+                  <div class="text-[11px] text-slate-500">${latest?.costoTotal != null ? Number(latest.costoTotal).toFixed(0) : "0"} total</div>
+                </div>
+              </div>
+
+              <!-- Tabla de tendencia 12 meses -->
+              <div class="mt-4 overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th class="px-2 py-1.5 sticky left-0 bg-slate-50">Indicador</th>
+                      {periodos12.map((p) => <th class="px-2 py-1.5 text-right whitespace-nowrap">{mesLabel(p)}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    {KPIS_DEF.map((kpi) => (
+                      <tr>
+                        <td class="px-2 py-1.5 font-medium text-slate-700 sticky left-0 bg-white whitespace-nowrap">{kpi.label}</td>
+                        {periodos12.map((p) => {
+                          const row = serie[scope]?.[p];
+                          const val = row ? (row as any)[kpi.key] : null;
+                          return <td class="px-2 py-1.5 text-right font-mono text-slate-600 whitespace-nowrap">{row ? kpi.fmt(val) : "·"}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </>
+    )}
+  </section>
 
   <!-- Top KPIs -->
   <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
@@ -352,4 +490,105 @@ function fmtH(h: number) { return h < 1 ? `${(h * 60).toFixed(0)} min` : `${pct(
       </table>
     </div>
   </div>
+
+  <script define:vars={{ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }}>
+    // Tabs de alcance
+    document.querySelectorAll(".scope-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const scope = tab.dataset.scope;
+        document.querySelectorAll(".scope-tab").forEach((t) => {
+          const active = t.dataset.scope === scope;
+          t.classList.toggle("border-brand-600", active);
+          t.classList.toggle("text-brand-700", active);
+          t.classList.toggle("border-transparent", !active);
+          t.classList.toggle("text-slate-500", !active);
+        });
+        document.querySelectorAll(".scope-panel").forEach((p) => {
+          p.classList.toggle("hidden", p.dataset.scope !== scope);
+        });
+      });
+    });
+
+    // Acciones admin
+    document.getElementById("capturarBtn")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = "Capturando…";
+      const r = await fetch("/api/cron/snapshot-kpis");
+      if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "📸 Capturar mes actual"; }
+    });
+    document.getElementById("recalcularBtn")?.addEventListener("click", async (e) => {
+      if (!confirm("¿Recalcular los KPIs de los últimos 12 meses desde el historial de OTs? Sobrescribe los snapshots existentes de ese rango.")) return;
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = "Recalculando…";
+      const r = await fetch("/api/metricas/recalcular", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ meses: 12 }) });
+      if (r.ok) location.reload(); else { alert("Error al recalcular"); btn.disabled = false; btn.textContent = "♻ Recalcular 12 meses"; }
+    });
+
+    // ── PDF ──
+    async function loadJsPdf() {
+      if (window.jspdf) return window.jspdf;
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js";
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+      return window.jspdf;
+    }
+    function mesLbl(p) {
+      const [y, m] = p.split("-").map(Number);
+      const d = new Date(Date.UTC(y, m - 1, 1));
+      return d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(y).slice(2);
+    }
+    const KPIS = [
+      { key: "cumplimientoPreventivo", label: "Cumpl. preventivo (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
+      { key: "disponibilidadPct", label: "Disponibilidad (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
+      { key: "mttrHoras", label: "MTTR (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
+      { key: "mtbfHoras", label: "MTBF (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
+      { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v) => v == null ? "-" : String(v) },
+      { key: "costoPorActivo", label: "Costo por activo ($)", fmt: (v) => v == null ? "-" : Number(v).toFixed(0) },
+    ];
+
+    document.getElementById("pdfBtn")?.addEventListener("click", async () => {
+      const { serie } = JSON.parse(metricasJson);
+      let empresa = "Mantenimiento";
+      try { const r = await fetch("/api/empresa"); if (r.ok) empresa = (await r.json()).empresa?.nombre ?? empresa; } catch {}
+      const { jsPDF } = await loadJsPdf();
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const W = doc.internal.pageSize.getWidth();
+      const M = 10;
+      let y = M;
+      const cols = periodos.slice(-6); // últimos 6 meses para que quepan
+
+      doc.setFontSize(14); doc.setFont("helvetica", "bold");
+      doc.text("Reporte de indicadores JCI", M, y); y += 6;
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      doc.text(`${empresa} · Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })}`, M, y); y += 7;
+
+      const labelW = 45;
+      const colW = (W - M * 2 - labelW) / cols.length;
+      for (const scope of scopes) {
+        if (y > 250) { doc.addPage(); y = M; }
+        doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+        doc.text(scopeLabels[scope], M, y); y += 5;
+        // Cabecera de meses
+        doc.setFontSize(8); doc.setFont("helvetica", "bold");
+        cols.forEach((p, i) => doc.text(mesLbl(p), M + labelW + i * colW + colW - 2, y, { align: "right" }));
+        y += 1; doc.setDrawColor(200); doc.line(M, y, W - M, y); y += 4;
+        doc.setFont("helvetica", "normal");
+        for (const kpi of KPIS) {
+          doc.setFont("helvetica", "bold"); doc.text(kpi.label, M, y); doc.setFont("helvetica", "normal");
+          cols.forEach((p, i) => {
+            const row = serie[scope]?.[p];
+            const v = row ? kpi.fmt(row[kpi.key]) : "·";
+            doc.text(String(v), M + labelW + i * colW + colW - 2, y, { align: "right" });
+          });
+          y += 5;
+          if (y > 285) { doc.addPage(); y = M; }
+        }
+        y += 4;
+      }
+      doc.save(`indicadores-jci-${new Date().toISOString().slice(0, 10)}.pdf`);
+    });
+  </script>
 </Layout>

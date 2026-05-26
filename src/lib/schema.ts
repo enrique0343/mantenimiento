@@ -978,3 +978,24 @@ export const activoDocumentos = sqliteTable("activo_documentos", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type ActivoDocumento = typeof activoDocumentos.$inferSelect;
+
+// ─── Métricas KPI mensuales (Fase 36 — JCI: tendencia documentada) ───────────
+export const metricasKpi = sqliteTable("metricas_kpi", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  periodo: text("periodo").notNull(),
+  scope: text("scope").notNull().default("global"),
+  cumplimientoPreventivo: real("cumplimiento_preventivo"),
+  mttrHoras: real("mttr_horas"),
+  mtbfHoras: real("mtbf_horas"),
+  disponibilidadPct: real("disponibilidad_pct"),
+  backlogCorrectivos: integer("backlog_correctivos").notNull().default(0),
+  costoTotal: real("costo_total").notNull().default(0),
+  costoPorActivo: real("costo_por_activo").notNull().default(0),
+  otsCompletadas: integer("ots_completadas").notNull().default(0),
+  otsCorrectivas: integer("ots_correctivas").notNull().default(0),
+  otsPreventivas: integer("ots_preventivas").notNull().default(0),
+  preventivosProgramados: integer("preventivos_programados").notNull().default(0),
+  numActivos: integer("num_activos").notNull().default(0),
+  capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type MetricaKpi = typeof metricasKpi.$inferSelect;
