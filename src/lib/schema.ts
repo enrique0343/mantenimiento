@@ -1024,3 +1024,22 @@ export const escalacionNiveles = sqliteTable("escalacion_niveles", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type EscalacionNivel = typeof escalacionNiveles.$inferSelect;
+
+// ─── Matriz RACI (Fase 38 — gobernanza JCI) ──────────────────────────────────
+export const raciProcesos = sqliteTable("raci_procesos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type RaciProceso = typeof raciProcesos.$inferSelect;
+
+export const raciAsignaciones = sqliteTable("raci_asignaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procesoId: integer("proceso_id").notNull().references(() => raciProcesos.id, { onDelete: "cascade" }),
+  actor: text("actor").notNull(),
+  responsabilidad: text("responsabilidad", { enum: ["R", "A", "C", "I"] }).notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type RaciAsignacion = typeof raciAsignaciones.$inferSelect;
