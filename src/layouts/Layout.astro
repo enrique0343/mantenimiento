@@ -39,6 +39,7 @@ const allLinks: Link[] = [
   { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
   { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
   { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
+  { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
   { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
   { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
   { href: "/requisiciones",      label: "Requisiciones", icon: "🛒", show: isOperativo },

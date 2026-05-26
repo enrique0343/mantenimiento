@@ -1,0 +1,213 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, activoRespaldos, escalacionNiveles } from "@/lib/schema";
+import { ne, asc } from "drizzle-orm";
+import { CRITICIDAD_LABEL } from "@/lib/inventario-jci";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const db = getDb(Astro);
+const activosAll = await db
+  .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado, criticidad: activos.criticidadOperacional })
+  .from(activos).where(ne(activos.estado, "baja"));
+const activoMap = new Map(activosAll.map((a) => [a.id, a]));
+
+const respaldosAll = await db.select().from(activoRespaldos);
+const respaldosPorActivo = new Map<number, number[]>();
+for (const r of respaldosAll) {
+  const arr = respaldosPorActivo.get(r.activoId) ?? [];
+  arr.push(r.respaldoId);
+  respaldosPorActivo.set(r.activoId, arr);
+}
+
+const criticos = activosAll.filter((a) => a.criticidad === "alta");
+const sinRespaldo = criticos.filter((a) => !(respaldosPorActivo.get(a.id)?.length));
+const fueraServicio = criticos.filter((a) => a.estado === "averiado" || a.estado === "mantenimiento");
+
+const niveles = await db.select().from(escalacionNiveles).orderBy(asc(escalacionNiveles.criticidad), asc(escalacionNiveles.nivel));
+const nivelesPorCrit: Record<string, typeof niveles> = {};
+for (const n of niveles) (nivelesPorCrit[n.criticidad] ??= []).push(n);
+
+const CRIT_COLOR: Record<string, string> = { alta: "bg-red-100 text-red-700", media: "bg-amber-100 text-amber-700", baja: "bg-slate-100 text-slate-600", todas: "bg-blue-100 text-blue-700" };
+const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" : m < 60 ? `${m} min` : `${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} h`;
+---
+
+<Layout title="Contingencia">
+  <div class="flex flex-wrap items-start justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">🚨 Plan de contingencia</h1>
+      <p class="text-sm text-slate-500">Continuidad de servicio (JCI FMS.9): respaldo de equipos críticos y protocolo de escalación.</p>
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-3 gap-3">
+    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Equipos críticos</div><div class="mt-1 text-2xl font-bold text-slate-700">{criticos.length}</div></div>
+    <div class="card p-4 border-l-4 border-red-400"><div class="text-xs uppercase text-slate-500">Sin respaldo</div><div class="mt-1 text-2xl font-bold text-red-600">{sinRespaldo.length}</div></div>
+    <div class="card p-4 border-l-4 border-amber-400"><div class="text-xs uppercase text-slate-500">Fuera de servicio</div><div class="mt-1 text-2xl font-bold text-amber-600">{fueraServicio.length}</div></div>
+  </div>
+
+  <!-- Críticos fuera de servicio ahora -->
+  {fueraServicio.length > 0 && (
+    <div class="card mt-6 overflow-hidden border-l-4 border-amber-400">
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-amber-700">⚠ Equipos críticos fuera de servicio ahora</h2></div>
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr><th class="px-4 py-2">Equipo</th><th class="px-4 py-2">Estado</th><th class="px-4 py-2">Respaldo disponible</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {fueraServicio.map((a) => {
+            const reps = (respaldosPorActivo.get(a.id) ?? []).map((rid) => activoMap.get(rid)).filter(Boolean) as typeof activosAll;
+            const operativos = reps.filter((r) => r.estado === "operativo");
+            return (
+              <tr>
+                <td class="px-4 py-2"><a href={`/activos/${a.id}`} class="font-medium text-brand-700 hover:underline">{a.codigo} · {a.nombre}</a></td>
+                <td class="px-4 py-2"><span class="badge bg-amber-100 text-amber-700">{a.estado}</span></td>
+                <td class="px-4 py-2">
+                  {reps.length === 0 ? <span class="text-red-600 font-medium">Sin respaldo</span>
+                    : operativos.length > 0 ? <span class="text-emerald-700 font-medium">{operativos.map((r) => r.codigo).join(", ")}</span>
+                    : <span class="text-red-600 font-medium">Respaldo(s) no operativo(s)</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  <!-- Críticos sin respaldo -->
+  <div class="card mt-6 overflow-hidden border-l-4 border-red-400">
+    <div class="px-5 pt-4 pb-2">
+      <h2 class="font-semibold text-red-700">🔴 Equipos críticos sin respaldo ({sinRespaldo.length})</h2>
+      <p class="text-xs text-slate-500">Riesgo de continuidad: configura un equipo de respaldo desde la ficha de cada equipo.</p>
+    </div>
+    {sinRespaldo.length === 0 ? (
+      <p class="px-5 pb-4 text-sm text-emerald-700">✓ Todos los equipos críticos tienen al menos un respaldo configurado.</p>
+    ) : (
+      <ul class="divide-y divide-slate-100 text-sm">
+        {sinRespaldo.map((a) => (
+          <li class="flex items-center justify-between px-5 py-2">
+            <a href={`/activos/${a.id}#contingencia`} class="font-medium text-brand-700 hover:underline">{a.codigo} · {a.nombre}</a>
+            <span class="badge bg-slate-100 text-slate-600 capitalize">{a.estado}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
+  <!-- Protocolo de escalación -->
+  <div class="card mt-6 p-5">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">📞 Protocolo de escalación</h2>
+        <p class="text-xs text-slate-500">A quién recurrir y en qué tiempo cuando un equipo crítico falla.</p>
+      </div>
+      <button id="nivelNewBtn" class="btn-primary text-sm">+ Nivel</button>
+    </div>
+
+    <div id="nivelForm" class="mt-3 hidden rounded-md border border-slate-200 bg-slate-50 p-3">
+      <input type="hidden" id="n_id" />
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-4">
+        <div>
+          <label class="label">Criticidad</label>
+          <select id="n_criticidad" class="input">
+            <option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option><option value="todas">Todas</option>
+          </select>
+        </div>
+        <div><label class="label">Nivel</label><input id="n_nivel" type="number" min="1" max="10" value="1" class="input" /></div>
+        <div><label class="label">Min. para escalar</label><input id="n_minutos" type="number" min="0" class="input" placeholder="0 = inmediato" /></div>
+        <div><label class="label">Contacto (nombre)</label><input id="n_nombre" class="input" /></div>
+        <div><label class="label">Cargo</label><input id="n_cargo" class="input" placeholder="Ej: Jefe de mantenimiento" /></div>
+        <div><label class="label">Teléfono</label><input id="n_telefono" class="input" /></div>
+        <div><label class="label">Email</label><input id="n_email" class="input" /></div>
+        <div class="sm:col-span-4"><label class="label">Acción</label><input id="n_accion" class="input" placeholder="Qué hacer en este nivel" /></div>
+      </div>
+      <p id="n_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-2 flex gap-2">
+        <button id="n_save" class="btn-primary text-sm">Guardar</button>
+        <button id="n_cancel" class="btn-secondary text-sm">Cancelar</button>
+      </div>
+    </div>
+
+    {niveles.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Sin niveles definidos. Agrega el primero.</p>
+    ) : (
+      <div class="mt-4 space-y-4">
+        {Object.entries(nivelesPorCrit).map(([crit, lista]) => (
+          <div>
+            <h3 class="mb-2 text-sm font-semibold"><span class={`badge ${CRIT_COLOR[crit]}`}>Criticidad {CRITICIDAD_LABEL[crit as "alta" | "media" | "baja"] ?? crit}</span></h3>
+            <ol class="space-y-2">
+              {lista.map((n) => (
+                <li class="flex items-start justify-between gap-3 rounded border border-slate-200 p-3 text-sm" data-nivel-id={n.id}>
+                  <div class="min-w-0 flex-1">
+                    <div class="font-medium text-slate-800">Nivel {n.nivel} · escalar tras {fmtMin(n.minutosParaEscalar)}</div>
+                    {(n.contactoNombre || n.contactoCargo) && <div class="text-slate-600">👤 {[n.contactoCargo, n.contactoNombre].filter(Boolean).join(" — ")}</div>}
+                    {(n.contactoTelefono || n.contactoEmail) && <div class="text-xs text-slate-500">{[n.contactoTelefono, n.contactoEmail].filter(Boolean).join(" · ")}</div>}
+                    {n.accion && <div class="mt-0.5 text-xs text-slate-600">→ {n.accion}</div>}
+                  </div>
+                  <div class="flex shrink-0 gap-2">
+                    <button class="nivel-edit text-xs text-brand-600 hover:underline" data-id={n.id} data-json={JSON.stringify(n)}>Editar</button>
+                    <button class="nivel-del text-xs text-red-600 hover:underline" data-id={n.id}>Eliminar</button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+
+  <script>
+    const $ = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    const form = document.getElementById("nivelForm")!;
+    const reset = () => { ["n_id","n_nombre","n_cargo","n_telefono","n_email","n_accion","n_minutos"].forEach((i) => { const e = $(i); if (e) e.value = ""; }); ($("n_nivel")!).value = "1"; ($("n_criticidad")!).value = "alta"; };
+
+    document.getElementById("nivelNewBtn")?.addEventListener("click", () => { reset(); form.classList.remove("hidden"); });
+    document.getElementById("n_cancel")?.addEventListener("click", () => form.classList.add("hidden"));
+
+    document.querySelectorAll<HTMLButtonElement>(".nivel-edit").forEach((b) => {
+      b.addEventListener("click", () => {
+        const n = JSON.parse(b.dataset.json!);
+        ($("n_id")!).value = n.id; ($("n_criticidad")!).value = n.criticidad; ($("n_nivel")!).value = n.nivel;
+        ($("n_minutos")!).value = n.minutosParaEscalar ?? ""; ($("n_nombre")!).value = n.contactoNombre ?? "";
+        ($("n_cargo")!).value = n.contactoCargo ?? ""; ($("n_telefono")!).value = n.contactoTelefono ?? "";
+        ($("n_email")!).value = n.contactoEmail ?? ""; ($("n_accion")!).value = n.accion ?? "";
+        form.classList.remove("hidden"); form.scrollIntoView({ behavior: "smooth" });
+      });
+    });
+
+    document.getElementById("n_save")?.addEventListener("click", async () => {
+      const err = document.getElementById("n_err")!;
+      err.classList.add("hidden");
+      const id = ($("n_id")!).value;
+      const minRaw = ($("n_minutos")!).value;
+      const payload: Record<string, unknown> = {
+        criticidad: ($("n_criticidad")!).value,
+        nivel: Number(($("n_nivel")!).value || 1),
+        minutosParaEscalar: minRaw === "" ? null : Number(minRaw),
+        contactoNombre: ($("n_nombre")!).value || null,
+        contactoCargo: ($("n_cargo")!).value || null,
+        contactoTelefono: ($("n_telefono")!).value || null,
+        contactoEmail: ($("n_email")!).value || null,
+        accion: ($("n_accion")!).value || null,
+      };
+      const res = await fetch(id ? `/api/escalacion/${id}` : "/api/escalacion", {
+        method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = typeof j.error === "string" ? j.error : "Error al guardar"; err.classList.remove("hidden"); return; }
+      location.reload();
+    });
+
+    document.querySelectorAll<HTMLButtonElement>(".nivel-del").forEach((b) => {
+      b.addEventListener("click", async () => {
+        if (!confirm("¿Eliminar este nivel de escalación?")) return;
+        await fetch(`/api/escalacion/${b.dataset.id}`, { method: "DELETE" });
+        location.reload();
+      });
+    });
+  </script>
+</Layout>

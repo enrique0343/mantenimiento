@@ -999,3 +999,28 @@ export const metricasKpi = sqliteTable("metricas_kpi", {
   capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type MetricaKpi = typeof metricasKpi.$inferSelect;
+
+// ─── Contingencia (Fase 37 — JCI FMS.9: continuidad de servicio) ─────────────
+export const activoRespaldos = sqliteTable("activo_respaldos", {
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  respaldoId: integer("respaldo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.activoId, t.respaldoId] }),
+}));
+export type ActivoRespaldo = typeof activoRespaldos.$inferSelect;
+
+export const escalacionNiveles = sqliteTable("escalacion_niveles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  criticidad: text("criticidad", { enum: ["alta", "media", "baja", "todas"] }).notNull().default("alta"),
+  nivel: integer("nivel").notNull().default(1),
+  minutosParaEscalar: integer("minutos_para_escalar"),
+  contactoNombre: text("contacto_nombre"),
+  contactoCargo: text("contacto_cargo"),
+  contactoTelefono: text("contacto_telefono"),
+  contactoEmail: text("contacto_email"),
+  accion: text("accion"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type EscalacionNivel = typeof escalacionNiveles.$inferSelect;
