@@ -1,0 +1,186 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos, usuarios } from "@/lib/schema";
+import { eq, and, inArray, gte, lt, isNotNull, asc, desc, sql } from "drizzle-orm";
+import { PRIO_COLOR } from "@/lib/ordenes";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+
+// Semana actual (lunes–domingo) en hora de El Salvador.
+const sv = new Date(Date.now() - 6 * 3600_000);
+const dow = (sv.getUTCDay() + 6) % 7; // 0 = lunes
+const monday = new Date(Date.UTC(sv.getUTCFullYear(), sv.getUTCMonth(), sv.getUTCDate() - dow));
+const inicio = monday.toISOString().slice(0, 10);
+const fin = new Date(monday.getTime() + 7 * 86400_000).toISOString().slice(0, 10);
+const ahoraIso = new Date().toISOString();
+
+// OTs activas (lo que está en el taller ahora).
+const abiertas = await db
+  .select({ o: ordenes, a: activos, u: usuarios })
+  .from(ordenes)
+  .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"]))
+  .orderBy(asc(ordenes.vencimiento));
+
+// Completadas esta semana (throughput).
+const completadasSemana = await db
+  .select({ o: ordenes, a: activos, u: usuarios })
+  .from(ordenes)
+  .leftJoin(activos, eq(activos.id, ordenes.activoId))
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(and(isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicio), lt(ordenes.completadaEn, fin)))
+  .orderBy(desc(ordenes.completadaEn));
+
+// ── Datos para la reunión semanal ──
+// Cumplimiento preventivo: preventivos con vencimiento esta semana.
+const prevSemana = await db
+  .select({ completadaEn: ordenes.completadaEn, vencimiento: ordenes.vencimiento })
+  .from(ordenes)
+  .where(and(eq(ordenes.tipo, "preventivo"), isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, inicio), lt(ordenes.vencimiento, fin)));
+const prevProg = prevSemana.length;
+const prevATiempo = prevSemana.filter((p) => p.completadaEn && p.vencimiento && p.completadaEn <= p.vencimiento).length;
+const cumplimiento = prevProg > 0 ? Math.round((prevATiempo / prevProg) * 100) : null;
+
+// Correctivos creados esta semana.
+const correctivosSemana = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), lt(ordenes.createdAt, fin)));
+const nCorrectivos = Number(correctivosSemana[0]?.n ?? 0);
+
+const vencidas = abiertas.filter((r) => r.o.vencimiento && r.o.vencimiento < ahoraIso);
+const correctivosAbiertos = abiertas.filter((r) => r.o.tipo === "correctivo").length;
+const completPrev = completadasSemana.filter((r) => r.o.tipo === "preventivo").length;
+const completCorr = completadasSemana.filter((r) => r.o.tipo === "correctivo").length;
+
+// Columnas del tablero.
+const columnas = [
+  { estado: "abierta", titulo: "📥 Abiertas", items: abiertas.filter((r) => r.o.estado === "abierta"), color: "border-blue-300" },
+  { estado: "en_proceso", titulo: "🔧 En proceso", items: abiertas.filter((r) => r.o.estado === "en_proceso"), color: "border-amber-300" },
+  { estado: "en_espera", titulo: "⏸ En espera", items: abiertas.filter((r) => r.o.estado === "en_espera"), color: "border-purple-300" },
+  { estado: "completada", titulo: "✅ Completadas (semana)", items: completadasSemana, color: "border-emerald-300" },
+];
+
+const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
+const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86400_000).toISOString().slice(0, 10))}`;
+---
+
+<Layout title="Tablero de taller">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">🗂 Tablero de taller</h1>
+      <p class="text-sm text-slate-500">Gestión visual semanal · {rangoSemana}</p>
+    </div>
+    <div class="flex gap-1 rounded-lg bg-slate-100 p-1">
+      <button class="lean-tab rounded-md px-3 py-1.5 text-sm font-medium bg-white shadow-sm" data-tab="tablero">Tablero</button>
+      <button class="lean-tab rounded-md px-3 py-1.5 text-sm font-medium text-slate-600" data-tab="reunion">Reunión semanal</button>
+    </div>
+  </div>
+
+  <!-- ── Tablero kanban ── -->
+  <div id="panel-tablero" class="lean-panel mt-4">
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {columnas.map((col) => (
+        <div class={`card border-t-4 ${col.color} p-3`}>
+          <h2 class="mb-2 text-sm font-semibold text-slate-700">{col.titulo} <span class="text-slate-400">({col.items.length})</span></h2>
+          <div class="space-y-2">
+            {col.items.length === 0 && <p class="text-xs text-slate-400">—</p>}
+            {col.items.map((r) => {
+              const vencida = col.estado !== "completada" && r.o.vencimiento && r.o.vencimiento < ahoraIso;
+              return (
+                <a href={`/ordenes/${r.o.id}`} class:list={["block rounded-md border p-2 text-sm hover:shadow-sm transition", vencida ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"]}>
+                  <div class="flex items-center justify-between gap-1">
+                    <span class="font-medium text-slate-800">#{r.o.id}</span>
+                    <span class={`badge text-[10px] ${PRIO_COLOR[r.o.prioridad] ?? ""}`}>{r.o.prioridad}</span>
+                  </div>
+                  <div class="mt-0.5 line-clamp-2 text-xs text-slate-700">{r.o.titulo}</div>
+                  {r.a && <div class="mt-0.5 font-mono text-[10px] text-slate-500">{r.a.codigo}</div>}
+                  <div class="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                    <span>{r.u ? `👤 ${r.u.nombre.split(" ")[0]}` : "Sin asignar"}</span>
+                    {col.estado === "completada"
+                      ? <span>✓ {fmt(r.o.completadaEn)}</span>
+                      : r.o.vencimiento && <span class:list={[vencida && "font-semibold text-red-600"]}>⏱ {fmt(r.o.vencimiento)}</span>}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+
+  <!-- ── Reunión semanal ── -->
+  <div id="panel-reunion" class="lean-panel mt-4 hidden">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="card p-4">
+        <div class="text-xs uppercase text-slate-500">Cumplimiento preventivo</div>
+        <div class:list={["mt-1 text-2xl font-bold", cumplimiento == null ? "text-slate-300" : cumplimiento >= 90 ? "text-emerald-600" : cumplimiento >= 70 ? "text-amber-600" : "text-red-600"]}>{cumplimiento == null ? "—" : `${cumplimiento}%`}</div>
+        <div class="text-[11px] text-slate-500">{prevATiempo}/{prevProg} a tiempo</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs uppercase text-slate-500">Completadas (semana)</div>
+        <div class="mt-1 text-2xl font-bold text-emerald-600">{completadasSemana.length}</div>
+        <div class="text-[11px] text-slate-500">{completPrev} prev · {completCorr} corr</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs uppercase text-slate-500">Backlog correctivos</div>
+        <div class="mt-1 text-2xl font-bold text-orange-600">{correctivosAbiertos}</div>
+        <div class="text-[11px] text-slate-500">abiertos ahora</div>
+      </div>
+      <div class="card p-4 border-l-4 border-red-400">
+        <div class="text-xs uppercase text-slate-500">OTs vencidas</div>
+        <div class="mt-1 text-2xl font-bold text-red-600">{vencidas.length}</div>
+        <div class="text-[11px] text-slate-500">{nCorrectivos} correctivos nuevos esta semana</div>
+      </div>
+    </div>
+
+    <div class="card mt-4 overflow-hidden">
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-red-700">🚩 OTs vencidas — requieren acción</h2></div>
+      {vencidas.length === 0 ? (
+        <p class="px-5 pb-4 text-sm text-emerald-700">✓ No hay OTs vencidas. Buen trabajo.</p>
+      ) : (
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+            <tr><th class="px-4 py-2">OT</th><th class="px-4 py-2">Equipo</th><th class="px-4 py-2">Responsable</th><th class="px-4 py-2">Venció</th><th class="px-4 py-2">Prioridad</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {vencidas.map((r) => (
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2"><a href={`/ordenes/${r.o.id}`} class="text-brand-700 hover:underline">#{r.o.id} {r.o.titulo}</a></td>
+                <td class="px-4 py-2 font-mono text-xs text-slate-600">{r.a?.codigo ?? "—"}</td>
+                <td class="px-4 py-2 text-xs">{r.u?.nombre ?? "Sin asignar"}</td>
+                <td class="px-4 py-2 font-mono text-xs text-red-600">{fmt(r.o.vencimiento)}</td>
+                <td class="px-4 py-2"><span class={`badge text-[10px] ${PRIO_COLOR[r.o.prioridad] ?? ""}`}>{r.o.prioridad}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+
+    <p class="mt-3 text-xs text-slate-500">💡 Para la reunión semanal: revisa cumplimiento, ataca el backlog vencido, y confirma que ningún equipo crítico quede sin cobertura (ver <a href="/contingencia" class="text-brand-600 hover:underline">Contingencia</a> y <a href="/cronograma" class="text-brand-600 hover:underline">Cronograma</a>).</p>
+  </div>
+
+  <script>
+    document.querySelectorAll<HTMLButtonElement>(".lean-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const target = tab.dataset.tab;
+        document.querySelectorAll<HTMLButtonElement>(".lean-tab").forEach((t) => {
+          const active = t.dataset.tab === target;
+          t.classList.toggle("bg-white", active);
+          t.classList.toggle("shadow-sm", active);
+          t.classList.toggle("text-slate-600", !active);
+        });
+        document.querySelectorAll<HTMLElement>(".lean-panel").forEach((p) => p.classList.add("hidden"));
+        document.getElementById(`panel-${target}`)?.classList.remove("hidden");
+      });
+    });
+  </script>
+</Layout>
