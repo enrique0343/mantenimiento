@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
 import { eq, asc, and } from "drizzle-orm";
+import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -98,6 +99,69 @@ const proximos30 = items.filter((r) => r.fecha > en7Str && r.fecha <= en30Str);
 const futuros    = items.filter((r) => r.fecha > en30Str);
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+
+// ─── Vista anual (12 meses) + detección de colisiones de equipos críticos ────
+const hoyD = new Date();
+const horizonStart = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth(), 1));
+const horizonEnd = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth() + 12, 1));
+const horizonStartStr = horizonStart.toISOString().slice(0, 10);
+const horizonEndStr = horizonEnd.toISOString().slice(0, 10);
+
+const meses = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date(Date.UTC(horizonStart.getUTCFullYear(), horizonStart.getUTCMonth() + i, 1));
+  return {
+    label: d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(d.getUTCFullYear()).slice(2),
+    ym: d.toISOString().slice(0, 7),
+    total: 0,
+    criticos: 0,
+  };
+});
+const mesIndex = (fecha: string) => {
+  const d = new Date(fecha);
+  return (d.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 + (d.getUTCMonth() - horizonStart.getUTCMonth());
+};
+
+// Por semana (bucket de 7 días desde el inicio del horizonte): equipos críticos programados.
+const semanas = new Map<number, Map<number, { codigo: string; nombre: string; fecha: string }>>();
+
+function proyectar(fechaInicial: string, frecuencia: Frecuencia, onOcc: (fecha: string) => void) {
+  let f = fechaInicial;
+  let guard = 0;
+  while (f < horizonStartStr && guard < 500) { const n = siguienteFecha(f, frecuencia); if (n <= f) return; f = n; guard++; }
+  guard = 0;
+  while (f < horizonEndStr && guard < 400) { onOcc(f); const n = siguienteFecha(f, frecuencia); if (n <= f) break; f = n; guard++; }
+}
+
+for (const r of planRows) {
+  const crit = r.a?.criticidadOperacional === "alta";
+  proyectar(r.p.proximaFecha, r.p.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) { meses[mi].total++; if (crit) meses[mi].criticos++; }
+    if (crit && r.a) {
+      const wk = Math.floor((new Date(fecha).getTime() - horizonStart.getTime()) / (7 * 86400_000));
+      const m = semanas.get(wk) ?? new Map();
+      if (!m.has(r.a.id)) m.set(r.a.id, { codigo: r.a.codigo, nombre: r.a.nombre, fecha });
+      semanas.set(wk, m);
+    }
+  });
+}
+for (const r of actRows) {
+  proyectar(r.a.proximaFecha, r.a.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) meses[mi].total++;
+  });
+}
+
+const colisiones = [...semanas.entries()]
+  .filter(([, m]) => m.size >= 2)
+  .map(([wk, m]) => {
+    const ini = new Date(horizonStart.getTime() + wk * 7 * 86400_000);
+    const fin = new Date(ini.getTime() + 6 * 86400_000);
+    return { ini: ini.toISOString().slice(0, 10), fin: fin.toISOString().slice(0, 10), equipos: [...m.values()] };
+  })
+  .sort((a, b) => a.ini.localeCompare(b.ini));
+const mesesConColision = new Set(colisiones.map((c) => c.ini.slice(0, 7)));
+const maxMes = Math.max(1, ...meses.map((m) => m.total));
 ---
 
 <Layout title="Cronograma">
@@ -165,6 +229,46 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "Ame
         )}
       </div>
     ))}
+  </div>
+
+  <!-- Vista anual -->
+  <div class="card mt-6 p-5">
+    <h2 class="font-semibold text-slate-900">📆 Vista anual de preventivos (12 meses)</h2>
+    <p class="text-xs text-slate-500">Proyección de mantenimientos programados por mes. Barra roja = mes con colisión de equipos críticos.</p>
+    <div class="mt-4 flex items-end gap-1.5 overflow-x-auto pb-2">
+      {meses.map((m) => {
+        const h = Math.round((m.total / maxMes) * 120);
+        const colision = mesesConColision.has(m.ym);
+        return (
+          <div class="flex min-w-[44px] flex-1 flex-col items-center gap-1">
+            <div class="flex w-full flex-col-reverse" style="height:120px">
+              <div class:list={["mx-auto w-6 rounded-t", colision ? "bg-red-400" : "bg-brand-500"]} style={`height:${h}px`} title={`${m.total} programados · ${m.criticos} críticos`}></div>
+            </div>
+            <div class="text-[9px] capitalize whitespace-nowrap text-slate-500">{m.label}</div>
+            <div class="font-mono text-[9px] text-slate-700">{m.total}{m.criticos > 0 && <span class="text-red-600"> ({m.criticos})</span>}</div>
+          </div>
+        );
+      })}
+    </div>
+    <div class="mt-1 text-xs text-slate-500">Número total por mes · (n) = equipos críticos · proyectado desde la frecuencia de cada plan</div>
+  </div>
+
+  <!-- Colisiones de equipos críticos -->
+  <div class="card mt-4 p-5">
+    <h2 class="font-semibold text-slate-900">⚠ Colisiones de equipos críticos</h2>
+    <p class="text-xs text-slate-500">Semanas con 2 o más equipos críticos programados a la vez — evita dejarlos fuera de servicio simultáneamente.</p>
+    {colisiones.length === 0 ? (
+      <p class="mt-3 text-sm text-emerald-700">✓ Sin colisiones detectadas en los próximos 12 meses.</p>
+    ) : (
+      <ul class="mt-3 space-y-2 text-sm">
+        {colisiones.map((c) => (
+          <li class="rounded-md border border-amber-300 bg-amber-50 p-3">
+            <div class="font-medium text-amber-800">Semana {fmt(c.ini)} – {fmt(c.fin)} · {c.equipos.length} equipos críticos</div>
+            <div class="mt-1 text-xs text-slate-700">{c.equipos.map((e) => `${e.codigo} (${fmt(e.fecha)})`).join("  ·  ")}</div>
+          </li>
+        ))}
+      </ul>
+    )}
   </div>
 
   {puedeGenerar && (
