@@ -1096,7 +1096,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     activoActualId: row.activo?.id ?? null,
   }}>
     const $ = (id) => document.getElementById(id);
-    let checklist = checklistJson ? JSON.parse(checklistJson) : [];
+    // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
+    // toda la página (botones incluidos). Ante error, se trata como vacío.
+    let checklist = [];
+    try { checklist = checklistJson ? JSON.parse(checklistJson) : []; } catch { checklist = []; }
 
     async function patchOrden(payload) {
       const res = await fetch(`/api/ordenes/${id}`, {
@@ -1208,6 +1211,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         if (estado === "cancelada" && !confirm("¿Cancelar esta orden?")) return;
         if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
+        // Antes de completar, fuerza el guardado del checklist (el autoguardado
+        // es diferido ~1s): así el servidor valida el estado real y no rechaza
+        // por "pendientes" que en pantalla ya están marcados.
+        if (estado === "completada" && Array.isArray(checklist) && checklist.length > 0) {
+          if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+          await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+        }
         const r = await patchOrden({ estado });
         if (r) location.reload();
       });
