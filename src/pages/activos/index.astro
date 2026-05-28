@@ -234,7 +234,9 @@ function urlConVista(v: string) {
               <td class="px-4 py-2"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
               <td class="px-4 py-2">
                 {planesByActivo.get(r.a.id) ? (
-                  <span class="badge bg-blue-100 text-blue-700">{planesByActivo.get(r.a.id)} plan(es)</span>
+                  <a href={`/activos/${r.a.id}#planes`} class="badge bg-blue-100 text-blue-700 hover:bg-blue-200">{planesByActivo.get(r.a.id)} plan(es)</a>
+                ) : canEdit ? (
+                  <button type="button" class="prog-btn text-xs font-medium text-brand-700 hover:underline" data-activo-id={r.a.id} data-activo-label={`${r.a.codigo} · ${r.a.nombre}`}>+ Programar</button>
                 ) : (
                   <span class="text-xs text-slate-400">sin cronograma</span>
                 )}
@@ -245,6 +247,100 @@ function urlConVista(v: string) {
       </table>
     </div>
   )}
+
+  {canEdit && (
+    <div id="programarModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-md p-5">
+        <h3 class="text-lg font-semibold text-slate-900">Programar mantenimiento preventivo</h3>
+        <p id="progSubtitle" class="mt-0.5 text-xs text-slate-500"></p>
+        <div class="mt-4 grid gap-3">
+          <div>
+            <label class="label text-xs">Próxima fecha</label>
+            <input id="progFecha" type="date" class="input w-full" required />
+          </div>
+          <div>
+            <label class="label text-xs">Frecuencia</label>
+            <select id="progFreq" class="input w-full">
+              <option value="diaria">Diaria</option>
+              <option value="semanal">Semanal</option>
+              <option value="quincenal">Quincenal</option>
+              <option value="mensual" selected>Mensual</option>
+              <option value="bimestral">Bimestral</option>
+              <option value="trimestral">Trimestral</option>
+              <option value="semestral">Semestral</option>
+              <option value="anual">Anual</option>
+            </select>
+            <p class="mt-1 text-xs text-slate-400">Tras cerrar la OT, el cron calcula la siguiente fecha con esta frecuencia.</p>
+          </div>
+          <p id="progMsg" class="hidden text-sm"></p>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="progCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="progSave" type="button" class="btn-primary">Guardar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <script>
+    const progModal = document.getElementById("programarModal");
+    if (progModal) {
+      const progFecha = document.getElementById("progFecha");
+      const progFreq = document.getElementById("progFreq");
+      const progMsg = document.getElementById("progMsg");
+      const progSubtitle = document.getElementById("progSubtitle");
+      const progSave = document.getElementById("progSave");
+      const progCancel = document.getElementById("progCancel");
+      let progActivoId = null;
+
+      const showMsg = (txt, ok = false) => {
+        progMsg.textContent = txt;
+        progMsg.className = `text-sm ${ok ? "text-emerald-600" : "text-red-600"}`;
+        progMsg.classList.remove("hidden");
+      };
+      const closeModal = () => {
+        progModal.classList.add("hidden");
+        progModal.classList.remove("flex");
+        progActivoId = null;
+      };
+
+      document.querySelectorAll(".prog-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          progActivoId = Number(btn.dataset.activoId);
+          progSubtitle.textContent = btn.dataset.activoLabel ?? "";
+          // Default: dentro de 30 días (mensual)
+          const d = new Date(); d.setDate(d.getDate() + 30);
+          progFecha.value = d.toISOString().slice(0, 10);
+          progFecha.min = new Date().toISOString().slice(0, 10);
+          progFreq.value = "mensual";
+          progMsg.classList.add("hidden");
+          progModal.classList.remove("hidden");
+          progModal.classList.add("flex");
+          progFecha.focus();
+        });
+      });
+
+      progCancel?.addEventListener("click", closeModal);
+      progModal.addEventListener("click", (e) => { if (e.target === progModal) closeModal(); });
+
+      progSave?.addEventListener("click", async () => {
+        if (!progActivoId) return;
+        const fecha = progFecha.value;
+        if (!fecha) { showMsg("Selecciona la próxima fecha."); return; }
+        progSave.disabled = true;
+        const r = await fetch(`/api/activos/${progActivoId}/planes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ titulo: "Mantenimiento preventivo", frecuencia: progFreq.value, proximaFecha: fecha }),
+        });
+        if (r.ok) { showMsg("Programado.", true); location.reload(); return; }
+        progSave.disabled = false;
+        const j = await r.json().catch(() => ({}));
+        const err = typeof j?.error === "string" ? j.error : (j?.error?.formErrors?.[0] ?? "No se pudo guardar el plan");
+        showMsg(err);
+      });
+    }
+  </script>
 
   <script define:vars={{ ubicacionesJson, sucursalActualId: sucursalFiltro ? Number(sucursalFiltro) : null, ubicacionActualId: ubicacionFiltro ? Number(ubicacionFiltro) : null }}>
     // ── Filtro ubicación dependiente de sucursal ─────────────────────────────
