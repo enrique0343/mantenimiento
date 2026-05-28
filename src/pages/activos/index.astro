@@ -236,7 +236,7 @@ function urlConVista(v: string) {
                 {planesByActivo.get(r.a.id) ? (
                   <a href={`/activos/${r.a.id}#planes`} class="badge bg-blue-100 text-blue-700 hover:bg-blue-200">{planesByActivo.get(r.a.id)} plan(es)</a>
                 ) : canEdit ? (
-                  <button type="button" class="prog-btn text-xs font-medium text-brand-700 hover:underline" data-activo-id={r.a.id} data-activo-label={`${r.a.codigo} · ${r.a.nombre}`}>+ Programar</button>
+                  <button type="button" class="prog-btn text-xs font-medium text-brand-700 hover:underline" data-activo-id={r.a.id} data-activo-label={`${r.a.codigo} · ${r.a.nombre}`} data-activo-lugar={[r.suc?.nombre, r.ub?.nombre ?? r.a.ubicacion].filter(Boolean).join(" · ")}>+ Programar</button>
                 ) : (
                   <span class="text-xs text-slate-400">sin cronograma</span>
                 )}
@@ -252,7 +252,8 @@ function urlConVista(v: string) {
     <div id="programarModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
       <div class="card w-full max-w-md p-5">
         <h3 class="text-lg font-semibold text-slate-900">Programar mantenimiento preventivo</h3>
-        <p id="progSubtitle" class="mt-0.5 text-xs text-slate-500"></p>
+        <p id="progSubtitle" class="mt-0.5 text-sm font-medium text-slate-700"></p>
+        <p id="progLugar" class="text-xs text-slate-500"></p>
         <div class="mt-4 grid gap-3">
           <div>
             <label class="label text-xs">Próxima fecha</label>
@@ -289,6 +290,7 @@ function urlConVista(v: string) {
       const progFreq = document.getElementById("progFreq");
       const progMsg = document.getElementById("progMsg");
       const progSubtitle = document.getElementById("progSubtitle");
+      const progLugar = document.getElementById("progLugar");
       const progSave = document.getElementById("progSave");
       const progCancel = document.getElementById("progCancel");
       let progActivoId = null;
@@ -308,6 +310,9 @@ function urlConVista(v: string) {
         btn.addEventListener("click", () => {
           progActivoId = Number(btn.dataset.activoId);
           progSubtitle.textContent = btn.dataset.activoLabel ?? "";
+          const lugar = btn.dataset.activoLugar ?? "";
+          progLugar.textContent = lugar || "Sin sede / ubicación asignada";
+          progLugar.classList.toggle("italic", !lugar);
           // Default: dentro de 30 días (mensual)
           const d = new Date(); d.setDate(d.getDate() + 30);
           progFecha.value = d.toISOString().slice(0, 10);
