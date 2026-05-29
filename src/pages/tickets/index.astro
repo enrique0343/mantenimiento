@@ -3,7 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { tickets, usuarios, sucursales, activos } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
-import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
+import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { tipoActivoFiltro } from "@/lib/especialidad";
 export const prerender = false;
@@ -147,7 +147,6 @@ const esAdmin = user.rol === "admin";
   <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden">
     {rows.length === 0 && <div class="card p-6 text-center text-slate-400">Sin tickets.</div>}
     {rows.map((r) => {
-      const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
       const asignadoAMi = r.t.asignadoA === user.id;
       const e = r.t.estado as EstadoTicket;
       const cardColor =
@@ -188,13 +187,6 @@ const esAdmin = user.rol === "admin";
                 return <div class={`text-[10px] ${color}`}>hace {dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</div>;
               })()}
             </div>
-            <div>
-              <span class="text-slate-400 block">SLA</span>
-              {sla === "vencido" && <span class="text-red-600 font-medium">⚠ Vencido</span>}
-              {sla === "warning" && <span class="text-amber-600 font-medium">Por vencer</span>}
-              {sla === "ok" && <span class="text-slate-600">{fmt(r.t.vencimientoSla)}</span>}
-              {sla === "n/a" && <span class="text-slate-400">—</span>}
-            </div>
           </div>
           <div class="mt-2 flex items-center gap-1.5">
             <span class={`badge ${ESTADO_TICKET_COLOR[r.t.estado as EstadoTicket]} text-[10px]`}>{ESTADO_TICKET_LABEL[r.t.estado as EstadoTicket]}</span>
@@ -219,16 +211,14 @@ const esAdmin = user.rol === "admin";
           <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
-          <th class="px-4 py-2">SLA</th>
           <th class="px-4 py-2">Asignado</th>
           <th class="px-4 py-2">Recibido</th>
           <th class="px-4 py-2">Días</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && <tr><td colspan={esAdmin ? 11 : 10} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
+        {rows.length === 0 && <tr><td colspan={esAdmin ? 10 : 9} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
         {rows.map((r) => {
-          const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           const asignadoAMi = r.t.asignadoA === user.id;
           const e = r.t.estado as EstadoTicket;
           const filaColor =
@@ -260,12 +250,6 @@ const esAdmin = user.rol === "admin";
               <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
               <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.t.prioridad]} capitalize`}>{r.t.prioridad}</span></td>
               <td class="px-4 py-2"><span class={`badge ${ESTADO_TICKET_COLOR[r.t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[r.t.estado as EstadoTicket]}</span></td>
-              <td class="px-4 py-2 text-xs">
-                {sla === "vencido" && <span class="font-medium text-red-600">⚠ Vencido</span>}
-                {sla === "warning" && <span class="font-medium text-amber-600">Por vencer</span>}
-                {sla === "ok" && <span class="text-slate-500">{fmt(r.t.vencimientoSla)}</span>}
-                {sla === "n/a" && <span class="text-slate-400">—</span>}
-              </td>
               <td class="px-4 py-2 text-slate-600">{r.a?.nombre ?? "—"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">
                 {r.t.createdAt ? new Date(r.t.createdAt).toLocaleDateString("es", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/El_Salvador" }) : "—"}
@@ -282,6 +266,24 @@ const esAdmin = user.rol === "admin";
         })}
       </tbody>
     </table>
+  </div>
+
+  <!-- Leyenda de colores de la columna "Días" -->
+  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+    <span class="font-medium text-slate-700">Días transcurridos:</span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+      <span>Verde · menos de 7 días (en plazo)</span>
+    </span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+      <span>Ámbar · 7 a 13 días (atención)</span>
+    </span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500"></span>
+      <span>Rojo · 14 días o más (estancado)</span>
+    </span>
+    <span class="text-slate-400">· Tickets resueltos/cerrados/descartados no muestran días.</span>
   </div>
 
   {esAdmin && (
