@@ -82,7 +82,14 @@ export const POST: APIRoute = async (ctx) => {
 
   const [row] = await db
     .insert(ordenes)
-    .values({ ...parsed.data, vencimiento, creadoPor: user.id })
+    .values({
+      ...parsed.data,
+      vencimiento,
+      creadoPor: user.id,
+      // Si la OT nace ya asignada, registramos la marca de asignación para que
+      // la lista pueda mostrar "asignada hace N días" sin depender del log.
+      asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
+    })
     .returning();
 
   // Audit: creación de OT

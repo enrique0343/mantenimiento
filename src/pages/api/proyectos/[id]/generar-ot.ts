@@ -64,6 +64,7 @@ export const POST: APIRoute = async (ctx) => {
     ubicacionId: p.ubicacionId,
     ubicacionDetalle: p.ubicacionDetalle,
     asignadoA: parsed.data.asignadoA ?? null,
+    asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
     creadoPor: user.id,
     vencimiento: parsed.data.vencimiento ?? p.fechaFinEstimada ?? null,
   } as any).returning();

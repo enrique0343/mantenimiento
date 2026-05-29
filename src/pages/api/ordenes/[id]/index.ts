@@ -196,6 +196,12 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
+  // Si cambia el asignado, actualizar la marca temporal de asignación.
+  // Esto alimenta la columna "Asignado hace N días" del listado de OTs.
+  if (parsed.data.asignadoA !== undefined && parsed.data.asignadoA !== actual.asignadoA) {
+    data.asignadoEn = parsed.data.asignadoA ? now : null;
+  }
+
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
 
   // Audit: cambio de estado (con resumen legible)

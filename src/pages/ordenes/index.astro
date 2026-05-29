@@ -224,6 +224,11 @@ const esAdmin = usrLogged.rol === "admin";
             <div>
               <span class="text-slate-400 block">👤 Asignado</span>
               <span class="text-slate-700 font-medium">{r.asignado?.nombre ?? <span class="text-red-600">Sin asignar</span>}</span>
+              {r.orden.asignadoEn && !(e === "cerrada" || e === "cancelada") && (() => {
+                const dias = Math.floor((Date.now() - new Date(r.orden.asignadoEn).getTime()) / 86400_000);
+                const color = dias >= 14 ? "text-red-600" : dias >= 7 ? "text-amber-700" : "text-slate-500";
+                return <div class={`text-[10px] ${color}`}>hace {dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</div>;
+              })()}
             </div>
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-1.5">
@@ -251,11 +256,13 @@ const esAdmin = usrLogged.rol === "admin";
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2">Asignado</th>
+          <th class="px-4 py-2">Asignada el</th>
+          <th class="px-4 py-2">Días</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && !errorMsg && (
-          <tr><td colspan={esAdmin ? 8 : 7} class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
+          <tr><td colspan={esAdmin ? 10 : 9} class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
         )}
         {rows.map((r) => {
           const e = (r.orden.estado ?? "abierta") as EstadoOT;
@@ -295,6 +302,16 @@ const esAdmin = usrLogged.rol === "admin";
               <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[prio] ?? "bg-slate-100 text-slate-600"} capitalize`}>{r.orden.prioridad}</span></td>
               <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[e] ?? "bg-slate-100 text-slate-600"}`}>{ESTADO_LABEL[e] ?? r.orden.estado}</span></td>
               <td class="px-4 py-2 text-slate-600">{r.asignado?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">
+                {r.orden.asignadoEn ? new Date(r.orden.asignadoEn).toLocaleDateString("es", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/El_Salvador" }) : "—"}
+              </td>
+              <td class="px-4 py-2 text-xs">
+                {r.orden.asignadoEn && !(e === "cerrada" || e === "cancelada") ? (() => {
+                  const dias = Math.floor((Date.now() - new Date(r.orden.asignadoEn).getTime()) / 86400_000);
+                  const color = dias >= 14 ? "bg-red-100 text-red-700" : dias >= 7 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+                  return <span class={`badge ${color}`}>{dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</span>;
+                })() : <span class="text-slate-400">—</span>}
+              </td>
             </tr>
           );
         })}

@@ -42,6 +42,7 @@ export const POST: APIRoute = async (ctx) => {
       estado: "abierta",
       actividadId: a.id,
       asignadoA: a.asignadoA,
+      asignadoEn: a.asignadoA ? new Date().toISOString() : null,
       creadoPor: user.id,
       vencimiento: venc.toISOString(),
       checklistEjecucion: a.checklist ?? null,

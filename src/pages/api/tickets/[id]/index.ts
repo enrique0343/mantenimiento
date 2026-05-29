@@ -120,6 +120,7 @@ export const PATCH: APIRoute = async (ctx) => {
           estado: "abierta",
           activoId: actual.activoId,
           asignadoA: parsed.data.asignadoA!,
+          asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
           creadoPor: user.id,
           vencimiento: actual.vencimientoSla,
         })
