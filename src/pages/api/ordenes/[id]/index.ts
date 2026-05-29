@@ -308,7 +308,13 @@ export const PATCH: APIRoute = async (ctx) => {
           estado: nuevoEstadoTicket,
           updatedAt: now,
         };
-        if (parsed.data.estado === "completada" || parsed.data.estado === "verificada") {
+        // Si el ticket queda resuelto o cerrado, registra la marca temporal y
+        // (si existe) la solución aplicada. Se chequea contra el estado FINAL
+        // del ticket (no el de la OT), porque el switch de arriba reasigna
+        // parsed.data.estado a "cerrada" cuando viene "completada"/"verificada",
+        // dejando estas dos comparaciones efectivamente muertas si se chequean
+        // contra parsed.data.estado.
+        if (nuevoEstadoTicket === "resuelto" || nuevoEstadoTicket === "cerrado") {
           updateTicket.resueltoEn = now;
           if (actual.solucionAplicada || parsed.data.solucionAplicada) {
             updateTicket.resolucionNotas = parsed.data.solucionAplicada ?? actual.solucionAplicada;
