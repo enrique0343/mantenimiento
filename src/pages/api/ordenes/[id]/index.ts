@@ -4,11 +4,6 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales } from "@/lib/schema";
 
-async function contarAdjuntos(db: any, ordenId: number, categoria: string): Promise<number> {
-  const rows = await db.select({ id: adjuntos.id }).from(adjuntos)
-    .where(and(eq(adjuntos.ordenId, ordenId), eq(adjuntos.categoria, categoria)));
-  return rows.length;
-}
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, parseChecklist, validarChecklistParaCierre, type EstadoOT } from "@/lib/ordenes";
@@ -104,26 +99,10 @@ export const PATCH: APIRoute = async (ctx) => {
 
   // Validar transicion de estado segun rol
   if (parsed.data.estado && parsed.data.estado !== actual.estado) {
-    // ─── Validaciones de adjuntos obligatorios ──────────────────────────────
-    // Para iniciar (abierta → en_proceso): se requiere al menos 1 foto "antes"
-    if (actual.estado === "abierta" && parsed.data.estado === "en_proceso") {
-      const nAntes = await contarAdjuntos(db, id, "antes");
-      if (nAntes === 0) {
-        return Response.json(
-          { error: "Debes adjuntar al menos una foto del estado inicial (antes) para iniciar la OT." },
-          { status: 400 }
-        );
-      }
-    }
-    // Para completar (en_proceso → completada): se requiere al menos 1 foto "después"
+    // Las fotos "antes"/"después" son opcionales: el técnico puede adjuntar
+    // evidencia si la conexión y el dispositivo lo permiten, pero ya no
+    // bloquean el flujo (se reportaron equipos saturándose al subir fotos).
     if (actual.estado === "en_proceso" && parsed.data.estado === "completada") {
-      const nDespues = await contarAdjuntos(db, id, "despues");
-      if (nDespues === 0) {
-        return Response.json(
-          { error: "Debes adjuntar al menos una foto del estado final (después) para completar la OT." },
-          { status: 400 }
-        );
-      }
       // Validación bloqueante de checklist: si la OT tiene checklist con
       // items pendientes o desviaciones sin nota, NO se puede completar.
       const checklist = parseChecklist(actual.checklistEjecucion);
