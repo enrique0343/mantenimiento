@@ -60,10 +60,33 @@ if (t.proyectoId) {
 <Layout title={`Ticket #${t.id}`}>
   <div class="flex items-center justify-between">
     <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
-    {esAdmin && (
-      <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
-    )}
+    <div class="flex gap-2">
+      {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
+        <button id="cierreAdminTicketBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
+      )}
+      {esAdmin && (
+        <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
+      )}
+    </div>
   </div>
+
+  {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
+    <div id="cierreAdminTicketModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo del ticket</h3>
+        <p class="mt-1 text-sm text-slate-600">Cierra el ticket sin pasar por el flujo normal. Registra un comentario interno con el motivo y marca el ticket como <em>cerrado</em> con la fecha actual como <em>resueltoEn</em>. La OT asociada (si la hay) <strong>no</strong> se toca.</p>
+        <div class="mt-3">
+          <label class="label text-xs">Motivo (comentario interno, el solicitante no lo verá)</label>
+          <textarea id="cierreAdminTicketMotivo" class="input w-full" rows="3" placeholder="Ej. Reportado fuera del sistema, ya atendido. Se cierra para limpiar la bandeja."></textarea>
+        </div>
+        <p id="cierreAdminTicketMsg" class="hidden mt-2 text-sm"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="cierreAdminTicketCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="cierreAdminTicketConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar el ticket</button>
+        </div>
+      </div>
+    </div>
+  )}
 
   {esAdmin && (
     <script define:vars={{ ticketId: t.id }}>
@@ -73,6 +96,51 @@ if (t.proyectoId) {
         if (res.ok) { location.href = "/tickets"; }
         else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "desconocido")); }
       });
+
+      // Cierre administrativo del ticket
+      const caBtn = document.getElementById("cierreAdminTicketBtn");
+      const caModal = document.getElementById("cierreAdminTicketModal");
+      if (caBtn && caModal) {
+        const motivoInp = document.getElementById("cierreAdminTicketMotivo");
+        const msgEl = document.getElementById("cierreAdminTicketMsg");
+        const confirmBtn = document.getElementById("cierreAdminTicketConfirm");
+        const closeModal = () => { caModal.classList.add("hidden"); caModal.classList.remove("flex"); };
+        caBtn.addEventListener("click", () => {
+          if (motivoInp) motivoInp.value = "";
+          msgEl?.classList.add("hidden");
+          if (msgEl) msgEl.textContent = "";
+          caModal.classList.remove("hidden");
+          caModal.classList.add("flex");
+          motivoInp?.focus();
+        });
+        document.getElementById("cierreAdminTicketCancel")?.addEventListener("click", closeModal);
+        caModal.addEventListener("click", (e) => { if (e.target === caModal) closeModal(); });
+        confirmBtn?.addEventListener("click", async () => {
+          const motivo = (motivoInp?.value || "").trim();
+          confirmBtn.setAttribute("disabled", "true");
+          const texto = motivo
+            ? `🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+            : "🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.";
+          const cr = await fetch(`/api/tickets/${ticketId}/comentario`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ texto, publico: false }),
+          });
+          if (!cr.ok) {
+            confirmBtn.removeAttribute("disabled");
+            if (msgEl) { msgEl.textContent = "No se pudo registrar el motivo. Intenta de nuevo."; msgEl.className = "mt-2 text-sm text-red-600"; msgEl.classList.remove("hidden"); }
+            return;
+          }
+          const r = await fetch(`/api/tickets/${ticketId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ estado: "cerrado" }),
+          });
+          if (r.ok) { location.reload(); return; }
+          confirmBtn.removeAttribute("disabled");
+          if (msgEl) { msgEl.textContent = "No se pudo cerrar el ticket."; msgEl.className = "mt-2 text-sm text-red-600"; msgEl.classList.remove("hidden"); }
+        });
+      }
     </script>
   )}
 

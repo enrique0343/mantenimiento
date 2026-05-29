@@ -86,6 +86,10 @@ export const PATCH: APIRoute = async (ctx) => {
   }
 
   if (parsed.data.estado === "resuelto" && !actual.resueltoEn) data.resueltoEn = new Date().toISOString();
+  // Cierre directo (típicamente cierre administrativo): si pasa a "cerrado"
+  // sin haber pasado por "resuelto", registramos igualmente la marca temporal
+  // para que la auditoría y los reportes tengan la fecha de resolución real.
+  if (parsed.data.estado === "cerrado" && !actual.resueltoEn) data.resueltoEn = new Date().toISOString();
   if (parsed.data.estado && parsed.data.estado !== "resuelto" && parsed.data.estado !== "cerrado") {
     data.resueltoEn = null;
   }
