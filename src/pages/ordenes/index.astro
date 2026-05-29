@@ -111,6 +111,11 @@ const esAdmin = usrLogged.rol === "admin";
     </div>
     <div class="flex gap-2">
       {esAdmin && (
+        <button id="bulkCloseBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700">
+          🔒 Cerrar admin (<span id="selCountClose">0</span>)
+        </button>
+      )}
+      {esAdmin && (
         <button id="bulkDelBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">
           🗑 Eliminar seleccionadas (<span id="selCount">0</span>)
         </button>
@@ -322,16 +327,41 @@ const esAdmin = usrLogged.rol === "admin";
   </script>
 
   {esAdmin && (
+    <div id="bulkCloseModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo en lote</h3>
+        <p class="mt-1 text-sm text-slate-600">
+          Vas a cerrar <strong><span id="bulkCloseCount">0</span> OT(s)</strong> como si las hubiera cerrado el técnico.
+          La API auto-promueve a <em>cerrada</em>, registra timestamps/horas y <strong>envía el correo habitual de encuesta de satisfacción al solicitante</strong> de cada OT.
+        </p>
+        <div class="mt-3">
+          <label class="label text-xs">Motivo común (queda como comentario en cada OT)</label>
+          <textarea id="bulkCloseMotivo" class="input w-full" rows="3" placeholder="Ej. Trabajos ejecutados en sitio sin seguimiento en la plataforma. Cierre administrativo para preservar el registro."></textarea>
+        </div>
+        <p id="bulkCloseMsg" class="hidden mt-2 text-sm"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="bulkCloseCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="bulkCloseConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar las OT seleccionadas</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {esAdmin && (
     <script>
       const cbs = document.querySelectorAll<HTMLInputElement>(".ot-cb");
       const selAll = document.getElementById("selAll") as HTMLInputElement | null;
       const bulkBtn = document.getElementById("bulkDelBtn");
       const countEl = document.getElementById("selCount");
+      const bulkCloseBtn = document.getElementById("bulkCloseBtn");
+      const countCloseEl = document.getElementById("selCountClose");
 
       function refresh() {
         const sel = Array.from(cbs).filter((cb) => cb.checked);
         if (countEl) countEl.textContent = String(sel.length);
         if (bulkBtn) bulkBtn.classList.toggle("hidden", sel.length === 0);
+        if (countCloseEl) countCloseEl.textContent = String(sel.length);
+        if (bulkCloseBtn) bulkCloseBtn.classList.toggle("hidden", sel.length === 0);
       }
 
       selAll?.addEventListener("change", () => {
@@ -362,6 +392,87 @@ const esAdmin = usrLogged.rol === "admin";
           alert("✗ Error: " + (j.error ?? "desconocido"));
           bulkBtn.removeAttribute("disabled");
         }
+      });
+
+      // ── Cierre administrativo en lote ───────────────────────────────────
+      const bcModal = document.getElementById("bulkCloseModal");
+      const bcCount = document.getElementById("bulkCloseCount");
+      const bcMotivo = document.getElementById("bulkCloseMotivo") as HTMLTextAreaElement | null;
+      const bcMsg = document.getElementById("bulkCloseMsg");
+      const bcConfirm = document.getElementById("bulkCloseConfirm");
+      const bcCancel = document.getElementById("bulkCloseCancel");
+
+      const closeBcModal = () => {
+        bcModal?.classList.add("hidden");
+        bcModal?.classList.remove("flex");
+      };
+
+      bulkCloseBtn?.addEventListener("click", () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length || !bcModal) return;
+        if (bcCount) bcCount.textContent = String(ids.length);
+        if (bcMotivo) bcMotivo.value = "";
+        bcMsg?.classList.add("hidden");
+        if (bcMsg) bcMsg.textContent = "";
+        bcModal.classList.remove("hidden");
+        bcModal.classList.add("flex");
+        bcMotivo?.focus();
+      });
+      bcCancel?.addEventListener("click", closeBcModal);
+      bcModal?.addEventListener("click", (e) => { if (e.target === bcModal) closeBcModal(); });
+
+      bcConfirm?.addEventListener("click", async () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length || !bcConfirm) return;
+        const motivo = (bcMotivo?.value || "").trim();
+        const texto = motivo
+          ? `🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+          : "🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.";
+
+        bcConfirm.setAttribute("disabled", "true");
+        const originalLabel = bcConfirm.textContent;
+
+        let ok = 0;
+        let fail = 0;
+        // Procesa de 5 en 5 para no saturar el worker.
+        const CONC = 5;
+        for (let i = 0; i < ids.length; i += CONC) {
+          const lote = ids.slice(i, i + CONC);
+          if (bcConfirm) bcConfirm.textContent = `Procesando ${Math.min(i + CONC, ids.length)} / ${ids.length}…`;
+          await Promise.all(lote.map(async (id) => {
+            try {
+              const cr = await fetch(`/api/ordenes/${id}/comentarios`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ texto }),
+              });
+              if (!cr.ok) throw new Error("comentario");
+              const pr = await fetch(`/api/ordenes/${id}`, {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ estado: "completada" }),
+              });
+              if (!pr.ok) throw new Error("patch");
+              ok++;
+            } catch {
+              fail++;
+            }
+          }));
+        }
+
+        if (bcConfirm) bcConfirm.textContent = originalLabel;
+        bcConfirm.removeAttribute("disabled");
+        if (bcMsg) {
+          if (fail === 0) {
+            bcMsg.textContent = `✓ ${ok} OT(s) cerradas. Se enviaron los correos de encuesta correspondientes.`;
+            bcMsg.className = "mt-2 text-sm text-emerald-600";
+          } else {
+            bcMsg.textContent = `Cerradas: ${ok}. Con error: ${fail}. Revisa las que quedaron sin cerrar y reintenta.`;
+            bcMsg.className = "mt-2 text-sm text-amber-700";
+          }
+          bcMsg.classList.remove("hidden");
+        }
+        if (fail === 0) setTimeout(() => location.reload(), 800);
       });
     </script>
   )}
