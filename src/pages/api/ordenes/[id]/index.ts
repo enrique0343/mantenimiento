@@ -102,9 +102,10 @@ export const PATCH: APIRoute = async (ctx) => {
     // Las fotos "antes"/"después" son opcionales: el técnico puede adjuntar
     // evidencia si la conexión y el dispositivo lo permiten, pero ya no
     // bloquean el flujo (se reportaron equipos saturándose al subir fotos).
-    if (actual.estado === "en_proceso" && parsed.data.estado === "completada") {
+    if (actual.estado === "en_proceso" && parsed.data.estado === "completada" && user.rol !== "admin") {
       // Validación bloqueante de checklist: si la OT tiene checklist con
       // items pendientes o desviaciones sin nota, NO se puede completar.
+      // El admin la salta cuando cierra administrativamente.
       const checklist = parseChecklist(actual.checklistEjecucion);
       const v = validarChecklistParaCierre(checklist);
       if (!v.ok) {
@@ -114,7 +115,10 @@ export const PATCH: APIRoute = async (ctx) => {
 
     const esAsignado = actual.asignadoA === user.id;
     const permitidas = transicionesPermitidas(actual.estado as EstadoOT, user.rol, esAsignado);
-    if (!permitidas.includes(parsed.data.estado as EstadoOT)) {
+    // El admin (super admin) puede forzar cualquier transición desde cualquier
+    // estado — necesario para cerrar OTs antiguas cuyo trabajo se ejecutó
+    // fuera de la plataforma y nunca se siguió aquí.
+    if (user.rol !== "admin" && !permitidas.includes(parsed.data.estado as EstadoOT)) {
       return Response.json(
         { error: `No tienes permisos para mover de "${actual.estado}" a "${parsed.data.estado}"` },
         { status: 403 }

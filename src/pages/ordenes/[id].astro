@@ -173,10 +173,31 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {user.rol === "admin" && (
         <button id="historialBtn" type="button" class="btn-secondary text-sm">📜 Historial</button>
       )}
+      {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+        <button id="cierreAdminBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
+      )}
       {user.rol === "admin" && (
         <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
       )}
     </div>
+
+    {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+      <div id="cierreAdminModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+        <div class="card w-full max-w-lg p-5">
+          <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo</h3>
+          <p class="mt-1 text-sm text-slate-600">Esta acción <strong>cierra la OT igual que si la cerrara un técnico</strong> (estado <em>cerrada</em>, marca completada/cerrada con la hora actual, dispara la encuesta de satisfacción y el cálculo automático de horas). Úsalo para OTs cuyo trabajo se ejecutó fuera de la plataforma.</p>
+          <div class="mt-3">
+            <label class="label text-xs">Motivo (queda como comentario en la OT)</label>
+            <textarea id="cierreAdminMotivo" class="input w-full" rows="3" placeholder="Ej. Trabajo realizado en sitio el 12/05, sin seguimiento en plataforma. Cierre para no perder el registro."></textarea>
+          </div>
+          <p id="cierreAdminMsg" class="hidden mt-2 text-sm"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="cierreAdminCancel" type="button" class="btn-secondary">Cancelar</button>
+            <button id="cierreAdminConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar la OT</button>
+          </div>
+        </div>
+      </div>
+    )}
   </div>
 
   {user.rol === "admin" && (
@@ -1222,6 +1243,56 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (r) location.reload();
       });
     });
+
+    // Cierre administrativo (solo admin): abre modal, deja un comentario con el
+    // motivo y luego hace PATCH estado="completada" — la API ya auto-promueve
+    // a "cerrada" y dispara las mismas side-effects que el cierre del técnico.
+    const cierreAdminBtn = $("cierreAdminBtn");
+    if (cierreAdminBtn) {
+      const modal = $("cierreAdminModal");
+      const motivoInp = $("cierreAdminMotivo");
+      const msgEl = $("cierreAdminMsg");
+      const confirmBtn = $("cierreAdminConfirm");
+      const closeModal = () => {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+      };
+      cierreAdminBtn.addEventListener("click", () => {
+        motivoInp.value = "";
+        msgEl.classList.add("hidden"); msgEl.textContent = "";
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+        motivoInp.focus();
+      });
+      $("cierreAdminCancel")?.addEventListener("click", closeModal);
+      modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+      confirmBtn?.addEventListener("click", async () => {
+        const motivo = (motivoInp.value || "").trim();
+        confirmBtn.disabled = true;
+        msgEl.classList.add("hidden");
+        const texto = motivo
+          ? `🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+          : "🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.";
+        const cr = await fetch(`/api/ordenes/${id}/comentarios`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ texto }),
+        });
+        if (!cr.ok) {
+          confirmBtn.disabled = false;
+          msgEl.textContent = "No se pudo registrar el motivo. Intenta de nuevo.";
+          msgEl.className = "mt-2 text-sm text-red-600";
+          msgEl.classList.remove("hidden");
+          return;
+        }
+        const r = await patchOrden({ estado: "completada" });
+        if (r) { location.reload(); return; }
+        confirmBtn.disabled = false;
+        msgEl.textContent = "No se pudo cerrar la OT. Revisa la consola.";
+        msgEl.className = "mt-2 text-sm text-red-600";
+        msgEl.classList.remove("hidden");
+      });
+    }
 
     // Verificacion modal
     $("verifCancel")?.addEventListener("click", () => {
