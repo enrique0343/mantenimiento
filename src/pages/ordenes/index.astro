@@ -19,6 +19,7 @@ const verCerradas = url.searchParams.get("verCerradas") === "1"; // por defecto 
 const aplicaFiltroEsp = (usrLogged.rol === "jefe" || usrLogged.rol === "tecnico");
 const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(usrLogged.especialidad ?? null) : null;
 const esTecnico = usrLogged.rol === "tecnico";
+const esJefe = usrLogged.rol === "jefe";
 
 let errorMsg: string | null = null;
 let rowsRaw: any[] = [];
@@ -137,7 +138,7 @@ const esAdmin = usrLogged.rol === "admin";
        class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista !== "mias" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
       Todas
     </a>
-    {esTecnico && (
+    {(esTecnico || esJefe) && (
       <a href={`/ordenes?vista=mias${filtroEstado ? `&estado=${filtroEstado}` : ""}${verCerradas ? "&verCerradas=1" : ""}`}
          class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista === "mias" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"]}>
         👤 Asignadas a mí ({conteoMias})
