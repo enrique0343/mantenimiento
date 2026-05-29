@@ -175,6 +175,15 @@ const esAdmin = user.rol === "admin";
               <span class="text-slate-600 truncate block">{r.t.solicitanteNombre}</span>
             </div>
             <div>
+              <span class="text-slate-400 block">📅 Recibido</span>
+              <span class="text-slate-700">{r.t.createdAt ? new Date(r.t.createdAt).toLocaleDateString("es", { day: "2-digit", month: "short", timeZone: "America/El_Salvador" }) : "—"}</span>
+              {r.t.createdAt && !(e === "resuelto" || e === "cerrado" || e === "descartado") && (() => {
+                const dias = Math.floor((Date.now() - new Date(r.t.createdAt).getTime()) / 86400_000);
+                const color = dias >= 14 ? "text-red-600" : dias >= 7 ? "text-amber-700" : "text-slate-500";
+                return <div class={`text-[10px] ${color}`}>hace {dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</div>;
+              })()}
+            </div>
+            <div>
               <span class="text-slate-400 block">SLA</span>
               {sla === "vencido" && <span class="text-red-600 font-medium">⚠ Vencido</span>}
               {sla === "warning" && <span class="text-amber-600 font-medium">Por vencer</span>}
@@ -207,10 +216,12 @@ const esAdmin = user.rol === "admin";
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2">SLA</th>
           <th class="px-4 py-2">Asignado</th>
+          <th class="px-4 py-2">Recibido</th>
+          <th class="px-4 py-2">Días</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && <tr><td colspan={esAdmin ? 9 : 8} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
+        {rows.length === 0 && <tr><td colspan={esAdmin ? 11 : 10} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
         {rows.map((r) => {
           const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           const asignadoAMi = r.t.asignadoA === user.id;
@@ -251,6 +262,16 @@ const esAdmin = user.rol === "admin";
                 {sla === "n/a" && <span class="text-slate-400">—</span>}
               </td>
               <td class="px-4 py-2 text-slate-600">{r.a?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">
+                {r.t.createdAt ? new Date(r.t.createdAt).toLocaleDateString("es", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/El_Salvador" }) : "—"}
+              </td>
+              <td class="px-4 py-2 text-xs">
+                {r.t.createdAt && !(e === "resuelto" || e === "cerrado" || e === "descartado") ? (() => {
+                  const dias = Math.floor((Date.now() - new Date(r.t.createdAt).getTime()) / 86400_000);
+                  const color = dias >= 14 ? "bg-red-100 text-red-700" : dias >= 7 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+                  return <span class={`badge ${color}`}>{dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</span>;
+                })() : <span class="text-slate-400">—</span>}
+              </td>
             </tr>
           );
         })}
