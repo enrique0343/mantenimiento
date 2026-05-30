@@ -3,7 +3,8 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion, metricasKpi } from "@/lib/schema";
 import { eq, and, sql, isNotNull, desc, gte, inArray } from "drizzle-orm";
-import { SCOPES, SCOPE_LABEL, ultimosPeriodos } from "@/lib/metricas";
+import { SCOPES, SCOPE_LABEL, ultimosPeriodos, KPI_BASELINE_DATE, aplicarLineaBase } from "@/lib/metricas";
+import { fmtFechaLarga } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -12,8 +13,11 @@ const esAdmin = user.rol === "admin";
 
 const db = getDb(Astro);
 const now = new Date();
-const inicioAno = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
-const inicio30d = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+const inicioAnoRaw = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+const inicio30dRaw = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+// La línea base recorta cualquier ventana hacia atrás del corte de reinicio.
+const inicioAno = aplicarLineaBase(inicioAnoRaw);
+const inicio30d = aplicarLineaBase(inicio30dRaw);
 
 // Total OTs y por estado
 const totalesEstado = await db
@@ -23,14 +27,16 @@ const totalesEstado = await db
 const total = totalesEstado.reduce((s, r) => s + Number(r.n), 0);
 const get = (estado: string) => Number(totalesEstado.find((r) => r.estado === estado)?.n ?? 0);
 
-// OTs vencidas (sin cerrar y vencimiento pasado)
+// OTs vencidas (sin cerrar y vencimiento pasado). Solo contamos las creadas
+// después de la línea base — las anteriores quedan excluidas por reinicio.
 const vencidasRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
-  .where(sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada')`);
+  .where(sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada') AND ${ordenes.createdAt} >= ${KPI_BASELINE_DATE}`);
 const vencidas = Number(vencidasRows[0]?.n ?? 0);
 
 // % cumplimiento SLA: completadas a tiempo / total completadas con vencimiento
+// (post línea base).
 const slaRows = await db
   .select({
     total: sql<number>`COUNT(*)`,
@@ -41,6 +47,7 @@ const slaRows = await db
     isNotNull(ordenes.completadaEn),
     isNotNull(ordenes.vencimiento),
     gte(ordenes.completadaEn, inicio30d),
+    gte(ordenes.createdAt, KPI_BASELINE_DATE),
   ));
 const slaTotal = Number(slaRows[0]?.total ?? 0);
 const slaATiempo = Number(slaRows[0]?.aTiempo ?? 0);
@@ -52,11 +59,16 @@ const porTipo = await db
   .from(ordenes)
   .groupBy(ordenes.tipo);
 
-// MTTR (30d): tiempo promedio creación → completada
+// MTTR (30d): tiempo promedio creación → completada, sólo de OTs creadas
+// después de la línea base (las heredadas se excluyen por reinicio).
 const completadas30d = await db
   .select({ createdAt: ordenes.createdAt, completadaEn: ordenes.completadaEn })
   .from(ordenes)
-  .where(and(gte(ordenes.completadaEn, inicio30d), isNotNull(ordenes.completadaEn)));
+  .where(and(
+    gte(ordenes.completadaEn, inicio30d),
+    isNotNull(ordenes.completadaEn),
+    gte(ordenes.createdAt, KPI_BASELINE_DATE),
+  ));
 let mttrHoras = 0;
 if (completadas30d.length > 0) {
   const totalMs = completadas30d.reduce((s, r) => {
@@ -67,7 +79,7 @@ if (completadas30d.length > 0) {
   mttrHoras = totalMs / completadas30d.length / 3_600_000;
 }
 
-// MTBF aproximado
+// MTBF aproximado (correctivos en los 30d post línea base).
 const correctivos30dRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
@@ -205,6 +217,17 @@ const KPIS_DEF = [
       <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>📄 Reporte JCI (PDF)</button>
       <a href="/reportes" class="btn-secondary">📑 Reportes CSV</a>
     </div>
+  </div>
+
+  <!-- Aviso de línea base: KPIs reiniciados a partir de la fecha de corte. -->
+  <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div class="font-semibold">ℹ️ Línea base de KPIs: {fmtFechaLarga(KPI_BASELINE_DATE)}</div>
+    <p class="mt-1 text-xs text-amber-800/90">
+      Por retrasos y cambios de sistema que impidieron cerrar OTs/tickets a tiempo, los indicadores de mantenimiento
+      (Cumplimiento SLA, MTTR, MTBF, Backlog vencido) cuentan únicamente OTs creadas a partir de esa fecha; el
+      histórico previo queda excluido para no distorsionar la tendencia.
+      <strong>Satisfacción</strong> y <strong>Disponibilidad</strong> no se ven afectadas y siguen reflejando toda la información disponible.
+    </p>
   </div>
 
   <!-- ─── Indicadores JCI con tendencia documentada (persistidos) ─── -->

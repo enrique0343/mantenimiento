@@ -12,6 +12,22 @@ export const SCOPE_LABEL: Record<Scope, string> = {
   global: "Global", general: "General", biomedico: "Biomédico",
 };
 
+// Línea base del sistema (reinicio de KPIs). Las OTs/eventos previos a esta
+// fecha NO cuentan para los KPIs de mantenimiento (SLA, MTTR, MTBF, backlog,
+// tendencia JCI). Se introdujo porque retrasos y cambios de sistema impidieron
+// cerrar OTs/tickets a tiempo y distorsionaban las métricas con datos
+// históricos no representativos.
+// Satisfacción y Disponibilidad NO se ven afectadas (no son métricas
+// dependientes del histórico de OTs).
+// Si en el futuro hay que mover el corte, basta cambiar esta fecha.
+export const KPI_BASELINE_DATE = "2026-05-30";
+
+// Devuelve el mayor entre la fecha de inicio solicitada y la línea base, de
+// forma que cualquier ventana temporal queda topada por el reinicio.
+export function aplicarLineaBase(inicio: string): string {
+  return inicio > KPI_BASELINE_DATE ? inicio : KPI_BASELINE_DATE;
+}
+
 export interface KpiPeriodo {
   cumplimientoPreventivo: number | null;
   mttrHoras: number | null;
@@ -58,6 +74,19 @@ type Db = ReturnType<typeof getDb>;
 
 // Computa los KPIs del período para los 3 alcances en una sola pasada.
 export async function computarPeriodo(db: Db, inicio: string, fin: string): Promise<Record<Scope, KpiPeriodo>> {
+  // Aplica la línea base: si el período es entero anterior al reinicio,
+  // devuelve KPIs vacíos. Si lo atraviesa, recortamos el inicio.
+  const inicioReal = aplicarLineaBase(inicio);
+  if (inicioReal >= fin) {
+    const vacio = (): KpiPeriodo => ({
+      cumplimientoPreventivo: null, mttrHoras: null, mtbfHoras: null,
+      disponibilidadPct: null, backlogCorrectivos: 0, costoTotal: 0,
+      costoPorActivo: 0, otsCompletadas: 0, otsCorrectivas: 0,
+      otsPreventivas: 0, preventivosProgramados: 0, numActivos: 0,
+    });
+    return SCOPES.reduce((acc, s) => { acc[s] = vacio(); return acc; }, {} as Record<Scope, KpiPeriodo>);
+  }
+  inicio = inicioReal;
   const horasPeriodo = (new Date(fin).getTime() - new Date(inicio).getTime()) / 3_600_000;
 
   // Parque de equipos (excluye dados de baja). tipo por activo para bucketing.
