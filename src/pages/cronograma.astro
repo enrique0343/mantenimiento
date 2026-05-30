@@ -101,13 +101,17 @@ const tecnicosLista = puedeAsignar
 
 const hoy = new Date().toISOString().slice(0, 10);
 const en7 = new Date(); en7.setDate(en7.getDate() + 7);
+const en15 = new Date(); en15.setDate(en15.getDate() + 15);
 const en30 = new Date(); en30.setDate(en30.getDate() + 30);
 const en7Str = en7.toISOString().slice(0, 10);
+const en15Str = en15.toISOString().slice(0, 10);
 const en30Str = en30.toISOString().slice(0, 10);
 
+// Bucketing exclusivo y consecutivo: 7 → 15 → 30 → más adelante.
 const vencidos   = items.filter((r) => r.fecha <= hoy);
 const proximos7  = items.filter((r) => r.fecha > hoy && r.fecha <= en7Str);
-const proximos30 = items.filter((r) => r.fecha > en7Str && r.fecha <= en30Str);
+const proximos15 = items.filter((r) => r.fecha > en7Str && r.fecha <= en15Str);
+const proximos30 = items.filter((r) => r.fecha > en15Str && r.fecha <= en30Str);
 const futuros    = items.filter((r) => r.fecha > en30Str);
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
@@ -193,10 +197,11 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     {[
-      { titulo: "Vencidos",         items: vencidos,   color: "border-red-300 bg-red-50",    text: "text-red-700" },
-      { titulo: "Próximos 7 días",  items: proximos7,  color: "border-amber-300 bg-amber-50", text: "text-amber-700" },
-      { titulo: "Próximos 30 días", items: proximos30, color: "border-blue-300 bg-blue-50",   text: "text-blue-700" },
-      { titulo: "Más adelante",     items: futuros,    color: "border-slate-200 bg-slate-50", text: "text-slate-600" },
+      { titulo: "Vencidos",         items: vencidos,   color: "border-red-300 bg-red-50",      text: "text-red-700" },
+      { titulo: "Próximos 7 días",  items: proximos7,  color: "border-amber-300 bg-amber-50",  text: "text-amber-700" },
+      { titulo: "Próximos 15 días", items: proximos15, color: "border-orange-300 bg-orange-50", text: "text-orange-700" },
+      { titulo: "Próximos 30 días", items: proximos30, color: "border-blue-300 bg-blue-50",    text: "text-blue-700" },
+      { titulo: "Más adelante",     items: futuros,    color: "border-slate-200 bg-slate-50",  text: "text-slate-600" },
     ].map((seccion) => (
       <div class={`card ${seccion.color} p-4`}>
         <h2 class={`font-semibold ${seccion.text}`}>{seccion.titulo} ({seccion.items.length})</h2>
@@ -210,7 +215,18 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
                   <a href={r.link} class="font-medium text-brand-700 hover:underline">
                     {r.icono} {r.titulo}
                   </a>
-                  <span class="text-xs font-semibold whitespace-nowrap">{fmt(r.fecha)}</span>
+                  {puedeAsignar ? (
+                    <input
+                      type="date"
+                      class="fecha-prox rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
+                      data-tipo={r.tipo}
+                      data-id={r.id}
+                      value={r.fecha}
+                      title="Cambiar próxima fecha de realización"
+                    />
+                  ) : (
+                    <span class="text-xs font-semibold whitespace-nowrap">{fmt(r.fecha)}</span>
+                  )}
                 </div>
                 <div class="text-xs text-slate-700">
                   <span class="font-mono">{r.contexto}</span>
@@ -325,31 +341,57 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
         });
       });
 
-      // Asignación inline: cambia el técnico del plan/actividad y, al guardar,
-      // confirma visualmente con un highlight breve. El backend ya valida.
+      // Helper común para PATCH inline con feedback visual (highlight verde si
+      // ok, revert + alerta si falla). El backend valida tipos/permisos.
+      async function patchInline(
+        el: HTMLInputElement | HTMLSelectElement,
+        body: Record<string, unknown>,
+        prevValue: string,
+      ) {
+        const tipo = el.dataset.tipo;
+        const id = el.dataset.id;
+        el.disabled = true;
+        const url = tipo === "plan" ? `/api/planes/${id}` : `/api/actividades/${id}`;
+        const res = await fetch(url, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        el.disabled = false;
+        if (res.ok) {
+          el.classList.add("ring-2", "ring-emerald-300");
+          setTimeout(() => el.classList.remove("ring-2", "ring-emerald-300"), 900);
+          return true;
+        }
+        el.value = prevValue;
+        const j = await res.json().catch(() => ({}));
+        const err = typeof j?.error === "string" ? j.error : "error desconocido";
+        alert("✗ No se pudo guardar: " + err);
+        return false;
+      }
+
+      // Asignación inline del técnico.
       document.querySelectorAll<HTMLSelectElement>(".asignar-sel").forEach((sel) => {
-        const original = sel.value;
-        let prev = original;
+        let prev = sel.value;
         sel.addEventListener("change", async () => {
-          const tipo = sel.dataset.tipo;
-          const id = sel.dataset.id;
           const nuevoId = sel.value ? Number(sel.value) : null;
-          sel.disabled = true;
-          const url = tipo === "plan" ? `/api/planes/${id}` : `/api/actividades/${id}`;
-          const res = await fetch(url, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ asignadoA: nuevoId }),
-          });
-          sel.disabled = false;
-          if (res.ok) {
-            prev = sel.value;
-            sel.classList.add("ring-2", "ring-emerald-300");
-            setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
-          } else {
-            sel.value = prev;
-            const j = await res.json().catch(() => ({}));
-            alert("✗ No se pudo asignar: " + (j?.error ?? "error desconocido"));
+          const ok = await patchInline(sel, { asignadoA: nuevoId }, prev);
+          if (ok) prev = sel.value;
+        });
+      });
+
+      // Cambio inline de la próxima fecha de realización. Acepta cualquier
+      // fecha válida (incluye pasadas, por si se quiere marcar atraso).
+      document.querySelectorAll<HTMLInputElement>(".fecha-prox").forEach((inp) => {
+        let prev = inp.value;
+        inp.addEventListener("change", async () => {
+          if (!inp.value) { inp.value = prev; return; }
+          const ok = await patchInline(inp, { proximaFecha: inp.value }, prev);
+          if (ok) {
+            prev = inp.value;
+            // Recarga suave para que la tarjeta caiga al bucket correcto
+            // (vencido / 7 / 15 / 30 / más adelante) según la nueva fecha.
+            setTimeout(() => location.reload(), 700);
           }
         });
       });
