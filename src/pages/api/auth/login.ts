@@ -61,6 +61,13 @@ export const POST: APIRoute = async (ctx) => {
     }
   }
 
+  // Registra la última conexión exitosa. No bloquea el login si falla.
+  try {
+    await db.update(usuarios)
+      .set({ ultimaConexion: new Date().toISOString() })
+      .where(eq(usuarios.id, user.id));
+  } catch {}
+
   const token = await createSessionToken(
     { sub: user.id, email: user.email, nombre: user.nombre, rol: user.rol },
     env.JWT_SECRET

@@ -115,6 +115,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
           <th class="px-4 py-2">Especialidad</th>
           <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Estado</th>
+          <th class="px-4 py-2">Última conexión</th>
           <th class="px-4 py-2 text-right">Acciones</th>
         </tr>
       </thead>
@@ -132,6 +133,27 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
               <span class={`badge ${u.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                 {u.activo ? "activo" : "inactivo"}
               </span>
+            </td>
+            <td class="px-4 py-2 text-xs">
+              {u.ultimaConexion ? (() => {
+                const t = new Date(u.ultimaConexion).getTime();
+                const diasMs = Date.now() - t;
+                const dias = Math.floor(diasMs / 86400_000);
+                const horas = Math.floor(diasMs / 3_600_000);
+                const minutos = Math.floor(diasMs / 60_000);
+                const rel = dias >= 1 ? `hace ${dias} día${dias === 1 ? "" : "s"}`
+                  : horas >= 1 ? `hace ${horas} h`
+                  : minutos >= 1 ? `hace ${minutos} min`
+                  : "hace instantes";
+                const color = dias >= 60 ? "text-red-600" : dias >= 30 ? "text-amber-700" : "text-slate-600";
+                const fecha = new Date(u.ultimaConexion).toLocaleDateString("es", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/El_Salvador" });
+                return (
+                  <div>
+                    <div class={color}>{fecha}</div>
+                    <div class="text-[10px] text-slate-400">{rel}</div>
+                  </div>
+                );
+              })() : <span class="italic text-slate-400">nunca</span>}
             </td>
             <td class="px-4 py-2 text-right">
               <button

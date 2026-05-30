@@ -76,6 +76,9 @@ export const usuarios = sqliteTable("usuarios", {
   calendarToken: text("calendar_token"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  // Marca temporal del último login exitoso (no del último request — eso sería
+  // demasiados writes). Útil para detectar cuentas inactivas o no usadas.
+  ultimaConexion: text("ultima_conexion"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
