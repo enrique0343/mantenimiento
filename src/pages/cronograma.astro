@@ -50,6 +50,7 @@ type Item = {
   sucursal: string | null;
   ubicacion: string | null;
   asignado: string | null;
+  asignadoId: number | null;
   icono: string;
   yaGenerada: boolean;
 };
@@ -66,6 +67,7 @@ const items: Item[] = [
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a?.ubicacion ?? null,
     asignado: r.u?.nombre ?? null,
+    asignadoId: r.p.asignadoA ?? null,
     icono: "🛠",
     yaGenerada: !!(r.p.ultimaGeneracion && r.p.ultimaGeneracion.slice(0, 10) >= r.p.proximaFecha),
   })),
@@ -80,12 +82,22 @@ const items: Item[] = [
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a.ubicacionDetalle ?? null,
     asignado: r.u?.nombre ?? null,
+    asignadoId: r.a.asignadoA ?? null,
     icono: r.c?.icono ?? "📌",
     yaGenerada: !!(r.a.ultimaGeneracion && r.a.ultimaGeneracion.slice(0, 10) >= r.a.proximaFecha),
   })),
 ].sort((a, b) => a.fecha.localeCompare(b.fecha));
 
 const puedeGenerar = user.rol === "admin" || user.rol === "jefe";
+const puedeAsignar = user.rol === "admin" || user.rol === "jefe";
+
+// Lista de técnicos para los selectores inline (solo para admin/jefe).
+const tecnicosLista = puedeAsignar
+  ? await db.select({ id: usuarios.id, nombre: usuarios.nombre })
+      .from(usuarios)
+      .where(and(eq(usuarios.rol, "tecnico"), eq(usuarios.activo, true)))
+      .orderBy(asc(usuarios.nombre))
+  : [];
 
 const hoy = new Date().toISOString().slice(0, 10);
 const en7 = new Date(); en7.setDate(en7.getDate() + 7);
@@ -212,9 +224,26 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
                     {r.ubicacion && <span> · 📍 {r.ubicacion}</span>}
                   </div>
                 )}
-                <div class="text-xs text-slate-400 capitalize">
-                  {r.frecuencia}
-                  {r.asignado && ` · 👤 ${r.asignado}`}
+                <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span class="capitalize">{r.frecuencia}</span>
+                  {puedeAsignar ? (
+                    <label class="inline-flex items-center gap-1 normal-case">
+                      <span aria-hidden="true">👤</span>
+                      <select
+                        class="asignar-sel rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-700 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
+                        data-tipo={r.tipo}
+                        data-id={r.id}
+                        title="Asignar técnico"
+                      >
+                        <option value="">— Sin asignar —</option>
+                        {tecnicosLista.map((t) => (
+                          <option value={t.id} selected={t.id === r.asignadoId}>{t.nombre}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    r.asignado && <span class="normal-case">· 👤 {r.asignado}</span>
+                  )}
                 </div>
                 {puedeGenerar && (
                   r.yaGenerada
@@ -292,6 +321,35 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
             alert("✗ " + (j.error ?? "Error al generar OT"));
             btn.disabled = false;
             btn.textContent = labelOriginal;
+          }
+        });
+      });
+
+      // Asignación inline: cambia el técnico del plan/actividad y, al guardar,
+      // confirma visualmente con un highlight breve. El backend ya valida.
+      document.querySelectorAll<HTMLSelectElement>(".asignar-sel").forEach((sel) => {
+        const original = sel.value;
+        let prev = original;
+        sel.addEventListener("change", async () => {
+          const tipo = sel.dataset.tipo;
+          const id = sel.dataset.id;
+          const nuevoId = sel.value ? Number(sel.value) : null;
+          sel.disabled = true;
+          const url = tipo === "plan" ? `/api/planes/${id}` : `/api/actividades/${id}`;
+          const res = await fetch(url, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ asignadoA: nuevoId }),
+          });
+          sel.disabled = false;
+          if (res.ok) {
+            prev = sel.value;
+            sel.classList.add("ring-2", "ring-emerald-300");
+            setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+          } else {
+            sel.value = prev;
+            const j = await res.json().catch(() => ({}));
+            alert("✗ No se pudo asignar: " + (j?.error ?? "error desconocido"));
           }
         });
       });
