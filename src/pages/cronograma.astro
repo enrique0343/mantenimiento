@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
 import { eq, asc, and } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -114,7 +115,9 @@ const proximos15 = items.filter((r) => r.fecha > en7Str && r.fecha <= en15Str);
 const proximos30 = items.filter((r) => r.fecha > en15Str && r.fecha <= en30Str);
 const futuros    = items.filter((r) => r.fecha > en30Str);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+// proximaFecha es solo-fecha ("YYYY-MM-DD"); usamos el helper que NO la pasa
+// por Date+TZ (evita el desfase a "día anterior 6 p.m." en UTC-6).
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
 
 // ─── Vista anual (12 meses) + detección de colisiones de equipos críticos ────
 const hoyD = new Date();

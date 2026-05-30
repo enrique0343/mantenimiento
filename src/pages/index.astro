@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion, contratosMantenimiento, proveedores, ubicaciones, sucursales } from "@/lib/schema";
 import { sql, eq, and, lte, gte, asc, isNotNull, inArray, desc } from "drizzle-orm";
 import { diasParaVencer } from "@/lib/contratos";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
 export const prerender = false;
 
 // Tecnico y Motorista → su panel personal
@@ -75,7 +76,7 @@ const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
 const satEnv = Number(satEnviadas?.n ?? 0);
 const satTasa = satEnv > 0 ? Math.round((satN / satEnv) * 100) : 0;
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
 
 // Contratos próximos a vencer (próximos 90 días)
 const limite90d = new Date(Date.now() + 90 * 86400_000).toISOString().slice(0, 10);

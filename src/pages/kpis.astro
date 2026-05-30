@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion, metricasKpi } from "@/lib/schema";
 import { eq, and, sql, isNotNull, desc, gte, inArray } from "drizzle-orm";
 import { SCOPES, SCOPE_LABEL, ultimosPeriodos, KPI_BASELINE_DATE, aplicarLineaBase } from "@/lib/metricas";
-import { fmtFechaLarga } from "@/lib/datetime";
+import { fmtFechaSolo } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -221,7 +221,7 @@ const KPIS_DEF = [
 
   <!-- Aviso de línea base: KPIs reiniciados a partir de la fecha de corte. -->
   <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-    <div class="font-semibold">ℹ️ Línea base de KPIs: {fmtFechaLarga(KPI_BASELINE_DATE)}</div>
+    <div class="font-semibold">ℹ️ Línea base de KPIs: {fmtFechaSolo(KPI_BASELINE_DATE)}</div>
     <p class="mt-1 text-xs text-amber-800/90">
       Por retrasos y cambios de sistema que impidieron cerrar OTs/tickets a tiempo, los indicadores de mantenimiento
       (Cumplimiento SLA, MTTR, MTBF, Backlog vencido) cuentan únicamente OTs creadas a partir de esa fecha; el
