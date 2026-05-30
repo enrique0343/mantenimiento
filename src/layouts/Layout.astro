@@ -17,6 +17,8 @@ const verFlota = isAdminOrJefe || isMotorista;
 const esProveedor = user?.rol === "proveedor";
 
 interface Link { href: string; label: string; icon: string; show?: boolean }
+interface Separator { sep: true }
+type NavItem = Link | Separator;
 
 const motoLinks: Link[] = [
   { href: "/mi-panel", label: "Mi panel",  icon: "🏠" },
@@ -27,37 +29,65 @@ const motoLinks: Link[] = [
 const homeHref  = user?.rol === "tecnico" ? "/mi-panel" : "/";
 const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
 
-const allLinks: Link[] = [
+// Orden del menú agrupado:
+//  1. Operación diaria  ── lo que se mira/usa cada día
+//  2. Activos y mantenimiento  ── datos maestros y rutinas
+//  3. Compras e inventario  ── ciclo de adquisición y stock
+//  4. Análisis y seguimiento  ── métricas y planificación
+//  5. Gobernanza y administración  ── procesos JCI, usuarios, config
+const allLinks: NavItem[] = [
+  // 1. Operación diaria
   { href: homeHref,         label: homeLabel,       icon: "🏠" },
-  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
-  { href: "/taller",        label: "Taller (Lean)", icon: "🗂", show: isOperativo },
-  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
-  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
-  { href: "/procedimientos", label: "Procedimientos", icon: "📋", show: isAdminOrJefe },
-  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
-  { href: "/contratos",     label: "Contratos",     icon: "📜", show: isAdminOrJefe },
   { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
+  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
+  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
+  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
+  { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
+  { href: "/taller",        label: "Taller (Lean)", icon: "🗂", show: isOperativo },
+  { sep: true },
+  // 2. Activos y mantenimiento
+  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
   { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
   { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
-  { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
-  { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
-  { href: "/raci",          label: "Matriz RACI",   icon: "🧭", show: isOperativo },
   { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
+  { sep: true },
+  // 3. Compras e inventario
   { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
   { href: "/requisiciones",      label: "Requisiciones", icon: "🛒", show: isOperativo },
   { href: "/solicitudes-compra", label: "Compras",       icon: "🛍", show: isOperativo },
+  { href: "/proveedores",        label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
+  { href: "/contratos",          label: "Contratos",     icon: "📜", show: isAdminOrJefe },
+  { sep: true },
+  // 4. Análisis y seguimiento
   { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
   { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
   { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },
   { href: "/planificador",  label: "Planificador",  icon: "🗓", show: isAdminOrJefe },
-  { href: "/proveedores",   label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
+  { sep: true },
+  // 5. Gobernanza y administración
+  { href: "/procedimientos", label: "Procedimientos", icon: "📋", show: isAdminOrJefe },
+  { href: "/raci",          label: "Matriz RACI",   icon: "🧭", show: isOperativo },
+  { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
   { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
   { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
 ];
 
-const navLinks = isMotorista
-  ? motoLinks
-  : allLinks.filter((l) => l.show === undefined || l.show);
+// Filtra por rol y colapsa separadores huérfanos (consecutivos al inicio/fin o
+// repetidos cuando un grupo entero queda vacío para ese rol).
+const filteredItems: NavItem[] = [];
+for (const item of allLinks) {
+  if ("sep" in item) {
+    const last = filteredItems[filteredItems.length - 1];
+    if (last && !("sep" in last)) filteredItems.push(item);
+  } else if (item.show === undefined || item.show) {
+    filteredItems.push(item);
+  }
+}
+while (filteredItems.length && "sep" in filteredItems[filteredItems.length - 1]) {
+  filteredItems.pop();
+}
+
+const navLinks: NavItem[] = isMotorista ? motoLinks : filteredItems;
 
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",
@@ -102,7 +132,9 @@ const isActive = (href: string) =>
 
           <!-- Nav links -->
           <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-            {navLinks.map((l) => (
+            {navLinks.map((l) => "sep" in l ? (
+              <div class="my-2 border-t border-slate-700/60"></div>
+            ) : (
               <a
                 href={l.href}
                 class:list={[
