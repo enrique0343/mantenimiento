@@ -91,10 +91,13 @@ if (t.proyectoId) {
   {esAdmin && (
     <script define:vars={{ ticketId: t.id }}>
       document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
-        if (!confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")) return;
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar ticket", "¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")
+          : confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer."));
+        if (!ok) return;
         const res = await fetch(`/api/tickets/${ticketId}`, { method: "DELETE" });
         if (res.ok) { location.href = "/tickets"; }
-        else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "desconocido")); }
+        else { const j = await res.json().catch(() => ({})); window.showToast?.("Error: " + (j.error ?? "desconocido"), "error"); }
       });
 
       // Cierre administrativo del ticket
@@ -329,7 +332,10 @@ if (t.proyectoId) {
     });
 
     document.getElementById("cerrarSinOtBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.")) return;
+      const ok = await (window.confirmAction
+        ? window.confirmAction("Cerrar ticket", "¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.", { danger: false, confirmLabel: "Cerrar ticket" })
+        : confirm("¿Cerrar este ticket sin generar una orden de trabajo?"));
+      if (!ok) return;
       const res = await fetch(`/api/tickets/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -339,7 +345,10 @@ if (t.proyectoId) {
     });
 
     document.getElementById("descartarBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")) return;
+      const ok = await (window.confirmAction
+        ? window.confirmAction("Descartar ticket", "¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")
+        : confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente."));
+      if (!ok) return;
       const res = await fetch(`/api/tickets/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },

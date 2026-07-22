@@ -330,9 +330,11 @@ const esAdmin = user.rol === "admin";
         const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
         if (!ids.length) return;
         const txt = ids.length === 1 ? "este ticket" : `estos ${ids.length} tickets`;
-        if (!confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`)) return;
-        if (ids.length > 5 && !confirm(`Vas a borrar ${ids.length} tickets. ¿Confirmas?`)) return;
-        bulkBtn.setAttribute("disabled", "true");
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar tickets", `¿Eliminar ${txt}? Esta acción NO se puede deshacer.`)
+          : confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`));
+        if (!ok) return;
+        (bulkBtn as HTMLButtonElement).disabled = true;
         bulkBtn.textContent = "Borrando...";
         const res = await fetch("/api/tickets/bulk-delete", {
           method: "POST",
@@ -341,11 +343,11 @@ const esAdmin = user.rol === "admin";
         });
         const j = await res.json().catch(() => ({}));
         if (res.ok) {
-          alert(`✓ ${j.borrados} ticket(s) eliminados`);
+          window.showToast?.(`${j.borrados} ticket(s) eliminados`, "success");
           location.reload();
         } else {
-          alert("✗ Error: " + (j.error ?? "desconocido"));
-          bulkBtn.removeAttribute("disabled");
+          window.showToast?.("Error: " + (j.error ?? "desconocido"), "error");
+          (bulkBtn as HTMLButtonElement).disabled = false;
         }
       });
 

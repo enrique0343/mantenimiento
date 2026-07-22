@@ -327,7 +327,10 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
           const tipo = btn.dataset.tipo;
           const id = btn.dataset.id;
           const labelOriginal = btn.textContent;
-          if (!confirm(`¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`)) return;
+          const ok = window.confirmAction
+            ? await window.confirmAction("Generar orden de trabajo", `¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`, { danger: false, confirmLabel: "Generar" })
+            : confirm(`¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`);
+          if (!ok) return;
           btn.disabled = true;
           btn.textContent = "Generando...";
           const url = tipo === "plan" ? `/api/planes/${id}/generar-ot` : `/api/actividades/${id}/generar-ot`;
@@ -337,7 +340,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
             // Redirige a la nueva OT
             location.href = `/ordenes/${j.orden.id}`;
           } else {
-            alert("✗ " + (j.error ?? "Error al generar OT"));
+            window.showToast?.("✗ " + (j.error ?? "Error al generar OT"), "error");
             btn.disabled = false;
             btn.textContent = labelOriginal;
           }
@@ -369,7 +372,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
         el.value = prevValue;
         const j = await res.json().catch(() => ({}));
         const err = typeof j?.error === "string" ? j.error : "error desconocido";
-        alert("✗ No se pudo guardar: " + err);
+        window.showToast?.("No se pudo guardar: " + err, "error");
         return false;
       }
 

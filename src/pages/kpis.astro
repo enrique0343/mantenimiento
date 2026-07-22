@@ -540,7 +540,10 @@ const KPIS_DEF = [
       if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "📸 Capturar mes actual"; }
     });
     document.getElementById("recalcularBtn")?.addEventListener("click", async (e) => {
-      if (!confirm("¿Recalcular los KPIs de los últimos 12 meses desde el historial de OTs? Sobrescribe los snapshots existentes de ese rango.")) return;
+      const go = window.confirmAction
+        ? await window.confirmAction("Recalcular KPIs", "¿Recalcular los KPIs de los últimos 12 meses desde el historial de OTs? Sobrescribe los snapshots existentes de ese rango.", { confirmLabel: "Recalcular" })
+        : confirm("¿Recalcular los KPIs de los últimos 12 meses desde el historial de OTs? Sobrescribe los snapshots existentes de ese rango.");
+      if (!go) return;
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Recalculando…";
       const r = await fetch("/api/metricas/recalcular", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ meses: 12 }) });

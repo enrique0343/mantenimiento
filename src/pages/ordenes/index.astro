@@ -410,10 +410,12 @@ const esAdmin = usrLogged.rol === "admin";
         const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
         if (!ids.length) return;
         const txt = ids.length === 1 ? "esta OT" : `estas ${ids.length} OTs`;
-        if (!confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer. Se borrarán todos sus comentarios, adjuntos y firmas.`)) return;
-        if (ids.length > 5 && !confirm(`Vas a borrar ${ids.length} OTs. ¿Confirmas?`)) return;
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar OTs", `¿Eliminar ${txt}? Esta acción NO se puede deshacer. Se borrarán todos sus comentarios, adjuntos y firmas.`)
+          : confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`));
+        if (!ok) return;
 
-        bulkBtn.setAttribute("disabled", "true");
+        (bulkBtn as HTMLButtonElement).disabled = true;
         bulkBtn.textContent = "Borrando...";
         const res = await fetch("/api/ordenes/bulk-delete", {
           method: "POST",
@@ -422,11 +424,11 @@ const esAdmin = usrLogged.rol === "admin";
         });
         const j = await res.json().catch(() => ({}));
         if (res.ok) {
-          alert(`✓ ${j.borradas} OT(s) eliminadas correctamente`);
+          window.showToast?.(`${j.borradas} OT(s) eliminadas`, "success");
           location.reload();
         } else {
-          alert("✗ Error: " + (j.error ?? "desconocido"));
-          bulkBtn.removeAttribute("disabled");
+          window.showToast?.("Error: " + (j.error ?? "desconocido"), "error");
+          (bulkBtn as HTMLButtonElement).disabled = false;
         }
       });
 
@@ -498,17 +500,17 @@ const esAdmin = usrLogged.rol === "admin";
 
         if (bcConfirm) bcConfirm.textContent = originalLabel;
         bcConfirm.removeAttribute("disabled");
-        if (bcMsg) {
-          if (fail === 0) {
-            bcMsg.textContent = `✓ ${ok} OT(s) cerradas. Se enviaron los correos de encuesta correspondientes.`;
-            bcMsg.className = "mt-2 text-sm text-emerald-600";
-          } else {
+        if (fail === 0) {
+          window.showToast?.(`${ok} OT(s) cerradas correctamente`, "success");
+          setTimeout(() => location.reload(), 800);
+        } else {
+          if (bcMsg) {
             bcMsg.textContent = `Cerradas: ${ok}. Con error: ${fail}. Revisa las que quedaron sin cerrar y reintenta.`;
             bcMsg.className = "mt-2 text-sm text-amber-700";
+            bcMsg.classList.remove("hidden");
           }
-          bcMsg.classList.remove("hidden");
+          window.showToast?.(`${ok} cerradas, ${fail} con error`, "warning");
         }
-        if (fail === 0) setTimeout(() => location.reload(), 800);
       });
     </script>
   )}

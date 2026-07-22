@@ -100,56 +100,92 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
 ---
 
 <Layout title="Dashboard">
-  <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
-  <p class="mt-1 text-sm text-slate-500">Resumen del estado del sistema</p>
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
+      <p class="mt-0.5 text-sm text-slate-500">Resumen del estado operativo</p>
+    </div>
+    <span class="text-xs text-slate-400">{new Date().toLocaleDateString("es", { weekday:"long", day:"numeric", month:"long", timeZone:"America/El_Salvador" })}</span>
+  </div>
 
   <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
-    <div class="card p-4">
-      <div class="text-xs font-medium uppercase text-slate-500">Ordenes abiertas</div>
-      <div class="mt-2 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
+    <!-- Órdenes abiertas -->
+    <a href="/ordenes?estado=abierta" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Abiertas</div>
+        <div class="mt-1.5 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">órdenes de trabajo</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-xl">📋</div>
+    </a>
+    <!-- En proceso -->
+    <a href="/ordenes?estado=en_proceso" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">En proceso</div>
+        <div class="mt-1.5 text-3xl font-bold text-amber-600">{get(ordenesPorEstado, "en_proceso")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">en ejecución</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-xl">⚙️</div>
+    </a>
+    <!-- Completadas -->
+    <a href="/ordenes?estado=completada" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Completadas</div>
+        <div class="mt-1.5 text-3xl font-bold text-emerald-600">{get(ordenesPorEstado, "completada")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">finalizadas</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-xl">✅</div>
+    </a>
+    <!-- Vencidas -->
+    <div class="card p-4 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Vencidas</div>
+        <div class="mt-1.5 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">requieren atención</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-xl">⚡</div>
     </div>
-    <div class="card p-4">
-      <div class="text-xs font-medium uppercase text-slate-500">En proceso</div>
-      <div class="mt-2 text-3xl font-bold text-amber-600">{get(ordenesPorEstado, "en_proceso")}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs font-medium uppercase text-slate-500">Completadas</div>
-      <div class="mt-2 text-3xl font-bold text-emerald-600">{get(ordenesPorEstado, "completada")}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs font-medium uppercase text-slate-500">Vencidas</div>
-      <div class="mt-2 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
-    </div>
-    <div class="card p-4">
-      <div class="text-xs font-medium uppercase text-slate-500">Satisfacción</div>
-      {satAvg != null ? (
-        <>
-          <div class="mt-2 text-3xl font-bold text-violet-600">{satAvg.toFixed(1)}<span class="text-base text-slate-400">/5</span></div>
-          <div class="mt-0.5 text-xs text-slate-500">{satN} de {satEnv} respondieron ({satTasa}%)</div>
-        </>
-      ) : (
-        <>
-          <div class="mt-2 text-2xl font-bold text-slate-300">—</div>
-          <div class="mt-0.5 text-xs text-slate-500">Sin encuestas aún</div>
-        </>
-      )}
+    <!-- Satisfacción -->
+    <div class="card p-4 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Satisfacción</div>
+        {satAvg != null ? (
+          <>
+            <div class="mt-1.5 text-3xl font-bold text-violet-600">{satAvg.toFixed(1)}<span class="text-base font-normal text-slate-400">/5</span></div>
+            <div class="mt-0.5 text-[11px] text-slate-400">{satTasa}% respuesta</div>
+          </>
+        ) : (
+          <>
+            <div class="mt-1.5 text-3xl font-bold text-slate-300">—</div>
+            <div class="mt-0.5 text-[11px] text-slate-400">sin encuestas aún</div>
+          </>
+        )}
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-xl">⭐</div>
     </div>
   </div>
 
-  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Proximos mantenimientos preventivos</h2>
-      <p class="text-xs text-slate-500">Planes con vencimiento en los proximos 14 dias</p>
-      <ul class="mt-3 space-y-2 text-sm">
-        {proximosConVencido.length === 0 && <li class="text-slate-500">Sin planes proximos a vencer.</li>}
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-semibold text-slate-800">Próximos preventivos</h2>
+        <span class="badge bg-amber-100 text-amber-700">{proximosConVencido.length}</span>
+      </div>
+      <p class="text-xs text-slate-400 mb-3">Planes con vencimiento en los próximos 14 días</p>
+      <ul class="space-y-2 text-sm">
+        {proximosConVencido.length === 0 && (
+          <li class="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-4 text-slate-400 text-xs">
+            <span class="text-base">✓</span> Sin planes próximos a vencer.
+          </li>
+        )}
         {proximosConVencido.map((r) => (
-          <li class="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
+          <li class="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5 hover:bg-slate-100 transition-colors">
             <div class="min-w-0">
-              <a href={`/activos/${r.a?.id}`} class="font-medium text-brand-700 hover:underline">{r.p.titulo}</a>
-              <div class="text-xs text-slate-500 truncate">{r.a?.codigo} · {r.a?.nombre}</div>
+              <a href={`/activos/${r.a?.id}`} class="font-medium text-brand-700 hover:underline text-sm">{r.p.titulo}</a>
+              <div class="text-xs text-slate-500 truncate mt-0.5">{r.a?.codigo} · {r.a?.nombre}</div>
               {(r.suc?.nombre || r.ub?.nombre) && (
-                <div class="text-xs text-slate-400 truncate">
-                  {r.suc?.nombre ?? "Sin sede"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
+                <div class="text-[11px] text-slate-400 truncate">
+                  📍 {r.suc?.nombre ?? "Sin sede"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
                 </div>
               )}
             </div>
@@ -157,46 +193,58 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
           </li>
         ))}
       </ul>
-      <div class="mt-4">
-        <a class="btn-secondary" href="/cronograma">Ver cronograma completo</a>
+      <div class="mt-4 border-t border-slate-100 pt-3">
+        <a class="btn-secondary btn-sm" href="/cronograma">Ver cronograma →</a>
       </div>
     </div>
 
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">Equipos ({total(activosPorEstado)})</h2>
-      <ul class="mt-3 space-y-2 text-sm">
-        {activosPorEstado.length === 0 && <li class="text-slate-500">Sin equipos aun.</li>}
-        {activosPorEstado.map((r) => (
-          <li class="flex justify-between">
-            <span class="capitalize">{r.estado}</span>
-            <span class="font-semibold">{r.n}</span>
-          </li>
-        ))}
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-semibold text-slate-800">Equipos</h2>
+        <span class="badge bg-slate-100 text-slate-600">{total(activosPorEstado)} total</span>
+      </div>
+      <p class="text-xs text-slate-400 mb-3">Estado actual del parque de equipos</p>
+      <ul class="space-y-1.5 text-sm">
+        {activosPorEstado.length === 0 && <li class="text-slate-400 text-xs py-2">Sin equipos registrados.</li>}
+        {activosPorEstado.map((r) => {
+          const pct = total(activosPorEstado) > 0 ? Math.round((Number(r.n) / total(activosPorEstado)) * 100) : 0;
+          return (
+            <li class="flex items-center gap-3">
+              <span class="w-20 capitalize text-slate-600 text-xs shrink-0">{r.estado}</span>
+              <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div class="h-full bg-brand-400 rounded-full" style={`width:${pct}%`}></div>
+              </div>
+              <span class="font-semibold text-slate-700 w-6 text-right text-xs">{r.n}</span>
+            </li>
+          );
+        })}
       </ul>
-      <div class="mt-4 flex gap-2">
-        <a class="btn-primary" href="/ordenes/nueva">Nueva orden</a>
-        <a class="btn-secondary" href="/activos">Ver equipos</a>
+      <div class="mt-4 flex gap-2 border-t border-slate-100 pt-3">
+        <a class="btn-primary btn-sm" href="/ordenes/nueva">+ Nueva orden</a>
+        <a class="btn-secondary btn-sm" href="/activos">Ver equipos</a>
       </div>
     </div>
   </div>
 
   {contratosProximos.length > 0 && (
-    <div class="card mt-6 p-5">
-      <div class="flex items-center justify-between">
-        <h2 class="font-semibold text-slate-900">📜 Contratos próximos a vencer</h2>
-        <a href="/contratos?proximos=90" class="text-sm text-brand-600 hover:underline">Ver todos →</a>
+    <div class="card mt-4 p-5 border-l-4 border-amber-400">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📜</span>
+          <h2 class="font-semibold text-slate-800">Contratos próximos a vencer</h2>
+          <span class="badge bg-amber-100 text-amber-700">{contratosProximos.length}</span>
+        </div>
+        <a href="/contratos?proximos=90" class="text-xs text-brand-600 hover:underline font-medium">Ver todos →</a>
       </div>
-      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+      <ul class="divide-y divide-slate-100 text-sm">
         {contratosProximos.map(({ c, prov, color, diasLabel }) => (
-          <li class="flex items-center justify-between gap-2 py-2">
-            <a href={`/contratos/${c.id}`} class="text-brand-600 hover:underline">
-              <span class="font-mono text-xs text-slate-400 mr-2">{c.codigo}</span>
-              <span class="font-medium text-slate-900">{c.nombre}</span>
+          <li class="flex items-center justify-between gap-2 py-2.5">
+            <a href={`/contratos/${c.id}`} class="min-w-0 flex-1 hover:text-brand-700">
+              <span class="font-mono text-[10px] text-slate-400 mr-1.5 border border-slate-200 rounded px-1 py-0.5">{c.codigo}</span>
+              <span class="font-medium text-slate-800">{c.nombre}</span>
+              {prov?.nombre && <span class="ml-2 text-xs text-slate-400">{prov.nombre}</span>}
             </a>
-            <div class="text-right">
-              <div class={`text-xs font-semibold ${color}`}>{diasLabel}</div>
-              <div class="text-[10px] text-slate-500">{prov?.nombre ?? "—"}</div>
-            </div>
+            <span class={`badge shrink-0 ${color === "text-red-600" ? "bg-red-100 text-red-700" : color === "text-orange-600" ? "bg-orange-100 text-orange-700" : "bg-amber-100 text-amber-700"}`}>{diasLabel}</span>
           </li>
         ))}
       </ul>

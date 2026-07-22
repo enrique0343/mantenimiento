@@ -360,7 +360,7 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
         err.classList.remove("hidden");
         return;
       }
-      alert("✓ Contraseña actualizada");
+      window.showToast?.("Contraseña actualizada", "success");
       document.getElementById("pwdModal")!.classList.add("hidden");
       document.getElementById("pwdModal")!.classList.remove("flex");
     });
@@ -368,10 +368,16 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
     // Desactivar
     document.querySelectorAll<HTMLButtonElement>(".del-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm(`¿Desactivar usuario "${btn.dataset.nombre}"? No podrá entrar al sistema, pero se conservan sus registros.`)) return;
+        const ok = await (window.confirmAction
+          ? window.confirmAction(
+              `Desactivar usuario`,
+              `¿Desactivar a "${btn.dataset.nombre}"? No podrá entrar al sistema, pero se conservan sus registros.`
+            )
+          : confirm(`¿Desactivar usuario "${btn.dataset.nombre}"?`));
+        if (!ok) return;
         const res = await fetch(`/api/usuarios/${btn.dataset.id}`, { method: "DELETE" });
         if (res.ok) location.reload();
-        else alert("Error al desactivar");
+        else window.showToast?.("Error al desactivar", "error");
       });
     });
   </script>
