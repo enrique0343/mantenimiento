@@ -13,8 +13,19 @@ const db = getDb(Astro);
 // Técnicos solo ven planes/actividades asignados a ellos
 const esTecnico = user.rol === "tecnico";
 
+// Filtro por sede (?sede=<id>)
+const url = new URL(Astro.request.url);
+const sedeParam = url.searchParams.get("sede");
+const sedeId = sedeParam ? Number(sedeParam) : null;
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
 // 1) Planes preventivos por equipo
-const planRows = await db
+const planRowsAll = await db
   .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
@@ -27,7 +38,7 @@ const planRows = await db
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
 // 2) Actividades recurrentes
-const actRows = await db
+const actRowsAll = await db
   .select({ a: actividades, c: actividadCategorias, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(actividades)
   .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
@@ -38,6 +49,12 @@ const actRows = await db
     ? and(eq(actividades.activo, true), eq(actividades.asignadoA, user.id))
     : eq(actividades.activo, true))
   .orderBy(asc(actividades.proximaFecha));
+
+// Aplicar filtro por sede: planes vía activo→ubicación→sucursal; actividades
+// tienen sucursal directa. Sin filtro se muestra todo.
+const planRows = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRows = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
 // Unificar en un solo timeline
 type Item = {
@@ -187,9 +204,19 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
       <h1 class="text-2xl font-bold">Cronograma de mantenimiento</h1>
-      <p class="mt-1 text-sm text-slate-500">{planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)</p>
+      <p class="mt-1 text-sm text-slate-500">
+        {planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)
+        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+      </p>
     </div>
-    <div class="flex flex-wrap gap-2 text-sm">
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <select id="sedeFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por sede">
+        <option value="">🏢 Todas las sedes</option>
+        {sucursalesList.map((s) => (
+          <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
+        ))}
+      </select>
+      <a href={`/plan-mantenimiento${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📄 Plan por sede</a>
       <a href="/actividades" class="btn-secondary">📌 Actividades</a>
       <a href="/planificador" class="btn-secondary">📊 Planificador</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
@@ -197,6 +224,13 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       )}
     </div>
   </div>
+
+  <script>
+    document.getElementById("sedeFiltro")?.addEventListener("change", (e) => {
+      const v = (e.currentTarget as HTMLSelectElement).value;
+      location.href = v ? `/cronograma?sede=${v}` : "/cronograma";
+    });
+  </script>
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     {[

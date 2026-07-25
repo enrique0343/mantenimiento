@@ -49,6 +49,7 @@ const allLinks: NavItem[] = [
   { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
   { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
   { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
+  { href: "/electrico",     label: "Eléctrico",     icon: "⚡", show: isOperativo || user?.rol === "visualizador" },
   { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
   { sep: true },
   // 3. Compras e inventario

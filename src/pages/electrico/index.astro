@@ -1,0 +1,245 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { subestaciones, cargasElectricas, sucursales } from "@/lib/schema";
+import { eq, asc, inArray } from "drizzle-orm";
+import { puedeVerElectrico, puedeAdministrarElectrico, resumenSubestacion, fmtKw } from "@/lib/electrico";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerElectrico(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const esAdmin = puedeAdministrarElectrico(user.rol);
+
+const subs = await db
+  .select({ sub: subestaciones, s: sucursales })
+  .from(subestaciones)
+  .leftJoin(sucursales, eq(sucursales.id, subestaciones.sucursalId))
+  .where(eq(subestaciones.activa, true))
+  .orderBy(asc(subestaciones.nombre));
+
+const subIds = subs.map((r) => r.sub.id);
+const cargas = subIds.length
+  ? await db.select().from(cargasElectricas).where(inArray(cargasElectricas.subestacionId, subIds))
+  : [];
+
+const cargasPorSub = new Map<number, typeof cargas>();
+for (const c of cargas) {
+  if (!c.activa) continue;
+  const arr = cargasPorSub.get(c.subestacionId) ?? [];
+  arr.push(c);
+  cargasPorSub.set(c.subestacionId, arr);
+}
+
+const filas = subs.map((r) => {
+  const cs = cargasPorSub.get(r.sub.id) ?? [];
+  return { ...r, cargas: cs, resumen: resumenSubestacion(r.sub, cs) };
+});
+
+// Agrupar por sede
+const porSede = new Map<string, typeof filas>();
+for (const f of filas) {
+  const sede = f.s?.nombre ?? "Sin sede";
+  const arr = porSede.get(sede) ?? [];
+  arr.push(f);
+  porSede.set(sede, arr);
+}
+const sedes = [...porSede.keys()].sort((a, b) => a.localeCompare(b, "es"));
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
+const SEMAFORO = {
+  verde: { bar: "bg-emerald-500", badge: "bg-emerald-100 text-emerald-700", label: "Con holgura" },
+  ambar: { bar: "bg-amber-500", badge: "bg-amber-100 text-amber-700", label: "Cerca del límite" },
+  rojo:  { bar: "bg-red-500", badge: "bg-red-100 text-red-700", label: "Sobre el límite seguro" },
+} as const;
+
+// Totales globales
+const totalInstalado = filas.reduce((s, f) => s + f.resumen.cargaInstaladaKw, 0);
+const totalDisponible = filas.reduce((s, f) => s + f.resumen.disponibleKw, 0);
+---
+
+<Layout title="Control eléctrico">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">⚡ Control eléctrico</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {filas.length} subestación(es) · {fmtKw(totalInstalado)} kW instalados · {fmtKw(totalDisponible)} kW disponibles
+      </p>
+    </div>
+    {esAdmin && (
+      <button id="nuevaSubBtn" class="btn-primary">+ Nueva subestación</button>
+    )}
+  </div>
+
+  {filas.length === 0 && (
+    <div class="card mt-6 p-10 text-center">
+      <div class="text-4xl">⚡</div>
+      <h2 class="mt-3 font-semibold text-slate-800">Sin subestaciones registradas</h2>
+      <p class="mt-1 text-sm text-slate-500 max-w-md mx-auto">
+        Registra las subestaciones o puntos de alimentación de cada sede y luego agrega las cargas conectadas
+        para conocer la disponibilidad eléctrica.
+      </p>
+      {esAdmin && <button id="nuevaSubBtn2" class="btn-primary mt-4">+ Registrar la primera</button>}
+    </div>
+  )}
+
+  {sedes.map((sede) => (
+    <div class="mt-6">
+      <h2 class="font-semibold text-slate-700 flex items-center gap-2">
+        🏢 {sede}
+        <span class="badge bg-slate-100 text-slate-600">{porSede.get(sede)!.length} punto(s)</span>
+      </h2>
+      <div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {porSede.get(sede)!.map((f) => {
+          const sem = SEMAFORO[f.resumen.semaforo];
+          const pctBar = Math.min(100, f.resumen.pctUso);
+          return (
+            <a href={`/electrico/${f.sub.id}`} class="card p-4 hover:shadow-md transition-shadow block">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="font-semibold text-slate-800 truncate">{f.sub.nombre}</div>
+                  <div class="text-xs text-slate-400 mt-0.5">
+                    {f.sub.codigo && <span class="font-mono mr-1.5">{f.sub.codigo}</span>}
+                    {f.sub.capacidadKva} kVA{f.sub.voltaje ? ` · ${f.sub.voltaje}` : ""}
+                  </div>
+                </div>
+                <span class={`badge shrink-0 ${sem.badge}`}>{sem.label}</span>
+              </div>
+
+              <div class="mt-3">
+                <div class="flex justify-between text-xs text-slate-500 mb-1">
+                  <span>{fmtKw(f.resumen.cargaInstaladaKw)} kW instalados</span>
+                  <span class="font-medium">{Math.round(f.resumen.pctUso)}%</span>
+                </div>
+                <div class="h-2 rounded-full bg-slate-100 overflow-hidden">
+                  <div class={`h-full rounded-full ${sem.bar}`} style={`width:${pctBar}%`}></div>
+                </div>
+                <div class="mt-1.5 flex justify-between text-xs">
+                  <span class="text-slate-400">{f.cargas.length} carga(s) conectada(s)</span>
+                  <span class={f.resumen.disponibleKw > 0 ? "text-emerald-600 font-semibold" : "text-red-600 font-semibold"}>
+                    {fmtKw(f.resumen.disponibleKw)} kW libres
+                  </span>
+                </div>
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  ))}
+
+  <div class="card mt-8 p-4 text-xs text-slate-500 leading-relaxed">
+    <span class="font-semibold text-slate-600">¿Cómo se calcula la disponibilidad?</span>
+    kW útiles = capacidad (kVA) × factor de potencia (0.9 por defecto). El límite seguro aplica el factor de
+    seguridad (80% por defecto, criterio NEC) — no es recomendable cargar una subestación a más de ese umbral.
+    Disponible = límite seguro − carga instalada. Las cargas sin kW directo se estiman con amperaje × voltaje (× √3 si trifásicas).
+  </div>
+
+  {esAdmin && (
+    <div id="subModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900">⚡ Nueva subestación / punto de alimentación</h3>
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Sede *</label>
+            <select id="m_sucursal" class="input">
+              <option value="">Seleccionar sede…</option>
+              {sucursalesList.map((s) => <option value={s.id}>{s.nombre}</option>)}
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Nombre *</label>
+            <input id="m_nombre" class="input" placeholder="Ej. Subestación 1 — Torre principal" />
+          </div>
+          <div>
+            <label class="label text-xs">Código interno</label>
+            <input id="m_codigo" class="input" placeholder="SUB-ESP-01" />
+          </div>
+          <div>
+            <label class="label text-xs">Capacidad (kVA) *</label>
+            <input id="m_kva" class="input" type="number" step="0.1" min="1" placeholder="300" />
+          </div>
+          <div>
+            <label class="label text-xs">Voltaje</label>
+            <input id="m_voltaje" class="input" placeholder="480V / 240-120V" />
+          </div>
+          <div>
+            <label class="label text-xs">Factor de seguridad</label>
+            <select id="m_fs" class="input">
+              <option value="0.8" selected>80% (recomendado NEC)</option>
+              <option value="0.7">70% (conservador)</option>
+              <option value="0.9">90%</option>
+              <option value="1">100% (sin margen)</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Ubicación física</label>
+            <input id="m_ubicacion" class="input" placeholder="Ej. Sótano, cuarto eléctrico norte" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Notas</label>
+            <textarea id="m_notas" class="input" rows="2" placeholder="Transformador, año, observaciones…"></textarea>
+          </div>
+        </div>
+        <p id="m_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="m_cancel" class="btn-secondary">Cancelar</button>
+          <button id="m_save" class="btn-primary">Crear subestación</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {esAdmin && (
+    <script>
+      const modal = document.getElementById("subModal")!;
+      const open = () => { modal.classList.remove("hidden"); modal.classList.add("flex"); };
+      const close = () => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+      document.getElementById("nuevaSubBtn")?.addEventListener("click", open);
+      document.getElementById("nuevaSubBtn2")?.addEventListener("click", open);
+      document.getElementById("m_cancel")?.addEventListener("click", close);
+      modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+
+      const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
+      document.getElementById("m_save")?.addEventListener("click", async () => {
+        const err = document.getElementById("m_err")!;
+        err.classList.add("hidden");
+        const sucursalId = Number(($("m_sucursal") as unknown as HTMLSelectElement).value);
+        const nombre = $("m_nombre").value.trim();
+        const kva = Number($("m_kva").value);
+        if (!sucursalId || !nombre || !kva) {
+          err.textContent = "Sede, nombre y capacidad (kVA) son obligatorios.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const res = await fetch("/api/electrico/subestaciones", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            sucursalId,
+            nombre,
+            codigo: $("m_codigo").value.trim() || null,
+            capacidadKva: kva,
+            voltaje: $("m_voltaje").value.trim() || null,
+            factorSeguridad: Number(($("m_fs") as unknown as HTMLSelectElement).value),
+            ubicacionDetalle: $("m_ubicacion").value.trim() || null,
+            notas: ($("m_notas") as unknown as HTMLTextAreaElement).value.trim() || null,
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j.subestacion) {
+          window.showToast?.("Subestación creada", "success");
+          location.href = `/electrico/${j.subestacion.id}`;
+        } else {
+          err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
+          err.classList.remove("hidden");
+        }
+      });
+    </script>
+  )}
+</Layout>

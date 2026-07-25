@@ -643,6 +643,47 @@ export const actividades = sqliteTable("actividades", {
 export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
 export type Actividad = typeof actividades.$inferSelect;
 
+// ─── Control eléctrico (Fase 42) ─────────────────────────────────────────────
+// Subestaciones/puntos de alimentación por sede + cargas conectadas, para
+// calcular la disponibilidad eléctrica antes de incorporar equipos nuevos.
+export const subestaciones = sqliteTable("subestaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sucursalId: integer("sucursal_id")
+    .notNull()
+    .references(() => sucursales.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  codigo: text("codigo"),
+  capacidadKva: real("capacidad_kva").notNull(),
+  voltaje: text("voltaje"),
+  factorPotencia: real("factor_potencia").notNull().default(0.9),
+  factorSeguridad: real("factor_seguridad").notNull().default(0.8),
+  ubicacionDetalle: text("ubicacion_detalle"),
+  activoId: integer("activo_id").references(() => activos.id),
+  notas: text("notas"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const cargasElectricas = sqliteTable("cargas_electricas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  subestacionId: integer("subestacion_id")
+    .notNull()
+    .references(() => subestaciones.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  activoId: integer("activo_id").references(() => activos.id),
+  tablero: text("tablero"),
+  potenciaKw: real("potencia_kw"),
+  amperaje: real("amperaje"),
+  voltajeCarga: real("voltaje_carga"),
+  fases: integer("fases").notNull().default(1),
+  notas: text("notas"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type Subestacion = typeof subestaciones.$inferSelect;
+export type CargaElectrica = typeof cargasElectricas.$inferSelect;
+
 // ─── Encuestas de satisfacción ───────────────────────────────────────────────
 export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
   id: integer("id").primaryKey({ autoIncrement: true }),
