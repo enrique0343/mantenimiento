@@ -216,6 +216,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
+      <a href={`/gantt${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📊 Gantt</a>
       <a href={`/plan-mantenimiento${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📄 Plan por sede</a>
       <a href="/actividades" class="btn-secondary">📌 Actividades</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
