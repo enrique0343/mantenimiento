@@ -36,6 +36,8 @@ const updateSchema = z.object({
   })).optional(),
   asignadoA: z.number().int().positive().nullable().optional(),
   activo: z.boolean().optional(),
+  modalidad: z.enum(["interno", "contratado", "mixto"]).optional(),
+  contratoId: z.number().int().positive().nullable().optional(),
 });
 
 export const PATCH: APIRoute = async (ctx) => {

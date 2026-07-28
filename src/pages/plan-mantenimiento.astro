@@ -1,18 +1,25 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
-import { eq, asc, and } from "drizzle-orm";
+import {
+  planesMantenimiento, activos, usuarios, sucursales, ubicaciones,
+  actividades, actividadCategorias, appConfig, presupuestoMantenimiento,
+  gastosMantenimiento, contratosMantenimiento,
+} from "@/lib/schema";
+import { eq, asc, and, gte, lt, like } from "drizzle-orm";
 import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+import { RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, MODALIDAD_LABEL } from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect("/");
 const db = getDb(Astro);
+const puedeEditar = user.rol === "admin" || user.rol === "jefe";
 
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
+const anio = Number(url.searchParams.get("anio")) || new Date().getFullYear();
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre, direccion: sucursales.direccion })
@@ -22,7 +29,26 @@ const sucursalesList = await db
 
 const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
-// 1) Planes por equipo (sede vía activo→ubicación→sucursal)
+// ── Configuración del documento (textos editables) ───────────────────────────
+const configRows = await db.select().from(appConfig).where(like(appConfig.clave, "plan.%"));
+const cfg = new Map(configRows.map((r) => [r.clave, r.valor]));
+const C = (clave: string, def: string) => cfg.get(`plan.${clave}`) ?? def;
+
+const docCodigo  = C("codigo", "AVA-MTO-PL-001");
+const docVersion = C("version", "01");
+const docElaboro = C("elaboro", "Jefatura de Mantenimiento");
+const docReviso  = C("reviso", "Jefatura de Operaciones");
+const docAprobo  = C("aprobo", "Dirección Administrativa");
+const txtIntro = C("intro",
+  "El presente Plan de Mantenimiento de Avante Complejo Hospitalario describe las actividades preventivas y recurrentes programadas para la vigencia, con la finalidad de mantener en óptimas condiciones de funcionamiento la infraestructura, las instalaciones, redes y la dotación de uso asistencial, industrial y administrativo, garantizando la seguridad de los pacientes y del personal.");
+const txtObjetivos = C("objetivos",
+  "• Garantizar la disponibilidad y el funcionamiento seguro de los equipos e instalaciones.\n• Aumentar las acciones preventivas y disminuir las correctivas.\n• Optimizar el uso de los recursos asignados al mantenimiento.\n• Cumplir los estándares de calidad y acreditación aplicables (JCI).");
+const txtNormativa = C("normativa",
+  "• Estándares de acreditación Joint Commission International (FMS).\n• Reglamentos técnicos nacionales aplicables a instalaciones eléctricas y sanitarias.\n• Recomendaciones de los fabricantes de cada equipo.");
+const txtRecursos = C("recursos",
+  "El plan se ejecuta con personal propio de mantenimiento y con empresas externas contratadas para los sistemas especializados (equipos biomédicos, subestaciones eléctricas, aires acondicionados, entre otros), bajo la supervisión de la Jefatura de Mantenimiento.");
+
+// ── Datos: planes por equipo ─────────────────────────────────────────────────
 const planRowsAll = await db
   .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(planesMantenimiento)
@@ -33,7 +59,6 @@ const planRowsAll = await db
   .where(eq(planesMantenimiento.activo, true))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
-// 2) Actividades recurrentes (sede directa)
 const actRowsAll = await db
   .select({ a: actividades, c: actividadCategorias, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(actividades)
@@ -47,7 +72,42 @@ const actRowsAll = await db
 const planRows = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
 const actRows = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
 
-// Agrupar planes de equipo por categoría del activo
+// Contratos para mostrar modalidad "contratado"
+const contratosList = await db
+  .select({ id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo, nombre: contratosMantenimiento.nombre })
+  .from(contratosMantenimiento);
+const contratoMap = new Map(contratosList.map((c) => [c.id, c]));
+
+// ── Presupuesto del año ──────────────────────────────────────────────────────
+const presupuestos = await db
+  .select()
+  .from(presupuestoMantenimiento)
+  .where(eq(presupuestoMantenimiento.anio, anio));
+const presupuestoPorRubro = new Map(presupuestos.map((p) => [p.rubro, p.monto]));
+
+const gastosAnio = await db
+  .select({ rubro: gastosMantenimiento.rubro, monto: gastosMantenimiento.monto })
+  .from(gastosMantenimiento)
+  .where(and(gte(gastosMantenimiento.fecha, `${anio}-01-01`), lt(gastosMantenimiento.fecha, `${anio + 1}-01-01`)));
+const gastoPorRubro = new Map<string, number>();
+for (const g of gastosAnio) gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
+
+// ── Resumen por rubro ────────────────────────────────────────────────────────
+const resumenRubros = RUBRO_KEYS.map((k) => {
+  const planes = planRows.filter((r) => (r.a?.rubro ?? "industrial") === k);
+  const acts = actRows.filter((r) => (r.c?.rubro ?? "locativo") === k);
+  return {
+    rubro: k,
+    nPlanes: planes.length,
+    nActs: acts.length,
+    presupuesto: presupuestoPorRubro.get(k) ?? 0,
+    gastado: gastoPorRubro.get(k) ?? 0,
+  };
+}).filter((r) => r.nPlanes > 0 || r.nActs > 0 || r.presupuesto > 0 || r.gastado > 0);
+const totalPresupuesto = resumenRubros.reduce((s, r) => s + r.presupuesto, 0);
+const totalGastado = resumenRubros.reduce((s, r) => s + r.gastado, 0);
+
+// ── Agrupaciones para las secciones detalladas ───────────────────────────────
 const planesPorCategoria = new Map<string, typeof planRows>();
 for (const r of planRows) {
   const cat = (r.a?.categoria?.trim() || (r.a?.tipo === "biomedico" ? "Equipo biomédico" : "Sin categoría"));
@@ -57,7 +117,6 @@ for (const r of planRows) {
 }
 const catsPlanes = [...planesPorCategoria.keys()].sort((a, b) => a.localeCompare(b, "es"));
 
-// Agrupar actividades por su categoría
 const actsPorCategoria = new Map<string, typeof actRows>();
 for (const r of actRows) {
   const cat = r.c ? `${r.c.icono ?? ""} ${r.c.nombre}`.trim() : "📋 Sin categoría";
@@ -75,15 +134,23 @@ const FRECUENCIA_LABEL: Record<string, string> = {
 const hoy = new Date().toISOString().slice(0, 10);
 const fmt = (s: string) => fmtFechaSoloCompacta(s);
 const fechaGeneracion = fmtFechaSolo(hoy);
-const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "Plan de mantenimiento — Todas las sedes";
+const titulo = sedeActiva
+  ? `Plan Anual de Mantenimiento ${anio} — ${sedeActiva.nombre}`
+  : `Plan Anual de Mantenimiento ${anio}`;
+
+const modalidadDe = (r: (typeof planRows)[number]) => {
+  const m = MODALIDAD_LABEL[r.p.modalidad] ?? r.p.modalidad;
+  const c = r.p.contratoId ? contratoMap.get(r.p.contratoId) : null;
+  return c ? `${m} (${c.codigo})` : m;
+};
 ---
 
 <Layout title={titulo}>
   <!-- Barra de control (no se imprime) -->
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📄 Plan de mantenimiento por sede</h1>
-      <p class="mt-1 text-sm text-slate-500">Documento consolidado: equipos con plan preventivo + actividades recurrentes.</p>
+      <h1 class="text-2xl font-bold">📄 Plan Anual de Mantenimiento</h1>
+      <p class="mt-1 text-sm text-slate-500">Documento institucional generado con los datos reales del sistema.</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <select id="sedeSel" class="input w-auto text-sm py-1.5">
@@ -92,6 +159,7 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
+      {puedeEditar && <button id="editDocBtn" class="btn-secondary">✎ Editar textos</button>}
       <button id="printBtn" class="btn-primary">🖨 Imprimir / PDF</button>
       <a href={`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">← Cronograma</a>
     </div>
@@ -99,28 +167,86 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
 
   <!-- Documento -->
   <div class="print-doc card mt-4 p-6 sm:p-8">
-    <!-- Encabezado del documento -->
-    <div class="border-b-2 border-slate-800 pb-4">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <div class="text-xs font-semibold uppercase tracking-widest text-slate-400">Avante Complejo Hospitalario · Mantenimiento</div>
-          <h2 class="mt-1 text-xl font-bold text-slate-900">{titulo}</h2>
-          {sedeActiva?.direccion && <p class="mt-0.5 text-xs text-slate-500">{sedeActiva.direccion}</p>}
+    <!-- Portada / encabezado documental -->
+    <div class="border-2 border-slate-800 rounded-lg overflow-hidden">
+      <div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-300">
+        <div class="p-4 flex items-center gap-3">
+          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-xl">⚙️</div>
+          <div>
+            <div class="font-bold text-slate-900 text-sm leading-tight">Avante</div>
+            <div class="text-[11px] text-slate-500">Complejo Hospitalario</div>
+          </div>
         </div>
-        <div class="text-right text-xs text-slate-500 shrink-0">
-          <div>Generado: <span class="font-medium text-slate-700">{fechaGeneracion}</span></div>
-          <div class="mt-0.5">Por: {user.nombre}</div>
+        <div class="p-4 text-center">
+          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Plan Anual de Mantenimiento</div>
+          <div class="text-xs text-slate-500 mt-0.5">Vigencia {anio}{sedeActiva ? ` · ${sedeActiva.nombre}` : " · Todas las sedes"}</div>
         </div>
-      </div>
-      <div class="mt-3 flex flex-wrap gap-4 text-sm">
-        <div><span class="font-bold text-slate-900">{planRows.length}</span> <span class="text-slate-500">planes de equipos</span></div>
-        <div><span class="font-bold text-slate-900">{actRows.length}</span> <span class="text-slate-500">actividades recurrentes</span></div>
-        <div><span class="font-bold text-slate-900">{catsPlanes.length + catsActs.length}</span> <span class="text-slate-500">categorías</span></div>
+        <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
+          <div><span class="text-slate-400">Código:</span> <span class="font-mono font-semibold">{docCodigo}</span></div>
+          <div><span class="text-slate-400">Versión:</span> {docVersion}</div>
+          <div><span class="text-slate-400">Generado:</span> {fechaGeneracion}</div>
+        </div>
       </div>
     </div>
 
-    <!-- Sección A: Equipos con plan preventivo -->
-    <h3 class="mt-6 text-base font-bold text-slate-900 border-l-4 border-brand-600 pl-3">A. Equipos con plan preventivo</h3>
+    <!-- 1. Introducción -->
+    <h3 class="mt-7 text-base font-bold text-slate-900">1. Introducción</h3>
+    <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtIntro}</p>
+
+    <!-- 2. Objetivos -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">2. Objetivos</h3>
+    <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtObjetivos}</p>
+
+    <!-- 3. Marco normativo -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">3. Marco normativo y de referencia</h3>
+    <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtNormativa}</p>
+
+    <!-- 4. Recursos -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">4. Recursos y modalidad de ejecución</h3>
+    <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtRecursos}</p>
+
+    <!-- 5. Resumen por rubro -->
+    <h3 class="mt-7 text-base font-bold text-slate-900">5. Resumen por rubro de mantenimiento</h3>
+    <div class="overflow-x-auto avoid-break">
+      <table class="mt-2 w-full text-left text-xs border border-slate-200">
+        <thead class="bg-slate-800 text-white">
+          <tr>
+            <th class="px-3 py-2 font-medium">Rubro</th>
+            <th class="px-3 py-2 font-medium text-center">Planes de equipos</th>
+            <th class="px-3 py-2 font-medium text-center">Actividades recurrentes</th>
+            <th class="px-3 py-2 font-medium text-right">Presupuesto {anio}</th>
+            <th class="px-3 py-2 font-medium text-right">Ejecutado</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {resumenRubros.length === 0 && (
+            <tr><td colspan="5" class="px-3 py-4 text-center text-slate-400">Sin rutinas ni presupuesto registrados.</td></tr>
+          )}
+          {resumenRubros.map((r) => (
+            <tr>
+              <td class="px-3 py-2 font-medium text-slate-800">{rubroIcono(r.rubro)} {rubroLabel(r.rubro)}</td>
+              <td class="px-3 py-2 text-center">{r.nPlanes || "—"}</td>
+              <td class="px-3 py-2 text-center">{r.nActs || "—"}</td>
+              <td class="px-3 py-2 text-right font-mono">{r.presupuesto > 0 ? fmtMonto(r.presupuesto) : "—"}</td>
+              <td class="px-3 py-2 text-right font-mono">{r.gastado > 0 ? fmtMonto(r.gastado) : "—"}</td>
+            </tr>
+          ))}
+          {(totalPresupuesto > 0 || totalGastado > 0) && (
+            <tr class="bg-slate-50 font-semibold">
+              <td class="px-3 py-2 text-slate-900">TOTAL</td>
+              <td class="px-3 py-2 text-center">{planRows.length}</td>
+              <td class="px-3 py-2 text-center">{actRows.length}</td>
+              <td class="px-3 py-2 text-right font-mono">{fmtMonto(totalPresupuesto)}</td>
+              <td class="px-3 py-2 text-right font-mono">{fmtMonto(totalGastado)}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-1 text-[10px] text-slate-400">El detalle del presupuesto y su ejecución se gestiona en el módulo Presupuesto.</p>
+
+    <!-- 6. Equipos con plan preventivo -->
+    <h3 class="mt-7 text-base font-bold text-slate-900 border-l-4 border-brand-600 pl-3">6. Equipos con plan preventivo</h3>
     {catsPlanes.length === 0 && (
       <p class="mt-3 text-sm text-slate-400">Sin planes de equipos {sedeActiva ? "registrados para esta sede" : "registrados"}. Los equipos deben tener ubicación asignada para aparecer bajo su sede.</p>
     )}
@@ -137,6 +263,7 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
                   <th class="px-2 py-1.5 font-medium">Ubicación</th>
                   <th class="px-2 py-1.5 font-medium">Plan / rutina</th>
                   <th class="px-2 py-1.5 font-medium">Frecuencia</th>
+                  <th class="px-2 py-1.5 font-medium">Modalidad</th>
                   <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
                   <th class="px-2 py-1.5 font-medium">Responsable</th>
                 </tr>
@@ -151,6 +278,7 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
                     <td class="px-2 py-1.5 text-slate-500">{!sedeActiva && r.s?.nombre ? `${r.s.nombre} · ` : ""}{r.ub?.nombre ?? r.a?.ubicacion ?? "—"}</td>
                     <td class="px-2 py-1.5 text-slate-700">{r.p.titulo}</td>
                     <td class="px-2 py-1.5 text-slate-600">{FRECUENCIA_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
+                    <td class="px-2 py-1.5 text-slate-600">{modalidadDe(r)}</td>
                     <td class={`px-2 py-1.5 font-medium ${r.p.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fmt(r.p.proximaFecha)}</td>
                     <td class="px-2 py-1.5 text-slate-500">{r.u?.nombre ?? "—"}</td>
                   </tr>
@@ -162,8 +290,8 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
       );
     })}
 
-    <!-- Sección B: Actividades recurrentes (infraestructura) -->
-    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-emerald-600 pl-3">B. Actividades recurrentes de infraestructura</h3>
+    <!-- 7. Actividades recurrentes -->
+    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-emerald-600 pl-3">7. Actividades recurrentes de infraestructura</h3>
     {catsActs.length === 0 && (
       <p class="mt-3 text-sm text-slate-400">Sin actividades recurrentes {sedeActiva ? "registradas para esta sede" : "registradas"}.</p>
     )}
@@ -202,11 +330,57 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
       );
     })}
 
-    <!-- Pie del documento -->
+    <!-- Firmas -->
+    <div class="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-6 avoid-break">
+      {[
+        { rol: "Elaboró", nombre: docElaboro },
+        { rol: "Revisó", nombre: docReviso },
+        { rol: "Aprobó", nombre: docAprobo },
+      ].map((f) => (
+        <div class="text-center">
+          <div class="border-t border-slate-400 pt-2 mt-10 text-xs">
+            <div class="font-semibold text-slate-800">{f.nombre}</div>
+            <div class="text-slate-500">{f.rol}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <!-- Pie -->
     <div class="mt-8 border-t border-slate-200 pt-3 text-[10px] text-slate-400">
-      Documento generado desde la plataforma de mantenimiento · Las fechas mostradas corresponden a la próxima ejecución programada de cada rutina · Fechas en rojo indican rutinas vencidas.
+      {docCodigo} · Versión {docVersion} · Documento generado desde la plataforma de mantenimiento el {fechaGeneracion} por {user.nombre} ·
+      Las fechas mostradas corresponden a la próxima ejecución programada de cada rutina · Fechas en rojo indican rutinas vencidas.
     </div>
   </div>
+
+  <!-- Modal editar textos del documento -->
+  {puedeEditar && (
+    <div id="docModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900">✎ Textos del documento</h3>
+        <p class="mt-1 text-xs text-slate-500">Estos textos se guardan y aparecen en cada generación del plan.</p>
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div><label class="label text-xs">Código del documento</label><input id="d_codigo" class="input" value={docCodigo} /></div>
+          <div><label class="label text-xs">Versión</label><input id="d_version" class="input" value={docVersion} /></div>
+          <div></div>
+          <div><label class="label text-xs">Elaboró</label><input id="d_elaboro" class="input" value={docElaboro} /></div>
+          <div><label class="label text-xs">Revisó</label><input id="d_reviso" class="input" value={docReviso} /></div>
+          <div><label class="label text-xs">Aprobó</label><input id="d_aprobo" class="input" value={docAprobo} /></div>
+        </div>
+        <div class="mt-3 space-y-3">
+          <div><label class="label text-xs">1. Introducción</label><textarea id="d_intro" class="input" rows="4">{txtIntro}</textarea></div>
+          <div><label class="label text-xs">2. Objetivos (usa • para viñetas)</label><textarea id="d_objetivos" class="input" rows="4">{txtObjetivos}</textarea></div>
+          <div><label class="label text-xs">3. Marco normativo</label><textarea id="d_normativa" class="input" rows="4">{txtNormativa}</textarea></div>
+          <div><label class="label text-xs">4. Recursos y modalidad</label><textarea id="d_recursos" class="input" rows="4">{txtRecursos}</textarea></div>
+        </div>
+        <p id="docErr" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="docCancel" class="btn-secondary">Cancelar</button>
+          <button id="docSave" class="btn-primary">Guardar textos</button>
+        </div>
+      </div>
+    </div>
+  )}
 
   <style is:global>
     @media print {
@@ -224,5 +398,42 @@ const titulo = sedeActiva ? `Plan de mantenimiento — ${sedeActiva.nombre}` : "
       const v = (e.currentTarget as HTMLSelectElement).value;
       location.href = v ? `/plan-mantenimiento?sede=${v}` : "/plan-mantenimiento";
     });
+
+    // ── Edición de textos (admin/jefe) ──
+    const docModal = document.getElementById("docModal");
+    if (docModal) {
+      const show = () => { docModal.classList.remove("hidden"); docModal.classList.add("flex"); };
+      const hide = () => { docModal.classList.add("hidden"); docModal.classList.remove("flex"); };
+      document.getElementById("editDocBtn")?.addEventListener("click", show);
+      document.getElementById("docCancel")?.addEventListener("click", hide);
+      docModal.addEventListener("click", (e) => { if (e.target === docModal) hide(); });
+
+      document.getElementById("docSave")?.addEventListener("click", async () => {
+        const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
+        const res = await fetch("/api/plan-config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            valores: {
+              "plan.codigo": v("d_codigo"),
+              "plan.version": v("d_version"),
+              "plan.elaboro": v("d_elaboro"),
+              "plan.reviso": v("d_reviso"),
+              "plan.aprobo": v("d_aprobo"),
+              "plan.intro": v("d_intro"),
+              "plan.objetivos": v("d_objetivos"),
+              "plan.normativa": v("d_normativa"),
+              "plan.recursos": v("d_recursos"),
+            },
+          }),
+        });
+        if (res.ok) { window.showToast?.("Textos guardados", "success"); location.reload(); }
+        else {
+          const err = document.getElementById("docErr")!;
+          err.textContent = "Error al guardar";
+          err.classList.remove("hidden");
+        }
+      });
+    }
   </script>
 </Layout>

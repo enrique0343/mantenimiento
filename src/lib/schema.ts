@@ -104,6 +104,8 @@ export const activos = sqliteTable("activos", {
   qrCode: text("qr_code").unique(),
   // Tipo de equipo
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
+  // Rubro de mantenimiento (taxonomía del plan anual: locativo/redes/biomedico/industrial/ti/mobiliario/flota)
+  rubro: text("rubro"),
   // Datos patrimoniales (JCI FMS.8 — ciclo de vida del equipo)
   fechaAdquisicion: text("fecha_adquisicion"),
   vidaUtilAnios: integer("vida_util_anios"),
@@ -428,6 +430,9 @@ export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   asignadoA: integer("asignado_a").references(() => usuarios.id),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   ultimaGeneracion: text("ultima_generacion"),
+  // Modalidad de ejecución (interno/contratado/mixto) + contrato que la respalda
+  modalidad: text("modalidad", { enum: ["interno", "contratado", "mixto"] }).notNull().default("interno"),
+  contratoId: integer("contrato_id"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -612,6 +617,7 @@ export const actividadCategorias = sqliteTable("actividad_categorias", {
   icono: text("icono"),
   orden: integer("orden").notNull().default(0),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  rubro: text("rubro"),
 });
 
 export const actividades = sqliteTable("actividades", {
@@ -683,6 +689,38 @@ export const cargasElectricas = sqliteTable("cargas_electricas", {
 
 export type Subestacion = typeof subestaciones.$inferSelect;
 export type CargaElectrica = typeof cargasElectricas.$inferSelect;
+
+// ─── Presupuesto de mantenimiento (Fase 43) ──────────────────────────────────
+export const presupuestoMantenimiento = sqliteTable("presupuesto_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  anio: integer("anio").notNull(),
+  rubro: text("rubro").notNull(),
+  monto: real("monto").notNull().default(0),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const gastosMantenimiento = sqliteTable("gastos_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fecha: text("fecha").notNull(),
+  rubro: text("rubro").notNull(),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  descripcion: text("descripcion").notNull(),
+  monto: real("monto").notNull(),
+  referencia: text("referencia"),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Configuración clave-valor (textos del plan anual, parámetros generales)
+export const appConfig = sqliteTable("app_config", {
+  clave: text("clave").primaryKey(),
+  valor: text("valor").notNull(),
+  updatedAt: text("updated_at"),
+});
+
+export type PresupuestoMantenimiento = typeof presupuestoMantenimiento.$inferSelect;
+export type GastoMantenimiento = typeof gastosMantenimiento.$inferSelect;
 
 // ─── Encuestas de satisfacción ───────────────────────────────────────────────
 export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {

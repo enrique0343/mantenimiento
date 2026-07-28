@@ -1,8 +1,8 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, desc } from "drizzle-orm";
+import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contratosMantenimiento } from "@/lib/schema";
+import { eq, desc, inArray } from "drizzle-orm";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -34,6 +34,13 @@ const sucursalesList = await db
   .from(sucursales)
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
+
+// Contratos vigentes/por vencer para vincular planes contratados
+const contratosList = await db
+  .select({ id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo, nombre: contratosMantenimiento.nombre })
+  .from(contratosMantenimiento)
+  .where(inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]))
+  .orderBy(contratosMantenimiento.codigo);
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const FREC_LABEL: Record<string, string> = {
@@ -103,11 +110,13 @@ const FREC_LABEL: Record<string, string> = {
           <th class="px-3 py-2">Frecuencia</th>
           <th class="px-3 py-2">Próxima fecha</th>
           <th class="px-3 py-2">Asignado</th>
+          <th class="px-3 py-2">Modalidad</th>
+          <th class="px-3 py-2">Contrato</th>
           <th class="px-3 py-2">Estado</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {filtered.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
+        {filtered.length === 0 && <tr><td colspan="10" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
         {filtered.map((r) => (
           <tr class:list={["hover:bg-slate-50", !r.p.activo && "opacity-60"]}>
             <td class="px-3 py-2"><input type="checkbox" class="row-chk" data-id={r.p.id} /></td>
@@ -122,6 +131,21 @@ const FREC_LABEL: Record<string, string> = {
             <td class="px-3 py-2 capitalize text-xs">{FREC_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
             <td class="px-3 py-2 text-xs">{fmt(r.p.proximaFecha)}</td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.u?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</td>
+            <td class="px-3 py-2">
+              <select class="modalidad-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 hover:border-slate-300" data-id={r.p.id}>
+                <option value="interno" selected={r.p.modalidad === "interno"}>Propio</option>
+                <option value="contratado" selected={r.p.modalidad === "contratado"}>Externo</option>
+                <option value="mixto" selected={r.p.modalidad === "mixto"}>Mixto</option>
+              </select>
+            </td>
+            <td class="px-3 py-2">
+              <select class="contrato-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 hover:border-slate-300 max-w-[140px]" data-id={r.p.id}>
+                <option value="">—</option>
+                {contratosList.map((c) => (
+                  <option value={c.id} selected={r.p.contratoId === c.id}>{c.codigo}</option>
+                ))}
+              </select>
+            </td>
             <td class="px-3 py-2">
               {r.p.activo
                 ? <span class="badge bg-emerald-100 text-emerald-700">activo</span>
@@ -182,5 +206,37 @@ const FREC_LABEL: Record<string, string> = {
     document.getElementById("bulkEliminar")?.addEventListener("click", () => bulkAction("eliminar"));
     document.getElementById("bulkDesactivar")?.addEventListener("click", () => bulkAction("desactivar"));
     document.getElementById("bulkActivar")?.addEventListener("click", () => bulkAction("activar"));
+
+    // ── Modalidad / contrato inline ──
+    async function patchPlan(sel: HTMLSelectElement, body: Record<string, unknown>, prev: string) {
+      sel.disabled = true;
+      const r = await fetch(`/api/planes/${sel.dataset.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      sel.disabled = false;
+      if (r.ok) {
+        sel.classList.add("ring-2", "ring-emerald-300");
+        setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+      } else {
+        sel.value = prev;
+        window.showToast?.("No se pudo guardar", "error");
+      }
+    }
+    document.querySelectorAll<HTMLSelectElement>(".modalidad-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        await patchPlan(sel, { modalidad: sel.value }, prev);
+        prev = sel.value;
+      });
+    });
+    document.querySelectorAll<HTMLSelectElement>(".contrato-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        await patchPlan(sel, { contratoId: sel.value ? Number(sel.value) : null }, prev);
+        prev = sel.value;
+      });
+    });
   </script>
 </Layout>
