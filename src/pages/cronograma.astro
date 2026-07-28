@@ -218,7 +218,6 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       </select>
       <a href={`/plan-mantenimiento${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📄 Plan por sede</a>
       <a href="/actividades" class="btn-secondary">📌 Actividades</a>
-      <a href="/planificador" class="btn-secondary">📊 Planificador</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
         <a href="/planes" class="btn-secondary">🛠 Gestionar planes</a>
       )}

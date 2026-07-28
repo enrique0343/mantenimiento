@@ -53,22 +53,24 @@ const allLinks: NavItem[] = [
   { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
   { sep: true },
   // 3. Compras e inventario
+  // (Requisiciones oculto del menú: el flujo de compra activo es "Compras";
+  //  las páginas /requisiciones siguen accesibles por URL para el flujo de
+  //  reabastecimiento automático del inventario.)
   { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
-  { href: "/requisiciones",      label: "Requisiciones", icon: "🛒", show: isOperativo },
   { href: "/solicitudes-compra", label: "Compras",       icon: "🛍", show: isOperativo },
   { href: "/proveedores",        label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
   { href: "/contratos",          label: "Contratos",     icon: "📜", show: isAdminOrJefe },
   { sep: true },
   // 4. Análisis y seguimiento
+  // (Planificador oculto del menú: el Cronograma + Plan anual cubren esa vista.)
   { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
   { href: "/presupuesto",   label: "Presupuesto",   icon: "💰", show: isAdminOrJefe },
   { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
   { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },
-  { href: "/planificador",  label: "Planificador",  icon: "🗓", show: isAdminOrJefe },
   { sep: true },
   // 5. Gobernanza y administración
+  // (Matriz RACI oculta del menú: sigue accesible por URL en /raci.)
   { href: "/procedimientos", label: "Procedimientos", icon: "📋", show: isAdminOrJefe },
-  { href: "/raci",          label: "Matriz RACI",   icon: "🧭", show: isOperativo },
   { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
   { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
   { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
