@@ -5,6 +5,7 @@ import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, activi
 import { eq, asc, and } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -13,10 +14,12 @@ const db = getDb(Astro);
 // Técnicos solo ven planes/actividades asignados a ellos
 const esTecnico = user.rol === "tecnico";
 
-// Filtro por sede (?sede=<id>)
+// Filtro por sede (?sede=<id>) y por dominio/categoría (?dominio=<clave>)
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
+const dominioParam = url.searchParams.get("dominio");
+const dominio = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre })
@@ -51,9 +54,12 @@ const actRowsAll = await db
   .orderBy(asc(actividades.proximaFecha));
 
 // Aplicar filtro por sede: planes vía activo→ubicación→sucursal; actividades
-// tienen sucursal directa. Sin filtro se muestra todo.
-const planRows = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRows = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+// tienen sucursal directa. Luego filtro por dominio/categoría. Sin filtros se
+// muestra todo.
+const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
 const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
 // Unificar en un solo timeline
@@ -207,6 +213,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       <p class="mt-1 text-sm text-slate-500">
         {planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)
         {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2 text-sm">
@@ -216,8 +223,14 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
-      <a href={`/gantt${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📊 Gantt</a>
-      <a href={`/plan-mantenimiento${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📄 Plan por sede</a>
+      <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por categoría">
+        <option value="">🏷 Todas las categorías</option>
+        {RUBRO_KEYS.map((k) => (
+          <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
+        ))}
+      </select>
+      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📊 Gantt</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan</a>
       <a href="/actividades" class="btn-secondary">📌 Actividades</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
         <a href="/planes" class="btn-secondary">🛠 Gestionar planes</a>
@@ -226,9 +239,17 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
   </div>
 
   <script>
+    function navCrono(param: string, value: string) {
+      const p = new URLSearchParams(location.search);
+      if (value) p.set(param, value); else p.delete(param);
+      const s = p.toString();
+      location.href = `/cronograma${s ? `?${s}` : ""}`;
+    }
     document.getElementById("sedeFiltro")?.addEventListener("change", (e) => {
-      const v = (e.currentTarget as HTMLSelectElement).value;
-      location.href = v ? `/cronograma?sede=${v}` : "/cronograma";
+      navCrono("sede", (e.currentTarget as HTMLSelectElement).value);
+    });
+    document.getElementById("dominioFiltro")?.addEventListener("change", (e) => {
+      navCrono("dominio", (e.currentTarget as HTMLSelectElement).value);
     });
   </script>
 

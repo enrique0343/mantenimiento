@@ -1,0 +1,244 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, ubicaciones, sucursales } from "@/lib/schema";
+import { eq, asc, ne } from "drizzle-orm";
+import { RUBRO_KEYS, RUBROS, SUBCAT_KEYS, SUBCATS_BIOMEDICO, rubroDeActivo } from "@/lib/rubros";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/activos");
+const db = getDb(Astro);
+
+const rows = await db
+  .select({ a: activos, ub: ubicaciones, s: sucursales })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(ne(activos.estado, "baja"))
+  .orderBy(asc(activos.codigo));
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
+const sinDominio = rows.filter((r) => !r.a.rubro).length;
+const bioSinSubcat = rows.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico" && !r.a.subcategoria).length;
+const sinCriticidad = rows.filter((r) => !r.a.criticidadOperacional).length;
+
+const CRIT = [
+  { v: "alta", label: "A — Crítico" },
+  { v: "media", label: "B — Importante" },
+  { v: "baja", label: "C — General" },
+];
+---
+
+<Layout title="Clasificar equipos">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <a href="/activos" class="text-xs text-slate-400 hover:text-slate-600">← Equipos</a>
+      <h1 class="mt-1 text-2xl font-bold">🏷 Clasificación de equipos</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        Fase 1 del Sistema de Planificación: dominio, subcategoría biomédica y criticidad A/B/C.
+        Cada cambio se guarda al instante.
+      </p>
+    </div>
+    <div class="flex flex-wrap gap-2 text-xs">
+      {sinDominio > 0 && <span class="badge bg-amber-100 text-amber-700">{sinDominio} sin dominio</span>}
+      {bioSinSubcat > 0 && <span class="badge bg-violet-100 text-violet-700">{bioSinSubcat} biomédicos sin segmentar</span>}
+      {sinCriticidad > 0 && <span class="badge bg-red-100 text-red-700">{sinCriticidad} sin criticidad</span>}
+      {sinDominio === 0 && bioSinSubcat === 0 && sinCriticidad === 0 && (
+        <span class="badge bg-emerald-100 text-emerald-700">✓ Clasificación completa</span>
+      )}
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="card mt-4 flex flex-wrap items-end gap-3 p-3">
+    <div class="flex-1 min-w-[200px]">
+      <label class="label text-xs">Buscar</label>
+      <input id="buscar" type="search" class="input text-sm" placeholder="Código, nombre, marca…" />
+    </div>
+    <div>
+      <label class="label text-xs">Sede</label>
+      <select id="fSede" class="input text-sm">
+        <option value="">Todas</option>
+        {sucursalesList.map((s) => <option value={s.nombre}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Dominio</label>
+      <select id="fDominio" class="input text-sm">
+        <option value="">Todos</option>
+        {RUBRO_KEYS.map((k) => <option value={k}>{RUBROS[k].icono} {RUBROS[k].label}</option>)}
+        <option value="__sin__">Sin clasificar</option>
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Criticidad</label>
+      <select id="fCrit" class="input text-sm">
+        <option value="">Todas</option>
+        <option value="alta">A — Crítico</option>
+        <option value="media">B — Importante</option>
+        <option value="baja">C — General</option>
+        <option value="__sin__">Sin asignar</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm" id="tabla">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-3 py-2">Equipo</th>
+            <th class="px-3 py-2">Sede / Ubicación</th>
+            <th class="px-3 py-2">Dominio</th>
+            <th class="px-3 py-2">Subcategoría biomédica</th>
+            <th class="px-3 py-2">Criticidad</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {rows.map((r) => {
+            const dominio = r.a.rubro ?? "";
+            const esBio = rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico";
+            return (
+              <tr
+                class="hover:bg-slate-50 fila"
+                data-search={`${r.a.codigo} ${r.a.nombre} ${r.a.marca ?? ""} ${r.a.modelo ?? ""}`.toLowerCase()}
+                data-sede={r.s?.nombre ?? ""}
+                data-dominio={dominio || "__sin__"}
+                data-crit={r.a.criticidadOperacional ?? "__sin__"}
+              >
+                <td class="px-3 py-2">
+                  <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">
+                    <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span> {r.a.nombre}
+                  </a>
+                  <div class="text-[10px] text-slate-400">{r.a.marca ?? ""} {r.a.modelo ?? ""} · tipo: {r.a.tipo}</div>
+                </td>
+                <td class="px-3 py-2 text-xs text-slate-500">
+                  {r.s?.nombre ?? "—"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
+                </td>
+                <td class="px-3 py-2">
+                  <select class="dominio-sel rounded border px-1.5 py-1 text-xs" class:list={[dominio ? "border-slate-200 bg-white text-slate-700" : "border-amber-300 bg-amber-50 text-amber-800"]} data-id={r.a.id}>
+                    <option value="">— Elegir —</option>
+                    {RUBRO_KEYS.map((k) => (
+                      <option value={k} selected={dominio === k}>{RUBROS[k].icono} {RUBROS[k].label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td class="px-3 py-2">
+                  <select class="subcat-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 disabled:opacity-30" data-id={r.a.id} disabled={!esBio}>
+                    <option value="">—</option>
+                    {SUBCAT_KEYS.map((k) => (
+                      <option value={k} selected={r.a.subcategoria === k}>{SUBCATS_BIOMEDICO[k].icono} {SUBCATS_BIOMEDICO[k].label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td class="px-3 py-2">
+                  <select class="crit-sel rounded border px-1.5 py-1 text-xs" class:list={[r.a.criticidadOperacional ? "border-slate-200 bg-white text-slate-700" : "border-red-300 bg-red-50 text-red-800"]} data-id={r.a.id}>
+                    <option value="">— Elegir —</option>
+                    {CRIT.map((c) => (
+                      <option value={c.v} selected={r.a.criticidadOperacional === c.v}>{c.label}</option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="mt-3 text-xs text-slate-500">
+    <span class="font-medium text-slate-600">Criticidad:</span>
+    A = la falla compromete vida del paciente, continuidad o cumplimiento legal (preventivo estricto + repuesto crítico) ·
+    B = degrada el servicio con redundancia parcial (preventivo programado) ·
+    C = impacto menor (preventivo básico o correctivo planificado).
+  </div>
+
+  <script>
+    // ── Guardado inline ──
+    async function patchActivo(sel: HTMLSelectElement, body: Record<string, unknown>, prev: string) {
+      sel.disabled = true;
+      const r = await fetch(`/api/activos/${sel.dataset.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      sel.disabled = false;
+      if (r.ok) {
+        sel.classList.add("ring-2", "ring-emerald-300");
+        setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+        return true;
+      }
+      sel.value = prev;
+      window.showToast?.("No se pudo guardar", "error");
+      return false;
+    }
+
+    document.querySelectorAll<HTMLSelectElement>(".dominio-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        const ok = await patchActivo(sel, { rubro: sel.value || null }, prev);
+        if (ok) {
+          prev = sel.value;
+          // Habilita/deshabilita la subcategoría según el dominio elegido
+          const fila = sel.closest("tr")!;
+          const sub = fila.querySelector<HTMLSelectElement>(".subcat-sel")!;
+          const esBio = sel.value === "biomedico";
+          sub.disabled = !esBio;
+          if (!esBio && sub.value) {
+            sub.value = "";
+            patchActivo(sub, { subcategoria: null }, "");
+            sub.disabled = true;
+          }
+          fila.dataset.dominio = sel.value || "__sin__";
+          sel.className = sel.className.replace("border-amber-300 bg-amber-50 text-amber-800", "border-slate-200 bg-white text-slate-700");
+        }
+      });
+    });
+
+    document.querySelectorAll<HTMLSelectElement>(".subcat-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        if (await patchActivo(sel, { subcategoria: sel.value || null }, prev)) prev = sel.value;
+      });
+    });
+
+    document.querySelectorAll<HTMLSelectElement>(".crit-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        if (await patchActivo(sel, { criticidadOperacional: sel.value || null }, prev)) {
+          prev = sel.value;
+          sel.closest("tr")!.dataset.crit = sel.value || "__sin__";
+          sel.className = sel.className.replace("border-red-300 bg-red-50 text-red-800", "border-slate-200 bg-white text-slate-700");
+        }
+      });
+    });
+
+    // ── Filtros client-side ──
+    const buscar = document.getElementById("buscar") as HTMLInputElement;
+    const fSede = document.getElementById("fSede") as HTMLSelectElement;
+    const fDominio = document.getElementById("fDominio") as HTMLSelectElement;
+    const fCrit = document.getElementById("fCrit") as HTMLSelectElement;
+
+    function filtrar() {
+      const q = buscar.value.trim().toLowerCase();
+      document.querySelectorAll<HTMLTableRowElement>(".fila").forEach((tr) => {
+        const okQ = !q || (tr.dataset.search ?? "").includes(q);
+        const okS = !fSede.value || tr.dataset.sede === fSede.value;
+        const okD = !fDominio.value || tr.dataset.dominio === fDominio.value;
+        const okC = !fCrit.value || tr.dataset.crit === fCrit.value;
+        tr.style.display = okQ && okS && okD && okC ? "" : "none";
+      });
+    }
+    buscar.addEventListener("input", filtrar);
+    fSede.addEventListener("change", filtrar);
+    fDominio.addEventListener("change", filtrar);
+    fCrit.addEventListener("change", filtrar);
+  </script>
+</Layout>

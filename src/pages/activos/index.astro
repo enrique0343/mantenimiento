@@ -96,6 +96,7 @@ function urlConVista(v: string) {
       <p class="text-sm text-slate-500">{rows.length} equipos · mostrando <span id="visibleCount">{filtered.length}</span></p>
     </div>
     <div class="flex flex-wrap gap-2">
+      {(user.rol === "admin" || user.rol === "jefe") && <a href="/activos/clasificar" class="btn-secondary text-sm">🏷 Clasificar</a>}
       <a href="/activos/qr-print" class="btn-secondary text-sm">🔳 Imprimir QRs</a>
       {user.rol === "admin" && <a href="/activos/importar" class="btn-secondary text-sm">📥 Importar CSV</a>}
       {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}

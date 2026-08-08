@@ -30,6 +30,8 @@ const updateSchema = z.object({
   valorAdquisicion: z.number().nonnegative().nullable().optional(),
   responsableId: z.number().int().nullable().optional(),
   criticidadOperacional: z.enum(["alta", "media", "baja"]).nullable().optional(),
+  rubro: z.enum(["infraestructura", "aires", "equipo_general", "biomedico"]).nullable().optional(),
+  subcategoria: z.enum(["soporte_vida", "diagnostico", "tratamiento", "esterilizacion", "cadena_frio", "imagenologia", "apoyo"]).nullable().optional(),
   requiereCalibracion: z.boolean().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),

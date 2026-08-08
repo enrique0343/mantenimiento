@@ -5,6 +5,7 @@ import { planesMantenimiento, activos, sucursales, ubicaciones, actividades, act
 import { eq, asc, and } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -14,6 +15,8 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
+const dominioParam = url.searchParams.get("dominio");
+const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 const esTecnico = user.rol === "tecnico";
 
 const sucursalesList = await db
@@ -44,8 +47,10 @@ const actRowsAll = await db
     ? and(eq(actividades.activo, true), eq(actividades.asignadoA, user.id))
     : eq(actividades.activo, true));
 
-const planRows = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRows = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
 
 // ── Horizonte de 12 meses desde el mes actual ────────────────────────────────
 const hoyD = new Date();
@@ -152,6 +157,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
       <p class="mt-1 text-sm text-slate-500">
         {filas.length} rutina(s) proyectadas según su frecuencia
         {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
@@ -161,8 +167,14 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
+      <select id="dominioSel" class="input w-auto text-sm py-1.5">
+        <option value="">🏷 Todas las categorías</option>
+        {RUBRO_KEYS.map((k) => (
+          <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
+        ))}
+      </select>
       <a href={`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📅 Vista por fechas</a>
-      <a href={`/plan-mantenimiento${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📄 Plan anual</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan anual</a>
     </div>
   </div>
 
@@ -236,9 +248,17 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
   </div>
 
   <script>
+    function nav(param: string, value: string) {
+      const p = new URLSearchParams(location.search);
+      if (value) p.set(param, value); else p.delete(param);
+      const s = p.toString();
+      location.href = `/gantt${s ? `?${s}` : ""}`;
+    }
     document.getElementById("sedeSel")?.addEventListener("change", (e) => {
-      const v = (e.currentTarget as HTMLSelectElement).value;
-      location.href = v ? `/gantt?sede=${v}` : "/gantt";
+      nav("sede", (e.currentTarget as HTMLSelectElement).value);
+    });
+    document.getElementById("dominioSel")?.addEventListener("change", (e) => {
+      nav("dominio", (e.currentTarget as HTMLSelectElement).value);
     });
   </script>
 </Layout>

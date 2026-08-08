@@ -104,8 +104,10 @@ export const activos = sqliteTable("activos", {
   qrCode: text("qr_code").unique(),
   // Tipo de equipo
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
-  // Rubro de mantenimiento (taxonomía del plan anual: locativo/redes/biomedico/industrial/ti/mobiliario/flota)
+  // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
   rubro: text("rubro"),
+  // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
+  subcategoria: text("subcategoria"),
   // Datos patrimoniales (JCI FMS.8 — ciclo de vida del equipo)
   fechaAdquisicion: text("fecha_adquisicion"),
   vidaUtilAnios: integer("vida_util_anios"),

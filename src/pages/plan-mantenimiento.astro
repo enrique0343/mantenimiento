@@ -8,7 +8,10 @@ import {
 } from "@/lib/schema";
 import { eq, asc, and, gte, lt, like } from "drizzle-orm";
 import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
-import { RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, MODALIDAD_LABEL } from "@/lib/rubros";
+import {
+  RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, MODALIDAD_LABEL,
+  rubroDeActivo, rubroDeActividad, subcatLabel, subcatIcono, type RubroKey,
+} from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -20,6 +23,8 @@ const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
 const anio = Number(url.searchParams.get("anio")) || new Date().getFullYear();
+const dominioParam = url.searchParams.get("dominio");
+const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre, direccion: sucursales.direccion })
@@ -69,8 +74,13 @@ const actRowsAll = await db
   .where(eq(actividades.activo, true))
   .orderBy(asc(actividades.proximaFecha));
 
-const planRows = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRows = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+
+// Filtro por dominio (categoría): planes vía el dominio del equipo,
+// actividades vía el dominio de su categoría.
+const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
 
 // Contratos para mostrar modalidad "contratado"
 const contratosList = await db
@@ -92,10 +102,11 @@ const gastosAnio = await db
 const gastoPorRubro = new Map<string, number>();
 for (const g of gastosAnio) gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
 
-// ── Resumen por rubro ────────────────────────────────────────────────────────
-const resumenRubros = RUBRO_KEYS.map((k) => {
-  const planes = planRows.filter((r) => (r.a?.rubro ?? "industrial") === k);
-  const acts = actRows.filter((r) => (r.c?.rubro ?? "locativo") === k);
+// ── Resumen por dominio ──────────────────────────────────────────────────────
+const dominiosResumen = dominio ? [dominio] : RUBRO_KEYS;
+const resumenRubros = dominiosResumen.map((k) => {
+  const planes = planRows.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === k);
+  const acts = actRows.filter((r) => rubroDeActividad(r.c?.rubro) === k);
   return {
     rubro: k,
     nPlanes: planes.length,
@@ -108,9 +119,13 @@ const totalPresupuesto = resumenRubros.reduce((s, r) => s + r.presupuesto, 0);
 const totalGastado = resumenRubros.reduce((s, r) => s + r.gastado, 0);
 
 // ── Agrupaciones para las secciones detalladas ───────────────────────────────
+// En la vista del dominio biomédico se agrupa por subcategoría clínica
+// (soporte de vida, diagnóstico…); en las demás, por categoría del equipo.
 const planesPorCategoria = new Map<string, typeof planRows>();
 for (const r of planRows) {
-  const cat = (r.a?.categoria?.trim() || (r.a?.tipo === "biomedico" ? "Equipo biomédico" : "Sin categoría"));
+  const cat = dominio === "biomedico"
+    ? `${subcatIcono(r.a?.subcategoria)} ${subcatLabel(r.a?.subcategoria)}`
+    : (r.a?.categoria?.trim() || (r.a?.tipo === "biomedico" ? "Equipo biomédico" : "Sin categoría"));
   const arr = planesPorCategoria.get(cat) ?? [];
   arr.push(r);
   planesPorCategoria.set(cat, arr);
@@ -134,9 +149,23 @@ const FRECUENCIA_LABEL: Record<string, string> = {
 const hoy = new Date().toISOString().slice(0, 10);
 const fmt = (s: string) => fmtFechaSoloCompacta(s);
 const fechaGeneracion = fmtFechaSolo(hoy);
-const titulo = sedeActiva
-  ? `Plan Anual de Mantenimiento ${anio} — ${sedeActiva.nombre}`
+const tituloBase = dominio
+  ? `Plan de Mantenimiento ${anio} — ${rubroLabel(dominio)}`
   : `Plan Anual de Mantenimiento ${anio}`;
+const titulo = sedeActiva ? `${tituloBase} — ${sedeActiva.nombre}` : tituloBase;
+
+// Query string compartido para conservar filtros al navegar
+const qs = (cambios: Record<string, string | null>) => {
+  const p = new URLSearchParams();
+  if (sedeId) p.set("sede", String(sedeId));
+  if (dominio) p.set("dominio", dominio);
+  for (const [k, v] of Object.entries(cambios)) {
+    if (v === null) p.delete(k);
+    else p.set(k, v);
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
 
 const modalidadDe = (r: (typeof planRows)[number]) => {
   const m = MODALIDAD_LABEL[r.p.modalidad] ?? r.p.modalidad;
@@ -149,7 +178,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
   <!-- Barra de control (no se imprime) -->
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📄 Plan Anual de Mantenimiento</h1>
+      <h1 class="text-2xl font-bold">📄 {dominio ? `Plan de ${rubroLabel(dominio)}` : "Plan Anual de Mantenimiento"}</h1>
       <p class="mt-1 text-sm text-slate-500">Documento institucional generado con los datos reales del sistema.</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
@@ -165,6 +194,24 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
     </div>
   </div>
 
+  <!-- Filtro por dominio / categoría (no se imprime) -->
+  <div class="no-print mt-3 flex flex-wrap gap-1.5 text-sm">
+    <a
+      href={`/plan-mantenimiento${qs({ dominio: null })}`}
+      class:list={["rounded-lg px-3 py-1.5 font-medium", !dominio ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
+    >
+      Plan general
+    </a>
+    {RUBRO_KEYS.map((k) => (
+      <a
+        href={`/plan-mantenimiento${qs({ dominio: k })}`}
+        class:list={["rounded-lg px-3 py-1.5 font-medium", dominio === k ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
+      >
+        {RUBROS[k].icono} {RUBROS[k].label}
+      </a>
+    ))}
+  </div>
+
   <!-- Documento -->
   <div class="print-doc card mt-4 p-6 sm:p-8">
     <!-- Portada / encabezado documental -->
@@ -178,7 +225,9 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
           </div>
         </div>
         <div class="p-4 text-center">
-          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Plan Anual de Mantenimiento</div>
+          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">
+            {dominio ? `Plan de Mantenimiento — ${rubroLabel(dominio)}` : "Plan Anual de Mantenimiento"}
+          </div>
           <div class="text-xs text-slate-500 mt-0.5">Vigencia {anio}{sedeActiva ? ` · ${sedeActiva.nombre}` : " · Todas las sedes"}</div>
         </div>
         <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
@@ -206,7 +255,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
     <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtRecursos}</p>
 
     <!-- 5. Resumen por rubro -->
-    <h3 class="mt-7 text-base font-bold text-slate-900">5. Resumen por rubro de mantenimiento</h3>
+    <h3 class="mt-7 text-base font-bold text-slate-900">5. Resumen por categoría de mantenimiento</h3>
     <div class="overflow-x-auto avoid-break">
       <table class="mt-2 w-full text-left text-xs border border-slate-200">
         <thead class="bg-slate-800 text-white">
@@ -396,7 +445,10 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
     document.getElementById("printBtn")?.addEventListener("click", () => window.print());
     document.getElementById("sedeSel")?.addEventListener("change", (e) => {
       const v = (e.currentTarget as HTMLSelectElement).value;
-      location.href = v ? `/plan-mantenimiento?sede=${v}` : "/plan-mantenimiento";
+      const p = new URLSearchParams(location.search);
+      if (v) p.set("sede", v); else p.delete("sede");
+      const s = p.toString();
+      location.href = `/plan-mantenimiento${s ? `?${s}` : ""}`;
     });
 
     // ── Edición de textos (admin/jefe) ──
