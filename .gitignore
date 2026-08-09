@@ -3,6 +3,9 @@ dist/
 build/
 .env
 *.log
+
+# Caché local de Wrangler (Cloudflare)
+.wrangler/
 .DS_Store
 .vscode/
 coverage/
