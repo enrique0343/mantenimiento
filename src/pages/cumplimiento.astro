@@ -1,0 +1,305 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, planesMantenimiento, ubicaciones, sucursales, alertasEquipo } from "@/lib/schema";
+import { eq, ne, and } from "drizzle-orm";
+import { SUBCAT_KEYS, SUBCATS_BIOMEDICO, subcatLabel, subcatIcono, rubroDeActivo } from "@/lib/rubros";
+import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+const db = getDb(Astro);
+
+const hoy = new Date().toISOString().slice(0, 10);
+
+// ── Equipos biomédicos vigentes ──────────────────────────────────────────────
+const equiposAll = await db
+  .select({ a: activos, ub: ubicaciones, s: sucursales })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(ne(activos.estado, "baja"));
+
+const bio = equiposAll.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico");
+
+// ── Planes activos por equipo ────────────────────────────────────────────────
+const planes = await db
+  .select({ activoId: planesMantenimiento.activoId, proximaFecha: planesMantenimiento.proximaFecha })
+  .from(planesMantenimiento)
+  .where(eq(planesMantenimiento.activo, true));
+
+const planesPorActivo = new Map<number, string[]>();
+for (const p of planes) {
+  const arr = planesPorActivo.get(p.activoId) ?? [];
+  arr.push(p.proximaFecha);
+  planesPorActivo.set(p.activoId, arr);
+}
+
+// ── Métricas de cobertura ────────────────────────────────────────────────────
+const conPlan = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length > 0);
+const sinPlan = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length === 0);
+const conVencido = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).some((f) => f <= hoy));
+const sinCriticidad = bio.filter((r) => !r.a.criticidadOperacional);
+const sinSubcat = bio.filter((r) => !r.a.subcategoria);
+
+// Calibración: aplica a los marcados requiereCalibracion o con fecha programada
+const aplicaCalib = bio.filter((r) => r.a.requiereCalibracion || r.a.proximaCalibracion);
+const calibVencida = aplicaCalib.filter((r) => r.a.proximaCalibracion && r.a.proximaCalibracion.slice(0, 10) <= hoy);
+const calibSinFecha = bio.filter((r) => r.a.requiereCalibracion && !r.a.proximaCalibracion);
+
+// Alertas abiertas (FMS.07.1)
+const alertasAbiertas = await db
+  .select({ id: alertasEquipo.id })
+  .from(alertasEquipo)
+  .where(ne(alertasEquipo.estado, "cerrada"));
+
+const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+const cobertura = pct(conPlan.length, bio.length);
+const colorPct = (p: number) => (p >= 95 ? "text-emerald-600" : p >= 80 ? "text-amber-600" : "text-red-600");
+const barPct = (p: number) => (p >= 95 ? "bg-emerald-500" : p >= 80 ? "bg-amber-500" : "bg-red-500");
+
+// ── Segmentación por subcategoría ────────────────────────────────────────────
+const porSubcat = SUBCAT_KEYS.map((k) => {
+  const eq_ = bio.filter((r) => r.a.subcategoria === k);
+  const cp = eq_.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length > 0);
+  const venc = eq_.filter((r) => (planesPorActivo.get(r.a.id) ?? []).some((f) => f <= hoy));
+  return { subcat: k, total: eq_.length, conPlan: cp.length, vencidos: venc.length };
+}).filter((r) => r.total > 0);
+const sinSegmentar = bio.filter((r) => !r.a.subcategoria);
+
+// ── Segmentación por sede ────────────────────────────────────────────────────
+const porSede = new Map<string, { total: number; conPlan: number; vencidos: number }>();
+for (const r of bio) {
+  const sede = r.s?.nombre ?? "Sin sede";
+  const e = porSede.get(sede) ?? { total: 0, conPlan: 0, vencidos: 0 };
+  e.total++;
+  const fechas = planesPorActivo.get(r.a.id) ?? [];
+  if (fechas.length > 0) e.conPlan++;
+  if (fechas.some((f) => f <= hoy)) e.vencidos++;
+  porSede.set(sede, e);
+}
+const sedes = [...porSede.entries()].sort((a, b) => a[0].localeCompare(b[0], "es"));
+
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
+const fechaGeneracion = fmtFechaSolo(hoy);
+
+// Criticidad A sin plan = hallazgo grave
+const claseASinPlan = sinPlan.filter((r) => r.a.criticidadOperacional === "alta");
+---
+
+<Layout title="Cumplimiento FMS.07">
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">✅ Cumplimiento — Equipo biomédico</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        Programa de gestión de equipo médico (JCI FMS.07): cobertura del inventario, mantenimiento y calibración.
+      </p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/activos/clasificar" class="btn-secondary">🏷 Clasificar</a>
+      <a href="/alertas" class="btn-secondary">📢 Alertas</a>
+      <button onclick="window.print()" class="btn-primary">🖨 Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <!-- KPIs principales -->
+  <div class="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-5">
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Inventario biomédico</div>
+      <div class="mt-1.5 text-3xl font-bold text-slate-800">{bio.length}</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">equipos vigentes</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Cobertura preventiva</div>
+      <div class={`mt-1.5 text-3xl font-bold ${colorPct(cobertura)}`}>{cobertura}%</div>
+      <div class="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        <div class={`h-full rounded-full ${barPct(cobertura)}`} style={`width:${cobertura}%`}></div>
+      </div>
+      <div class="mt-1 text-[11px] text-slate-400">{conPlan.length} con plan · {sinPlan.length} sin plan</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Preventivos vencidos</div>
+      <div class={`mt-1.5 text-3xl font-bold ${conVencido.length === 0 ? "text-emerald-600" : "text-red-600"}`}>{conVencido.length}</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">equipos con rutina atrasada</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Calibración</div>
+      <div class={`mt-1.5 text-3xl font-bold ${calibVencida.length + calibSinFecha.length === 0 ? "text-emerald-600" : "text-red-600"}`}>
+        {calibVencida.length + calibSinFecha.length}
+      </div>
+      <div class="mt-0.5 text-[11px] text-slate-400">{calibVencida.length} vencida(s) · {calibSinFecha.length} sin programar</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Alertas abiertas</div>
+      <div class={`mt-1.5 text-3xl font-bold ${alertasAbiertas.length === 0 ? "text-emerald-600" : "text-amber-600"}`}>{alertasAbiertas.length}</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">FMS.07.1 — recalls y avisos</div>
+    </div>
+  </div>
+
+  {claseASinPlan.length > 0 && (
+    <div class="card mt-4 border-l-4 border-red-500 p-4">
+      <h2 class="font-semibold text-red-700">🚨 {claseASinPlan.length} equipo(s) clase A (crítico) SIN plan preventivo</h2>
+      <p class="mt-1 text-xs text-slate-600">Hallazgo prioritario: la falla de estos equipos compromete la vida del paciente y no tienen rutina programada.</p>
+      <div class="mt-2 flex flex-wrap gap-1.5 text-xs">
+        {claseASinPlan.map((r) => (
+          <a href={`/activos/${r.a.id}`} class="rounded-md bg-red-50 px-2 py-1 text-red-700 hover:bg-red-100">
+            <span class="font-mono text-[10px]">{r.a.codigo}</span> {r.a.nombre}
+          </a>
+        ))}
+      </div>
+    </div>
+  )}
+
+  <!-- Clasificación pendiente -->
+  {(sinCriticidad.length > 0 || sinSubcat.length > 0) && (
+    <div class="card mt-4 border-l-4 border-amber-400 p-4">
+      <h2 class="font-semibold text-amber-800">🏷 Clasificación pendiente (Fase 1)</h2>
+      <p class="mt-1 text-xs text-slate-600">
+        {sinCriticidad.length} sin criticidad A/B/C · {sinSubcat.length} sin subcategoría clínica —
+        <a href="/activos/clasificar" class="text-brand-600 hover:underline font-medium">completar en la herramienta de clasificación →</a>
+      </p>
+    </div>
+  )}
+
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <!-- Por subcategoría -->
+    <div class="card overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-100 font-semibold text-slate-800 text-sm">Cobertura por subcategoría clínica</div>
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-4 py-2">Subcategoría</th>
+            <th class="px-2 py-2 text-center">Equipos</th>
+            <th class="px-2 py-2 text-center">Con plan</th>
+            <th class="px-2 py-2 text-center">Vencidos</th>
+            <th class="px-4 py-2 text-right">Cobertura</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {porSubcat.length === 0 && (
+            <tr><td colspan="5" class="px-4 py-5 text-center text-slate-400">Sin equipos segmentados aún — usa 🏷 Clasificar.</td></tr>
+          )}
+          {porSubcat.map((r) => {
+            const p = pct(r.conPlan, r.total);
+            return (
+              <tr>
+                <td class="px-4 py-2 font-medium text-slate-700">{subcatIcono(r.subcat)} {subcatLabel(r.subcat)}</td>
+                <td class="px-2 py-2 text-center">{r.total}</td>
+                <td class="px-2 py-2 text-center">{r.conPlan}</td>
+                <td class={`px-2 py-2 text-center ${r.vencidos > 0 ? "text-red-600 font-semibold" : "text-slate-400"}`}>{r.vencidos || "—"}</td>
+                <td class={`px-4 py-2 text-right font-bold ${colorPct(p)}`}>{p}%</td>
+              </tr>
+            );
+          })}
+          {sinSegmentar.length > 0 && (
+            <tr class="bg-amber-50/50">
+              <td class="px-4 py-2 text-amber-800">📋 Sin segmentar</td>
+              <td class="px-2 py-2 text-center">{sinSegmentar.length}</td>
+              <td colspan="3" class="px-4 py-2 text-right text-[11px] text-amber-700">pendiente de clasificación</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Por sede -->
+    <div class="card overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-100 font-semibold text-slate-800 text-sm">Cobertura por sede</div>
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-4 py-2">Sede</th>
+            <th class="px-2 py-2 text-center">Equipos</th>
+            <th class="px-2 py-2 text-center">Con plan</th>
+            <th class="px-2 py-2 text-center">Vencidos</th>
+            <th class="px-4 py-2 text-right">Cobertura</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {sedes.map(([sede, e]) => {
+            const p = pct(e.conPlan, e.total);
+            return (
+              <tr>
+                <td class="px-4 py-2 font-medium text-slate-700">🏢 {sede}</td>
+                <td class="px-2 py-2 text-center">{e.total}</td>
+                <td class="px-2 py-2 text-center">{e.conPlan}</td>
+                <td class={`px-2 py-2 text-center ${e.vencidos > 0 ? "text-red-600 font-semibold" : "text-slate-400"}`}>{e.vencidos || "—"}</td>
+                <td class={`px-4 py-2 text-right font-bold ${colorPct(p)}`}>{p}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Listas de trabajo -->
+  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-4">
+      <h2 class="font-semibold text-slate-800 text-sm">📋 Sin plan preventivo ({sinPlan.length})</h2>
+      {sinPlan.length === 0 ? (
+        <p class="mt-2 text-sm text-emerald-700">✓ Todo el inventario biomédico tiene plan asignado.</p>
+      ) : (
+        <ul class="mt-2 space-y-1 max-h-64 overflow-y-auto text-xs">
+          {sinPlan.map((r) => (
+            <li>
+              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                <span class="min-w-0 truncate">
+                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
+                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
+                  {r.a.criticidadOperacional === "alta" && <span class="ml-1 badge bg-red-100 text-red-700">A</span>}
+                </span>
+                <span class="shrink-0 text-slate-400">{r.s?.nombre ?? "—"}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+
+    <div class="card p-4">
+      <h2 class="font-semibold text-slate-800 text-sm">🔬 Calibraciones vencidas o sin programar ({calibVencida.length + calibSinFecha.length})</h2>
+      {calibVencida.length + calibSinFecha.length === 0 ? (
+        <p class="mt-2 text-sm text-emerald-700">✓ Calibraciones al día.</p>
+      ) : (
+        <ul class="mt-2 space-y-1 max-h-64 overflow-y-auto text-xs">
+          {calibVencida.map((r) => (
+            <li>
+              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                <span class="min-w-0 truncate">
+                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
+                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
+                </span>
+                <span class="shrink-0 text-red-600 font-medium">venció {fmt(r.a.proximaCalibracion!.slice(0, 10))}</span>
+              </a>
+            </li>
+          ))}
+          {calibSinFecha.map((r) => (
+            <li>
+              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                <span class="min-w-0 truncate">
+                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
+                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
+                </span>
+                <span class="shrink-0 text-amber-600 font-medium">sin programar</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </div>
+
+  <div class="mt-4 text-[10px] text-slate-400">
+    Panel generado el {fechaGeneracion} · Umbral de referencia: ≥95% verde, 80–94% ámbar, &lt;80% rojo (meta institucional: ≥95% en clase A).
+  </div>
+
+  <style is:global>
+    @media print {
+      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
+      main { padding: 0 !important; }
+      body { background: white !important; }
+    }
+  </style>
+</Layout>

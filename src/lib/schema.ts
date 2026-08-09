@@ -724,6 +724,31 @@ export const appConfig = sqliteTable("app_config", {
 export type PresupuestoMantenimiento = typeof presupuestoMantenimiento.$inferSelect;
 export type GastoMantenimiento = typeof gastosMantenimiento.$inferSelect;
 
+// ─── Alertas y retiros de equipo — JCI FMS.07.1 (Fase 45) ────────────────────
+export const alertasEquipo = sqliteTable("alertas_equipo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tipo: text("tipo", { enum: ["retiro", "alerta", "aviso"] }).notNull().default("alerta"),
+  fuente: text("fuente", { enum: ["fabricante", "regulador", "proveedor", "interna"] }).notNull().default("fabricante"),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  referencia: text("referencia"),
+  fechaAlerta: text("fecha_alerta").notNull(),
+  estado: text("estado", { enum: ["abierta", "en_proceso", "cerrada"] }).notNull().default("abierta"),
+  accionTomada: text("accion_tomada"),
+  cerradaEn: text("cerrada_en"),
+  cerradaPor: integer("cerrada_por").references(() => usuarios.id),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const alertasEquipoActivos = sqliteTable("alertas_equipo_activos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  alertaId: integer("alerta_id").notNull().references(() => alertasEquipo.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+});
+
+export type AlertaEquipo = typeof alertasEquipo.$inferSelect;
+
 // ─── Encuestas de satisfacción ───────────────────────────────────────────────
 export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
   id: integer("id").primaryKey({ autoIncrement: true }),

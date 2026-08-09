@@ -58,6 +58,7 @@ const allLinks: NavItem[] = [
   { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
   { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
   { href: "/electrico",     label: "Eléctrico",     icon: "⚡", show: isOperativo || user?.rol === "visualizador" },
+  { href: "/alertas",       label: "Alertas equipo", icon: "📢", show: isOperativo || user?.rol === "visualizador" },
   { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
   { sep: true },
   // 4. Compras e inventario
@@ -68,6 +69,7 @@ const allLinks: NavItem[] = [
   { sep: true },
   // 5. Análisis y seguimiento
   { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
+  { href: "/cumplimiento",  label: "Cumplimiento",  icon: "✅", show: isAdminOrJefe },
   { href: "/presupuesto",   label: "Presupuesto",   icon: "💰", show: isAdminOrJefe },
   { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
   { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },

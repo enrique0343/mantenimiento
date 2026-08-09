@@ -1,0 +1,251 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  activos, ubicaciones, sucursales, proveedores, usuarios,
+  planesMantenimiento, ordenes, calibraciones,
+} from "@/lib/schema";
+import { eq, desc, asc } from "drizzle-orm";
+import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+import { rubroLabel, rubroIcono, subcatLabel, subcatIcono, rubroDeActivo, MODALIDAD_LABEL } from "@/lib/rubros";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect("/");
+const db = getDb(Astro);
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect("/activos");
+
+const [row] = await db
+  .select({ a: activos, ub: ubicaciones, s: sucursales, prov: proveedores, resp: usuarios })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
+  .leftJoin(usuarios, eq(usuarios.id, activos.responsableId))
+  .where(eq(activos.id, id));
+
+if (!row) return Astro.redirect("/activos");
+const a = row.a;
+
+const planes = await db
+  .select()
+  .from(planesMantenimiento)
+  .where(eq(planesMantenimiento.activoId, id))
+  .orderBy(asc(planesMantenimiento.proximaFecha));
+
+const ots = await db
+  .select({ o: ordenes, tec: usuarios })
+  .from(ordenes)
+  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
+  .where(eq(ordenes.activoId, id))
+  .orderBy(desc(ordenes.id))
+  .limit(200);
+
+const calibs = await db
+  .select({ c: calibraciones, lab: proveedores })
+  .from(calibraciones)
+  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
+  .where(eq(calibraciones.activoId, id))
+  .orderBy(desc(calibraciones.fechaCalibracion));
+
+const hoy = new Date().toISOString().slice(0, 10);
+const fmt = (s: string | null | undefined) => (s ? fmtFechaSoloCompacta(s.slice(0, 10)) : "—");
+const fmtDT = (s: string | null | undefined) =>
+  s ? new Date(s).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" }) : "—";
+
+const dominio = rubroDeActivo(a.rubro, a.tipo);
+const esBio = dominio === "biomedico";
+
+const ESTADO_OT: Record<string, string> = {
+  abierta: "Abierta", en_proceso: "En proceso", en_espera: "En espera",
+  completada: "Completada", verificada: "Verificada", cerrada: "Cerrada", cancelada: "Cancelada",
+};
+const CRIT_LABEL: Record<string, string> = { alta: "A — Crítico", media: "B — Importante", baja: "C — General" };
+const FREC_LABEL: Record<string, string> = {
+  diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal", mensual: "Mensual",
+  bimestral: "Bimestral", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual",
+};
+const RESULTADO_CALIB: Record<string, string> = {
+  conforme: "Conforme", conforme_con_ajuste: "Conforme con ajuste", no_conforme: "NO conforme",
+};
+
+const otsCerradas = ots.filter((r) => ["completada", "verificada", "cerrada"].includes(r.o.estado));
+const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
+---
+
+<Layout title={`Hoja de vida — ${a.codigo}`}>
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <a href={`/activos/${a.id}`} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
+      <h1 class="mt-1 text-2xl font-bold">📄 Hoja de vida del equipo</h1>
+    </div>
+    <button onclick="window.print()" class="btn-primary">🖨 Imprimir / PDF</button>
+  </div>
+
+  <div class="print-doc card mt-4 p-6 sm:p-8">
+    <!-- Encabezado -->
+    <div class="border-2 border-slate-800 rounded-lg overflow-hidden">
+      <div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-300">
+        <div class="p-4 flex items-center gap-3">
+          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-xl">⚙️</div>
+          <div>
+            <div class="font-bold text-slate-900 text-sm leading-tight">Avante</div>
+            <div class="text-[11px] text-slate-500">Complejo Hospitalario</div>
+          </div>
+        </div>
+        <div class="p-4 text-center">
+          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Hoja de vida de equipo</div>
+          <div class="text-xs text-slate-500 mt-0.5">JCI FMS.07 — historial de inspección, prueba y mantenimiento</div>
+        </div>
+        <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
+          <div><span class="text-slate-400">Código:</span> <span class="font-mono font-semibold">{a.codigo}</span></div>
+          {a.numeroActivo && <div><span class="text-slate-400">Nº activo:</span> {a.numeroActivo}</div>}
+          <div><span class="text-slate-400">Generado:</span> {fmtFechaSolo(hoy)}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1. Identificación -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">1. Identificación del equipo</h3>
+    <div class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-3">
+      <div><span class="text-xs text-slate-400 block">Nombre</span><span class="font-medium text-slate-800">{a.nombre}</span></div>
+      <div><span class="text-xs text-slate-400 block">Marca / Modelo</span>{a.marca ?? "—"} {a.modelo ?? ""}</div>
+      <div><span class="text-xs text-slate-400 block">Serie</span><span class="font-mono text-xs">{a.serial ?? "—"}</span></div>
+      <div><span class="text-xs text-slate-400 block">Sede / Ubicación</span>{row.s?.nombre ?? "—"}{row.ub?.nombre ? ` · ${row.ub.nombre}` : ""}</div>
+      <div><span class="text-xs text-slate-400 block">Dominio</span>{rubroIcono(dominio)} {rubroLabel(dominio)}</div>
+      {esBio && <div><span class="text-xs text-slate-400 block">Subcategoría clínica</span>{subcatIcono(a.subcategoria)} {subcatLabel(a.subcategoria)}</div>}
+      <div><span class="text-xs text-slate-400 block">Criticidad</span>{a.criticidadOperacional ? CRIT_LABEL[a.criticidadOperacional] : "—"}</div>
+      {esBio && <div><span class="text-xs text-slate-400 block">Clase de riesgo</span>{a.claseRiesgo ?? "—"}</div>}
+      {esBio && <div><span class="text-xs text-slate-400 block">Registro sanitario</span>{a.registroSanitario ?? "—"}</div>}
+      <div><span class="text-xs text-slate-400 block">Estado actual</span><span class="capitalize">{a.estado}</span></div>
+      <div><span class="text-xs text-slate-400 block">Adquisición</span>{fmt(a.fechaAdquisicion)}</div>
+      <div><span class="text-xs text-slate-400 block">Vida útil</span>{a.vidaUtilAnios ? `${a.vidaUtilAnios} años` : "—"}</div>
+      <div><span class="text-xs text-slate-400 block">Proveedor</span>{row.prov?.nombre ?? "—"}</div>
+      <div><span class="text-xs text-slate-400 block">Responsable</span>{row.resp?.nombre ?? "—"}</div>
+      {a.requiereCalibracion && <div><span class="text-xs text-slate-400 block">Próxima calibración</span><span class={a.proximaCalibracion && a.proximaCalibracion.slice(0,10) <= hoy ? "text-red-600 font-semibold" : ""}>{fmt(a.proximaCalibracion)}</span></div>}
+    </div>
+
+    <!-- 2. Planes preventivos -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">2. Planes de mantenimiento preventivo</h3>
+    {planes.length === 0 ? (
+      <p class="mt-2 text-sm text-red-600">⚠ Este equipo no tiene planes preventivos registrados.</p>
+    ) : (
+      <table class="mt-2 w-full text-left text-xs">
+        <thead class="text-slate-500 border-b border-slate-200">
+          <tr>
+            <th class="px-2 py-1.5 font-medium">Plan</th>
+            <th class="px-2 py-1.5 font-medium">Frecuencia</th>
+            <th class="px-2 py-1.5 font-medium">Modalidad</th>
+            <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
+            <th class="px-2 py-1.5 font-medium">Estado</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {planes.map((p) => (
+            <tr>
+              <td class="px-2 py-1.5 font-medium text-slate-800">{p.titulo}</td>
+              <td class="px-2 py-1.5">{FREC_LABEL[p.frecuencia] ?? p.frecuencia}</td>
+              <td class="px-2 py-1.5">{MODALIDAD_LABEL[p.modalidad] ?? p.modalidad}</td>
+              <td class={`px-2 py-1.5 font-medium ${p.activo && p.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fmt(p.proximaFecha)}</td>
+              <td class="px-2 py-1.5">{p.activo ? "Activo" : "Inactivo"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+
+    <!-- 3. Historial de intervenciones -->
+    <h3 class="mt-6 text-base font-bold text-slate-900">3. Historial de intervenciones (órdenes de trabajo)</h3>
+    <p class="mt-1 text-xs text-slate-500">
+      {ots.length} intervención(es) registradas · {otsCerradas.length} concluidas · {correctivas.length} correctivas
+      {ots.length === 200 && " · mostrando las 200 más recientes"}
+    </p>
+    {ots.length === 0 ? (
+      <p class="mt-2 text-sm text-slate-400">Sin intervenciones registradas.</p>
+    ) : (
+      <table class="mt-2 w-full text-left text-xs">
+        <thead class="text-slate-500 border-b border-slate-200">
+          <tr>
+            <th class="px-2 py-1.5 font-medium">OT</th>
+            <th class="px-2 py-1.5 font-medium">Tipo</th>
+            <th class="px-2 py-1.5 font-medium">Trabajo</th>
+            <th class="px-2 py-1.5 font-medium">Técnico</th>
+            <th class="px-2 py-1.5 font-medium">Creada</th>
+            <th class="px-2 py-1.5 font-medium">Concluida</th>
+            <th class="px-2 py-1.5 font-medium">Estado</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {ots.map(({ o, tec }) => (
+            <tr>
+              <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400">#{o.id}</td>
+              <td class="px-2 py-1.5 capitalize">{o.tipo}</td>
+              <td class="px-2 py-1.5">
+                <span class="font-medium text-slate-800">{o.titulo}</span>
+                {o.trabajosRealizados && <span class="block text-[10px] text-slate-500 max-w-[300px]">{o.trabajosRealizados.slice(0, 160)}{o.trabajosRealizados.length > 160 ? "…" : ""}</span>}
+              </td>
+              <td class="px-2 py-1.5 text-slate-600">{tec?.nombre ?? "—"}</td>
+              <td class="px-2 py-1.5 whitespace-nowrap">{fmt(o.createdAt)}</td>
+              <td class="px-2 py-1.5 whitespace-nowrap">{fmt(o.completadaEn)}</td>
+              <td class="px-2 py-1.5">{ESTADO_OT[o.estado] ?? o.estado}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+
+    <!-- 4. Calibraciones -->
+    {(esBio || a.requiereCalibracion || calibs.length > 0) && (
+      <>
+        <h3 class="mt-6 text-base font-bold text-slate-900">4. Historial de calibraciones</h3>
+        {calibs.length === 0 ? (
+          <p class="mt-2 text-sm text-slate-400">Sin calibraciones registradas.</p>
+        ) : (
+          <table class="mt-2 w-full text-left text-xs">
+            <thead class="text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Fecha</th>
+                <th class="px-2 py-1.5 font-medium">Laboratorio</th>
+                <th class="px-2 py-1.5 font-medium">Certificado</th>
+                <th class="px-2 py-1.5 font-medium">Patrón</th>
+                <th class="px-2 py-1.5 font-medium">Resultado</th>
+                <th class="px-2 py-1.5 font-medium">Próxima</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {calibs.map(({ c, lab }) => (
+                <tr>
+                  <td class="px-2 py-1.5 whitespace-nowrap">{fmt(c.fechaCalibracion)}</td>
+                  <td class="px-2 py-1.5">{lab?.nombre ?? c.laboratorioExterno ?? "—"}</td>
+                  <td class="px-2 py-1.5 font-mono text-[10px]">{c.numeroCertificado ?? "—"}</td>
+                  <td class="px-2 py-1.5">{c.patronReferencia ?? "—"}</td>
+                  <td class={`px-2 py-1.5 font-medium ${c.resultado === "no_conforme" ? "text-red-600" : "text-emerald-700"}`}>{RESULTADO_CALIB[c.resultado] ?? c.resultado}</td>
+                  <td class="px-2 py-1.5 whitespace-nowrap">{fmt(c.proximaCalibracion)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    )}
+
+    <!-- Pie -->
+    <div class="mt-8 border-t border-slate-200 pt-3 text-[10px] text-slate-400">
+      Hoja de vida generada desde la plataforma de mantenimiento el {fmtDT(new Date().toISOString())} por {user.nombre} ·
+      Equipo {a.codigo} · Documento de evidencia del programa de gestión de equipo (JCI FMS.07).
+    </div>
+  </div>
+
+  <style is:global>
+    @media print {
+      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
+      main { padding: 0 !important; }
+      .print-doc { border: none !important; box-shadow: none !important; margin-top: 0 !important; }
+      body { background: white !important; }
+      table { break-inside: auto; }
+      tr { break-inside: avoid; }
+    }
+  </style>
+</Layout>
