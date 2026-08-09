@@ -41,6 +41,13 @@ if (a.proveedorId) {
   if (p) proveedorInfo = p;
 }
 
+// Quién registró la inspección de aceptación (FMS.07)
+let aceptadoPorNombre: string | null = null;
+if (a.aceptacionPor) {
+  const [ap] = await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, a.aceptacionPor)).limit(1);
+  aceptadoPorNombre = ap?.nombre ?? null;
+}
+
 const planes = await db
   .select({ p: planesMantenimiento, u: usuarios })
   .from(planesMantenimiento)
@@ -302,6 +309,94 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <div class="mt-4 flex flex-wrap gap-2">
     <a href={`/activos/${a.id}/predictivo`} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
   </div>
+
+  <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
+  <div class="card mt-6 p-5">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="font-semibold">🔎 Inspección de aceptación (entrada en servicio)</h2>
+      {canEdit && (
+        <button id="acepBtn" class="btn-secondary text-sm">{a.aceptacionFecha ? "✎ Editar registro" : "+ Registrar aceptación"}</button>
+      )}
+    </div>
+    {a.aceptacionFecha ? (
+      <div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+        <span class={`badge ${a.aceptacionResultado === "aprobado" ? "bg-emerald-100 text-emerald-700" : a.aceptacionResultado === "condicionado" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
+          {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "⚠ Aprobado con condiciones" : "✗ Rechazado"}
+        </span>
+        <span class="text-slate-600">Fecha: <span class="font-medium">{a.aceptacionFecha.split("-").reverse().join("/")}</span></span>
+        {aceptadoPorNombre && <span class="text-slate-500 text-xs">Registrado por {aceptadoPorNombre}</span>}
+        {a.aceptacionNotas && <span class="w-full text-xs text-slate-500 mt-1">{a.aceptacionNotas}</span>}
+      </div>
+    ) : (
+      <p class="mt-2 text-sm text-slate-400">
+        Sin registro de inspección inicial. JCI FMS.07 pide documentar la inspección de aceptación antes de poner el equipo en servicio.
+      </p>
+    )}
+  </div>
+
+  {canEdit && (
+    <div id="acepModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-md p-5">
+        <h3 class="text-lg font-semibold text-slate-900">🔎 Inspección de aceptación</h3>
+        <p class="mt-1 text-xs text-slate-500">Prueba inicial de funcionamiento, integridad y accesorios al recibir/instalar el equipo.</p>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="label text-xs">Fecha de la inspección *</label>
+            <input id="acep_fecha" type="date" class="input" value={a.aceptacionFecha ?? new Date().toISOString().slice(0, 10)} />
+          </div>
+          <div>
+            <label class="label text-xs">Resultado *</label>
+            <select id="acep_resultado" class="input">
+              <option value="aprobado" selected={a.aceptacionResultado === "aprobado" || !a.aceptacionResultado}>✓ Aprobado — apto para servicio</option>
+              <option value="condicionado" selected={a.aceptacionResultado === "condicionado"}>⚠ Aprobado con condiciones</option>
+              <option value="rechazado" selected={a.aceptacionResultado === "rechazado"}>✗ Rechazado — no entra en servicio</option>
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs">Notas (pruebas realizadas, accesorios verificados, observaciones)</label>
+            <textarea id="acep_notas" class="input" rows="3">{a.aceptacionNotas ?? ""}</textarea>
+          </div>
+        </div>
+        <p id="acep_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="acep_cancel" class="btn-secondary">Cancelar</button>
+          <button id="acep_save" class="btn-primary">Guardar registro</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {canEdit && (
+    <script define:vars={{ activoId: a.id }}>
+      (function () {
+        const modal = document.getElementById("acepModal");
+        if (!modal) return;
+        const show = () => { modal.classList.remove("hidden"); modal.classList.add("flex"); };
+        const hide = () => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+        document.getElementById("acepBtn")?.addEventListener("click", show);
+        document.getElementById("acep_cancel")?.addEventListener("click", hide);
+        modal.addEventListener("click", (e) => { if (e.target === modal) hide(); });
+
+        document.getElementById("acep_save")?.addEventListener("click", async () => {
+          const err = document.getElementById("acep_err");
+          err.classList.add("hidden");
+          const fecha = document.getElementById("acep_fecha").value;
+          if (!fecha) { err.textContent = "La fecha es obligatoria."; err.classList.remove("hidden"); return; }
+          const res = await fetch(`/api/activos/${activoId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              aceptacionFecha: fecha,
+              aceptacionResultado: document.getElementById("acep_resultado").value,
+              aceptacionNotas: document.getElementById("acep_notas").value.trim() || null,
+            }),
+          });
+          if (res.ok) { window.showToast?.("Inspección de aceptación registrada", "success"); location.reload(); }
+          else { err.textContent = "Error al guardar"; err.classList.remove("hidden"); }
+        });
+      })();
+    </script>
+  )}
 
   <!-- Documentos del equipo (ficha técnica, manual, garantía…) -->
   <div class="card mt-6 p-5">

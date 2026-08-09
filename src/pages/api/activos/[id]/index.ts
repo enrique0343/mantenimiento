@@ -32,6 +32,9 @@ const updateSchema = z.object({
   criticidadOperacional: z.enum(["alta", "media", "baja"]).nullable().optional(),
   rubro: z.enum(["infraestructura", "aires", "equipo_general", "biomedico"]).nullable().optional(),
   subcategoria: z.enum(["soporte_vida", "diagnostico", "tratamiento", "esterilizacion", "cadena_frio", "imagenologia", "apoyo"]).nullable().optional(),
+  aceptacionFecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  aceptacionResultado: z.enum(["aprobado", "condicionado", "rechazado"]).nullable().optional(),
+  aceptacionNotas: z.string().nullable().optional(),
   requiereCalibracion: z.boolean().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),
@@ -64,7 +67,11 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const [row] = await db.update(activos).set(parsed.data).where(eq(activos.id, id)).returning();
+  // Al registrar la inspección de aceptación, se firma con el usuario actual
+  const data: Record<string, unknown> = { ...parsed.data };
+  if (parsed.data.aceptacionFecha) data.aceptacionPor = user.id;
+
+  const [row] = await db.update(activos).set(data).where(eq(activos.id, id)).returning();
 
   // Audit
   const diff = calcularDiff(actual as any, parsed.data as any);

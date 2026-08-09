@@ -108,6 +108,11 @@ export const activos = sqliteTable("activos", {
   rubro: text("rubro"),
   // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
   subcategoria: text("subcategoria"),
+  // Inspección de aceptación / entrada en servicio (JCI FMS.07)
+  aceptacionFecha: text("aceptacion_fecha"),
+  aceptacionResultado: text("aceptacion_resultado", { enum: ["aprobado", "condicionado", "rechazado"] }),
+  aceptacionNotas: text("aceptacion_notas"),
+  aceptacionPor: integer("aceptacion_por"),
   // Datos patrimoniales (JCI FMS.8 — ciclo de vida del equipo)
   fechaAdquisicion: text("fecha_adquisicion"),
   vidaUtilAnios: integer("vida_util_anios"),

@@ -120,6 +120,16 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
       {esBio && <div><span class="text-xs text-slate-400 block">Clase de riesgo</span>{a.claseRiesgo ?? "—"}</div>}
       {esBio && <div><span class="text-xs text-slate-400 block">Registro sanitario</span>{a.registroSanitario ?? "—"}</div>}
       <div><span class="text-xs text-slate-400 block">Estado actual</span><span class="capitalize">{a.estado}</span></div>
+      <div>
+        <span class="text-xs text-slate-400 block">Inspección de aceptación</span>
+        {a.aceptacionFecha ? (
+          <span class={a.aceptacionResultado === "aprobado" ? "text-emerald-700" : a.aceptacionResultado === "condicionado" ? "text-amber-700" : "text-red-700"}>
+            {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "⚠ Condicionado" : "✗ Rechazado"} · {fmt(a.aceptacionFecha)}
+          </span>
+        ) : (
+          <span class="text-slate-400">Sin registro</span>
+        )}
+      </div>
       <div><span class="text-xs text-slate-400 block">Adquisición</span>{fmt(a.fechaAdquisicion)}</div>
       <div><span class="text-xs text-slate-400 block">Vida útil</span>{a.vidaUtilAnios ? `${a.vidaUtilAnios} años` : "—"}</div>
       <div><span class="text-xs text-slate-400 block">Proveedor</span>{row.prov?.nombre ?? "—"}</div>

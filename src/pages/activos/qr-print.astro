@@ -1,8 +1,9 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { activos, ubicaciones, sucursales, ordenes, planesMantenimiento } from "@/lib/schema";
+import { eq, asc, inArray, and, isNotNull, sql } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -30,6 +31,27 @@ const sucursalesList = await db
   .from(sucursales)
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
+
+// Etiqueta de estado (JCI FMS.07): última intervención concluida y próxima programada
+const idsFiltrados = filtered.map((r) => r.a.id);
+const ultimaMap = new Map<number, string>();
+const proximaMap = new Map<number, string>();
+if (idsFiltrados.length > 0) {
+  const ultimas = await db
+    .select({ activoId: ordenes.activoId, f: sql<string>`MAX(${ordenes.completadaEn})` })
+    .from(ordenes)
+    .where(and(inArray(ordenes.activoId, idsFiltrados), isNotNull(ordenes.completadaEn)))
+    .groupBy(ordenes.activoId);
+  for (const u of ultimas) if (u.activoId && u.f) ultimaMap.set(u.activoId, u.f);
+
+  const proximas = await db
+    .select({ activoId: planesMantenimiento.activoId, f: sql<string>`MIN(${planesMantenimiento.proximaFecha})` })
+    .from(planesMantenimiento)
+    .where(and(inArray(planesMantenimiento.activoId, idsFiltrados), eq(planesMantenimiento.activo, true)))
+    .groupBy(planesMantenimiento.activoId);
+  for (const p of proximas) if (p.activoId && p.f) proximaMap.set(p.activoId, p.f);
+}
+const fmtEtiqueta = (s: string | undefined) => (s ? fmtFechaSoloCompacta(s.slice(0, 10)) : null);
 
 // Origen para construir el URL del QR. Astro.url sirve.
 const origin = Astro.url.origin;
@@ -71,6 +93,8 @@ const origin = Astro.url.origin;
     {filtered.map((r) => {
       const target = `${origin}/activos/${r.a.id}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(target)}`;
+      const ultima = fmtEtiqueta(ultimaMap.get(r.a.id));
+      const proxima = fmtEtiqueta(proximaMap.get(r.a.id));
       return (
         <div class="qr-tag">
           <img src={qrUrl} alt={r.a.codigo} loading="lazy" />
@@ -82,6 +106,13 @@ const origin = Astro.url.origin;
               {r.s && <span> · 🏢 {r.s.nombre}</span>}
               {r.ub && <span> · 📍 {r.ub.nombre}</span>}
             </div>
+            {(ultima || proxima) && (
+              <div class="qr-fechas">
+                {ultima && <span>Últ. mant.: <b>{ultima}</b></span>}
+                {ultima && proxima && <span> · </span>}
+                {proxima && <span>Próx.: <b>{proxima}</b></span>}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -113,6 +144,7 @@ const origin = Astro.url.origin;
     .qr-code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; }
     .qr-name { font-size: 12px; margin-top: 2px; }
     .qr-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+    .qr-fechas { font-size: 10px; color: #334155; margin-top: 4px; border-top: 1px dashed #cbd5e1; padding-top: 4px; }
     @media print {
       .qr-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
       .qr-tag { border: 1px dashed #999; box-shadow: none; }
