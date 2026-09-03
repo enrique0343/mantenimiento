@@ -41,7 +41,7 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
 
   // Datos para el correo formal: técnico solicitante + jefe que autoriza
   const [creador] = sol.creadoPor

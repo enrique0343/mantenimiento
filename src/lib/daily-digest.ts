@@ -18,7 +18,7 @@ import { procesarContratosVencimiento } from "./contratos-alertas";
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  return env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  return env.APP_URL || "https://mantenimiento.complejoavante.dev";
 }
 
 // Helpers de fecha en zona local El Salvador (UTC-6)

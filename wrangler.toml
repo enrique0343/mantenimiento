@@ -15,3 +15,4 @@ bucket_name = "mantenimiento-adjuntos"
 
 [vars]
 APP_NAME = "Mantenimiento"
+APP_URL = "https://mantenimiento.complejoavante.dev"

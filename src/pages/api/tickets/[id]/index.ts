@@ -168,7 +168,7 @@ export const PATCH: APIRoute = async (ctx) => {
         .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA!)).limit(1);
       if (tec?.email) {
         const env = (ctx.locals as any)?.runtime?.env ?? {};
-        const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+        const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
         const otUrl = `${baseUrl}/ordenes/${orden.id}`;
         const primerNombre = (tec.nombre ?? "").split(" ")[0] || tec.nombre;
 
