@@ -37,8 +37,15 @@ interface Env {
   APP_URL?: string;
 }
 
+// Global UI helpers injected by Layout.astro
+interface Window {
+  showToast?: (msg: string, type?: "success" | "error" | "warning" | "info", duration?: number) => void;
+  confirmAction?: (title: string, msg: string, opts?: { danger?: boolean; confirmLabel?: string }) => Promise<boolean>;
+}
+
 declare namespace App {
   interface Locals extends Runtime {
+    area?: import("./lib/areas").AreaKey | null;
     user?: {
       id: number;
       email: string;

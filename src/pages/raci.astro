@@ -1,0 +1,176 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { raciProcesos, raciAsignaciones } from "@/lib/schema";
+import { asc } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
+const canEdit = user.rol === "admin" || user.rol === "jefe";
+
+const db = getDb(Astro);
+const procesos = await db.select().from(raciProcesos).orderBy(asc(raciProcesos.orden), asc(raciProcesos.id));
+const asignaciones = await db.select().from(raciAsignaciones);
+
+const RESP = [
+  { key: "R", label: "Ejecuta (R)", color: "bg-emerald-100 text-emerald-700" },
+  { key: "A", label: "Aprueba (A)", color: "bg-blue-100 text-blue-700" },
+  { key: "C", label: "Consultado (C)", color: "bg-amber-100 text-amber-700" },
+  { key: "I", label: "Informado (I)", color: "bg-slate-100 text-slate-600" },
+];
+const porProceso = new Map<number, Record<string, typeof asignaciones>>();
+for (const a of asignaciones) {
+  const m = porProceso.get(a.procesoId) ?? { R: [], A: [], C: [], I: [] };
+  (m[a.responsabilidad] ??= []).push(a);
+  porProceso.set(a.procesoId, m);
+}
+const procesosJson = JSON.stringify(procesos.map((p) => ({ id: p.id, nombre: p.nombre })));
+---
+
+<Layout title="Matriz RACI">
+  <div class="flex flex-wrap items-start justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">🧭 Matriz de responsabilidades (RACI)</h1>
+      <p class="text-sm text-slate-500">Quién ejecuta, aprueba, es consultado e informado en cada proceso de mantenimiento (gobernanza JCI).</p>
+    </div>
+    {canEdit && (
+      <div class="flex flex-wrap gap-2">
+        <button id="procBtn" class="btn-secondary text-sm">+ Proceso</button>
+        <button id="asigBtn" class="btn-primary text-sm">+ Responsabilidad</button>
+      </div>
+    )}
+  </div>
+
+  <p class="mt-2 text-xs text-slate-500">
+    <span class="badge bg-emerald-100 text-emerald-700">R = Ejecuta</span>
+    <span class="badge bg-blue-100 text-blue-700 ml-1">A = Aprueba / rinde cuentas</span>
+    <span class="badge bg-amber-100 text-amber-700 ml-1">C = Consultado</span>
+    <span class="badge bg-slate-100 text-slate-600 ml-1">I = Informado</span>
+  </p>
+
+  {canEdit && (
+    <div id="procForm" class="card mt-3 hidden p-4">
+      <h2 class="mb-2 font-semibold">Nuevo proceso</h2>
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div><label class="label">Nombre *</label><input id="proc_nombre" class="input" /></div>
+        <div><label class="label">Descripción</label><input id="proc_desc" class="input" /></div>
+      </div>
+      <div class="mt-2 flex gap-2"><button id="proc_save" class="btn-primary text-sm">Guardar</button><button id="proc_cancel" class="btn-secondary text-sm">Cancelar</button></div>
+    </div>
+  )}
+
+  {canEdit && (
+    <div id="asigForm" class="card mt-3 hidden p-4">
+      <h2 class="mb-2 font-semibold">Agregar responsabilidad</h2>
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-4">
+        <div class="sm:col-span-2">
+          <label class="label">Proceso</label>
+          <select id="asig_proc" class="input">
+            {procesos.map((p) => <option value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Responsabilidad</label>
+          <select id="asig_resp" class="input">
+            <option value="R">Ejecuta (R)</option><option value="A">Aprueba (A)</option>
+            <option value="C">Consultado (C)</option><option value="I">Informado (I)</option>
+          </select>
+        </div>
+        <div><label class="label">Actor / rol</label><input id="asig_actor" class="input" placeholder="Ej: Jefe Biomédico" /></div>
+      </div>
+      <p id="asig_err" class="mt-2 hidden text-sm text-red-600"></p>
+      <div class="mt-2 flex gap-2"><button id="asig_save" class="btn-primary text-sm">Agregar</button><button id="asig_cancel" class="btn-secondary text-sm">Cancelar</button></div>
+    </div>
+  )}
+
+  <div class="card mt-4 overflow-x-auto">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2 min-w-[200px]">Proceso</th>
+          {RESP.map((r) => <th class="px-4 py-2 min-w-[160px]">{r.label}</th>)}
+          {canEdit && <th class="px-2 py-2"></th>}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {procesos.length === 0 && <tr><td colspan={canEdit ? 6 : 5} class="px-4 py-6 text-center text-slate-400">Sin procesos definidos.</td></tr>}
+        {procesos.map((p) => {
+          const celdas = porProceso.get(p.id) ?? { R: [], A: [], C: [], I: [] };
+          return (
+            <tr class="align-top">
+              <td class="px-4 py-3">
+                <div class="font-medium text-slate-800">{p.nombre}</div>
+                {p.descripcion && <div class="text-xs text-slate-500">{p.descripcion}</div>}
+              </td>
+              {RESP.map((r) => (
+                <td class="px-4 py-3">
+                  <div class="flex flex-wrap gap-1">
+                    {(celdas[r.key] ?? []).map((a) => (
+                      <span class={`badge text-[11px] ${r.color} inline-flex items-center gap-1`}>
+                        {a.actor}
+                        {canEdit && <button class="asig-del text-current opacity-60 hover:opacity-100" data-id={a.id} title="Quitar">×</button>}
+                      </span>
+                    ))}
+                    {(celdas[r.key] ?? []).length === 0 && <span class="text-xs text-slate-300">—</span>}
+                  </div>
+                </td>
+              ))}
+              {canEdit && (
+                <td class="px-2 py-3">
+                  <button class="proc-del text-xs text-red-600 hover:underline" data-id={p.id} title="Eliminar proceso">🗑</button>
+                </td>
+              )}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+
+  {canEdit && (
+    <script define:vars={{ procesosJson }}>
+      const $ = (id) => document.getElementById(id);
+      $("procBtn")?.addEventListener("click", () => $("procForm")?.classList.toggle("hidden"));
+      $("proc_cancel")?.addEventListener("click", () => $("procForm")?.classList.add("hidden"));
+      $("asigBtn")?.addEventListener("click", () => $("asigForm")?.classList.toggle("hidden"));
+      $("asig_cancel")?.addEventListener("click", () => $("asigForm")?.classList.add("hidden"));
+
+      $("proc_save")?.addEventListener("click", async () => {
+        const nombre = $("proc_nombre").value.trim();
+        if (!nombre) { alert("El nombre es obligatorio."); return; }
+        const res = await fetch("/api/raci/procesos", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nombre, descripcion: $("proc_desc").value.trim() || null }),
+        });
+        if (res.ok) location.reload(); else alert("Error al guardar");
+      });
+
+      $("asig_save")?.addEventListener("click", async () => {
+        const err = $("asig_err");
+        err.classList.add("hidden");
+        const actor = $("asig_actor").value.trim();
+        if (!actor) { err.textContent = "Indica el actor o rol."; err.classList.remove("hidden"); return; }
+        const res = await fetch("/api/raci/asignaciones", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ procesoId: Number($("asig_proc").value), actor, responsabilidad: $("asig_resp").value }),
+        });
+        if (res.ok) location.reload(); else { const j = await res.json().catch(() => ({})); err.textContent = typeof j.error === "string" ? j.error : "Error"; err.classList.remove("hidden"); }
+      });
+
+      document.querySelectorAll(".asig-del").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const res = await fetch(`/api/raci/asignaciones?id=${b.dataset.id}`, { method: "DELETE" });
+          if (res.ok) location.reload();
+        });
+      });
+      document.querySelectorAll(".proc-del").forEach((b) => {
+        b.addEventListener("click", async () => {
+          if (!confirm("¿Eliminar este proceso y todas sus responsabilidades?")) return;
+          const res = await fetch(`/api/raci/procesos/${b.dataset.id}`, { method: "DELETE" });
+          if (res.ok) location.reload();
+        });
+      });
+    </script>
+  )}
+</Layout>

@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, real, primaryKey, index } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const ROLES = ["admin", "jefe", "tecnico", "proveedor", "solicitante", "visualizador", "motorista"] as const;
@@ -51,6 +51,10 @@ export const proveedores = sqliteTable("proveedores", {
   email: text("email"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   notas: text("notas"),
+  // Laboratorio de calibración acreditado (JCI FMS.8 — cadena metrológica)
+  esLaboratorioAcreditado: integer("es_laboratorio_acreditado", { mode: "boolean" }).notNull().default(false),
+  acreditacionOrgano: text("acreditacion_organo"),
+  acreditacionVigencia: text("acreditacion_vigencia"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -72,6 +76,9 @@ export const usuarios = sqliteTable("usuarios", {
   calendarToken: text("calendar_token"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  // Marca temporal del último login exitoso (no del último request — eso sería
+  // demasiados writes). Útil para detectar cuentas inactivas o no usadas.
+  ultimaConexion: text("ultima_conexion"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -97,6 +104,25 @@ export const activos = sqliteTable("activos", {
   qrCode: text("qr_code").unique(),
   // Tipo de equipo
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
+  // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
+  rubro: text("rubro"),
+  datosTecnicos: text("datos_tecnicos"),
+  // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
+  subcategoria: text("subcategoria"),
+  // Inspección de aceptación / entrada en servicio (JCI FMS.07)
+  aceptacionFecha: text("aceptacion_fecha"),
+  aceptacionResultado: text("aceptacion_resultado", { enum: ["aprobado", "condicionado", "rechazado"] }),
+  aceptacionNotas: text("aceptacion_notas"),
+  aceptacionPor: integer("aceptacion_por"),
+  // Datos patrimoniales (JCI FMS.8 — ciclo de vida del equipo)
+  fechaAdquisicion: text("fecha_adquisicion"),
+  vidaUtilAnios: integer("vida_util_anios"),
+  valorAdquisicion: real("valor_adquisicion"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  // Criticidad operacional (tolerancia a downtime), distinta de claseRiesgo regulatoria
+  criticidadOperacional: text("criticidad_operacional", { enum: ["alta", "media", "baja"] }).default("media"),
+  // Equipo no biomédico que igual requiere calibración (balanzas, manómetros…)
+  requiereCalibracion: integer("requiere_calibracion", { mode: "boolean" }).notNull().default(false),
   // Campos biomedicos
   registroSanitario: text("registro_sanitario"),
   claseRiesgo: text("clase_riesgo", { enum: ["I", "IIa", "IIb", "III"] }),
@@ -113,6 +139,7 @@ export const activos = sqliteTable("activos", {
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
   tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo"] }).notNull().default("correctivo"),
@@ -133,6 +160,7 @@ export const ordenes = sqliteTable("ordenes", {
   vehiculoId: integer("vehiculo_id").references((): any => vehiculos.id),
   actividadId: integer("actividad_id").references((): any => actividades.id),
   asignadoA: integer("asignado_a").references(() => usuarios.id),
+  asignadoEn: text("asignado_en"),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   planId: integer("plan_id").references((): any => planesMantenimiento.id),
   vencimiento: text("vencimiento"),
@@ -304,6 +332,7 @@ export const requisicionItems = sqliteTable("requisicion_items", {
 
 // ─── Helpdesk ────────────────────────────────────────────────────────────────
 export const tickets = sqliteTable("tickets", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   trackingToken: text("tracking_token").notNull().unique(),
   solicitanteNombre: text("solicitante_nombre").notNull(),
@@ -411,6 +440,9 @@ export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   asignadoA: integer("asignado_a").references(() => usuarios.id),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   ultimaGeneracion: text("ultima_generacion"),
+  // Modalidad de ejecución (interno/contratado/mixto) + contrato que la respalda
+  modalidad: text("modalidad", { enum: ["interno", "contratado", "mixto"] }).notNull().default("interno"),
+  contratoId: integer("contrato_id"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -595,9 +627,11 @@ export const actividadCategorias = sqliteTable("actividad_categorias", {
   icono: text("icono"),
   orden: integer("orden").notNull().default(0),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  rubro: text("rubro"),
 });
 
 export const actividades = sqliteTable("actividades", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   codigo: text("codigo").notNull().unique(),
   titulo: text("titulo").notNull(),
@@ -625,6 +659,104 @@ export const actividades = sqliteTable("actividades", {
 
 export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
 export type Actividad = typeof actividades.$inferSelect;
+
+// ─── Control eléctrico (Fase 42) ─────────────────────────────────────────────
+// Subestaciones/puntos de alimentación por sede + cargas conectadas, para
+// calcular la disponibilidad eléctrica antes de incorporar equipos nuevos.
+export const subestaciones = sqliteTable("subestaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sucursalId: integer("sucursal_id")
+    .notNull()
+    .references(() => sucursales.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  codigo: text("codigo"),
+  capacidadKva: real("capacidad_kva").notNull(),
+  voltaje: text("voltaje"),
+  factorPotencia: real("factor_potencia").notNull().default(0.9),
+  factorSeguridad: real("factor_seguridad").notNull().default(0.8),
+  ubicacionDetalle: text("ubicacion_detalle"),
+  activoId: integer("activo_id").references(() => activos.id),
+  notas: text("notas"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const cargasElectricas = sqliteTable("cargas_electricas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  subestacionId: integer("subestacion_id")
+    .notNull()
+    .references(() => subestaciones.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  activoId: integer("activo_id").references(() => activos.id),
+  tablero: text("tablero"),
+  potenciaKw: real("potencia_kw"),
+  amperaje: real("amperaje"),
+  voltajeCarga: real("voltaje_carga"),
+  fases: integer("fases").notNull().default(1),
+  notas: text("notas"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type Subestacion = typeof subestaciones.$inferSelect;
+export type CargaElectrica = typeof cargasElectricas.$inferSelect;
+
+// ─── Presupuesto de mantenimiento (Fase 43) ──────────────────────────────────
+export const presupuestoMantenimiento = sqliteTable("presupuesto_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  anio: integer("anio").notNull(),
+  rubro: text("rubro").notNull(),
+  monto: real("monto").notNull().default(0),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const gastosMantenimiento = sqliteTable("gastos_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fecha: text("fecha").notNull(),
+  rubro: text("rubro").notNull(),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  descripcion: text("descripcion").notNull(),
+  monto: real("monto").notNull(),
+  referencia: text("referencia"),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Configuración clave-valor (textos del plan anual, parámetros generales)
+export const appConfig = sqliteTable("app_config", {
+  clave: text("clave").primaryKey(),
+  valor: text("valor").notNull(),
+  updatedAt: text("updated_at"),
+});
+
+export type PresupuestoMantenimiento = typeof presupuestoMantenimiento.$inferSelect;
+export type GastoMantenimiento = typeof gastosMantenimiento.$inferSelect;
+
+// ─── Alertas y retiros de equipo — JCI FMS.07.1 (Fase 45) ────────────────────
+export const alertasEquipo = sqliteTable("alertas_equipo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tipo: text("tipo", { enum: ["retiro", "alerta", "aviso"] }).notNull().default("alerta"),
+  fuente: text("fuente", { enum: ["fabricante", "regulador", "proveedor", "interna"] }).notNull().default("fabricante"),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion"),
+  referencia: text("referencia"),
+  fechaAlerta: text("fecha_alerta").notNull(),
+  estado: text("estado", { enum: ["abierta", "en_proceso", "cerrada"] }).notNull().default("abierta"),
+  accionTomada: text("accion_tomada"),
+  cerradaEn: text("cerrada_en"),
+  cerradaPor: integer("cerrada_por").references(() => usuarios.id),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const alertasEquipoActivos = sqliteTable("alertas_equipo_activos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  alertaId: integer("alerta_id").notNull().references(() => alertasEquipo.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+});
+
+export type AlertaEquipo = typeof alertasEquipo.$inferSelect;
 
 // ─── Encuestas de satisfacción ───────────────────────────────────────────────
 export const encuestasSatisfaccion = sqliteTable("encuestas_satisfaccion", {
@@ -762,6 +894,12 @@ export const checklistPlantillaItems = sqliteTable("checklist_plantilla_items", 
   id: integer("id").primaryKey({ autoIncrement: true }),
   plantillaId: integer("plantilla_id").notNull().references(() => checklistPlantillas.id, { onDelete: "cascade" }),
   texto: text("texto").notNull(),
+  // Fase 35 (procedimientos JCI): criterio de aceptación, punto crítico,
+  // tiempo estimado y recursos requeridos por paso.
+  criterioAceptacion: text("criterio_aceptacion"),
+  bloqueante: integer("bloqueante", { mode: "boolean" }).notNull().default(false),
+  minutosEstimados: integer("minutos_estimados"),
+  materiales: text("materiales"),
   orden: integer("orden").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -863,3 +1001,164 @@ export const proyectoComentarios = sqliteTable("proyecto_comentarios", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type ProyectoComentario = typeof proyectoComentarios.$inferSelect;
+
+// ─── Contratos de mantenimiento (Fase 33) ────────────────────────────────────
+export const contratosMantenimiento = sqliteTable("contratos_mantenimiento", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  proveedorId: integer("proveedor_id").notNull().references(() => proveedores.id),
+  tipo: text("tipo").notNull().default("preventivo"),
+  alcance: text("alcance"),
+  fechaInicio: text("fecha_inicio").notNull(),
+  fechaFin: text("fecha_fin").notNull(),
+  costo: real("costo").notNull().default(0),
+  periodicidadCosto: text("periodicidad_costo").default("anual"),
+  numeroContratoExterno: text("numero_contrato_externo"),
+  contactoProveedor: text("contacto_proveedor"),
+  telefonoContacto: text("telefono_contacto"),
+  emailContacto: text("email_contacto"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  estado: text("estado").notNull().default("vigente"),
+  renovacionDeId: integer("renovacion_de_id").references((): any => contratosMantenimiento.id),
+  notas: text("notas"),
+  notasRenovacion: text("notas_renovacion"),
+  notasCancelacion: text("notas_cancelacion"),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  alerta90dEnviadaEn: text("alerta_90d_enviada_en"),
+  alerta60dEnviadaEn: text("alerta_60d_enviada_en"),
+  alerta30dEnviadaEn: text("alerta_30d_enviada_en"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+});
+export type ContratoMantenimiento = typeof contratosMantenimiento.$inferSelect;
+
+export const contratoEquipos = sqliteTable("contrato_equipos", {
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.contratoId, t.activoId] }),
+}));
+export type ContratoEquipo = typeof contratoEquipos.$inferSelect;
+
+export const contratoAdjuntos = sqliteTable("contrato_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria").default("contrato"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ContratoAdjunto = typeof contratoAdjuntos.$inferSelect;
+
+export const contratoComentarios = sqliteTable("contrato_comentarios", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contratoId: integer("contrato_id").notNull().references(() => contratosMantenimiento.id, { onDelete: "cascade" }),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  texto: text("texto").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ContratoComentario = typeof contratoComentarios.$inferSelect;
+
+// ─── Calibraciones con trazabilidad metrológica (Fase 34 — JCI FMS.8) ────────
+export const calibraciones = sqliteTable("calibraciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  fechaCalibracion: text("fecha_calibracion").notNull(),
+  proximaCalibracion: text("proxima_calibracion"),
+  laboratorioId: integer("laboratorio_id").references(() => proveedores.id),
+  laboratorioExterno: text("laboratorio_externo"),
+  numeroCertificado: text("numero_certificado"),
+  patronReferencia: text("patron_referencia"),
+  resultado: text("resultado", { enum: ["conforme", "conforme_con_ajuste", "no_conforme"] }).notNull().default("conforme"),
+  incertidumbre: text("incertidumbre"),
+  certificadoR2Key: text("certificado_r2_key"),
+  realizadoPor: text("realizado_por"),
+  notas: text("notas"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type Calibracion = typeof calibraciones.$inferSelect;
+
+// ─── Documentos del equipo (ficha técnica, manual, garantía…) (Fase 34) ──────
+export const activoDocumentos = sqliteTable("activo_documentos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria").default("ficha_tecnica"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type ActivoDocumento = typeof activoDocumentos.$inferSelect;
+
+// ─── Métricas KPI mensuales (Fase 36 — JCI: tendencia documentada) ───────────
+export const metricasKpi = sqliteTable("metricas_kpi", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  periodo: text("periodo").notNull(),
+  scope: text("scope").notNull().default("global"),
+  cumplimientoPreventivo: real("cumplimiento_preventivo"),
+  mttrHoras: real("mttr_horas"),
+  mtbfHoras: real("mtbf_horas"),
+  disponibilidadPct: real("disponibilidad_pct"),
+  backlogCorrectivos: integer("backlog_correctivos").notNull().default(0),
+  costoTotal: real("costo_total").notNull().default(0),
+  costoPorActivo: real("costo_por_activo").notNull().default(0),
+  otsCompletadas: integer("ots_completadas").notNull().default(0),
+  otsCorrectivas: integer("ots_correctivas").notNull().default(0),
+  otsPreventivas: integer("ots_preventivas").notNull().default(0),
+  preventivosProgramados: integer("preventivos_programados").notNull().default(0),
+  numActivos: integer("num_activos").notNull().default(0),
+  capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type MetricaKpi = typeof metricasKpi.$inferSelect;
+
+// ─── Contingencia (Fase 37 — JCI FMS.9: continuidad de servicio) ─────────────
+export const activoRespaldos = sqliteTable("activo_respaldos", {
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  respaldoId: integer("respaldo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.activoId, t.respaldoId] }),
+}));
+export type ActivoRespaldo = typeof activoRespaldos.$inferSelect;
+
+export const escalacionNiveles = sqliteTable("escalacion_niveles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  criticidad: text("criticidad", { enum: ["alta", "media", "baja", "todas"] }).notNull().default("alta"),
+  nivel: integer("nivel").notNull().default(1),
+  minutosParaEscalar: integer("minutos_para_escalar"),
+  contactoNombre: text("contacto_nombre"),
+  contactoCargo: text("contacto_cargo"),
+  contactoTelefono: text("contacto_telefono"),
+  contactoEmail: text("contacto_email"),
+  accion: text("accion"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type EscalacionNivel = typeof escalacionNiveles.$inferSelect;
+
+// ─── Matriz RACI (Fase 38 — gobernanza JCI) ──────────────────────────────────
+export const raciProcesos = sqliteTable("raci_procesos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  orden: integer("orden").notNull().default(0),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type RaciProceso = typeof raciProcesos.$inferSelect;
+
+export const raciAsignaciones = sqliteTable("raci_asignaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procesoId: integer("proceso_id").notNull().references(() => raciProcesos.id, { onDelete: "cascade" }),
+  actor: text("actor").notNull(),
+  responsabilidad: text("responsabilidad", { enum: ["R", "A", "C", "I"] }).notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+export type RaciAsignacion = typeof raciAsignaciones.$inferSelect;

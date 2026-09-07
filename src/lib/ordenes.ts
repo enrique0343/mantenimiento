@@ -1,4 +1,10 @@
 import type { Rol } from "./schema";
+import { eq } from "drizzle-orm";
+import type { getDb } from "./db";
+import { activos, ubicaciones, sucursales } from "./schema";
+import { parseArea, type AreaKey } from "./areas";
+import { rubroDeActivo } from "./rubros";
+
 
 export const TIPOS_OT = ["preventivo", "correctivo", "predictivo"] as const;
 export type TipoOT = (typeof TIPOS_OT)[number];
@@ -101,7 +107,18 @@ export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: Esta
 
 // Checklist parsing helpers
 export type ChecklistEstado = "pendiente" | "ok" | "na" | "desviacion";
-export type ChecklistItem = { texto: string; estado: ChecklistEstado; notas?: string };
+export type ChecklistItem = {
+  texto: string;
+  estado: ChecklistEstado;
+  notas?: string;
+  // Procedimiento estándar (Fase 35): metadata heredada de la plantilla.
+  criterio?: string;       // criterio de aceptación (valor/condición esperada)
+  bloqueante?: boolean;    // punto crítico: una desviación impide cerrar la OT
+  minutos?: number;        // tiempo estimado del paso
+  materiales?: string;     // herramientas/materiales requeridos
+  // Ejecución: lo que el técnico registró frente al criterio.
+  valorMedido?: string;
+};
 
 const ESTADOS_VALIDOS: ChecklistEstado[] = ["pendiente", "ok", "na", "desviacion"];
 
@@ -123,10 +140,16 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
         } else {
           estado = "pendiente";
         }
+        const minutos = Number(it?.minutos);
         return {
           texto,
           estado,
           notas: it?.notas ? String(it.notas) : undefined,
+          criterio: it?.criterio ? String(it.criterio) : undefined,
+          bloqueante: it?.bloqueante === true || it?.bloqueante === 1,
+          minutos: Number.isFinite(minutos) && minutos > 0 ? minutos : undefined,
+          materiales: it?.materiales ? String(it.materiales) : undefined,
+          valorMedido: it?.valorMedido ? String(it.valorMedido) : undefined,
         };
       })
       .filter((it) => it.texto.length > 0);
@@ -135,19 +158,28 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
   }
 }
 
-export function progresoChecklist(items: ChecklistItem[]): { hechos: number; total: number; pct: number; desviaciones: number; pendientes: number } {
+// Suma del tiempo estimado de todos los pasos con minutos definidos.
+export function minutosEstimadosChecklist(items: ChecklistItem[]): number {
+  return items.reduce((s, i) => s + (i.minutos ?? 0), 0);
+}
+
+export function progresoChecklist(items: ChecklistItem[]): { hechos: number; total: number; pct: number; desviaciones: number; pendientes: number; bloqueantesAbiertos: number } {
   const total = items.length;
   const hechos = items.filter((i) => i.estado === "ok" || i.estado === "na" || i.estado === "desviacion").length;
   const desviaciones = items.filter((i) => i.estado === "desviacion").length;
   const pendientes = items.filter((i) => i.estado === "pendiente").length;
+  // Puntos críticos en desviación: impiden devolver el equipo a servicio.
+  const bloqueantesAbiertos = items.filter((i) => i.bloqueante && i.estado === "desviacion").length;
   const pct = total === 0 ? 0 : Math.round((hechos / total) * 100);
-  return { hechos, total, pct, desviaciones, pendientes };
+  return { hechos, total, pct, desviaciones, pendientes, bloqueantesAbiertos };
 }
 
 // Valida si el checklist permite cerrar la OT.
 // Reglas:
 //   - No puede haber items en estado "pendiente"
 //   - Los items en "desviacion" deben tener notas (mín 10 chars)
+//   - Un punto crítico (bloqueante) en "desviacion" impide cerrar: el equipo no
+//     debe volver a servicio; requiere resolver el punto o escalar a correctivo.
 export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolean; error?: string } {
   if (items.length === 0) return { ok: true };
   const pendientes = items.filter((i) => i.estado === "pendiente");
@@ -158,5 +190,57 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
   if (desvSinNota.length > 0) {
     return { ok: false, error: `No puedes completar: hay ${desvSinNota.length} desviación${desvSinNota.length === 1 ? "" : "es"} sin describir. Cada desviación necesita una nota de al menos 10 caracteres.` };
   }
+  const bloqueantes = items.filter((i) => i.bloqueante && i.estado === "desviacion");
+  if (bloqueantes.length > 0) {
+    return { ok: false, error: `No puedes completar: hay ${bloqueantes.length} punto${bloqueantes.length === 1 ? "" : "s"} crítico${bloqueantes.length === 1 ? "" : "s"} en desviación. El equipo no puede volver a servicio: resuelve el punto (márcalo OK) o escala a un correctivo.` };
+  }
   return { ok: true };
+}
+
+// Las áreas organizan el trabajo; no sustituyen los permisos ni la prioridad.
+
+type AreaTrabajoInput = {
+  rubro?: string | null;
+  activoId?: number | null;
+  sucursalId?: number | null;
+  ubicacionId?: number | null;
+};
+
+/** Valida pertenencia real, también cuando la solicitud es solo por ubicación. */
+export async function validarAreaTrabajo(db: ReturnType<typeof getDb>, input: AreaTrabajoInput): Promise<{ rubro: AreaKey } | { error: string }> {
+  let area = parseArea(input.rubro);
+  if (input.rubro != null && !area) return { error: "Área de mantenimiento inválida" };
+  let activo: typeof activos.$inferSelect | undefined;
+  if (input.activoId != null) {
+    if (!Number.isInteger(input.activoId) || input.activoId <= 0) return { error: "Equipo o instalación inválido" };
+    [activo] = await db.select().from(activos).where(eq(activos.id, input.activoId)).limit(1);
+    if (!activo) return { error: "Equipo o instalación no encontrado" };
+    const assetArea = rubroDeActivo(activo.rubro, activo.tipo);
+    if (area && area !== assetArea) return { error: "El equipo o instalación pertenece a otra área de mantenimiento" };
+    area = assetArea;
+    if (input.ubicacionId && activo.ubicacionId && input.ubicacionId !== activo.ubicacionId) return { error: "El equipo o instalación no pertenece a la ubicación seleccionada" };
+  }
+  if (!area) return { error: "Selecciona el área de mantenimiento" };
+  if (input.sucursalId != null) {
+    if (!Number.isInteger(input.sucursalId) || input.sucursalId <= 0) return { error: "Sucursal inválida" };
+    const [sucursal] = await db.select({ id: sucursales.id }).from(sucursales).where(eq(sucursales.id, input.sucursalId)).limit(1);
+    if (!sucursal) return { error: "Sucursal no encontrada" };
+  }
+  const locationIds = [...new Set([input.ubicacionId, activo?.ubicacionId].filter((id): id is number => id != null))];
+  for (const locationId of locationIds) {
+    if (!Number.isInteger(locationId) || locationId <= 0) return { error: "Ubicación inválida" };
+    const [ubicacion] = await db.select({ sucursalId: ubicaciones.sucursalId }).from(ubicaciones).where(eq(ubicaciones.id, locationId)).limit(1);
+    if (!ubicacion) return { error: "Ubicación no encontrada" };
+    if (input.sucursalId && ubicacion.sucursalId !== input.sucursalId) return { error: "La ubicación no pertenece a la sucursal seleccionada" };
+  }
+  return { rubro: area };
+}
+
+export function validarContextoArea(request: Request, rubro: string | null): Response | null {
+  const raw = new URL(request.url).searchParams.get("area");
+  if (raw === null) return null;
+  const area = parseArea(raw);
+  if (!area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  if (rubro !== area) return Response.json({ error: "El registro pertenece a otra área de mantenimiento" }, { status: 400 });
+  return null;
 }

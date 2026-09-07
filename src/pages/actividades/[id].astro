@@ -5,6 +5,8 @@ import { actividades, actividadCategorias, sucursales, ubicaciones, usuarios, pr
 import { eq, desc } from "drizzle-orm";
 import { estadoFecha, ESTADO_FECHA_COLOR, FRECUENCIA_LABEL, diasParaFecha, puedeAdministrarActividades } from "@/lib/actividades";
 import { ESTADO_LABEL, ESTADO_COLOR, PRIO_COLOR, parseChecklist, type EstadoOT } from "@/lib/ordenes";
+import { parseArea, areaHref, AREAS } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -24,6 +26,9 @@ const [r] = await db
   .limit(1);
 if (!r) return Astro.redirect("/actividades");
 const a = r.a;
+const area = areaDeActividad(a.rubro, r.c?.rubro);
+const requestedArea = parseArea(Astro.url.searchParams.get("area"));
+if (requestedArea && requestedArea !== area) return Astro.redirect(areaHref(`/actividades/${id}`, area));
 
 const ots = await db.select().from(ordenes).where(eq(ordenes.actividadId, id)).orderBy(desc(ordenes.id)).limit(20);
 
@@ -36,7 +41,7 @@ const dias = diasParaFecha(a.proximaFecha);
 ---
 
 <Layout title={`Actividad ${a.codigo}`}>
-  <a href="/actividades" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <a href={areaHref("/actividades", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
   <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
@@ -64,6 +69,7 @@ const dias = diasParaFecha(a.proximaFecha);
     <div class="lg:col-span-2 space-y-4">
       <div class="card p-5">
         <h2 class="font-semibold text-slate-900">Detalles</h2>
+        {area && <p class="mt-2 text-sm font-medium text-brand-700">{AREAS[area].label}</p>}
         {a.descripcion && <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{a.descripcion}</p>}
         <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div><div class="text-xs uppercase text-slate-500">Frecuencia</div><div>{FRECUENCIA_LABEL[a.frecuencia]}</div></div>
@@ -123,7 +129,7 @@ const dias = diasParaFecha(a.proximaFecha);
         {ots.map((o) => (
           <tr class="hover:bg-slate-50">
             <td class="px-4 py-2 font-mono text-xs">#{o.id}</td>
-            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${o.id}`}>{o.titulo}</a></td>
+            <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={areaHref(`/ordenes/${o.id}`, area)}>{o.titulo}</a></td>
             <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[o.estado as EstadoOT]}`}>{ESTADO_LABEL[o.estado as EstadoOT]}</span></td>
             <td class="px-4 py-2 text-xs text-slate-600">{fmtFull(o.vencimiento)}</td>
             <td class="px-4 py-2 text-xs text-slate-600">{fmtFull(o.completadaEn)}</td>
@@ -145,7 +151,7 @@ const dias = diasParaFecha(a.proximaFecha);
     </div>
   </div>
 
-  <script define:vars={{ id, proxFecha: a.proximaFecha }}>
+  <script define:vars={{ id, proxFecha: a.proximaFecha, area }}>
     const showMsg = (txt, ok) => {
       const m = document.getElementById("actMsg");
       m.textContent = txt;
@@ -155,10 +161,10 @@ const dias = diasParaFecha(a.proximaFecha);
 
     document.getElementById("generarBtn")?.addEventListener("click", async () => {
       if (!confirm("¿Generar una OT inmediatamente para esta actividad?")) return;
-      const res = await fetch(`/api/actividades/${id}/generar-ot`, { method: "POST" });
+      const res = await fetch(`/api/actividades/${id}/generar-ot?area=${area ?? ""}`, { method: "POST" });
       if (!res.ok) { showMsg("Error al generar", false); return; }
       const j = await res.json();
-      if (confirm(`OT #${j.orden.id} generada. ¿Abrirla?`)) location.href = `/ordenes/${j.orden.id}`;
+      if (confirm(`OT #${j.orden.id} generada. ¿Abrirla?`)) location.href = `/ordenes/${j.orden.id}?area=${area ?? ""}`;
       else location.reload();
     });
 
@@ -174,16 +180,16 @@ const dias = diasParaFecha(a.proximaFecha);
     document.getElementById("rSave")?.addEventListener("click", async () => {
       const fecha = document.getElementById("r_fecha").value;
       if (!fecha) return;
-      const res = await fetch(`/api/actividades/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ proximaFecha: fecha }) });
+      const res = await fetch(`/api/actividades/${id}?area=${area ?? ""}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ proximaFecha: fecha }) });
       if (!res.ok) { showMsg("Error al reprogramar", false); return; }
       location.reload();
     });
 
     document.getElementById("darBajaBtn")?.addEventListener("click", async () => {
       if (!confirm("¿Dar de baja esta actividad? Ya no generará OTs hasta que la reactives.")) return;
-      const res = await fetch(`/api/actividades/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/actividades/${id}?area=${area ?? ""}`, { method: "DELETE" });
       if (!res.ok) { showMsg("Error", false); return; }
-      location.href = "/actividades";
+      location.href = `/actividades?area=${area ?? ""}`;
     });
   </script>
 </Layout>

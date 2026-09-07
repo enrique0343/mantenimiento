@@ -1,0 +1,322 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { presupuestoMantenimiento, gastosMantenimiento, sucursales, usuarios } from "@/lib/schema";
+import { eq, and, gte, lt, desc } from "drizzle-orm";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, type RubroKey } from "@/lib/rubros";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+const db = getDb(Astro);
+const esAdminOJefe = true;
+
+const url = new URL(Astro.request.url);
+const anioActual = new Date().getFullYear();
+const anio = Number(url.searchParams.get("anio")) || anioActual;
+
+const presupuestos = await db
+  .select()
+  .from(presupuestoMantenimiento)
+  .where(eq(presupuestoMantenimiento.anio, anio));
+
+const gastos = await db
+  .select({ g: gastosMantenimiento, s: sucursales, u: usuarios })
+  .from(gastosMantenimiento)
+  .leftJoin(sucursales, eq(sucursales.id, gastosMantenimiento.sucursalId))
+  .leftJoin(usuarios, eq(usuarios.id, gastosMantenimiento.creadoPor))
+  .where(and(gte(gastosMantenimiento.fecha, `${anio}-01-01`), lt(gastosMantenimiento.fecha, `${anio + 1}-01-01`)))
+  .orderBy(desc(gastosMantenimiento.fecha));
+
+const presupuestoPorRubro = new Map(presupuestos.map((p) => [p.rubro, p.monto]));
+const gastoPorRubro = new Map<string, number>();
+for (const { g } of gastos) {
+  gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
+}
+
+const filas = RUBRO_KEYS.map((k) => {
+  const asignado = presupuestoPorRubro.get(k) ?? 0;
+  const gastado = gastoPorRubro.get(k) ?? 0;
+  const pct = asignado > 0 ? (gastado / asignado) * 100 : gastado > 0 ? 999 : 0;
+  return { rubro: k as RubroKey, asignado, gastado, disponible: asignado - gastado, pct };
+});
+const totalAsignado = filas.reduce((s, f) => s + f.asignado, 0);
+const totalGastado = filas.reduce((s, f) => s + f.gastado, 0);
+const pctTotal = totalAsignado > 0 ? (totalGastado / totalAsignado) * 100 : 0;
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true));
+
+const hoy = new Date().toISOString().slice(0, 10);
+
+const barColor = (pct: number) => (pct >= 100 ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-emerald-500");
+const fmtFecha = (f: string) => {
+  const [y, m, d] = f.split("-");
+  return `${d}/${m}/${y}`;
+};
+---
+
+<Layout title={`Presupuesto ${anio}`}>
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">💰 Presupuesto de mantenimiento</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        Asignación anual por rubro y ejecución real · {fmtMonto(totalGastado)} de {fmtMonto(totalAsignado)} ejecutado
+        ({Math.round(pctTotal)}%)
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <div class="flex items-center gap-1 text-sm">
+        <a href={`/presupuesto?anio=${anio - 1}`} class="btn-secondary btn-sm">←</a>
+        <span class="px-2 font-bold text-lg">{anio}</span>
+        <a href={`/presupuesto?anio=${anio + 1}`} class="btn-secondary btn-sm">→</a>
+      </div>
+      <button id="defBtn" class="btn-secondary">⚙ Definir presupuestos</button>
+      <button id="gastoBtn" class="btn-primary">+ Registrar gasto</button>
+    </div>
+  </div>
+
+  <!-- Resumen por rubro -->
+  <div class="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+    {filas.map((f) => (
+      <div class="card p-4">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-lg shrink-0">{rubroIcono(f.rubro)}</span>
+            <span class="font-semibold text-slate-800 text-sm truncate">{rubroLabel(f.rubro)}</span>
+          </div>
+          {f.asignado > 0 && (
+            <span class={`badge shrink-0 ${f.pct >= 100 ? "bg-red-100 text-red-700" : f.pct >= 80 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {Math.round(f.pct)}%
+            </span>
+          )}
+        </div>
+        <div class="mt-3 flex justify-between text-xs text-slate-500">
+          <span>Ejecutado: <span class="font-semibold text-slate-700">{fmtMonto(f.gastado)}</span></span>
+          <span>Asignado: <span class="font-semibold text-slate-700">{fmtMonto(f.asignado)}</span></span>
+        </div>
+        <div class="mt-1.5 h-2 rounded-full bg-slate-100 overflow-hidden">
+          <div class={`h-full rounded-full ${barColor(f.pct)}`} style={`width:${Math.min(100, f.pct)}%`}></div>
+        </div>
+        <div class="mt-1.5 text-xs">
+          {f.asignado > 0 ? (
+            <span class={f.disponible >= 0 ? "text-emerald-600" : "text-red-600 font-semibold"}>
+              {f.disponible >= 0 ? `${fmtMonto(f.disponible)} disponibles` : `Excedido en ${fmtMonto(-f.disponible)}`}
+            </span>
+          ) : f.gastado > 0 ? (
+            <span class="text-amber-600">Sin presupuesto asignado — hay gastos registrados</span>
+          ) : (
+            <span class="text-slate-400">Sin presupuesto asignado</span>
+          )}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  <!-- Total general -->
+  <div class="card mt-4 p-4 border-l-4 border-brand-600">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="text-sm font-semibold text-slate-800">TOTAL {anio}</div>
+      <div class="flex flex-wrap gap-5 text-sm">
+        <span class="text-slate-500">Asignado: <span class="font-bold text-slate-800">{fmtMonto(totalAsignado)}</span></span>
+        <span class="text-slate-500">Ejecutado: <span class="font-bold text-slate-800">{fmtMonto(totalGastado)}</span></span>
+        <span class={totalAsignado - totalGastado >= 0 ? "text-emerald-600 font-bold" : "text-red-600 font-bold"}>
+          {totalAsignado - totalGastado >= 0 ? `Disponible: ${fmtMonto(totalAsignado - totalGastado)}` : `Excedido: ${fmtMonto(totalGastado - totalAsignado)}`}
+        </span>
+      </div>
+    </div>
+    <div class="mt-2 h-2.5 rounded-full bg-slate-100 overflow-hidden">
+      <div class={`h-full rounded-full ${barColor(pctTotal)}`} style={`width:${Math.min(100, pctTotal)}%`}></div>
+    </div>
+  </div>
+
+  <!-- Gastos del año -->
+  <h2 class="mt-7 font-semibold text-slate-800">Gastos registrados en {anio} ({gastos.length})</h2>
+  <div class="card mt-3 overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">Fecha</th>
+            <th class="px-4 py-2">Rubro</th>
+            <th class="px-4 py-2">Descripción</th>
+            <th class="px-4 py-2">Sede</th>
+            <th class="px-4 py-2">Referencia</th>
+            <th class="px-4 py-2 text-right">Monto</th>
+            <th class="px-4 py-2 text-right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {gastos.length === 0 && (
+            <tr><td colspan="7" class="px-4 py-8 text-center text-slate-400 text-sm">Sin gastos registrados en {anio}. Usa "+ Registrar gasto".</td></tr>
+          )}
+          {gastos.map(({ g, s, u }) => (
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">{fmtFecha(g.fecha)}</td>
+              <td class="px-4 py-2 text-xs">{rubroIcono(g.rubro)} {rubroLabel(g.rubro)}</td>
+              <td class="px-4 py-2 text-slate-800">{g.descripcion}
+                {u && <span class="block text-[10px] text-slate-400">por {u.nombre}</span>}
+              </td>
+              <td class="px-4 py-2 text-xs text-slate-500">{s?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-500 font-mono">{g.referencia ?? "—"}</td>
+              <td class="px-4 py-2 text-right font-semibold text-slate-800 whitespace-nowrap">{fmtMonto(g.monto)}</td>
+              <td class="px-4 py-2 text-right">
+                <button class="del-gasto-btn text-xs text-red-600 hover:underline" data-id={g.id} data-desc={g.descripcion}>🗑</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Modal definir presupuestos -->
+  <div id="defModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+    <div class="card w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
+      <h3 class="text-lg font-semibold text-slate-900">⚙ Presupuesto {anio} por rubro</h3>
+      <p class="mt-1 text-xs text-slate-500">Monto anual asignado a cada rubro (en USD).</p>
+      <div class="mt-4 space-y-2.5">
+        {RUBRO_KEYS.map((k) => (
+          <div class="flex items-center gap-3">
+            <span class="w-52 text-sm text-slate-700 shrink-0">{rubroIcono(k)} {rubroLabel(k)}</span>
+            <input
+              type="number" step="0.01" min="0"
+              class="input text-sm def-monto"
+              data-rubro={k}
+              value={presupuestoPorRubro.get(k) ?? ""}
+              placeholder="0.00"
+            />
+          </div>
+        ))}
+      </div>
+      <p id="defErr" class="hidden mt-2 text-sm text-red-600"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button id="defCancel" class="btn-secondary">Cancelar</button>
+        <button id="defSave" class="btn-primary">Guardar presupuestos</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal registrar gasto -->
+  <div id="gastoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+    <div class="card w-full max-w-md p-5">
+      <h3 class="text-lg font-semibold text-slate-900">+ Registrar gasto</h3>
+      <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label class="label text-xs">Fecha *</label>
+          <input id="g_fecha" type="date" class="input" value={hoy} />
+        </div>
+        <div>
+          <label class="label text-xs">Rubro *</label>
+          <select id="g_rubro" class="input">
+            {RUBRO_KEYS.map((k) => <option value={k}>{rubroIcono(k)} {rubroLabel(k)}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label text-xs">Descripción *</label>
+          <input id="g_desc" class="input" placeholder="Ej. Mantenimiento anual subestación 1" />
+        </div>
+        <div>
+          <label class="label text-xs">Monto (USD) *</label>
+          <input id="g_monto" type="number" step="0.01" min="0.01" class="input" placeholder="0.00" />
+        </div>
+        <div>
+          <label class="label text-xs">Sede</label>
+          <select id="g_sede" class="input">
+            <option value="">—</option>
+            {sucursalesList.map((s) => <option value={s.id}>{s.nombre}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label text-xs">Referencia (factura, OC, contrato)</label>
+          <input id="g_ref" class="input" placeholder="Ej. FAC-00123, Contrato C-05" />
+        </div>
+      </div>
+      <p id="gastoErr" class="hidden mt-2 text-sm text-red-600"></p>
+      <div class="mt-5 flex justify-end gap-2">
+        <button id="gastoCancel" class="btn-secondary">Cancelar</button>
+        <button id="gastoSave" class="btn-primary">Registrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ anio }}>
+    const $ = (i) => document.getElementById(i);
+    const show = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };
+    const hide = (m) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+
+    // ── Definir presupuestos ──
+    const defModal = $("defModal");
+    $("defBtn")?.addEventListener("click", () => show(defModal));
+    $("defCancel")?.addEventListener("click", () => hide(defModal));
+    defModal?.addEventListener("click", (e) => { if (e.target === defModal) hide(defModal); });
+
+    $("defSave")?.addEventListener("click", async () => {
+      const presupuestos = Array.from(document.querySelectorAll(".def-monto"))
+        .map((inp) => ({ rubro: inp.dataset.rubro, monto: inp.value === "" ? 0 : Number(inp.value) }))
+        .filter((p) => !Number.isNaN(p.monto));
+      const res = await fetch("/api/presupuesto", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ anio, presupuestos }),
+      });
+      if (res.ok) { window.showToast?.("Presupuestos guardados", "success"); location.reload(); }
+      else {
+        const err = $("defErr");
+        err.textContent = "Error al guardar";
+        err.classList.remove("hidden");
+      }
+    });
+
+    // ── Registrar gasto ──
+    const gastoModal = $("gastoModal");
+    $("gastoBtn")?.addEventListener("click", () => show(gastoModal));
+    $("gastoCancel")?.addEventListener("click", () => hide(gastoModal));
+    gastoModal?.addEventListener("click", (e) => { if (e.target === gastoModal) hide(gastoModal); });
+
+    $("gastoSave")?.addEventListener("click", async () => {
+      const err = $("gastoErr");
+      err.classList.add("hidden");
+      const fecha = $("g_fecha").value;
+      const desc = $("g_desc").value.trim();
+      const monto = Number($("g_monto").value);
+      if (!fecha || !desc || !monto || monto <= 0) {
+        err.textContent = "Fecha, descripción y monto son obligatorios.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const res = await fetch("/api/presupuesto/gastos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          fecha,
+          rubro: $("g_rubro").value,
+          descripcion: desc,
+          monto,
+          sucursalId: $("g_sede").value ? Number($("g_sede").value) : null,
+          referencia: $("g_ref").value.trim() || null,
+        }),
+      });
+      if (res.ok) { window.showToast?.("Gasto registrado", "success"); location.reload(); }
+      else {
+        err.textContent = "Error al registrar el gasto";
+        err.classList.remove("hidden");
+      }
+    });
+
+    // ── Eliminar gasto ──
+    document.querySelectorAll(".del-gasto-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar gasto", `¿Eliminar el gasto "${btn.dataset.desc}"?`)
+          : Promise.resolve(confirm("¿Eliminar este gasto?")));
+        if (!ok) return;
+        const res = await fetch(`/api/presupuesto/gastos/${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) { window.showToast?.("Gasto eliminado", "success"); location.reload(); }
+        else window.showToast?.("Error al eliminar", "error");
+      });
+    });
+  </script>
+</Layout>

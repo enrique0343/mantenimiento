@@ -22,6 +22,9 @@ const createSchema = z.object({
   telefono: z.string().nullable().optional(),
   email: z.string().email().nullable().optional(),
   notas: z.string().nullable().optional(),
+  esLaboratorioAcreditado: z.boolean().optional(),
+  acreditacionOrgano: z.string().nullable().optional(),
+  acreditacionVigencia: z.string().nullable().optional(),
 });
 
 export const POST: APIRoute = async (ctx) => {

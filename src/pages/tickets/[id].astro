@@ -7,6 +7,7 @@ import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket 
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { proyectos } from "@/lib/schema";
+import { parseArea, areaHref, AREAS } from "@/lib/areas";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -26,6 +27,10 @@ const [r] = await db
   .limit(1);
 if (!r) return Astro.redirect("/tickets");
 const t = r.t;
+const area = parseArea(t.rubro);
+const rawArea = Astro.url.searchParams.get("area");
+if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
+if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 
 const coms = await db
   .select({ c: ticketComentarios, u: usuarios })
@@ -59,20 +64,91 @@ if (t.proyectoId) {
 
 <Layout title={`Ticket #${t.id}`}>
   <div class="flex items-center justify-between">
-    <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
-    {esAdmin && (
-      <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
-    )}
+    <a href={areaHref("/tickets", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    <div class="flex gap-2">
+      {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
+        <button id="cierreAdminTicketBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
+      )}
+      {esAdmin && (
+        <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
+      )}
+    </div>
   </div>
 
+  {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
+    <div id="cierreAdminTicketModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo del ticket</h3>
+        <p class="mt-1 text-sm text-slate-600">Cierra el ticket sin pasar por el flujo normal. Registra un comentario interno con el motivo y marca el ticket como <em>cerrado</em> con la fecha actual como <em>resueltoEn</em>. La OT asociada (si la hay) <strong>no</strong> se toca.</p>
+        <div class="mt-3">
+          <label class="label text-xs">Motivo (comentario interno, el solicitante no lo verá)</label>
+          <textarea id="cierreAdminTicketMotivo" class="input w-full" rows="3" placeholder="Ej. Reportado fuera del sistema, ya atendido. Se cierra para limpiar la bandeja."></textarea>
+        </div>
+        <p id="cierreAdminTicketMsg" class="hidden mt-2 text-sm"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="cierreAdminTicketCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="cierreAdminTicketConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar el ticket</button>
+        </div>
+      </div>
+    </div>
+  )}
+
   {esAdmin && (
-    <script define:vars={{ ticketId: t.id }}>
+    <script define:vars={{ ticketId: t.id, area }}>
       document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
-        if (!confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")) return;
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar ticket", "¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")
+          : confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer."));
+        if (!ok) return;
         const res = await fetch(`/api/tickets/${ticketId}`, { method: "DELETE" });
-        if (res.ok) { location.href = "/tickets"; }
-        else { const j = await res.json().catch(() => ({})); alert("Error: " + (j.error ?? "desconocido")); }
+        if (res.ok) { location.href = `/tickets?area=${encodeURIComponent(area || "")}`; }
+        else { const j = await res.json().catch(() => ({})); window.showToast?.("Error: " + (j.error ?? "desconocido"), "error"); }
       });
+
+      // Cierre administrativo del ticket
+      const caBtn = document.getElementById("cierreAdminTicketBtn");
+      const caModal = document.getElementById("cierreAdminTicketModal");
+      if (caBtn && caModal) {
+        const motivoInp = document.getElementById("cierreAdminTicketMotivo");
+        const msgEl = document.getElementById("cierreAdminTicketMsg");
+        const confirmBtn = document.getElementById("cierreAdminTicketConfirm");
+        const closeModal = () => { caModal.classList.add("hidden"); caModal.classList.remove("flex"); };
+        caBtn.addEventListener("click", () => {
+          if (motivoInp) motivoInp.value = "";
+          msgEl?.classList.add("hidden");
+          if (msgEl) msgEl.textContent = "";
+          caModal.classList.remove("hidden");
+          caModal.classList.add("flex");
+          motivoInp?.focus();
+        });
+        document.getElementById("cierreAdminTicketCancel")?.addEventListener("click", closeModal);
+        caModal.addEventListener("click", (e) => { if (e.target === caModal) closeModal(); });
+        confirmBtn?.addEventListener("click", async () => {
+          const motivo = (motivoInp?.value || "").trim();
+          confirmBtn.setAttribute("disabled", "true");
+          const texto = motivo
+            ? `🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+            : "🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.";
+          const cr = await fetch(`/api/tickets/${ticketId}/comentario`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ texto, publico: false }),
+          });
+          if (!cr.ok) {
+            confirmBtn.removeAttribute("disabled");
+            if (msgEl) { msgEl.textContent = "No se pudo registrar el motivo. Intenta de nuevo."; msgEl.className = "mt-2 text-sm text-red-600"; msgEl.classList.remove("hidden"); }
+            return;
+          }
+          const r = await fetch(`/api/tickets/${ticketId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ estado: "cerrado" }),
+          });
+          if (r.ok) { location.reload(); return; }
+          confirmBtn.removeAttribute("disabled");
+          if (msgEl) { msgEl.textContent = "No se pudo cerrar el ticket."; msgEl.className = "mt-2 text-sm text-red-600"; msgEl.classList.remove("hidden"); }
+        });
+      }
     </script>
   )}
 
@@ -88,10 +164,10 @@ if (t.proyectoId) {
       <p class="mt-1 font-mono text-xs text-slate-500">#{t.id} · Token <span class="rounded bg-slate-100 px-1.5 py-0.5">{t.trackingToken}</span></p>
     </div>
     {t.otId && (
-      <a href={`/ordenes/${t.otId}`} class="btn-secondary">Ver OT #{t.otId} →</a>
+      <a href={areaHref(`/ordenes/${t.otId}`, area)} class="btn-secondary">Ver OT #{t.otId} →</a>
     )}
     {proyectoVinc && (
-      <a href={`/proyectos/${proyectoVinc.id}`} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
+      <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
 
@@ -102,7 +178,7 @@ if (t.proyectoId) {
       <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div>{t.tipoMantenimiento === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Área</div><div>{area ? AREAS[area].label : "Sin clasificar"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.ub?.nombre ?? "—"}{t.ubicacion && <span class="block text-xs text-slate-500">{t.ubicacion}</span>}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
@@ -181,12 +257,12 @@ if (t.proyectoId) {
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
                 <p class="font-semibold text-sm">¿Es un trabajo grande?</p>
                 <p class="mt-1">Si el trabajo requiere evaluación, presupuesto o múltiples OTs (remodelaciones, instalaciones, traslados), conviértelo en proyecto en lugar de generar una OT directa.</p>
-                <a href={`/proyectos/nuevo?ticketId=${t.id}`} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
+                <a href={areaHref(`/proyectos/nuevo?ticketId=${t.id}`, area)} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
               </div>
             )}
             {proyectoVinc && (
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
-                📂 Este ticket está vinculado al proyecto <a href={`/proyectos/${proyectoVinc.id}`} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
+                📂 Este ticket está vinculado al proyecto <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
               </div>
             )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
@@ -201,7 +277,7 @@ if (t.proyectoId) {
             )}
             {t.otId && (
               <div class="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800">
-                ✅ Este ticket ya tiene <a href={`/ordenes/${t.otId}`} class="font-bold underline">OT #{t.otId}</a> asociada.
+                ✅ Este ticket ya tiene <a href={areaHref(`/ordenes/${t.otId}`, area)} class="font-bold underline">OT #{t.otId}</a> asociada.
               </div>
             )}
           </div>
@@ -234,7 +310,7 @@ if (t.proyectoId) {
     </div>
   </div>
 
-  <script define:vars={{ id }}>
+  <script define:vars={{ id, area }}>
     document.getElementById("saveBtn")?.addEventListener("click", async () => {
       const msg = document.getElementById("saveMsg");
       msg.classList.add("hidden");
@@ -254,14 +330,17 @@ if (t.proyectoId) {
       const j = await res.json().catch(() => ({}));
       if (j.otCreada) {
         // Si se creó OT automáticamente, lleva al usuario directo a esa OT
-        location.href = `/ordenes/${j.otCreada}`;
+        location.href = `/ordenes/${j.otCreada}?area=${encodeURIComponent(area || "")}`;
       } else {
         location.reload();
       }
     });
 
     document.getElementById("cerrarSinOtBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.")) return;
+      const ok = await (window.confirmAction
+        ? window.confirmAction("Cerrar ticket", "¿Cerrar este ticket sin generar una orden de trabajo? Útil para casos resueltos directamente o que no requieren intervención.", { danger: false, confirmLabel: "Cerrar ticket" })
+        : confirm("¿Cerrar este ticket sin generar una orden de trabajo?"));
+      if (!ok) return;
       const res = await fetch(`/api/tickets/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -271,7 +350,10 @@ if (t.proyectoId) {
     });
 
     document.getElementById("descartarBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")) return;
+      const ok = await (window.confirmAction
+        ? window.confirmAction("Descartar ticket", "¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente.")
+        : confirm("¿Descartar este ticket? Se usa para reportes duplicados, spam, o sin información suficiente."));
+      if (!ok) return;
       const res = await fetch(`/api/tickets/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },

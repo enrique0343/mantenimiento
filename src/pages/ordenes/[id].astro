@@ -10,6 +10,7 @@ import {
   type EstadoOT,
 } from "@/lib/ordenes";
 import { fmtCantidad } from "@/lib/inventario";
+import { parseArea, areaHref, AREAS, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -31,6 +32,10 @@ const [row] = await db
 if (!row) return Astro.redirect("/ordenes");
 
 const o = row.orden;
+const area = parseArea(o.rubro);
+const rawArea = Astro.url.searchParams.get("area");
+if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
+if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
 
@@ -102,6 +107,7 @@ const activosLista = puedeAsignarActivo
   ? await db
       .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
       .from(activos)
+      .where(area ? activoAreaCondition(area) : eq(activos.id, -1))
       .orderBy(asc(activos.codigo))
   : [];
 const ubicacionesLista = puedeAsignarActivo
@@ -157,12 +163,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 ---
 
 <Layout title={`Orden #${o.id}`}>
-  <a href="/ordenes" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
   <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
       <div class="flex flex-wrap items-center gap-2">
         <h1 class="text-2xl font-bold">{o.titulo}</h1>
+        {area && <span class="badge bg-teal-100 text-teal-800">{AREAS[area].label}</span>}
         <span class={`badge ${TIPO_COLOR[o.tipo]} capitalize`}>{o.tipo}</span>
         <span class={`badge ${PRIO_COLOR[o.prioridad]} capitalize`}>{o.prioridad}</span>
         <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
@@ -173,10 +180,31 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {user.rol === "admin" && (
         <button id="historialBtn" type="button" class="btn-secondary text-sm">📜 Historial</button>
       )}
+      {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+        <button id="cierreAdminBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
+      )}
       {user.rol === "admin" && (
         <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
       )}
     </div>
+
+    {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+      <div id="cierreAdminModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+        <div class="card w-full max-w-lg p-5">
+          <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo</h3>
+          <p class="mt-1 text-sm text-slate-600">Esta acción <strong>cierra la OT igual que si la cerrara un técnico</strong> (estado <em>cerrada</em>, marca completada/cerrada con la hora actual, dispara la encuesta de satisfacción y el cálculo automático de horas). Úsalo para OTs cuyo trabajo se ejecutó fuera de la plataforma.</p>
+          <div class="mt-3">
+            <label class="label text-xs">Motivo (queda como comentario en la OT)</label>
+            <textarea id="cierreAdminMotivo" class="input w-full" rows="3" placeholder="Ej. Trabajo realizado en sitio el 12/05, sin seguimiento en plataforma. Cierre para no perder el registro."></textarea>
+          </div>
+          <p id="cierreAdminMsg" class="hidden mt-2 text-sm"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="cierreAdminCancel" type="button" class="btn-secondary">Cancelar</button>
+            <button id="cierreAdminConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar la OT</button>
+          </div>
+        </div>
+      </div>
+    )}
   </div>
 
   {user.rol === "admin" && (
@@ -383,7 +411,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <div class="col-span-2">
               <div class="text-xs uppercase text-slate-500">Equipo</div>
               <div id="activoLabel" class="mt-0.5">
-                <a class="font-medium text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>
+                <a class="font-medium text-brand-700 hover:underline" href={areaHref(`/activos/${row.activo.id}`, area)}>
                   {row.activo.codigo} · {row.activo.nombre}
                 </a>
                 <span class="ml-2 text-xs text-slate-500">
@@ -506,7 +534,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <div class="flex items-center justify-between">
           <div>
             <h2 class="font-semibold text-slate-900">📷 Foto del estado inicial (antes)</h2>
-            <p class="mt-1 text-xs text-slate-500">Toma esta foto al llegar al sitio, antes de pulsar "Iniciar". Sirve como evidencia del estado en que se recibió el equipo.</p>
+            <p class="mt-1 text-xs text-slate-500">Opcional: toma esta foto al llegar al sitio, antes de pulsar "Iniciar". Sirve como evidencia del estado en que se recibió el equipo.</p>
           </div>
           <span class="text-xs text-slate-500">{adjsAntes.length} foto(s)</span>
         </div>
@@ -592,13 +620,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               {progreso.pendientes > 0 && (
                 <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">⏳ {progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
               )}
+              {progreso.bloqueantesAbiertos > 0 && (
+                <span class="px-1.5 py-0.5 rounded bg-red-600 text-white font-medium">🔴 {progreso.bloqueantesAbiertos} crítico{progreso.bloqueantesAbiertos === 1 ? "" : "s"} en desviación</span>
+              )}
               <span id="ckAutosave" class="text-slate-400"></span>
             </div>
           </div>
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
-          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes o desviaciones sin describir.</p>
+          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => {
               const filaColor =
@@ -608,7 +639,23 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 "bg-white border border-slate-200";
               return (
                 <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
-                  <div class="text-sm font-medium text-slate-900">{it.texto}</div>
+                  <div class="text-sm font-medium text-slate-900">
+                    {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">🔴 CRÍTICO</span>}
+                    {it.texto}
+                  </div>
+                  {(it.criterio || it.minutos || it.materiales) && (
+                    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">🎯 Criterio: {it.criterio}</span>}
+                      {it.minutos && <span class="text-slate-500">⏱ {it.minutos} min</span>}
+                      {it.materiales && <span class="text-slate-500">🧰 {it.materiales}</span>}
+                    </div>
+                  )}
+                  {it.criterio && (
+                    <div class="mt-2">
+                      <label class="mb-1 block text-xs text-slate-600">Valor medido / resultado</label>
+                      <input class="ck-valor input text-sm w-full max-w-xs" data-idx={idx} value={it.valorMedido ?? ""} placeholder="Ej: 125 psi" disabled={!puedeEditar} />
+                    </div>
+                  )}
                   {puedeEditar ? (
                     <div class="mt-2 flex flex-wrap gap-1">
                       {(["pendiente","ok","na","desviacion"] as const).map((e) => {
@@ -795,7 +842,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="flex items-center justify-between">
             <div>
               <h2 class="font-semibold text-slate-900">📸 Foto del estado final (después)</h2>
-              <p class="mt-1 text-xs text-slate-500">Toma foto antes de pulsar "Completar". Es obligatoria para cerrar el trabajo.</p>
+              <p class="mt-1 text-xs text-slate-500">Opcional: foto del estado final como evidencia del cierre. Recomendable cuando hubo intervención visible (cambio de pieza, reparación), pero no es obligatoria para completar.</p>
             </div>
             <span class="text-xs text-slate-500">{adjsDespues.length} foto(s)</span>
           </div>
@@ -1068,6 +1115,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
   <script define:vars={{
     id,
+    area,
     checklistJson: o.checklistEjecucion ?? null,
     itemsRepJson,
     ubicacionesData: ubicacionesLista,
@@ -1077,7 +1125,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     activoActualId: row.activo?.id ?? null,
   }}>
     const $ = (id) => document.getElementById(id);
-    let checklist = checklistJson ? JSON.parse(checklistJson) : [];
+    // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
+    // toda la página (botones incluidos). Ante error, se trata como vacío.
+    let checklist = [];
+    try { checklist = checklistJson ? JSON.parse(checklistJson) : []; } catch { checklist = []; }
 
     async function patchOrden(payload) {
       const res = await fetch(`/api/ordenes/${id}`, {
@@ -1172,7 +1223,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!confirm("¿Eliminar esta OT permanentemente?\n\nEsta acción borra la OT, sus comentarios y adjuntos. Si vino de un plan o actividad recurrente, el cron podrá generar otra en el siguiente ciclo. No se puede deshacer.")) return;
       const r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
       if (r.ok) {
-        location.href = "/ordenes";
+        location.href = `/ordenes?area=${encodeURIComponent(area || "")}`;
       } else {
         alert("Error al eliminar la OT");
       }
@@ -1189,10 +1240,67 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         if (estado === "cancelada" && !confirm("¿Cancelar esta orden?")) return;
         if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
+        // Antes de completar, fuerza el guardado del checklist (el autoguardado
+        // es diferido ~1s): así el servidor valida el estado real y no rechaza
+        // por "pendientes" que en pantalla ya están marcados.
+        if (estado === "completada" && Array.isArray(checklist) && checklist.length > 0) {
+          if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+          await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+        }
         const r = await patchOrden({ estado });
         if (r) location.reload();
       });
     });
+
+    // Cierre administrativo (solo admin): abre modal, deja un comentario con el
+    // motivo y luego hace PATCH estado="completada" — la API ya auto-promueve
+    // a "cerrada" y dispara las mismas side-effects que el cierre del técnico.
+    const cierreAdminBtn = $("cierreAdminBtn");
+    if (cierreAdminBtn) {
+      const modal = $("cierreAdminModal");
+      const motivoInp = $("cierreAdminMotivo");
+      const msgEl = $("cierreAdminMsg");
+      const confirmBtn = $("cierreAdminConfirm");
+      const closeModal = () => {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+      };
+      cierreAdminBtn.addEventListener("click", () => {
+        motivoInp.value = "";
+        msgEl.classList.add("hidden"); msgEl.textContent = "";
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+        motivoInp.focus();
+      });
+      $("cierreAdminCancel")?.addEventListener("click", closeModal);
+      modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+      confirmBtn?.addEventListener("click", async () => {
+        const motivo = (motivoInp.value || "").trim();
+        confirmBtn.disabled = true;
+        msgEl.classList.add("hidden");
+        const texto = motivo
+          ? `🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+          : "🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.";
+        const cr = await fetch(`/api/ordenes/${id}/comentarios`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ texto }),
+        });
+        if (!cr.ok) {
+          confirmBtn.disabled = false;
+          msgEl.textContent = "No se pudo registrar el motivo. Intenta de nuevo.";
+          msgEl.className = "mt-2 text-sm text-red-600";
+          msgEl.classList.remove("hidden");
+          return;
+        }
+        const r = await patchOrden({ estado: "completada" });
+        if (r) { location.reload(); return; }
+        confirmBtn.disabled = false;
+        msgEl.textContent = "No se pudo cerrar la OT. Revisa la consola.";
+        msgEl.className = "mt-2 text-sm text-red-600";
+        msgEl.classList.remove("hidden");
+      });
+    }
 
     // Verificacion modal
     $("verifCancel")?.addEventListener("click", () => {
@@ -1223,7 +1331,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!["pendiente","ok","na","desviacion"].includes(estado)) {
         estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
       }
-      return { texto: it.texto, estado, notas: it.notas ?? "" };
+      // Preservar la metadata del procedimiento estándar (no perderla al guardar).
+      return {
+        texto: it.texto, estado, notas: it.notas ?? "",
+        criterio: it.criterio ?? null,
+        bloqueante: it.bloqueante === true || it.bloqueante === 1,
+        minutos: it.minutos ?? null,
+        materiales: it.materiales ?? null,
+        valorMedido: it.valorMedido ?? "",
+      };
     });
 
     function actualizarColorFila(idx) {
@@ -1299,6 +1415,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const idx = Number(ta.dataset.idx);
         if (!checklist[idx]) return;
         checklist[idx].notas = ta.value;
+        programarGuardadoChecklist();
+      });
+    });
+
+    document.querySelectorAll(".ck-valor").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const idx = Number(inp.dataset.idx);
+        if (!checklist[idx]) return;
+        checklist[idx].valorMedido = inp.value;
         programarGuardadoChecklist();
       });
     });
@@ -1728,7 +1853,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           doc.setFont("helvetica", "bold"); doc.text("Checklist", M, y); y += 5;
           doc.setFont("helvetica", "normal");
           checklistItems.forEach((it) => {
-            doc.text(`${it.hecho ? "[X]" : "[ ]"} ${it.texto}`, M, y); y += 4.5;
+            const mark = it.estado === "ok" ? "[OK]" : it.estado === "na" ? "[N/A]" : it.estado === "desviacion" ? "[DESV]" : "[ ]";
+            doc.text(`${mark} ${it.texto}${it.bloqueante ? " (CRITICO)" : ""}`, M, y); y += 4.5;
+            const det = [it.criterio ? `Criterio: ${it.criterio}` : "", it.valorMedido ? `Medido: ${it.valorMedido}` : ""].filter(Boolean).join("   |   ");
+            if (det) {
+              doc.setTextColor(110); doc.setFontSize(8);
+              const lines = doc.splitTextToSize(det, W - M * 2 - 6);
+              doc.text(lines, M + 6, y); y += lines.length * 3.6;
+              doc.setFontSize(10); doc.setTextColor(0);
+            }
+            if (it.notas) {
+              doc.setTextColor(110); doc.setFontSize(8);
+              const lines = doc.splitTextToSize(`Nota: ${it.notas}`, W - M * 2 - 6);
+              doc.text(lines, M + 6, y); y += lines.length * 3.6;
+              doc.setFontSize(10); doc.setTextColor(0);
+            }
             if (y > 280) { doc.addPage(); y = M; }
           });
           y += 2;

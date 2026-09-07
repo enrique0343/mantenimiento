@@ -1,0 +1,205 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const esAdminOJefe = user.rol === "admin" || user.rol === "jefe";
+
+type Seccion = { icono: string; titulo: string; solo?: "adminjefe"; pasos: { t: string; d: string }[] };
+
+const secciones: Seccion[] = [
+  {
+    icono: "🎫",
+    titulo: "Tickets — reportar un problema",
+    pasos: [
+      { t: "Crear un ticket", d: "Menú Tickets → «+ Nuevo ticket». Describe el problema, indica la sede/ubicación y adjunta foto si ayuda. El equipo de mantenimiento lo recibe al instante." },
+      { t: "Dar seguimiento", d: "En la lista de Tickets ves el estado de cada reporte y los días transcurridos (verde <7, ámbar 7-13, rojo ≥14). Entra al ticket para ver comentarios y avances." },
+      { t: "Convertir en orden de trabajo (jefe/admin)", d: "Dentro del ticket usa «Generar OT» para crear la orden con el equipo y técnico correspondientes. El ticket queda vinculado y se cierra solo cuando la OT se completa." },
+    ],
+  },
+  {
+    icono: "📋",
+    titulo: "Órdenes de trabajo (OT)",
+    pasos: [
+      { t: "Crear una OT", d: "Menú Órdenes → «+ Nueva orden». Elige tipo (correctivo/preventivo), prioridad, equipo y técnico asignado." },
+      { t: "Ejecutar una OT (técnico)", d: "Desde Mi panel o Órdenes → «Asignadas a mí». Abre la OT, pulsa «Iniciar», completa el checklist y al terminar pulsa «Completar». Las fotos de antes/después son opcionales." },
+      { t: "Seguimiento", d: "La columna «Días» muestra cuánto lleva asignada cada OT con semáforo de colores. Usa «Ver cerradas» para consultar el histórico." },
+      { t: "Cierre administrativo (solo admin)", d: "Para OTs que se trabajaron fuera del sistema: botón 🔒 en la OT o selección múltiple en la lista. Se cierra con un motivo y dispara la encuesta de satisfacción normal." },
+    ],
+  },
+  {
+    icono: "📅",
+    titulo: "Cronograma y Gantt — planificar preventivos",
+    pasos: [
+      { t: "Vista por fechas", d: "Menú Cronograma: muestra lo vencido y lo que viene en 7/15/30 días. Usa el selector de sede para ver solo un hospital." },
+      { t: "Vista Gantt", d: "Menú Gantt: los 12 meses de cada rutina proyectados según su frecuencia. «2×» significa dos veces ese mes; rojo = vencido; ámbar = equipo crítico." },
+      { t: "Asignar técnico y fecha (jefe/admin)", d: "Directo en las tarjetas del Cronograma: cambia el técnico en el selector o la fecha en el campo de fecha — se guarda al instante." },
+      { t: "Generar la OT del preventivo", d: "Botón «⚡ Generar OT» en la tarjeta cuando quieras crearla manualmente; si no, el sistema la genera solo al vencer la fecha." },
+    ],
+  },
+  {
+    icono: "🛠",
+    titulo: "Equipos e inventario de activos",
+    pasos: [
+      { t: "Registrar un equipo", d: "Menú Equipos → «+ Nuevo». Completa código, ubicación (sede → área) y datos de placa. Puedes importar desde CSV o generar códigos QR." },
+      { t: "Programar su preventivo", d: "En la lista de Equipos, columna Cronograma → «+ Programar»: eliges fecha y frecuencia, y queda en el cronograma." },
+      { t: "Hoja de vida", d: "Entra al equipo para ver su historial completo: OTs, planes, documentos y trazabilidad." },
+    ],
+  },
+  {
+    icono: "📌",
+    titulo: "Actividades recurrentes (limpieza, puertas, fumigación…)",
+    pasos: [
+      { t: "¿Qué va aquí?", d: "Mantenimientos que no son de un equipo específico: lubricación de puertas, limpieza de tanques, jardinería, trampas de grasa, etc." },
+      { t: "Crear una actividad", d: "Menú Actividades → «+ Nueva». Elige categoría (🚪 Puertas, 🧹 Limpieza…), sede, frecuencia y responsable. Genera OTs automáticamente igual que los planes de equipos." },
+    ],
+  },
+  {
+    icono: "⚡",
+    titulo: "Control eléctrico",
+    pasos: [
+      { t: "Registrar subestaciones", d: "Menú Eléctrico → «+ Nueva subestación»: sede, capacidad en kVA y voltaje. (Solo admin/jefe editan.)" },
+      { t: "Cargar el cuadro de cargas", d: "Entra a la subestación → «+ Agregar carga». Registra cada equipo con sus kW, o con amperaje + voltaje y el sistema calcula." },
+      { t: "Consultar disponibilidad", d: "La barra de cada subestación muestra el % de uso y los kW libres. Verde = holgura; rojo = no conectar más equipos ahí." },
+    ],
+  },
+  {
+    icono: "📄",
+    titulo: "Plan anual de mantenimiento",
+    pasos: [
+      { t: "Generar el documento", d: "Menú Plan anual: se arma solo con los datos del sistema (rutinas, rubros, presupuesto). Elige la sede y pulsa «🖨 Imprimir / PDF»." },
+      { t: "Personalizar los textos (jefe/admin)", d: "Botón «✎ Editar textos»: introducción, objetivos, normativa, firmantes y código del documento. Se guardan para siempre." },
+    ],
+  },
+  {
+    icono: "💰",
+    titulo: "Presupuesto de mantenimiento",
+    solo: "adminjefe",
+    pasos: [
+      { t: "Definir el presupuesto del año", d: "Menú Presupuesto → «⚙ Definir presupuestos»: monto anual por categoría (infraestructura, aires acondicionados, equipo general, equipo biomédico)." },
+      { t: "Registrar gastos", d: "«+ Registrar gasto» con fecha, rubro, monto y referencia (factura/contrato). Las barras muestran el % ejecutado con semáforo." },
+    ],
+  },
+  {
+    icono: "🛍",
+    titulo: "Compras y proveedores",
+    pasos: [
+      { t: "Solicitar una compra", d: "Menú Compras → «+ Nueva solicitud»: describe lo que necesitas (puede vincularse a una OT). El admin la autoriza y marca cuando se compró." },
+      { t: "Inventario de repuestos", d: "Menú Inventario: existencias y stock mínimo. Cuando un ítem cae bajo el mínimo aparece el botón «⚠ Reabastecer»." },
+      { t: "Contratos de mantenimiento (jefe/admin)", d: "Menú Contratos: registra cada contrato con proveedor, vigencia y costo. El sistema avisa 90/60/30 días antes del vencimiento." },
+    ],
+  },
+  {
+    icono: "✅",
+    titulo: "Cumplimiento JCI y alertas de equipo",
+    solo: "adminjefe",
+    pasos: [
+      { t: "Panel de cumplimiento (FMS.07)", d: "Menú Cumplimiento: cobertura preventiva del equipo biomédico, preventivos y calibraciones vencidas, por subcategoría y sede. Los «sin plan» son tu lista de trabajo. Imprime la evidencia para auditorías." },
+      { t: "Alertas y retiros (FMS.07.1)", d: "Menú Alertas equipo: registra recalls y avisos de fabricantes con los equipos afectados. Para cerrar una alerta el sistema exige documentar la acción tomada." },
+      { t: "Hoja de vida por equipo", d: "En la ficha de cada equipo → «📄 Hoja de vida»: documento imprimible con datos de placa, planes, historial de OTs y calibraciones — lo que pide el auditor equipo por equipo." },
+    ],
+  },
+  {
+    icono: "📊",
+    titulo: "KPIs y satisfacción",
+    solo: "adminjefe",
+    pasos: [
+      { t: "Indicadores", d: "Menú KPIs: cumplimiento preventivo, SLA, MTTR, MTBF, backlog y tendencia de 12 meses. La línea base (30/05/2026) excluye el arrastre histórico." },
+      { t: "Encuestas", d: "Al cerrar cada OT el solicitante recibe una encuesta por correo. Menú Satisfacción muestra las calificaciones y comentarios." },
+    ],
+  },
+  {
+    icono: "👤",
+    titulo: "Usuarios y roles",
+    solo: "adminjefe",
+    pasos: [
+      { t: "Roles", d: "Admin (todo), Jefe (gestiona su especialidad), Técnico (ejecuta sus OTs), Solicitante (crea tickets), Visualizador (solo lectura), Proveedor y Motorista (vistas limitadas)." },
+      { t: "Gestión (solo admin)", d: "Menú Usuarios: crear cuentas, cambiar rol/contraseña, desactivar. La columna «Última conexión» muestra quién usa el sistema." },
+    ],
+  },
+];
+
+const visibles = secciones.filter((s) => !s.solo || esAdminOJefe);
+
+// Guía rápida según el rol del usuario conectado
+const guiaRol: Record<string, { titulo: string; items: string[] }> = {
+  solicitante: {
+    titulo: "Tu flujo como solicitante",
+    items: ["1. Reporta problemas en Tickets → «+ Nuevo ticket»", "2. Sigue el avance en la lista de Tickets", "3. Al resolverse, responde la encuesta que llega a tu correo"],
+  },
+  tecnico: {
+    titulo: "Tu flujo como técnico",
+    items: ["1. Revisa Mi panel al iniciar el día: ahí están tus OTs", "2. Abre la OT → «Iniciar» → completa el checklist → «Completar»", "3. En Cronograma ves tus preventivos próximos"],
+  },
+  jefe: {
+    titulo: "Tu flujo como jefe",
+    items: ["1. Dashboard para el estado general del día", "2. Tickets nuevos → generar OT y asignar técnico", "3. Cronograma/Gantt para planificar; asigna técnico y fecha en la misma tarjeta", "4. KPIs y Presupuesto para el control gerencial", "5. Plan anual cuando te pidan el documento formal"],
+  },
+  admin: {
+    titulo: "Tu flujo como administrador",
+    items: ["1. Todo lo del jefe, más: Usuarios, Configuración y cierres administrativos 🔒", "2. Presupuesto: define montos anuales y registra gastos", "3. Plan anual: edita los textos institucionales una vez y genera el PDF cuando lo pidan"],
+  },
+};
+const guia = guiaRol[user.rol] ?? null;
+---
+
+<Layout title="Manual de usuario">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📖 Manual de usuario</h1>
+      <p class="mt-1 text-sm text-slate-500">Guía rápida de la plataforma de mantenimiento de Avante.</p>
+    </div>
+    <button onclick="window.print()" class="btn-secondary no-print">🖨 Imprimir</button>
+  </div>
+
+  {guia && (
+    <div class="card mt-4 p-5 border-l-4 border-brand-600">
+      <h2 class="font-semibold text-slate-800">👋 {guia.titulo}</h2>
+      <ul class="mt-2 space-y-1.5 text-sm text-slate-700">
+        {guia.items.map((i) => <li>{i}</li>)}
+      </ul>
+    </div>
+  )}
+
+  <div class="mt-5 space-y-3">
+    {visibles.map((s) => (
+      <details class="card overflow-hidden group">
+        <summary class="flex items-center gap-3 px-5 py-3.5 cursor-pointer select-none hover:bg-slate-50 font-semibold text-slate-800 text-sm">
+          <span class="text-lg">{s.icono}</span>
+          <span class="flex-1">{s.titulo}</span>
+          <span class="text-slate-400 text-xs group-open:rotate-90 transition-transform">▶</span>
+        </summary>
+        <div class="border-t border-slate-100 px-5 py-4">
+          <dl class="space-y-3">
+            {s.pasos.map((p) => (
+              <div>
+                <dt class="text-sm font-semibold text-slate-700">{p.t}</dt>
+                <dd class="mt-0.5 text-sm text-slate-600 leading-relaxed">{p.d}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </details>
+    ))}
+  </div>
+
+  <div class="card mt-5 p-4 text-xs text-slate-500 leading-relaxed">
+    <span class="font-semibold text-slate-600">💡 Atajos útiles:</span>
+    <kbd class="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd> / <kbd class="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 font-mono text-[10px]">Ctrl+K</kbd> abre la búsqueda global (OTs, equipos, tickets, repuestos) ·
+    la 🔔 campana muestra tus notificaciones · en móvil el menú se abre con ☰.
+  </div>
+
+  <style is:global>
+    @media print {
+      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
+      main { padding: 0 !important; }
+      details { break-inside: avoid; }
+      details > div { display: block !important; }
+    }
+    @media print { details[open] summary ~ * { display: block; } details:not([open]) > div { display: block !important; } }
+  </style>
+  <script>
+    // Al imprimir, abrir todas las secciones
+    window.addEventListener("beforeprint", () => document.querySelectorAll("details").forEach((d) => (d.open = true)));
+  </script>
+</Layout>

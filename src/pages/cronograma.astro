@@ -3,6 +3,11 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
 import { eq, asc, and } from "drizzle-orm";
+import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
+import { parseArea, areaHref } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -11,8 +16,21 @@ const db = getDb(Astro);
 // Técnicos solo ven planes/actividades asignados a ellos
 const esTecnico = user.rol === "tecnico";
 
+// Filtro por sede (?sede=<id>) y por dominio/categoría (?dominio=<clave>)
+const url = new URL(Astro.request.url);
+const sedeParam = url.searchParams.get("sede");
+const sedeId = sedeParam ? Number(sedeParam) : null;
+const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
+const dominio = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
 // 1) Planes preventivos por equipo
-const planRows = await db
+const planRowsAll = await db
   .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
@@ -25,7 +43,7 @@ const planRows = await db
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
 // 2) Actividades recurrentes
-const actRows = await db
+const actRowsAll = await db
   .select({ a: actividades, c: actividadCategorias, u: usuarios, s: sucursales, ub: ubicaciones })
   .from(actividades)
   .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
@@ -36,6 +54,15 @@ const actRows = await db
     ? and(eq(actividades.activo, true), eq(actividades.asignadoA, user.id))
     : eq(actividades.activo, true))
   .orderBy(asc(actividades.proximaFecha));
+
+// Aplicar filtro por sede: planes vía activo→ubicación→sucursal; actividades
+// tienen sucursal directa. Luego filtro por dominio/categoría. Sin filtros se
+// muestra todo.
+const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
+const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
 // Unificar en un solo timeline
 type Item = {
@@ -49,6 +76,7 @@ type Item = {
   sucursal: string | null;
   ubicacion: string | null;
   asignado: string | null;
+  asignadoId: number | null;
   icono: string;
   yaGenerada: boolean;
 };
@@ -60,11 +88,12 @@ const items: Item[] = [
     titulo: r.p.titulo,
     fecha: r.p.proximaFecha,
     frecuencia: r.p.frecuencia,
-    link: `/activos/${r.a?.id}`,
+    link: areaHref(`/activos/${r.a?.id}`, dominio ?? r.a?.rubro),
     contexto: r.a ? `${r.a.codigo} · ${r.a.nombre}` : "",
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a?.ubicacion ?? null,
     asignado: r.u?.nombre ?? null,
+    asignadoId: r.p.asignadoA ?? null,
     icono: "🛠",
     yaGenerada: !!(r.p.ultimaGeneracion && r.p.ultimaGeneracion.slice(0, 10) >= r.p.proximaFecha),
   })),
@@ -74,53 +103,168 @@ const items: Item[] = [
     titulo: r.a.titulo,
     fecha: r.a.proximaFecha,
     frecuencia: r.a.frecuencia,
-    link: `/actividades/${r.a.id}`,
+    link: areaHref(`/actividades/${r.a.id}`, dominio ?? r.a.rubro),
     contexto: `${r.a.codigo}${r.c ? ` · ${r.c.nombre}` : ""}`,
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a.ubicacionDetalle ?? null,
     asignado: r.u?.nombre ?? null,
+    asignadoId: r.a.asignadoA ?? null,
     icono: r.c?.icono ?? "📌",
     yaGenerada: !!(r.a.ultimaGeneracion && r.a.ultimaGeneracion.slice(0, 10) >= r.a.proximaFecha),
   })),
 ].sort((a, b) => a.fecha.localeCompare(b.fecha));
 
 const puedeGenerar = user.rol === "admin" || user.rol === "jefe";
+const puedeAsignar = user.rol === "admin" || user.rol === "jefe";
+
+// Lista de técnicos para los selectores inline (solo para admin/jefe).
+const tecnicosLista = puedeAsignar
+  ? await db.select({ id: usuarios.id, nombre: usuarios.nombre })
+      .from(usuarios)
+      .where(and(eq(usuarios.rol, "tecnico"), eq(usuarios.activo, true)))
+      .orderBy(asc(usuarios.nombre))
+  : [];
 
 const hoy = new Date().toISOString().slice(0, 10);
 const en7 = new Date(); en7.setDate(en7.getDate() + 7);
+const en15 = new Date(); en15.setDate(en15.getDate() + 15);
 const en30 = new Date(); en30.setDate(en30.getDate() + 30);
 const en7Str = en7.toISOString().slice(0, 10);
+const en15Str = en15.toISOString().slice(0, 10);
 const en30Str = en30.toISOString().slice(0, 10);
 
+// Bucketing exclusivo y consecutivo: 7 → 15 → 30 → más adelante.
 const vencidos   = items.filter((r) => r.fecha <= hoy);
 const proximos7  = items.filter((r) => r.fecha > hoy && r.fecha <= en7Str);
-const proximos30 = items.filter((r) => r.fecha > en7Str && r.fecha <= en30Str);
+const proximos15 = items.filter((r) => r.fecha > en7Str && r.fecha <= en15Str);
+const proximos30 = items.filter((r) => r.fecha > en15Str && r.fecha <= en30Str);
 const futuros    = items.filter((r) => r.fecha > en30Str);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
+// proximaFecha es solo-fecha ("YYYY-MM-DD"); usamos el helper que NO la pasa
+// por Date+TZ (evita el desfase a "día anterior 6 p.m." en UTC-6).
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
+
+// ─── Vista anual (12 meses) + detección de colisiones de equipos críticos ────
+const hoyD = new Date();
+const horizonStart = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth(), 1));
+const horizonEnd = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth() + 12, 1));
+const horizonStartStr = horizonStart.toISOString().slice(0, 10);
+const horizonEndStr = horizonEnd.toISOString().slice(0, 10);
+
+const meses = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date(Date.UTC(horizonStart.getUTCFullYear(), horizonStart.getUTCMonth() + i, 1));
+  return {
+    label: d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(d.getUTCFullYear()).slice(2),
+    ym: d.toISOString().slice(0, 7),
+    total: 0,
+    criticos: 0,
+  };
+});
+const mesIndex = (fecha: string) => {
+  const d = new Date(fecha);
+  return (d.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 + (d.getUTCMonth() - horizonStart.getUTCMonth());
+};
+
+// Por semana (bucket de 7 días desde el inicio del horizonte): equipos críticos programados.
+const semanas = new Map<number, Map<number, { codigo: string; nombre: string; fecha: string }>>();
+
+function proyectar(fechaInicial: string, frecuencia: Frecuencia, onOcc: (fecha: string) => void) {
+  let f = fechaInicial;
+  let guard = 0;
+  while (f < horizonStartStr && guard < 500) { const n = siguienteFecha(f, frecuencia); if (n <= f) return; f = n; guard++; }
+  guard = 0;
+  while (f < horizonEndStr && guard < 400) { onOcc(f); const n = siguienteFecha(f, frecuencia); if (n <= f) break; f = n; guard++; }
+}
+
+for (const r of planRows) {
+  const crit = r.a?.criticidadOperacional === "alta";
+  proyectar(r.p.proximaFecha, r.p.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) { meses[mi].total++; if (crit) meses[mi].criticos++; }
+    if (crit && r.a) {
+      const wk = Math.floor((new Date(fecha).getTime() - horizonStart.getTime()) / (7 * 86400_000));
+      const m = semanas.get(wk) ?? new Map();
+      if (!m.has(r.a.id)) m.set(r.a.id, { codigo: r.a.codigo, nombre: r.a.nombre, fecha });
+      semanas.set(wk, m);
+    }
+  });
+}
+for (const r of actRows) {
+  proyectar(r.a.proximaFecha, r.a.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) meses[mi].total++;
+  });
+}
+
+const colisiones = [...semanas.entries()]
+  .filter(([, m]) => m.size >= 2)
+  .map(([wk, m]) => {
+    const ini = new Date(horizonStart.getTime() + wk * 7 * 86400_000);
+    const fin = new Date(ini.getTime() + 6 * 86400_000);
+    return { ini: ini.toISOString().slice(0, 10), fin: fin.toISOString().slice(0, 10), equipos: [...m.values()] };
+  })
+  .sort((a, b) => a.ini.localeCompare(b.ini));
+const mesesConColision = new Set(colisiones.map((c) => c.ini.slice(0, 7)));
+const maxMes = Math.max(1, ...meses.map((m) => m.total));
 ---
 
 <Layout title="Cronograma">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
       <h1 class="text-2xl font-bold">Cronograma de mantenimiento</h1>
-      <p class="mt-1 text-sm text-slate-500">{planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)</p>
+      <p class="mt-1 text-sm text-slate-500">
+        {planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)
+        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
+      </p>
     </div>
-    <div class="flex flex-wrap gap-2 text-sm">
-      <a href="/actividades" class="btn-secondary">📌 Actividades</a>
-      <a href="/planificador" class="btn-secondary">📊 Planificador</a>
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <select id="sedeFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por sede">
+        <option value="">🏢 Todas las sedes</option>
+        {sucursalesList.map((s) => (
+          <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
+        ))}
+      </select>
+      <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por área">
+        <option value="">🏷 Todas las áreas</option>
+        {RUBRO_KEYS.map((k) => (
+          <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
+        ))}
+      </select>
+      <a href={areaHref("/planificador", dominio)} class="btn-secondary">Planificador mensual</a>
+      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📊 Gantt</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan</a>
+      <a href={areaHref("/actividades", dominio)} class="btn-secondary">📌 Actividades</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
-        <a href="/planes" class="btn-secondary">🛠 Gestionar planes</a>
+        <a href={areaHref("/planes", dominio)} class="btn-secondary">🛠 Gestionar planes</a>
       )}
     </div>
   </div>
 
+  <script>
+    function navCrono(param: string, value: string) {
+      const p = new URLSearchParams(location.search);
+      if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
+      p.delete("dominio");
+      if (value) p.set(param, value); else p.delete(param);
+      const s = p.toString();
+      location.href = `/cronograma${s ? `?${s}` : ""}`;
+    }
+    document.getElementById("sedeFiltro")?.addEventListener("change", (e) => {
+      navCrono("sede", (e.currentTarget as HTMLSelectElement).value);
+    });
+    document.getElementById("dominioFiltro")?.addEventListener("change", (e) => {
+      navCrono("area", (e.currentTarget as HTMLSelectElement).value);
+    });
+  </script>
+
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     {[
-      { titulo: "Vencidos",         items: vencidos,   color: "border-red-300 bg-red-50",    text: "text-red-700" },
-      { titulo: "Próximos 7 días",  items: proximos7,  color: "border-amber-300 bg-amber-50", text: "text-amber-700" },
-      { titulo: "Próximos 30 días", items: proximos30, color: "border-blue-300 bg-blue-50",   text: "text-blue-700" },
-      { titulo: "Más adelante",     items: futuros,    color: "border-slate-200 bg-slate-50", text: "text-slate-600" },
+      { titulo: "Vencidos",         items: vencidos,   color: "border-red-300 bg-red-50",      text: "text-red-700" },
+      { titulo: "Próximos 7 días",  items: proximos7,  color: "border-amber-300 bg-amber-50",  text: "text-amber-700" },
+      { titulo: "Próximos 15 días", items: proximos15, color: "border-orange-300 bg-orange-50", text: "text-orange-700" },
+      { titulo: "Próximos 30 días", items: proximos30, color: "border-blue-300 bg-blue-50",    text: "text-blue-700" },
+      { titulo: "Más adelante",     items: futuros,    color: "border-slate-200 bg-slate-50",  text: "text-slate-600" },
     ].map((seccion) => (
       <div class={`card ${seccion.color} p-4`}>
         <h2 class={`font-semibold ${seccion.text}`}>{seccion.titulo} ({seccion.items.length})</h2>
@@ -134,7 +278,18 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "Ame
                   <a href={r.link} class="font-medium text-brand-700 hover:underline">
                     {r.icono} {r.titulo}
                   </a>
-                  <span class="text-xs font-semibold whitespace-nowrap">{fmt(r.fecha)}</span>
+                  {puedeAsignar ? (
+                    <input
+                      type="date"
+                      class="fecha-prox rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
+                      data-tipo={r.tipo}
+                      data-id={r.id}
+                      value={r.fecha}
+                      title="Cambiar próxima fecha de realización"
+                    />
+                  ) : (
+                    <span class="text-xs font-semibold whitespace-nowrap">{fmt(r.fecha)}</span>
+                  )}
                 </div>
                 <div class="text-xs text-slate-700">
                   <span class="font-mono">{r.contexto}</span>
@@ -148,9 +303,26 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "Ame
                     {r.ubicacion && <span> · 📍 {r.ubicacion}</span>}
                   </div>
                 )}
-                <div class="text-xs text-slate-400 capitalize">
-                  {r.frecuencia}
-                  {r.asignado && ` · 👤 ${r.asignado}`}
+                <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span class="capitalize">{r.frecuencia}</span>
+                  {puedeAsignar ? (
+                    <label class="inline-flex items-center gap-1 normal-case">
+                      <span aria-hidden="true">👤</span>
+                      <select
+                        class="asignar-sel rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-700 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
+                        data-tipo={r.tipo}
+                        data-id={r.id}
+                        title="Asignar técnico"
+                      >
+                        <option value="">— Sin asignar —</option>
+                        {tecnicosLista.map((t) => (
+                          <option value={t.id} selected={t.id === r.asignadoId}>{t.nombre}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    r.asignado && <span class="normal-case">· 👤 {r.asignado}</span>
+                  )}
                 </div>
                 {puedeGenerar && (
                   r.yaGenerada
@@ -167,27 +339,127 @@ const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "Ame
     ))}
   </div>
 
+  <!-- Vista anual -->
+  <div class="card mt-6 p-5">
+    <h2 class="font-semibold text-slate-900">📆 Vista anual de preventivos (12 meses)</h2>
+    <p class="text-xs text-slate-500">Proyección de mantenimientos programados por mes. Barra roja = mes con colisión de equipos críticos.</p>
+    <div class="mt-4 flex items-end gap-1.5 overflow-x-auto pb-2">
+      {meses.map((m) => {
+        const h = Math.round((m.total / maxMes) * 120);
+        const colision = mesesConColision.has(m.ym);
+        return (
+          <div class="flex min-w-[44px] flex-1 flex-col items-center gap-1">
+            <div class="flex w-full flex-col-reverse" style="height:120px">
+              <div class:list={["mx-auto w-6 rounded-t", colision ? "bg-red-400" : "bg-brand-500"]} style={`height:${h}px`} title={`${m.total} programados · ${m.criticos} críticos`}></div>
+            </div>
+            <div class="text-[9px] capitalize whitespace-nowrap text-slate-500">{m.label}</div>
+            <div class="font-mono text-[9px] text-slate-700">{m.total}{m.criticos > 0 && <span class="text-red-600"> ({m.criticos})</span>}</div>
+          </div>
+        );
+      })}
+    </div>
+    <div class="mt-1 text-xs text-slate-500">Número total por mes · (n) = equipos críticos · proyectado desde la frecuencia de cada plan</div>
+  </div>
+
+  <!-- Colisiones de equipos críticos -->
+  <div class="card mt-4 p-5">
+    <h2 class="font-semibold text-slate-900">⚠ Colisiones de equipos críticos</h2>
+    <p class="text-xs text-slate-500">Semanas con 2 o más equipos críticos programados a la vez — evita dejarlos fuera de servicio simultáneamente.</p>
+    {colisiones.length === 0 ? (
+      <p class="mt-3 text-sm text-emerald-700">✓ Sin colisiones detectadas en los próximos 12 meses.</p>
+    ) : (
+      <ul class="mt-3 space-y-2 text-sm">
+        {colisiones.map((c) => (
+          <li class="rounded-md border border-amber-300 bg-amber-50 p-3">
+            <div class="font-medium text-amber-800">Semana {fmt(c.ini)} – {fmt(c.fin)} · {c.equipos.length} equipos críticos</div>
+            <div class="mt-1 text-xs text-slate-700">{c.equipos.map((e) => `${e.codigo} (${fmt(e.fecha)})`).join("  ·  ")}</div>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
   {puedeGenerar && (
     <script>
+      import { areaHref, parseArea } from "@/lib/areas";
+      const area = parseArea(new URLSearchParams(location.search).get("area"));
       document.querySelectorAll<HTMLButtonElement>(".generar-ot-btn").forEach((btn) => {
         btn.addEventListener("click", async (e) => {
           e.preventDefault();
           const tipo = btn.dataset.tipo;
           const id = btn.dataset.id;
           const labelOriginal = btn.textContent;
-          if (!confirm(`¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`)) return;
+          const ok = window.confirmAction
+            ? await window.confirmAction("Generar orden de trabajo", `¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`, { danger: false, confirmLabel: "Generar" })
+            : confirm(`¿Generar OT ahora para este ${tipo === "plan" ? "plan" : "actividad"}?`);
+          if (!ok) return;
           btn.disabled = true;
           btn.textContent = "Generando...";
           const url = tipo === "plan" ? `/api/planes/${id}/generar-ot` : `/api/actividades/${id}/generar-ot`;
-          const res = await fetch(url, { method: "POST" });
+          const res = await fetch(areaHref(url, area), { method: "POST" });
           const j = await res.json().catch(() => ({}));
           if (res.ok && j.orden) {
             // Redirige a la nueva OT
-            location.href = `/ordenes/${j.orden.id}`;
+            location.href = areaHref(`/ordenes/${j.orden.id}`, area);
           } else {
-            alert("✗ " + (j.error ?? "Error al generar OT"));
+            window.showToast?.("✗ " + (j.error ?? "Error al generar OT"), "error");
             btn.disabled = false;
             btn.textContent = labelOriginal;
+          }
+        });
+      });
+
+      // Helper común para PATCH inline con feedback visual (highlight verde si
+      // ok, revert + alerta si falla). El backend valida tipos/permisos.
+      async function patchInline(
+        el: HTMLInputElement | HTMLSelectElement,
+        body: Record<string, unknown>,
+        prevValue: string,
+      ) {
+        const tipo = el.dataset.tipo;
+        const id = el.dataset.id;
+        el.disabled = true;
+        const url = tipo === "plan" ? `/api/planes/${id}` : `/api/actividades/${id}`;
+        const res = await fetch(areaHref(url, area), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        el.disabled = false;
+        if (res.ok) {
+          el.classList.add("ring-2", "ring-emerald-300");
+          setTimeout(() => el.classList.remove("ring-2", "ring-emerald-300"), 900);
+          return true;
+        }
+        el.value = prevValue;
+        const j = await res.json().catch(() => ({}));
+        const err = typeof j?.error === "string" ? j.error : "error desconocido";
+        window.showToast?.("No se pudo guardar: " + err, "error");
+        return false;
+      }
+
+      // Asignación inline del técnico.
+      document.querySelectorAll<HTMLSelectElement>(".asignar-sel").forEach((sel) => {
+        let prev = sel.value;
+        sel.addEventListener("change", async () => {
+          const nuevoId = sel.value ? Number(sel.value) : null;
+          const ok = await patchInline(sel, { asignadoA: nuevoId }, prev);
+          if (ok) prev = sel.value;
+        });
+      });
+
+      // Cambio inline de la próxima fecha de realización. Acepta cualquier
+      // fecha válida (incluye pasadas, por si se quiere marcar atraso).
+      document.querySelectorAll<HTMLInputElement>(".fecha-prox").forEach((inp) => {
+        let prev = inp.value;
+        inp.addEventListener("change", async () => {
+          if (!inp.value) { inp.value = prev; return; }
+          const ok = await patchInline(inp, { proximaFecha: inp.value }, prev);
+          if (ok) {
+            prev = inp.value;
+            // Recarga suave para que la tarjeta caiga al bucket correcto
+            // (vencido / 7 / 15 / 30 / más adelante) según la nueva fecha.
+            setTimeout(() => location.reload(), 700);
           }
         });
       });

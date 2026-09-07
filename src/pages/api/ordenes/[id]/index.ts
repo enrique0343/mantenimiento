@@ -4,11 +4,6 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales } from "@/lib/schema";
 
-async function contarAdjuntos(db: any, ordenId: number, categoria: string): Promise<number> {
-  const rows = await db.select({ id: adjuntos.id }).from(adjuntos)
-    .where(and(eq(adjuntos.ordenId, ordenId), eq(adjuntos.categoria, categoria)));
-  return rows.length;
-}
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
 import { transicionesPermitidas, parseChecklist, validarChecklistParaCierre, type EstadoOT } from "@/lib/ordenes";
@@ -20,9 +15,12 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+
 export const prerender = false;
 
 const updateSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
@@ -61,6 +59,9 @@ export const GET: APIRoute = async (ctx) => {
     .limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const contextError = validarContextoArea(ctx.request, row.orden.rubro);
+  if (contextError) return contextError;
+
   const coms = await db
     .select({ c: comentarios, u: usuarios })
     .from(comentarios)
@@ -96,6 +97,14 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const contextError = validarContextoArea(ctx.request, actual.rubro);
+  if (contextError) return contextError;
+  if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una orden no puede cambiarse" }, { status: 400 });
+  if (parsed.data.activoId !== undefined) {
+    const areaResult = await validarAreaTrabajo(db, { ...actual, ...parsed.data });
+    if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  }
+
   const { reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras, ...rest } = parsed.data;
   // horasTrabajadas se calcula SIEMPRE en el servidor (al cerrar la OT).
   // Ignoramos cualquier valor que venga del cliente para evitar manipulacion.
@@ -104,28 +113,13 @@ export const PATCH: APIRoute = async (ctx) => {
 
   // Validar transicion de estado segun rol
   if (parsed.data.estado && parsed.data.estado !== actual.estado) {
-    // ─── Validaciones de adjuntos obligatorios ──────────────────────────────
-    // Para iniciar (abierta → en_proceso): se requiere al menos 1 foto "antes"
-    if (actual.estado === "abierta" && parsed.data.estado === "en_proceso") {
-      const nAntes = await contarAdjuntos(db, id, "antes");
-      if (nAntes === 0) {
-        return Response.json(
-          { error: "Debes adjuntar al menos una foto del estado inicial (antes) para iniciar la OT." },
-          { status: 400 }
-        );
-      }
-    }
-    // Para completar (en_proceso → completada): se requiere al menos 1 foto "después"
-    if (actual.estado === "en_proceso" && parsed.data.estado === "completada") {
-      const nDespues = await contarAdjuntos(db, id, "despues");
-      if (nDespues === 0) {
-        return Response.json(
-          { error: "Debes adjuntar al menos una foto del estado final (después) para completar la OT." },
-          { status: 400 }
-        );
-      }
+    // Las fotos "antes"/"después" son opcionales: el técnico puede adjuntar
+    // evidencia si la conexión y el dispositivo lo permiten, pero ya no
+    // bloquean el flujo (se reportaron equipos saturándose al subir fotos).
+    if (actual.estado === "en_proceso" && parsed.data.estado === "completada" && user.rol !== "admin") {
       // Validación bloqueante de checklist: si la OT tiene checklist con
       // items pendientes o desviaciones sin nota, NO se puede completar.
+      // El admin la salta cuando cierra administrativamente.
       const checklist = parseChecklist(actual.checklistEjecucion);
       const v = validarChecklistParaCierre(checklist);
       if (!v.ok) {
@@ -135,7 +129,10 @@ export const PATCH: APIRoute = async (ctx) => {
 
     const esAsignado = actual.asignadoA === user.id;
     const permitidas = transicionesPermitidas(actual.estado as EstadoOT, user.rol, esAsignado);
-    if (!permitidas.includes(parsed.data.estado as EstadoOT)) {
+    // El admin (super admin) puede forzar cualquier transición desde cualquier
+    // estado — necesario para cerrar OTs antiguas cuyo trabajo se ejecutó
+    // fuera de la plataforma y nunca se siguió aquí.
+    if (user.rol !== "admin" && !permitidas.includes(parsed.data.estado as EstadoOT)) {
       return Response.json(
         { error: `No tienes permisos para mover de "${actual.estado}" a "${parsed.data.estado}"` },
         { status: 403 }
@@ -211,6 +208,12 @@ export const PATCH: APIRoute = async (ctx) => {
         data.verificadoEn = null;
         break;
     }
+  }
+
+  // Si cambia el asignado, actualizar la marca temporal de asignación.
+  // Esto alimenta la columna "Asignado hace N días" del listado de OTs.
+  if (parsed.data.asignadoA !== undefined && parsed.data.asignadoA !== actual.asignadoA) {
+    data.asignadoEn = parsed.data.asignadoA ? now : null;
   }
 
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
@@ -325,7 +328,13 @@ export const PATCH: APIRoute = async (ctx) => {
           estado: nuevoEstadoTicket,
           updatedAt: now,
         };
-        if (parsed.data.estado === "completada" || parsed.data.estado === "verificada") {
+        // Si el ticket queda resuelto o cerrado, registra la marca temporal y
+        // (si existe) la solución aplicada. Se chequea contra el estado FINAL
+        // del ticket (no el de la OT), porque el switch de arriba reasigna
+        // parsed.data.estado a "cerrada" cuando viene "completada"/"verificada",
+        // dejando estas dos comparaciones efectivamente muertas si se chequean
+        // contra parsed.data.estado.
+        if (nuevoEstadoTicket === "resuelto" || nuevoEstadoTicket === "cerrado") {
           updateTicket.resueltoEn = now;
           if (actual.solucionAplicada || parsed.data.solucionAplicada) {
             updateTicket.resolucionNotas = parsed.data.solucionAplicada ?? actual.solucionAplicada;
@@ -492,6 +501,9 @@ export const DELETE: APIRoute = async (ctx) => {
   const env = (ctx.locals as any).runtime?.env;
   const [ot] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!ot) return Response.json({ error: "No encontrada" }, { status: 404 });
+
+  const contextError = validarContextoArea(ctx.request, ot.rubro);
+  if (contextError) return contextError;
 
   // Borrar adjuntos de R2
   const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));

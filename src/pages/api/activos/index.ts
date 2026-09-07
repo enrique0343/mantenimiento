@@ -5,14 +5,20 @@ import { activos, planesMantenimiento } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { desc } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { activoAreaCondition, parseArea, AREA_KEYS } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
 
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
+  const requestedArea = new URL(ctx.request.url).searchParams.get("area");
+  const area = parseArea(requestedArea);
+  if (requestedArea && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   const db = getDb(ctx);
-  const rows = await db.select().from(activos).orderBy(desc(activos.id));
+  const rows = await db.select().from(activos).where(area ? activoAreaCondition(area) : undefined).orderBy(desc(activos.id));
   return Response.json({ activos: rows });
 };
 
@@ -23,6 +29,8 @@ const baseSchema = {
   ubicacion: z.string().nullable().optional(),
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
   tipo: z.enum(["general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
+  datosTecnicos: datosTecnicosSchema,
   categoria: z.string().nullable().optional(),
   numeroActivo: z.string().nullable().optional(),
   marca: z.string().nullable().optional(),
@@ -33,6 +41,12 @@ const baseSchema = {
   claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
   ultimaCalibracion: z.string().nullable().optional(),
   proximaCalibracion: z.string().nullable().optional(),
+  fechaAdquisicion: z.string().nullable().optional(),
+  vidaUtilAnios: z.number().int().nonnegative().nullable().optional(),
+  valorAdquisicion: z.number().nonnegative().nullable().optional(),
+  responsableId: z.number().int().nullable().optional(),
+  criticidadOperacional: z.enum(["alta", "media", "baja"]).default("media"),
+  requiereCalibracion: z.boolean().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),
   slaUrgenteHoras: z.number().int().nonnegative().optional(),
@@ -58,7 +72,11 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
   const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad, ...activoData } = parsed.data;
-  const data = { ...activoData, qrCode: `QR-${activoData.codigo}` };
+  const rubro = rubroDeActivo(activoData.rubro, activoData.tipo);
+  const tipo = rubro === "biomedico" ? "biomedico" : "general";
+  if (activoData.tipo && activoData.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
+  if (!datosTecnicosValidosParaArea(rubro, activoData.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
+  const data: typeof activos.$inferInsert = { ...activoData, rubro, tipo, datosTecnicos: serializarDatosTecnicos(rubro, activoData.datosTecnicos), qrCode: `QR-${activoData.codigo}` };
   try {
     const [row] = await db.insert(activos).values(data).returning();
 

@@ -3,18 +3,23 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
   activos, ordenes, usuarios, comentarios, ordenRepuestos, items as itemsTable,
-  movimientosInventario, encuestasSatisfaccion,
+  movimientosInventario, encuestasSatisfaccion, calibraciones, proveedores,
 } from "@/lib/schema";
 import { eq, desc, and, sql, isNotNull, gte } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
+import { areaHref, parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
-if (!Number.isFinite(id)) return Astro.redirect("/activos");
+if (!Number.isFinite(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const db = getDb(Astro);
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
-if (!a) return Astro.redirect("/activos");
+if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const area = rubroDeActivo(a.rubro, a.tipo);
+if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
 
 // Todas las OTs del equipo (orden cronológico inverso)
 const ots = await db
@@ -207,18 +212,29 @@ for (const r of repuestos) {
     icono: "🔧",
   });
 }
-if (a.tipo === "biomedico") {
-  if (a.ultimaCalibracion) {
-    eventos.push({
-      fecha: a.ultimaCalibracion,
-      tipo: "calibracion",
-      titulo: `Calibración registrada`,
-      detalle: a.proximaCalibracion ? `Próxima: ${new Date(a.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
-      meta: a.claseRiesgo ? `Clase ${a.claseRiesgo}` : "",
-      color: "border-purple-500",
-      icono: "🩺",
-    });
-  }
+// Calibraciones con trazabilidad metrológica (tabla calibraciones, Fase 34)
+const calibracionesRows = await db
+  .select({ c: calibraciones, lab: proveedores })
+  .from(calibraciones)
+  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
+  .where(eq(calibraciones.activoId, id))
+  .orderBy(desc(calibraciones.fechaCalibracion));
+for (const { c, lab } of calibracionesRows) {
+  const labNombre = lab?.nombre ?? c.laboratorioExterno;
+  const detalle = [
+    c.proximaCalibracion ? `Próxima: ${new Date(c.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
+    c.patronReferencia ? `Patrón: ${c.patronReferencia}` : "",
+  ].filter(Boolean).join(" · ");
+  eventos.push({
+    fecha: c.fechaCalibracion,
+    tipo: "calibracion",
+    titulo: `Calibración: ${RESULTADO_CALIB_LABEL[c.resultado]}`,
+    detalle,
+    meta: [labNombre, c.numeroCertificado ? `Cert. ${c.numeroCertificado}` : ""].filter(Boolean).join(" · "),
+    link: c.certificadoR2Key ? `/api/calibraciones/certificado/${c.id}` : undefined,
+    color: c.resultado === "no_conforme" ? "border-red-500" : "border-purple-500",
+    icono: "🔬",
+  });
 }
 
 eventos.sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -228,7 +244,7 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", {
 ---
 
 <Layout title={`Historial · ${a.codigo}`}>
-  <a href={`/activos/${a.id}`} class="text-sm text-slate-500 hover:underline">← Volver al equipo</a>
+  <a href={areaHref(`/activos/${a.id}`, area)} class="text-sm text-slate-500 hover:underline">← Volver al equipo</a>
   <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">📜 Historial: {a.codigo}</h1>
@@ -335,7 +351,7 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", {
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
                   {e.link ? (
-                    <a href={e.link} class="font-semibold text-brand-700 hover:underline">{e.titulo}</a>
+                    <a href={areaHref(e.link, area)} class="font-semibold text-brand-700 hover:underline">{e.titulo}</a>
                   ) : (
                     <span class="font-semibold">{e.titulo}</span>
                   )}

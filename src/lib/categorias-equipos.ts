@@ -2,7 +2,6 @@
 // Sugerencias para el datalist; el usuario puede escribir libre.
 
 export const CATEGORIAS_GENERAL = [
-  "Aires acondicionados",
   "Generadores eléctricos",
   "UPS / respaldo eléctrico",
   "Electrodomésticos",
@@ -21,6 +20,9 @@ export const CATEGORIAS_GENERAL = [
   "Lavandería industrial",
   "Otros",
 ] as const;
+
+export const CATEGORIAS_AIRES = ["Mini split", "Cassette", "Piso techo", "Ventana", "Unidad central", "VRF / VRV", "Chiller", "Manejadora de aire", "Otros aires acondicionados"] as const;
+export const CATEGORIAS_INFRAESTRUCTURA = ["Cubiertas y techos", "Muros y acabados", "Puertas y ventanas", "Red hidráulica", "Red sanitaria", "Red eléctrica", "Iluminación", "Pisos y pavimentos", "Drenajes", "Otras instalaciones"] as const;
 
 export const CATEGORIAS_BIOMEDICO = [
   "Ventiladores mecánicos",
@@ -46,6 +48,13 @@ export const CATEGORIAS_BIOMEDICO = [
 export function categoriasParaTipo(tipo: "general" | "biomedico"): readonly string[] {
   return tipo === "biomedico" ? CATEGORIAS_BIOMEDICO : CATEGORIAS_GENERAL;
 }
+
+export const CATEGORIAS_POR_AREA = {
+  aires: CATEGORIAS_AIRES,
+  infraestructura: CATEGORIAS_INFRAESTRUCTURA,
+  equipo_general: CATEGORIAS_GENERAL,
+  biomedico: CATEGORIAS_BIOMEDICO,
+} as const;
 
 // Para vista agrupada: dado un texto libre devuelve un grupo "normalizado"
 // (busca coincidencia parcial; si no encaja, lo devuelve como "Otros")

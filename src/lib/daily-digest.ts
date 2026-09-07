@@ -14,6 +14,7 @@ import {
 } from "./schema";
 import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga, fmtFechaSimple } from "./datetime";
+import { procesarContratosVencimiento } from "./contratos-alertas";
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
@@ -261,6 +262,14 @@ export async function enviarDigestDiario(
        <div style="font-size:11px;color:${color.text};margin-top:4px;line-height:1.3">${label}</div>
      </td>`;
 
+  // Procesar vencimientos de contratos (auto-transición de estados, alertas 90/60/30)
+  // Esto envía emails específicos a admins + responsables y devuelve el resumen para el digest.
+  let contratosPorVencer: Awaited<ReturnType<typeof procesarContratosVencimiento>>["porVencer"] = [];
+  try {
+    const r = await procesarContratosVencimiento(ctx);
+    contratosPorVencer = r.porVencer;
+  } catch (e) { console.error("procesar contratos:", e); }
+
   let html = `<p>Buenos días,</p>
   <p>Resumen del estado de Mantenimiento al inicio de <strong>${fechaHoy}</strong>.</p>
 
@@ -451,6 +460,20 @@ export async function enviarDigestDiario(
     for (const r of proximasActividades) {
       const venc = r.a.proximaFecha <= hoy ? `<strong style="color:#991b1b">vencido</strong>` : fmtFechaSimple(r.a.proximaFecha);
       html += `<li>📌 <strong>${r.a.titulo}</strong> (${r.a.codigo}) — ${venc}</li>`;
+    }
+    html += `</ul>`;
+  }
+
+  // ── Contratos por vencer (90 días) ───────────────────────────────────────
+  if (contratosPorVencer.length > 0) {
+    html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">📜 Contratos por vencer (próximos 90 días)</h3>
+    <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
+    for (const c of contratosPorVencer) {
+      const color = c.diasRestantes <= 30 ? "#dc2626" : c.diasRestantes <= 60 ? "#ea580c" : "#0a4082";
+      const dias = c.diasRestantes < 0
+        ? `<strong style="color:#991b1b">vencido hace ${Math.abs(c.diasRestantes)} día${Math.abs(c.diasRestantes) === 1 ? "" : "s"}</strong>`
+        : `<strong style="color:${color}">${c.diasRestantes} día${c.diasRestantes === 1 ? "" : "s"}</strong>`;
+      html += `<li><a href="${baseUrl}/contratos/${c.id}" style="color:#0a4082;text-decoration:none">${c.codigo} — ${c.nombre}</a> · ${c.proveedor ?? "—"} · ${dias}</li>`;
     }
     html += `</ul>`;
   }

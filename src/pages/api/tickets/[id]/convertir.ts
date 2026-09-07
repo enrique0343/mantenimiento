@@ -6,6 +6,8 @@ import { tickets, ordenes, ticketAdjuntos, adjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+
 export const prerender = false;
 
 const schema = z.object({
@@ -24,6 +26,10 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [t] = await db.select().from(tickets).where(eq(tickets.id, id)).limit(1);
   if (!t) return Response.json({ error: "Ticket no encontrado" }, { status: 404 });
+  const contextError = validarContextoArea(ctx.request, t.rubro);
+  if (contextError) return contextError;
+  const areaResult = await validarAreaTrabajo(db, t);
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   if (t.otId) return Response.json({ error: "Ticket ya tiene OT asociada" }, { status: 400 });
 
   const desc = `${t.descripcion}\n\n— Ticket #${t.id} de ${t.solicitanteNombre} <${t.solicitanteEmail}>`;
@@ -35,8 +41,13 @@ export const POST: APIRoute = async (ctx) => {
       tipo: "correctivo",
       prioridad: t.prioridad,
       estado: "abierta",
+      rubro: areaResult.rubro,
       activoId: t.activoId,
+      sucursalId: t.sucursalId,
+      ubicacionId: t.ubicacionId,
+      ubicacionDetalle: t.ubicacion,
       asignadoA: parsed.data.asignadoA ?? null,
+      asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
       creadoPor: user.id,
       vencimiento: parsed.data.vencimiento ?? t.vencimientoSla,
     })

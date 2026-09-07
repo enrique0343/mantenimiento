@@ -1,5 +1,7 @@
 ---
 import "@/styles/globals.css";
+import AppIcon from "@/components/AppIcon.astro";
+import { AREA_KEYS, AREAS, parseArea, areaHref } from "@/lib/areas";
 
 interface Props {
   title?: string;
@@ -11,49 +13,16 @@ const path = Astro.url.pathname;
 
 const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
-const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol === "tecnico";
-const isMotorista = user?.rol === "motorista";
-const verFlota = isAdminOrJefe || isMotorista;
-const esProveedor = user?.rol === "proveedor";
-
-interface Link { href: string; label: string; icon: string; show?: boolean }
-
-const motoLinks: Link[] = [
-  { href: "/mi-panel", label: "Mi panel",  icon: "🏠" },
-  { href: "/flota",    label: "Flota",     icon: "🚗" },
-  { href: "/tickets",  label: "Reportes",  icon: "🎫" },
-];
-
-const homeHref  = user?.rol === "tecnico" ? "/mi-panel" : "/";
-const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
-
-const allLinks: Link[] = [
-  { href: homeHref,         label: homeLabel,       icon: "🏠" },
-  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
-  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
-  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
-  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
-  { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
-  { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
-  { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
-  { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
-  { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
-  { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
-  { href: "/requisiciones",      label: "Requisiciones", icon: "🛒", show: isOperativo },
-  { href: "/solicitudes-compra", label: "Compras",       icon: "🛍", show: isOperativo },
-  { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
-  { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
-  { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },
-  { href: "/planificador",  label: "Planificador",  icon: "🗓", show: isAdminOrJefe },
-  { href: "/proveedores",   label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
-  { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
-  { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
-];
-
-const navLinks = isMotorista
-  ? motoLinks
-  : allLinks.filter((l) => l.show === undefined || l.show);
-
+const isOperativo = isAdminOrJefe || user?.rol === "tecnico";
+const area = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
+const info = area ? AREAS[area] : null;
+const operationalTabs = area ? [
+  {href: `/areas/${area}`, label: "Resumen", show: true},
+  {href: areaHref("/tickets", area), label: "Solicitudes", show: true},
+  {href: areaHref("/ordenes", area), label: "Órdenes", show: !["motorista","proveedor"].includes(user?.rol ?? "")},
+  {href: areaHref("/activos", area), label: info!.inventoryLabel, show: user?.rol !== "motorista"},
+  {href: areaHref("/planes", area), label: "Planes", show: isOperativo || user?.rol === "visualizador"},
+].filter(x=>x.show) : [];
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",
   jefe:         "Jefe",
@@ -65,7 +34,7 @@ const ROL_LABEL: Record<string, string> = {
 };
 
 const isActive = (href: string) =>
-  path === href || (href !== "/" && href.length > 1 && path.startsWith(href));
+  path === href.split("?")[0] || (href.split("?")[0] !== "/" && path.startsWith(href.split("?")[0] + "/"));
 ---
 
 <!doctype html>
@@ -88,38 +57,44 @@ const isActive = (href: string) =>
     {!hideNav && user ? (
       <div class="flex min-h-screen">
         <!-- Sidebar -->
-        <aside class="sidebar flex flex-col bg-slate-900 text-white" id="sidebar">
+        <aside class="sidebar flex flex-col text-white" id="sidebar">
           <!-- Logo -->
-          <div class="flex items-center gap-2 px-4 py-4 border-b border-slate-700">
-            <span class="text-xl">⚙️</span>
-            <a href="/" class="font-bold text-white text-sm leading-tight">Avante<br/><span class="text-slate-400 font-normal text-xs">Mantenimiento</span></a>
+          <div class="flex items-center gap-3 px-4 py-4 border-b border-slate-700/60">
+            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-base shadow-md">
+              <AppIcon name="equipment" />
+            </div>
+            <a href="/" class="leading-tight min-w-0">
+              <div class="font-bold text-white text-sm">Avante</div>
+              <div class="text-slate-400 font-normal text-[11px]">Mantenimiento</div>
+            </a>
           </div>
 
-          <!-- Nav links -->
-          <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-            {navLinks.map((l) => (
-              <a
-                href={l.href}
-                class:list={[
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  isActive(l.href)
-                    ? "bg-brand-600 text-white"
-                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                ]}
-              >
-                <span class="text-base w-5 text-center">{l.icon}</span>
-                <span>{l.label}</span>
-              </a>
-            ))}
+          <nav class="app-nav" aria-label="Navegación principal">
+            <a href="/" class:list={["app-nav-link", {active:path === "/"}]} aria-current={path === "/" ? "page" : undefined}><AppIcon name="home" /><span>Panorama general</span></a>
+            <div class="app-nav-label">Áreas de mantenimiento</div>
+            {AREA_KEYS.map(key => <a href={`/areas/${key}`} class:list={["app-nav-link", {active:area === key}]} aria-current={area === key ? "page" : undefined}><AppIcon name={AREAS[key].icon}/><span>{AREAS[key].label}</span></a>)}
+            <div class="app-nav-label">Gestión compartida</div>
+            <a href="/recursos" class:list={["app-nav-link", {active:path === "/recursos"}]}><AppIcon name="box"/><span>Recursos</span></a>
+            {isAdminOrJefe && <a href="/indicadores" class:list={["app-nav-link", {active:path === "/indicadores"}]}><AppIcon name="report"/><span>Indicadores y reportes</span></a>}
+            {isAdminOrJefe && <a href="/administracion" class:list={["app-nav-link", {active:path === "/administracion"}]}><AppIcon name="settings"/><span>Administración</span></a>}
+            {user.rol !== "motorista" && <a href="/mi-panel" class="app-nav-link"><AppIcon name="equipment"/><span>Mi trabajo</span></a>}
+            <a href="/manual" class="app-nav-link"><AppIcon name="book"/><span>Ayuda</span></a>
           </nav>
 
           <!-- Usuario + Salir -->
-          <div class="border-t border-slate-700 p-3">
-            <div class="text-xs text-slate-400 mb-1 px-1 truncate">{user.nombre}</div>
-            <div class="text-xs text-slate-500 px-1 mb-2">
-              <span class="rounded bg-slate-700 px-1.5 py-0.5">{ROL_LABEL[user.rol] ?? user.rol}</span>
+          <div class="border-t border-slate-700/60 p-3">
+            <div class="flex items-center gap-2.5 mb-3 px-1">
+              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600/25 text-brand-300 text-xs font-bold border border-brand-500/30">
+                {user.nombre.charAt(0).toUpperCase()}
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium text-slate-200 truncate">{user.nombre}</div>
+                <div class="text-[10px] text-slate-500 mt-0.5">
+                  <span class="rounded bg-slate-700/70 px-1.5 py-0.5 text-slate-400">{ROL_LABEL[user.rol] ?? user.rol}</span>
+                </div>
+              </div>
             </div>
-            <button id="logoutBtn" class="w-full rounded-lg px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors">
+            <button id="logoutBtn" class="w-full rounded-lg px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700/60">
               Cerrar sesión
             </button>
           </div>
@@ -128,17 +103,25 @@ const isActive = (href: string) =>
         <!-- Contenido principal -->
         <div class="flex-1 flex flex-col min-w-0">
           <!-- Topbar -->
-          <header class="flex items-center justify-between gap-3 bg-white border-b border-slate-200 px-4 py-3">
-            <button id="menuToggle" class="md:hidden text-slate-600 text-xl">☰</button>
-            <button id="searchOpen" class="flex flex-1 items-center gap-2 max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300">
-              <span>🔍</span><span class="truncate">Buscar (OT, equipo, ticket, item)…</span>
-              <span class="ml-auto hidden sm:inline rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 font-mono">⌘K</span>
+          <header class="flex items-center justify-between gap-3 bg-white border-b border-slate-200 px-4 py-2.5 shadow-sm">
+            <button id="menuToggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar" class="md:hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 transition-colors text-xl">☰</button>
+            <button id="searchOpen" class="flex flex-1 items-center gap-2 max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-sm text-slate-400 hover:bg-white hover:border-slate-300 hover:text-slate-500 transition-all">
+              <span class="text-slate-400">🔍</span>
+              <span class="truncate">Buscar OT, equipo, ticket…</span>
+              <span class="ml-auto hidden sm:inline rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 font-mono border border-slate-200">⌘K</span>
             </button>
-            <button id="bellBtn" class="relative rounded-full p-2 hover:bg-slate-100" title="Notificaciones">
-              <span class="text-xl">🔔</span>
-              <span id="bellBadge" class="hidden absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1"></span>
-            </button>
-            <a href="/perfil" class="hidden sm:inline text-xs text-slate-500 hover:text-slate-700">{user.nombre}</a>
+            <div class="flex items-center gap-1">
+              <button id="bellBtn" class="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors" title="Notificaciones">
+                <span class="text-lg">🔔</span>
+                <span id="bellBadge" class="hidden absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1"></span>
+              </button>
+              <a href="/perfil" class="hidden sm:flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 transition-colors">
+                <div class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-[10px] font-bold">
+                  {user.nombre.charAt(0).toUpperCase()}
+                </div>
+                <span class="hidden lg:inline">{user.nombre.split(" ")[0]}</span>
+              </a>
+            </div>
           </header>
 
           <!-- Panel de notificaciones -->
@@ -152,7 +135,8 @@ const isActive = (href: string) =>
             </div>
           </div>
 
-          <main class="flex-1 p-4 sm:p-6">
+          <main class="app-content flex-1 p-4 sm:p-6">
+            {info && <div class="area-context"><div class="area-context-heading"><span class="area-symbol"><AppIcon name={info.icon} size={23}/></span><div><span class="area-eyebrow">Área de mantenimiento</span><strong>{info.label}</strong></div></div><nav class="area-tabs" aria-label={`Secciones de ${info.label}`}>{operationalTabs.map(tab=><a href={tab.href} class:list={[{active:isActive(tab.href)}]} aria-current={isActive(tab.href)?"page":undefined}>{tab.label}</a>)}</nav></div>}
             <slot />
           </main>
         </div>
@@ -179,7 +163,122 @@ const isActive = (href: string) =>
       </main>
     )}
 
+    <!-- Global confirm dialog -->
+    <div id="confirmModal" class="fixed inset-0 z-[150] hidden items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]">
+      <div class="w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
+        <div class="px-6 pt-6 pb-2">
+          <div id="confirmIcon" class="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-2xl">⚠️</div>
+          <h3 id="confirmTitle" class="text-base font-semibold text-slate-900"></h3>
+          <p id="confirmMsg" class="mt-1 text-sm text-slate-500 leading-relaxed"></p>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-6 py-4 bg-slate-50/60 border-t border-slate-100">
+          <button id="confirmCancel" class="btn btn-secondary btn-sm">Cancelar</button>
+          <button id="confirmOk" class="btn btn-danger btn-sm">Confirmar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-[200] flex flex-col gap-2 pointer-events-none max-w-xs" aria-live="polite"></div>
+
+
+    {area && <script is:inline define:vars={{currentArea:area}}>
+      (() => {
+        const paths = ["/activos", "/tickets", "/ordenes", "/planes", "/actividades", "/cronograma", "/planificador", "/gantt", "/plan-mantenimiento"];
+        document.querySelectorAll("a[href]").forEach(link => {
+          const url = new URL(link.href, location.origin);
+          if (url.origin === location.origin && !url.searchParams.has("area") && paths.some(p=>url.pathname === p || url.pathname.startsWith(p+"/"))) {
+            url.searchParams.set("area", currentArea);
+            link.href = url.pathname + url.search + url.hash;
+          }
+        });
+      })();
+    </script>}
+
     <script is:inline>
+      // ─── Toast system ─────────────────────────────────────────────────────────
+      window.showToast = (function () {
+        function esc(s) {
+          return String(s || "").replace(/[&<>"']/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+          });
+        }
+        return function (msg, type, duration) {
+          var container = document.getElementById("toastContainer");
+          if (!container) return;
+          type = type || "success";
+          var palettes = {
+            success: "bg-emerald-600 text-white",
+            error:   "bg-red-600 text-white",
+            warning: "bg-amber-500 text-white",
+            info:    "bg-brand-600 text-white",
+          };
+          var icons = { success: "✓", error: "✕", warning: "⚠", info: "ℹ" };
+          var t = document.createElement("div");
+          t.style.cssText = "opacity:0;transform:translateY(10px);transition:opacity .25s,transform .25s";
+          t.className =
+            "pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 shadow-lg text-sm font-medium " +
+            (palettes[type] || palettes.success);
+          t.innerHTML =
+            '<span class="shrink-0 font-bold text-base">' + (icons[type] || "✓") + "</span>" +
+            "<span>" + esc(msg) + "</span>";
+          container.appendChild(t);
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              t.style.opacity = "1";
+              t.style.transform = "translateY(0)";
+            });
+          });
+          setTimeout(function () {
+            t.style.opacity = "0";
+            t.style.transform = "translateY(10px)";
+            setTimeout(function () { t.remove(); }, 280);
+          }, duration || 4000);
+        };
+      })();
+
+      // ─── Confirm dialog ───────────────────────────────────────────────────────
+      (function () {
+        var modal = document.getElementById("confirmModal");
+        var titleEl = document.getElementById("confirmTitle");
+        var msgEl = document.getElementById("confirmMsg");
+        var okBtn = document.getElementById("confirmOk");
+        var cancelBtn = document.getElementById("confirmCancel");
+        var iconEl = document.getElementById("confirmIcon");
+        if (!modal) return;
+        var _resolve = null;
+
+        function closeModal(val) {
+          modal.classList.add("hidden");
+          modal.classList.remove("flex");
+          if (_resolve) { _resolve(val); _resolve = null; }
+        }
+
+        window.confirmAction = function (title, msg, opts) {
+          opts = opts || {};
+          return new Promise(function (resolve) {
+            _resolve = resolve;
+            titleEl.textContent = title || "¿Confirmar acción?";
+            msgEl.textContent = msg || "";
+            var danger = opts.danger !== false;
+            okBtn.textContent = opts.confirmLabel || (danger ? "Confirmar" : "Aceptar");
+            okBtn.className = "btn btn-sm " + (danger ? "btn-danger" : "btn-primary");
+            if (iconEl) {
+              iconEl.textContent = danger ? "⚠️" : "✅";
+              iconEl.className =
+                "mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl " +
+                (danger ? "bg-red-100" : "bg-brand-50");
+            }
+            modal.classList.remove("hidden");
+            modal.classList.add("flex");
+          });
+        };
+
+        okBtn && okBtn.addEventListener("click", function () { closeModal(true); });
+        cancelBtn && cancelBtn.addEventListener("click", function () { closeModal(false); });
+        modal && modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(false); });
+      })();
+
       document.getElementById("logoutBtn")?.addEventListener("click", async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         location.href = "/login";
@@ -227,7 +326,7 @@ const isActive = (href: string) =>
 
         function buscar(q) {
           results.innerHTML = '<p class="p-4 text-center text-slate-400">Buscando…</p>';
-          fetch("/api/search?q=" + encodeURIComponent(q))
+          fetch("/api/search?q=" + encodeURIComponent(q) + (searchArea ? "&area=" + encodeURIComponent(searchArea) : ""))
             .then(function (r) { return r.json(); })
             .then(function (j) { renderResultados(j.resultados); })
             .catch(function () { results.innerHTML = '<p class="p-4 text-center text-red-500">Error al buscar</p>'; });
@@ -377,16 +476,17 @@ const isActive = (href: string) =>
         toggle.addEventListener("click", function (e) {
           e.stopPropagation();
           sidebar.classList.toggle("open");
+          toggle.setAttribute("aria-expanded", String(sidebar.classList.contains("open")));
         });
         // Tap fuera cierra
         document.addEventListener("click", function (e) {
           if (sidebar.classList.contains("open") && !sidebar.contains(e.target) && e.target !== toggle) {
-            sidebar.classList.remove("open");
+            sidebar.classList.remove("open"); toggle.setAttribute("aria-expanded", "false");
           }
         });
         // Tap en cualquier link del sidebar lo cierra
         sidebar.querySelectorAll("a").forEach(function (a) {
-          a.addEventListener("click", function () { sidebar.classList.remove("open"); });
+          a.addEventListener("click", function () { sidebar.classList.remove("open"); toggle.setAttribute("aria-expanded", "false"); });
         });
       }
     </script>

@@ -1,0 +1,445 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { subestaciones, cargasElectricas, sucursales, activos, ubicaciones } from "@/lib/schema";
+import { eq, asc, and } from "drizzle-orm";
+import { puedeVerElectrico, puedeAdministrarElectrico, resumenSubestacion, kwDeCarga, fmtKw } from "@/lib/electrico";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerElectrico(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const esAdmin = puedeAdministrarElectrico(user.rol);
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect("/electrico");
+
+const [row] = await db
+  .select({ sub: subestaciones, s: sucursales })
+  .from(subestaciones)
+  .leftJoin(sucursales, eq(sucursales.id, subestaciones.sucursalId))
+  .where(eq(subestaciones.id, id));
+
+if (!row || !row.sub.activa) return Astro.redirect("/electrico");
+
+const cargas = await db
+  .select({ c: cargasElectricas, a: activos })
+  .from(cargasElectricas)
+  .leftJoin(activos, eq(activos.id, cargasElectricas.activoId))
+  .where(and(eq(cargasElectricas.subestacionId, id), eq(cargasElectricas.activa, true)))
+  .orderBy(asc(cargasElectricas.nombre));
+
+const resumen = resumenSubestacion(row.sub, cargas.map((r) => r.c));
+
+// Activos de la misma sede para vincular cargas al inventario (opcional)
+const activosSede = await db
+  .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .where(eq(ubicaciones.sucursalId, row.sub.sucursalId))
+  .orderBy(asc(activos.codigo));
+
+const SEMAFORO = {
+  verde: { text: "text-emerald-600", bar: "bg-emerald-500", badge: "bg-emerald-100 text-emerald-700", label: "Con holgura" },
+  ambar: { text: "text-amber-600", bar: "bg-amber-500", badge: "bg-amber-100 text-amber-700", label: "Cerca del límite" },
+  rojo:  { text: "text-red-600", bar: "bg-red-500", badge: "bg-red-100 text-red-700", label: "Sobre el límite seguro" },
+} as const;
+const sem = SEMAFORO[resumen.semaforo];
+const pctBar = Math.min(100, resumen.pctUso);
+
+// Agrupar cargas por tablero para lectura tipo "cuadro de carga"
+const porTablero = new Map<string, typeof cargas>();
+for (const r of cargas) {
+  const t = r.c.tablero?.trim() || "General";
+  const arr = porTablero.get(t) ?? [];
+  arr.push(r);
+  porTablero.set(t, arr);
+}
+const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"));
+---
+
+<Layout title={row.sub.nombre}>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <a href="/electrico" class="text-xs text-slate-400 hover:text-slate-600">← Control eléctrico</a>
+      <h1 class="mt-1 text-2xl font-bold">⚡ {row.sub.nombre}</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        🏢 {row.s?.nombre ?? "Sin sede"}
+        {row.sub.codigo && <span class="ml-2 font-mono text-xs border border-slate-200 rounded px-1.5 py-0.5">{row.sub.codigo}</span>}
+        {row.sub.ubicacionDetalle && <span class="ml-2">📍 {row.sub.ubicacionDetalle}</span>}
+      </p>
+    </div>
+    {esAdmin && (
+      <div class="flex gap-2">
+        <button id="editSubBtn" class="btn-secondary">✎ Editar</button>
+        <button id="delSubBtn" class="btn-danger">🗑 Dar de baja</button>
+      </div>
+    )}
+  </div>
+
+  <!-- Resumen de capacidad -->
+  <div class="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Capacidad</div>
+      <div class="mt-1.5 text-2xl font-bold text-slate-800">{row.sub.capacidadKva} <span class="text-sm font-normal text-slate-400">kVA</span></div>
+      <div class="mt-0.5 text-[11px] text-slate-400">≈ {fmtKw(resumen.capacidadKw)} kW útiles (FP {row.sub.factorPotencia})</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Límite seguro</div>
+      <div class="mt-1.5 text-2xl font-bold text-slate-800">{fmtKw(resumen.limiteSeguroKw)} <span class="text-sm font-normal text-slate-400">kW</span></div>
+      <div class="mt-0.5 text-[11px] text-slate-400">{Math.round(row.sub.factorSeguridad * 100)}% de la capacidad</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Carga instalada</div>
+      <div class={`mt-1.5 text-2xl font-bold ${sem.text}`}>{fmtKw(resumen.cargaInstaladaKw)} <span class="text-sm font-normal text-slate-400">kW</span></div>
+      <div class="mt-0.5 text-[11px] text-slate-400">{cargas.length} carga(s) · {Math.round(resumen.pctUso)}% del límite</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Disponible</div>
+      <div class={`mt-1.5 text-2xl font-bold ${resumen.disponibleKw > 0 ? "text-emerald-600" : "text-red-600"}`}>
+        {fmtKw(resumen.disponibleKw)} <span class="text-sm font-normal text-slate-400">kW</span>
+      </div>
+      <div class="mt-0.5"><span class={`badge ${sem.badge}`}>{sem.label}</span></div>
+    </div>
+  </div>
+
+  <!-- Barra de uso -->
+  <div class="card mt-4 p-4">
+    <div class="flex justify-between text-xs text-slate-500 mb-1.5">
+      <span>Uso del límite seguro</span>
+      <span class="font-semibold">{Math.round(resumen.pctUso)}%</span>
+    </div>
+    <div class="h-3 rounded-full bg-slate-100 overflow-hidden">
+      <div class={`h-full rounded-full ${sem.bar} transition-all`} style={`width:${pctBar}%`}></div>
+    </div>
+    {resumen.pctUso >= 100 && (
+      <p class="mt-2 text-xs text-red-600 font-medium">⚠ Esta subestación supera el límite de carga recomendado. Evita conectar equipos adicionales y evalúa redistribuir cargas.</p>
+    )}
+  </div>
+
+  <!-- Cuadro de cargas -->
+  <div class="mt-6 flex items-center justify-between">
+    <h2 class="font-semibold text-slate-800">Cuadro de cargas conectadas</h2>
+    {esAdmin && <button id="nuevaCargaBtn" class="btn-primary btn-sm">+ Agregar carga</button>}
+  </div>
+
+  {cargas.length === 0 ? (
+    <div class="card mt-3 p-8 text-center text-sm text-slate-400">
+      Sin cargas registradas. {esAdmin ? "Agrega los equipos y circuitos conectados a este punto." : ""}
+    </div>
+  ) : (
+    tableros.map((tab) => (
+      <div class="card mt-3 overflow-hidden">
+        <div class="flex items-center justify-between bg-slate-50 px-4 py-2 border-b border-slate-100">
+          <span class="text-sm font-semibold text-slate-700">🔌 {tab}</span>
+          <span class="text-xs text-slate-400">
+            {fmtKw(porTablero.get(tab)!.reduce((s, r) => s + kwDeCarga(r.c), 0))} kW
+          </span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-50/60 text-xs uppercase text-slate-500">
+              <tr>
+                <th class="px-4 py-2">Carga / equipo</th>
+                <th class="px-4 py-2">Potencia</th>
+                <th class="px-4 py-2">Detalle eléctrico</th>
+                <th class="px-4 py-2">Notas</th>
+                {esAdmin && <th class="px-4 py-2 text-right">Acciones</th>}
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {porTablero.get(tab)!.map((r) => (
+                <tr class="hover:bg-slate-50">
+                  <td class="px-4 py-2">
+                    <div class="font-medium text-slate-800">{r.c.nombre}</div>
+                    {r.a && (
+                      <a href={`/activos/${r.a.id}`} class="text-xs text-brand-600 hover:underline font-mono">{r.a.codigo}</a>
+                    )}
+                  </td>
+                  <td class="px-4 py-2 font-semibold text-slate-700 whitespace-nowrap">{fmtKw(kwDeCarga(r.c))} kW</td>
+                  <td class="px-4 py-2 text-xs text-slate-500">
+                    {r.c.potenciaKw != null && r.c.potenciaKw > 0
+                      ? "kW directo"
+                      : `${r.c.amperaje ?? "?"} A × ${r.c.voltajeCarga ?? "?"} V${r.c.fases === 3 ? " · 3Φ" : r.c.fases === 2 ? " · 2Φ" : ""}`}
+                  </td>
+                  <td class="px-4 py-2 text-xs text-slate-500 max-w-[200px] truncate">{r.c.notas ?? "—"}</td>
+                  {esAdmin && (
+                    <td class="px-4 py-2 text-right whitespace-nowrap">
+                      <button
+                        class="edit-carga-btn text-xs text-brand-600 hover:underline mr-2"
+                        data-id={r.c.id}
+                        data-nombre={r.c.nombre}
+                        data-tablero={r.c.tablero ?? ""}
+                        data-kw={r.c.potenciaKw ?? ""}
+                        data-amp={r.c.amperaje ?? ""}
+                        data-volt={r.c.voltajeCarga ?? ""}
+                        data-fases={r.c.fases}
+                        data-activo={r.c.activoId ?? ""}
+                        data-notas={r.c.notas ?? ""}
+                      >✎ Editar</button>
+                      <button class="del-carga-btn text-xs text-red-600 hover:underline" data-id={r.c.id} data-nombre={r.c.nombre}>🗑</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ))
+  )}
+
+  {row.sub.notas && (
+    <div class="card mt-4 p-4 text-sm text-slate-600">
+      <span class="text-xs font-semibold uppercase text-slate-400 block mb-1">Notas</span>
+      {row.sub.notas}
+    </div>
+  )}
+
+  {esAdmin && (
+    <>
+      <!-- Modal carga (crear/editar) -->
+      <div id="cargaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+          <h3 id="cargaModalTitle" class="text-lg font-semibold text-slate-900">🔌 Agregar carga</h3>
+          <input type="hidden" id="c_id" />
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Nombre de la carga *</label>
+              <input id="c_nombre" class="input" placeholder="Ej. Aire acondicionado UCI, Iluminación piso 2" />
+            </div>
+            <div>
+              <label class="label text-xs">Tablero / circuito</label>
+              <input id="c_tablero" class="input" placeholder="Ej. Tablero A, TB-2" />
+            </div>
+            <div>
+              <label class="label text-xs">Equipo del inventario (opcional)</label>
+              <select id="c_activo" class="input">
+                <option value="">— Sin vincular —</option>
+                {activosSede.map((a) => <option value={a.id}>{a.codigo} · {a.nombre}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div class="mt-4 rounded-lg border border-slate-200 p-3">
+            <div class="text-xs font-semibold text-slate-600 mb-2">Potencia — usa la opción que tengas disponible</div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label class="label text-xs">Opción 1: kW directo</label>
+                <input id="c_kw" class="input" type="number" step="0.01" min="0" placeholder="Ej. 5.5" />
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                <div class="col-span-1">
+                  <label class="label text-xs">Amperios</label>
+                  <input id="c_amp" class="input" type="number" step="0.1" min="0" placeholder="A" />
+                </div>
+                <div class="col-span-1">
+                  <label class="label text-xs">Voltaje</label>
+                  <input id="c_volt" class="input" type="number" step="1" min="0" placeholder="V" />
+                </div>
+                <div class="col-span-1">
+                  <label class="label text-xs">Fases</label>
+                  <select id="c_fases" class="input">
+                    <option value="1">1Φ</option>
+                    <option value="2">2Φ</option>
+                    <option value="3">3Φ</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <p class="mt-1.5 text-[11px] text-slate-400">Si registras kW directo, se usa ese valor. Si no, se estima con A × V (× √3 si trifásico, FP 0.9).</p>
+          </div>
+
+          <div class="mt-3">
+            <label class="label text-xs">Notas</label>
+            <input id="c_notas" class="input" placeholder="Observaciones" />
+          </div>
+          <p id="c_err" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="c_cancel" class="btn-secondary">Cancelar</button>
+            <button id="c_save" class="btn-primary">Guardar carga</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal editar subestación -->
+      <div id="editSubModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+          <h3 class="text-lg font-semibold text-slate-900">✎ Editar subestación</h3>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Nombre *</label>
+              <input id="e_nombre" class="input" value={row.sub.nombre} />
+            </div>
+            <div>
+              <label class="label text-xs">Código</label>
+              <input id="e_codigo" class="input" value={row.sub.codigo ?? ""} />
+            </div>
+            <div>
+              <label class="label text-xs">Capacidad (kVA) *</label>
+              <input id="e_kva" class="input" type="number" step="0.1" min="1" value={row.sub.capacidadKva} />
+            </div>
+            <div>
+              <label class="label text-xs">Voltaje</label>
+              <input id="e_voltaje" class="input" value={row.sub.voltaje ?? ""} />
+            </div>
+            <div>
+              <label class="label text-xs">Factor de seguridad</label>
+              <select id="e_fs" class="input">
+                <option value="0.7" selected={row.sub.factorSeguridad === 0.7}>70%</option>
+                <option value="0.8" selected={row.sub.factorSeguridad === 0.8}>80% (NEC)</option>
+                <option value="0.9" selected={row.sub.factorSeguridad === 0.9}>90%</option>
+                <option value="1" selected={row.sub.factorSeguridad === 1}>100%</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Ubicación física</label>
+              <input id="e_ubicacion" class="input" value={row.sub.ubicacionDetalle ?? ""} />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Notas</label>
+              <textarea id="e_notas" class="input" rows="2">{row.sub.notas ?? ""}</textarea>
+            </div>
+          </div>
+          <p id="e_err" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="e_cancel" class="btn-secondary">Cancelar</button>
+            <button id="e_save" class="btn-primary">Guardar cambios</button>
+          </div>
+        </div>
+      </div>
+    </>
+  )}
+
+  {esAdmin && (
+    <script define:vars={{ subId: id }}>
+      const $ = (i) => document.getElementById(i);
+      const show = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };
+      const hide = (m) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+
+      // ── Cargas ──
+      const cargaModal = $("cargaModal");
+      const openCargaNew = () => {
+        $("cargaModalTitle").textContent = "🔌 Agregar carga";
+        $("c_id").value = "";
+        ["c_nombre", "c_tablero", "c_kw", "c_amp", "c_volt", "c_notas"].forEach((i) => ($(i).value = ""));
+        $("c_activo").value = "";
+        $("c_fases").value = "1";
+        $("c_err").classList.add("hidden");
+        show(cargaModal);
+      };
+      $("nuevaCargaBtn")?.addEventListener("click", openCargaNew);
+      $("c_cancel")?.addEventListener("click", () => hide(cargaModal));
+      cargaModal?.addEventListener("click", (e) => { if (e.target === cargaModal) hide(cargaModal); });
+
+      document.querySelectorAll(".edit-carga-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          $("cargaModalTitle").textContent = "✎ Editar carga";
+          $("c_id").value = btn.dataset.id;
+          $("c_nombre").value = btn.dataset.nombre;
+          $("c_tablero").value = btn.dataset.tablero;
+          $("c_kw").value = btn.dataset.kw;
+          $("c_amp").value = btn.dataset.amp;
+          $("c_volt").value = btn.dataset.volt;
+          $("c_fases").value = btn.dataset.fases || "1";
+          $("c_activo").value = btn.dataset.activo || "";
+          $("c_notas").value = btn.dataset.notas;
+          $("c_err").classList.add("hidden");
+          show(cargaModal);
+        });
+      });
+
+      $("c_save")?.addEventListener("click", async () => {
+        const err = $("c_err");
+        err.classList.add("hidden");
+        const idC = $("c_id").value;
+        const nombre = $("c_nombre").value.trim();
+        const kw = $("c_kw").value ? Number($("c_kw").value) : null;
+        const amp = $("c_amp").value ? Number($("c_amp").value) : null;
+        const volt = $("c_volt").value ? Number($("c_volt").value) : null;
+        if (!nombre) { err.textContent = "El nombre es obligatorio."; err.classList.remove("hidden"); return; }
+        if (!kw && !(amp && volt)) {
+          err.textContent = "Registra la potencia en kW, o bien amperaje + voltaje.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const payload = {
+          nombre,
+          tablero: $("c_tablero").value.trim() || null,
+          activoId: $("c_activo").value ? Number($("c_activo").value) : null,
+          potenciaKw: kw,
+          amperaje: amp,
+          voltajeCarga: volt,
+          fases: Number($("c_fases").value),
+          notas: $("c_notas").value.trim() || null,
+        };
+        const res = idC
+          ? await fetch(`/api/electrico/cargas/${idC}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })
+          : await fetch("/api/electrico/cargas", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, subestacionId: subId }) });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) {
+          window.showToast?.(idC ? "Carga actualizada" : "Carga agregada", "success");
+          location.reload();
+        } else {
+          err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+          err.classList.remove("hidden");
+        }
+      });
+
+      document.querySelectorAll(".del-carga-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const ok = await (window.confirmAction
+            ? window.confirmAction("Eliminar carga", `¿Quitar "${btn.dataset.nombre}" del cuadro de cargas?`)
+            : Promise.resolve(confirm(`¿Quitar "${btn.dataset.nombre}"?`)));
+          if (!ok) return;
+          const res = await fetch(`/api/electrico/cargas/${btn.dataset.id}`, { method: "DELETE" });
+          if (res.ok) { window.showToast?.("Carga eliminada", "success"); location.reload(); }
+          else window.showToast?.("Error al eliminar", "error");
+        });
+      });
+
+      // ── Subestación ──
+      const editModal = $("editSubModal");
+      $("editSubBtn")?.addEventListener("click", () => show(editModal));
+      $("e_cancel")?.addEventListener("click", () => hide(editModal));
+      editModal?.addEventListener("click", (e) => { if (e.target === editModal) hide(editModal); });
+
+      $("e_save")?.addEventListener("click", async () => {
+        const err = $("e_err");
+        err.classList.add("hidden");
+        const nombre = $("e_nombre").value.trim();
+        const kva = Number($("e_kva").value);
+        if (!nombre || !kva) { err.textContent = "Nombre y capacidad son obligatorios."; err.classList.remove("hidden"); return; }
+        const res = await fetch(`/api/electrico/subestaciones/${subId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            nombre,
+            codigo: $("e_codigo").value.trim() || null,
+            capacidadKva: kva,
+            voltaje: $("e_voltaje").value.trim() || null,
+            factorSeguridad: Number($("e_fs").value),
+            ubicacionDetalle: $("e_ubicacion").value.trim() || null,
+            notas: $("e_notas").value.trim() || null,
+          }),
+        });
+        if (res.ok) { window.showToast?.("Subestación actualizada", "success"); location.reload(); }
+        else {
+          const j = await res.json().catch(() => ({}));
+          err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+          err.classList.remove("hidden");
+        }
+      });
+
+      $("delSubBtn")?.addEventListener("click", async () => {
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Dar de baja", "¿Dar de baja esta subestación? Dejará de aparecer en el control eléctrico (sus cargas se conservan en el historial).")
+          : Promise.resolve(confirm("¿Dar de baja esta subestación?")));
+        if (!ok) return;
+        const res = await fetch(`/api/electrico/subestaciones/${subId}`, { method: "DELETE" });
+        if (res.ok) { window.showToast?.("Subestación dada de baja", "success"); location.href = "/electrico"; }
+        else window.showToast?.("Error al dar de baja", "error");
+      });
+    </script>
+  )}
+</Layout>

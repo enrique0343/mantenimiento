@@ -3,9 +3,15 @@ import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, empresa } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { parseArea, AREAS, AREA_KEYS } from "@/lib/areas";
 export const prerender = false;
 
 const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const rawArea = url.searchParams.get("area");
+const area = parseArea(rawArea);
+if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
+
 const [emp] = await db.select().from(empresa).limit(1);
 const tieneLogo = !!emp?.logoR2Key;
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre })
@@ -43,7 +49,7 @@ const ubJson = JSON.stringify(ubRows);
       </div>
 
       <div id="formBox">
-        <h2 class="text-2xl font-bold">Cuéntanos qué necesita atención</h2>
+        <h2 class="text-2xl font-bold">{area ? `Solicitud · ${AREAS[area].label}` : "Cuéntanos qué necesita atención"}</h2>
         <p class="mt-1 text-sm text-slate-600">Si llegaste hasta aquí es porque algo dejó de funcionar. Gracias por detenerte a contárnoslo; lo resolvemos juntos.</p>
 
         <form id="form" class="card mt-5 space-y-4 p-5">
@@ -61,10 +67,10 @@ const ubJson = JSON.stringify(ubRows);
               <input class="input" id="solicitanteTelefono" type="tel" />
             </div>
             <div>
-              <label class="label">Tipo de mantenimiento *</label>
-              <select class="input" id="tipoMantenimiento" required>
-                <option value="general">🔧 General (instalaciones, áreas, equipos comunes)</option>
-                <option value="biomedico">🩺 Biomédico (equipos médicos, hospitalarios)</option>
+              <label class="label" for="rubro">Área de mantenimiento *</label>
+              <select class="input" id="rubro" required disabled={!!area}>
+                <option value="">— Selecciona el área —</option>
+                {AREA_KEYS.map((key) => <option value={key} selected={key === area}>{AREAS[key].label}</option>)}
               </select>
             </div>
             <div class="sm:col-span-2">
@@ -199,7 +205,7 @@ const ubJson = JSON.stringify(ubRows);
           asunto: v("asunto"),
           descripcion: v("descripcion"),
           prioridad: v("prioridad"),
-          tipoMantenimiento: v("tipoMantenimiento"),
+          rubro: v("rubro"),
           ubicacion: v("ubicacion") || null,
           sucursalId: Number(sucEl.value),
           ubicacionId: ubEl?.value ? Number(ubEl.value) : null,
@@ -211,7 +217,7 @@ const ubJson = JSON.stringify(ubRows);
         });
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
-          err.textContent = "No pudimos enviar tu solicitud. Verifica los campos e intenta de nuevo.";
+          err.textContent = typeof j.error === "string" ? j.error : "No pudimos enviar tu solicitud. Verifica los campos e intenta de nuevo.";
           err.classList.remove("hidden");
           btn.disabled = false; btn.textContent = "Enviar solicitud";
           return;

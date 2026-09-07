@@ -1,11 +1,12 @@
 import type { APIRoute } from "astro";
-import { eq, lte, and } from "drizzle-orm";
+import { eq, lte, and, asc } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
-import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias } from "@/lib/schema";
-import { siguienteFecha } from "@/lib/frecuencias";
+import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias, usuarios } from "@/lib/schema";
 import { enviarRecordatoriosEncuestas } from "@/lib/encuestas-recordatorio";
 import { enviarDigestDiario } from "@/lib/daily-digest";
 
+import { rubroDeActivo } from "@/lib/rubros";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 // Endpoint llamado por el Cron Worker. Protegido por header X-Cron-Secret.
@@ -26,6 +27,17 @@ export const POST: APIRoute = async (ctx) => {
 
   let creadas = 0;
   const detalles: Array<{ origen: string; refId: number; ordenId: number; descripcion: string }> = [];
+  const omitidas: Array<{ origen: string; refId: number; motivo: string }> = [];
+
+  // Estas rutinas no guardan un creador. La OT automática queda a cargo del
+  // responsable activo de la rutina o, si falta, de un administrador activo.
+  // La base real exige creado_por NOT NULL y una referencia a un usuario.
+  const responsables = await db.select({ id: usuarios.id, rol: usuarios.rol })
+    .from(usuarios).where(eq(usuarios.activo, true)).orderBy(asc(usuarios.id));
+  const responsablesIds = new Set(responsables.map((usuario) => usuario.id));
+  const administradorId = responsables.find((usuario) => usuario.rol === "admin")?.id;
+  const creadorDeRutina = (asignadoA: number | null) =>
+    asignadoA && responsablesIds.has(asignadoA) ? asignadoA : administradorId;
 
   // ── 1) Planes de mantenimiento de equipos ──────────────────────────────────
   // Generamos OT solo si proximaFecha <= hoy AND no hay aún OT generada para
@@ -41,6 +53,11 @@ export const POST: APIRoute = async (ctx) => {
     const p = r.p;
     // Si ya generamos OT para este ciclo, saltar.
     if (p.ultimaGeneracion && p.ultimaGeneracion.slice(0, 10) >= p.proximaFecha) continue;
+    const creadoPor = creadorDeRutina(p.asignadoA);
+    if (!creadoPor) {
+      omitidas.push({ origen: "equipo", refId: p.id, motivo: "Sin responsable ni administrador activo" });
+      continue;
+    }
 
     const codigoActivo = r.a?.codigo ?? `Activo #${p.activoId}`;
     const titulo = `[Preventivo] ${p.titulo} - ${codigoActivo}`;
@@ -56,8 +73,10 @@ export const POST: APIRoute = async (ctx) => {
         prioridad: p.prioridad,
         estado: "abierta",
         activoId: p.activoId,
+        rubro: rubroDeActivo(r.a?.rubro, r.a?.tipo),
         asignadoA: p.asignadoA,
-        creadoPor: null,
+        asignadoEn: p.asignadoA ? new Date().toISOString() : null,
+        creadoPor,
         planId: p.id,
         vencimiento: venc.toISOString(),
         checklistEjecucion: p.checklist ?? null,
@@ -87,6 +106,16 @@ export const POST: APIRoute = async (ctx) => {
     if (a.ultimaGeneracion && a.ultimaGeneracion.slice(0, 10) >= a.proximaFecha) continue;
 
     const cat = r.c;
+    const rubro = areaDeActividad(a.rubro, cat?.rubro);
+    if (!rubro) {
+      omitidas.push({ origen: "actividad", refId: a.id, motivo: "Sin área de mantenimiento" });
+      continue;
+    }
+    const creadoPor = creadorDeRutina(a.asignadoA);
+    if (!creadoPor) {
+      omitidas.push({ origen: "actividad", refId: a.id, motivo: "Sin responsable ni administrador activo" });
+      continue;
+    }
     const titulo = `[Actividad${cat ? ` · ${cat.icono ?? ""} ${cat.nombre}` : ""}] ${a.titulo}`;
     const venc = new Date(a.proximaFecha);
     venc.setUTCDate(venc.getUTCDate() + a.alertaDiasAntes);
@@ -100,8 +129,10 @@ export const POST: APIRoute = async (ctx) => {
         prioridad: a.prioridad,
         estado: "abierta",
         actividadId: a.id,
+        rubro,
         asignadoA: a.asignadoA,
-        creadoPor: null,
+        asignadoEn: a.asignadoA ? new Date().toISOString() : null,
+        creadoPor,
         vencimiento: venc.toISOString(),
         checklistEjecucion: a.checklist ?? null,
       })
@@ -137,5 +168,5 @@ export const POST: APIRoute = async (ctx) => {
     console.error("digest diario:", e);
   }
 
-  return Response.json({ ok: true, fecha: hoy, creadas, detalles, recordatoriosEnviados, digestEnviados });
+  return Response.json({ ok: true, fecha: hoy, creadas, detalles, omitidas, recordatoriosEnviados, digestEnviados });
 };

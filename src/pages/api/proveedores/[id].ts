@@ -25,6 +25,9 @@ const updateSchema = z.object({
   email: z.string().email().nullable().optional(),
   notas: z.string().nullable().optional(),
   activo: z.boolean().optional(),
+  esLaboratorioAcreditado: z.boolean().optional(),
+  acreditacionOrgano: z.string().nullable().optional(),
+  acreditacionVigencia: z.string().nullable().optional(),
 });
 
 export const PATCH: APIRoute = async (ctx) => {

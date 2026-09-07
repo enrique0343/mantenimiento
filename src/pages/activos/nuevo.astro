@@ -1,42 +1,47 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { sucursales, ubicaciones, proveedores } from "@/lib/schema";
-import { eq } from "drizzle-orm";
-import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
+import { sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
+import { eq, and, inArray, asc } from "drizzle-orm";
+import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
+import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
+import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
+import { AREAS, areaHref, parseArea } from "@/lib/areas";
 export const prerender = false;
+const area = parseArea(Astro.url.searchParams.get("area"));
+const titulo = area ? AREAS[area].createLabel : "Registrar activo";
 
 const user = Astro.locals.user!;
-if (user.rol === "solicitante" || user.rol === "visualizador" || user.rol === "proveedor") {
-  return Astro.redirect("/activos");
+if (!["admin", "tecnico"].includes(user.rol)) {
+  return Astro.redirect(areaHref("/activos", area));
 }
 
 const db = getDb(Astro);
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
 const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+const userRows = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+  .from(usuarios)
+  .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "admin"])))
+  .orderBy(asc(usuarios.nombre));
 
 const ubJson = JSON.stringify(ubRows);
 ---
 
-<Layout title="Nuevo equipo">
-  <a href="/activos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
-  <h1 class="mt-2 text-2xl font-bold">Nuevo equipo</h1>
+<Layout title={titulo}>
+  <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold" id="formTitle">{titulo}</h1>
 
   <form id="form" class="card mt-4 space-y-5 p-5">
+    <ActivoAreaFields area={area} />
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div>
-        <label class="label">Tipo de equipo *</label>
-        <select class="input" id="tipo">
-          <option value="general">General / Industrial</option>
-          <option value="biomedico">Biomedico</option>
-        </select>
-      </div>
+      <input type="hidden" id="tipo" value={area === "biomedico" ? "biomedico" : "general"} />
       <div>
         <label class="label">Categoría</label>
         <input class="input" id="categoria" list="categoriasList" placeholder="Selecciona o escribe..." />
         <datalist id="categoriasList"></datalist>
-        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo (general / biomédico).</p>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias corresponden al área seleccionada.</p>
       </div>
       <div>
         <label class="label">Codigo interno *</label>
@@ -52,7 +57,7 @@ const ubJson = JSON.stringify(ubRows);
       </div>
       <div class="sm:col-span-2">
         <label class="label">Descripcion</label>
-        <textarea class="input" id="descripcion" rows="2"></textarea>
+        <textarea class="input" id="descripcion" placeholder="Describe el equipo o instalación y su función" rows="2"></textarea>
       </div>
       <div>
         <label class="label">Marca</label>
@@ -117,6 +122,45 @@ const ubJson = JSON.stringify(ubRows);
     </div>
 
     <div class="border-t border-slate-200 pt-5">
+      <h2 class="mb-3 font-semibold text-brand-700">🏷 Datos patrimoniales y criticidad</h2>
+      <p class="text-xs text-slate-500 mb-3">La criticidad evalúa el impacto de una falla del equipo o instalación. Es independiente de la urgencia de una solicitud.</p>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label">Fecha de adquisición</label>
+          <input class="input" id="fechaAdquisicion" type="date" />
+        </div>
+        <div>
+          <label class="label">Vida útil estimada (años)</label>
+          <input class="input" id="vidaUtilAnios" type="number" min="0" max="100" placeholder="Ej: 10" />
+        </div>
+        <div>
+          <label class="label">Valor de adquisición (USD)</label>
+          <input class="input" id="valorAdquisicion" type="number" min="0" step="0.01" />
+        </div>
+        <div>
+          <label class="label">Responsable del equipo</label>
+          <select class="input" id="responsableSel">
+            <option value="">— Sin asignar —</option>
+            {userRows.map((u) => <option value={u.id}>{u.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label class="label">Criticidad operacional *</label>
+          <select class="input" id="criticidadOperacional" required>
+            {(["alta", "media", "baja"] as const).map((c) => (
+              <option value={c} selected={c === "media"}>{CRITICIDAD_LABEL[c]}</option>
+            ))}
+          </select>
+          <p class="mt-1 text-xs text-slate-500" id="critDesc">{CRITICIDAD_DESC.media}</p>
+        </div>
+        <div class="flex items-center gap-2 pt-6">
+          <input type="checkbox" id="requiereCalibracion" class="h-4 w-4" />
+          <label for="requiereCalibracion" class="text-sm text-slate-700">Requiere calibración (aunque no sea biomédico)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="border-t border-slate-200 pt-5">
       <h2 class="mb-3 font-semibold text-emerald-700">🛡️ Mantenimiento preventivo automático</h2>
       <p class="text-xs text-slate-500 mb-3">Si configuras la frecuencia, el sistema generará automáticamente las órdenes preventivas en cada ciclo. Si después se hace un correctivo, el contador se reinicia automáticamente.</p>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -129,7 +173,7 @@ const ubJson = JSON.stringify(ubRows);
             <option value="quincenal">Quincenal</option>
             <option value="mensual">Mensual</option>
             <option value="bimestral">Bimestral (2 meses)</option>
-            <option value="trimestral" selected>Trimestral (3 meses)</option>
+            <option value="trimestral">Trimestral (3 meses)</option>
             <option value="semestral">Semestral (6 meses)</option>
             <option value="anual">Anual</option>
           </select>
@@ -212,29 +256,38 @@ const ubJson = JSON.stringify(ubRows);
 
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
-      <button class="btn-primary" type="submit">Crear equipo</button>
-      <a class="btn-secondary" href="/activos">Cancelar</a>
+      <button class="btn-primary" type="submit" id="saveBtn">{titulo}</button>
+      <a class="btn-secondary" href={areaHref("/activos", area)}>Cancelar</a>
     </div>
   </form>
 
-  <script define:vars={{ ubJson, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO }}>
+  <script define:vars={{ ubJson, categoriasPorArea: CATEGORIAS_POR_AREA, areas: AREAS, critDescJson: CRITICIDAD_DESC }}>
     const allUbs = JSON.parse(ubJson);
 
-    // Biomedico toggle
+    // Descripción de criticidad operacional
+    const critSel = document.getElementById("criticidadOperacional");
+    const critDescEl = document.getElementById("critDesc");
+    critSel?.addEventListener("change", () => {
+      if (critDescEl) critDescEl.textContent = critDescJson[critSel.value] ?? "";
+    });
+
+    const areaSel = document.getElementById("rubro");
     const tipoSel = document.getElementById("tipo");
-    const bioFields = document.getElementById("bioFields");
-    const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
-
-    // Categorías dinámicas según tipo
-    const catList = document.getElementById("categoriasList");
-    const refreshCategorias = () => {
-      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
-      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
-    };
-
-    tipoSel?.addEventListener("change", () => { toggleBio(); refreshCategorias(); });
-    toggleBio();
-    refreshCategorias();
+    function actualizarArea() {
+      const key = areaSel.value;
+      tipoSel.value = key === "biomedico" ? "biomedico" : "general";
+      document.getElementById("bioFields").classList.toggle("hidden", key !== "biomedico");
+      document.getElementById("aireFields").classList.toggle("hidden", key !== "aires");
+      document.getElementById("infraFields").classList.toggle("hidden", key !== "infraestructura");
+      document.getElementById("servicioFields").classList.toggle("hidden", !["equipo_general", "biomedico"].includes(key));
+      for (const el of document.querySelectorAll("#aireFields input, #infraFields input, #servicioFields input")) el.disabled = el.closest(".hidden") !== null;
+      const list = document.getElementById("categoriasList");
+      list.replaceChildren(...(categoriasPorArea[key] ?? []).map((c) => { const option = document.createElement("option"); option.value = c; return option; }));
+      document.getElementById("formTitle").textContent = areas[key]?.createLabel ?? "Registrar activo";
+      document.getElementById("saveBtn").textContent = areas[key]?.createLabel ?? "Registrar activo";
+    }
+    areaSel.addEventListener("change", actualizarArea);
+    actualizarArea();
 
     // Sucursal → ubicacion filter
     const sucursalSel = document.getElementById("sucursalSel");
@@ -269,6 +322,10 @@ const ubJson = JSON.stringify(ubRows);
         ubicacion: v("ubicacion") || null,
         estado: sv("estado"),
         tipo: sv("tipo"),
+        rubro: sv("rubro"),
+        datosTecnicos: sv("rubro") === "aires" ? { tipoUnidad: v("tipoUnidad") || null, capacidadBtuH: v("capacidadBtuH") ? Number(v("capacidadBtuH")) : null, refrigerante: v("refrigerante") || null }
+          : sv("rubro") === "infraestructura" ? { tipoInstalacion: v("tipoInstalacion") || null, sector: v("sector") || null }
+          : { servicio: v("servicio") || null },
         categoria: v("categoria") || null,
         numeroActivo: v("numeroActivo") || null,
         marca: v("marca") || null,
@@ -281,6 +338,12 @@ const ubJson = JSON.stringify(ubRows);
         slaAltaHoras: Number(sv("slaAltaHoras") || 24),
         slaMediaHoras: Number(sv("slaMediaHoras") || 72),
         slaBajaHoras: Number(sv("slaBajaHoras") || 168),
+        fechaAdquisicion: v("fechaAdquisicion") || null,
+        vidaUtilAnios: v("vidaUtilAnios") ? Number(v("vidaUtilAnios")) : null,
+        valorAdquisicion: v("valorAdquisicion") ? Number(v("valorAdquisicion")) : null,
+        responsableId: sv("responsableSel") ? Number(sv("responsableSel")) : null,
+        criticidadOperacional: sv("criticidadOperacional") || "media",
+        requiereCalibracion: document.getElementById("requiereCalibracion")?.checked ?? false,
       };
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;
@@ -308,7 +371,7 @@ const ubJson = JSON.stringify(ubRows);
         return;
       }
       const j = await res.json();
-      location.href = `/activos/${j.activo.id}`;
+      location.href = `/activos/${j.activo.id}?area=${encodeURIComponent(j.activo.rubro)}`;
     });
   </script>
 </Layout>

@@ -1,15 +1,17 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, desc } from "drizzle-orm";
+import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contratosMantenimiento } from "@/lib/schema";
+import { eq, desc, inArray } from "drizzle-orm";
+import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/cronograma");
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/cronograma", Astro.url.searchParams.get("area")));
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const fSucursal = url.searchParams.get("sucursal");
 const fFrecuencia = url.searchParams.get("frecuencia");
 const fEstado = url.searchParams.get("estado") ?? "activos";
@@ -21,6 +23,7 @@ const rows = await db
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(area ? activoAreaCondition(area) : undefined)
   .orderBy(desc(planesMantenimiento.id));
 
 const filtered = rows.filter((r) =>
@@ -34,6 +37,13 @@ const sucursalesList = await db
   .from(sucursales)
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
+
+// Contratos vigentes/por vencer para vincular planes contratados
+const contratosList = await db
+  .select({ id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo, nombre: contratosMantenimiento.nombre })
+  .from(contratosMantenimiento)
+  .where(inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]))
+  .orderBy(contratosMantenimiento.codigo);
 
 const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const FREC_LABEL: Record<string, string> = {
@@ -50,12 +60,14 @@ const FREC_LABEL: Record<string, string> = {
       <p class="text-sm text-slate-500">{rows.length} en total · mostrando {filtered.length}</p>
     </div>
     <div class="flex gap-2">
-      <a href="/cronograma" class="btn-secondary">📅 Cronograma</a>
+      <a href={areaHref("/planificador", area)} class="btn-secondary">Planificador mensual</a>
+      <a href={areaHref("/cronograma", area)} class="btn-secondary">📅 Cronograma</a>
     </div>
   </div>
 
   <!-- Filtros -->
   <form class="card mt-3 flex flex-wrap items-end gap-3 p-3" method="get">
+    {area && <input type="hidden" name="area" value={area} />}
     <div>
       <label class="label text-xs">Sucursal</label>
       <select name="sucursal" class="input text-sm">
@@ -79,7 +91,7 @@ const FREC_LABEL: Record<string, string> = {
       </select>
     </div>
     <button class="btn-primary text-sm">Filtrar</button>
-    {(fSucursal || fFrecuencia || fEstado !== "activos") && <a href="/planes" class="btn-secondary text-sm">Limpiar</a>}
+    {(fSucursal || fFrecuencia || fEstado !== "activos") && <a href={areaHref("/planes", area)} class="btn-secondary text-sm">Limpiar</a>}
   </form>
 
   <!-- Barra de acciones bulk (aparece cuando hay seleccionados) -->
@@ -103,11 +115,13 @@ const FREC_LABEL: Record<string, string> = {
           <th class="px-3 py-2">Frecuencia</th>
           <th class="px-3 py-2">Próxima fecha</th>
           <th class="px-3 py-2">Asignado</th>
+          <th class="px-3 py-2">Modalidad</th>
+          <th class="px-3 py-2">Contrato</th>
           <th class="px-3 py-2">Estado</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {filtered.length === 0 && <tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
+        {filtered.length === 0 && <tr><td colspan="10" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
         {filtered.map((r) => (
           <tr class:list={["hover:bg-slate-50", !r.p.activo && "opacity-60"]}>
             <td class="px-3 py-2"><input type="checkbox" class="row-chk" data-id={r.p.id} /></td>
@@ -116,12 +130,27 @@ const FREC_LABEL: Record<string, string> = {
               {r.p.descripcion && <div class="text-xs text-slate-500 truncate max-w-md">{r.p.descripcion}</div>}
             </td>
             <td class="px-3 py-2 text-xs">
-              {r.a ? <a href={`/activos/${r.a.id}`} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
+              {r.a ? <a href={areaHref(`/activos/${r.a.id}`, area ?? r.a.rubro)} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
             </td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
             <td class="px-3 py-2 capitalize text-xs">{FREC_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
             <td class="px-3 py-2 text-xs">{fmt(r.p.proximaFecha)}</td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.u?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</td>
+            <td class="px-3 py-2">
+              <select class="modalidad-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 hover:border-slate-300" data-id={r.p.id}>
+                <option value="interno" selected={r.p.modalidad === "interno"}>Propio</option>
+                <option value="contratado" selected={r.p.modalidad === "contratado"}>Externo</option>
+                <option value="mixto" selected={r.p.modalidad === "mixto"}>Mixto</option>
+              </select>
+            </td>
+            <td class="px-3 py-2">
+              <select class="contrato-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 hover:border-slate-300 max-w-[140px]" data-id={r.p.id}>
+                <option value="">—</option>
+                {contratosList.map((c) => (
+                  <option value={c.id} selected={r.p.contratoId === c.id}>{c.codigo}</option>
+                ))}
+              </select>
+            </td>
             <td class="px-3 py-2">
               {r.p.activo
                 ? <span class="badge bg-emerald-100 text-emerald-700">activo</span>
@@ -134,6 +163,8 @@ const FREC_LABEL: Record<string, string> = {
   </div>
 
   <script>
+    import { areaHref, parseArea } from "@/lib/areas";
+    const area = parseArea(new URLSearchParams(location.search).get("area"));
     const selAll = document.getElementById("selAll") as HTMLInputElement;
     const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>(".row-chk"));
     const bulkBar = document.getElementById("bulkBar")!;
@@ -167,7 +198,7 @@ const FREC_LABEL: Record<string, string> = {
         : `¿${verbo} ${ids.length} plan(es)?`;
       if (!confirm(msg)) return;
 
-      const r = await fetch("/api/planes/bulk", {
+      const r = await fetch(areaHref("/api/planes/bulk", area), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ accion, ids }),
@@ -182,5 +213,37 @@ const FREC_LABEL: Record<string, string> = {
     document.getElementById("bulkEliminar")?.addEventListener("click", () => bulkAction("eliminar"));
     document.getElementById("bulkDesactivar")?.addEventListener("click", () => bulkAction("desactivar"));
     document.getElementById("bulkActivar")?.addEventListener("click", () => bulkAction("activar"));
+
+    // ── Modalidad / contrato inline ──
+    async function patchPlan(sel: HTMLSelectElement, body: Record<string, unknown>, prev: string) {
+      sel.disabled = true;
+      const r = await fetch(areaHref(`/api/planes/${sel.dataset.id}`, area), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      sel.disabled = false;
+      if (r.ok) {
+        sel.classList.add("ring-2", "ring-emerald-300");
+        setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+      } else {
+        sel.value = prev;
+        window.showToast?.("No se pudo guardar", "error");
+      }
+    }
+    document.querySelectorAll<HTMLSelectElement>(".modalidad-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        await patchPlan(sel, { modalidad: sel.value }, prev);
+        prev = sel.value;
+      });
+    });
+    document.querySelectorAll<HTMLSelectElement>(".contrato-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        await patchPlan(sel, { contratoId: sel.value ? Number(sel.value) : null }, prev);
+        prev = sel.value;
+      });
+    });
   </script>
 </Layout>

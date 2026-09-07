@@ -4,6 +4,8 @@ import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
+import { parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 // Genera una OT preventiva inmediatamente para el plan dado, sin esperar al cron.
@@ -13,6 +15,9 @@ export const POST: APIRoute = async (ctx) => {
   if (!user) return response;
 
   const id = Number(ctx.params.id);
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
 
   const [row] = await db
@@ -21,7 +26,7 @@ export const POST: APIRoute = async (ctx) => {
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .where(eq(planesMantenimiento.id, id))
     .limit(1);
-  if (!row) return Response.json({ error: "Plan no encontrado" }, { status: 404 });
+  if (!row || (area && (!row.a || rubroDeActivo(row.a.rubro, row.a.tipo) !== area))) return Response.json({ error: "Plan no encontrado en esta área" }, { status: 404 });
   if (!row.p.activo) return Response.json({ error: "El plan está inactivo" }, { status: 400 });
 
   const p = row.p;
@@ -42,10 +47,12 @@ export const POST: APIRoute = async (ctx) => {
       titulo,
       descripcion: p.descripcion ?? null,
       tipo: "preventivo",
+      rubro: rubroDeActivo(row.a?.rubro, row.a?.tipo),
       prioridad: p.prioridad,
       estado: "abierta",
       activoId: p.activoId,
       asignadoA: p.asignadoA,
+      asignadoEn: p.asignadoA ? new Date().toISOString() : null,
       creadoPor: user.id,
       planId: p.id,
       vencimiento: venc.toISOString(),

@@ -1,0 +1,202 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { contratosMantenimiento, contratoEquipos, proveedores, usuarios } from "@/lib/schema";
+import { desc, eq, and, inArray, lte, gte, sql } from "drizzle-orm";
+import { ESTADO_CONTRATO_LABEL, ESTADO_CONTRATO_COLOR, diasParaVencer, puedeGestionarContratos, puedeVerContratos } from "@/lib/contratos";
+import { fmtFechaSimple } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerContratos(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const filtroEstado = url.searchParams.get("estado");
+const filtroProveedor = url.searchParams.get("proveedorId");
+const proximos = url.searchParams.get("proximos");
+
+const conds: any[] = [];
+if (filtroEstado) conds.push(eq(contratosMantenimiento.estado, filtroEstado));
+if (filtroProveedor) conds.push(eq(contratosMantenimiento.proveedorId, Number(filtroProveedor)));
+if (proximos) {
+  const dias = Number(proximos) || 90;
+  const limite = new Date(Date.now() + dias * 86400_000).toISOString().slice(0, 10);
+  conds.push(lte(contratosMantenimiento.fechaFin, limite));
+  conds.push(inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]));
+}
+
+const rowsRaw = await db
+  .select({ c: contratosMantenimiento, prov: proveedores, resp: usuarios })
+  .from(contratosMantenimiento)
+  .leftJoin(proveedores, eq(proveedores.id, contratosMantenimiento.proveedorId))
+  .leftJoin(usuarios, eq(usuarios.id, contratosMantenimiento.responsableId))
+  .where(conds.length ? and(...conds) : undefined)
+  .orderBy(desc(contratosMantenimiento.id));
+
+// Conteo de equipos por contrato
+const ids = rowsRaw.map((r) => r.c.id);
+const conteoEquipos = new Map<number, number>();
+if (ids.length > 0) {
+  const grupos = await db
+    .select({ cid: contratoEquipos.contratoId, n: sql<number>`count(*)` })
+    .from(contratoEquipos)
+    .where(inArray(contratoEquipos.contratoId, ids))
+    .groupBy(contratoEquipos.contratoId);
+  for (const g of grupos) conteoEquipos.set(g.cid, Number(g.n));
+}
+
+// KPIs globales (sin filtros)
+const todos = await db.select({ estado: contratosMantenimiento.estado, n: sql<number>`count(*)` })
+  .from(contratosMantenimiento).groupBy(contratosMantenimiento.estado);
+const conteoEstado = Object.fromEntries(todos.map((r) => [r.estado, Number(r.n)]));
+const totalVigentes = conteoEstado.vigente ?? 0;
+const totalPorVencer = conteoEstado.por_vencer ?? 0;
+const totalVencidos = conteoEstado.vencido ?? 0;
+
+const proveedoresAll = await db.select({ id: proveedores.id, nombre: proveedores.nombre })
+  .from(proveedores).orderBy(proveedores.nombre);
+
+const puedeCrear = puedeGestionarContratos(user.rol);
+const estadosLista = Object.keys(ESTADO_CONTRATO_LABEL) as Array<keyof typeof ESTADO_CONTRATO_LABEL>;
+---
+
+<Layout title="Contratos de mantenimiento">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📜 Contratos de mantenimiento</h1>
+      <p class="text-sm text-slate-500">{rowsRaw.length} mostrados</p>
+    </div>
+    {puedeCrear && (
+      <a href="/contratos/nuevo" class="btn-primary">+ Nuevo contrato</a>
+    )}
+  </div>
+
+  <!-- KPI cards -->
+  <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <a href="/contratos?estado=vigente" class="card p-4 hover:bg-slate-50 no-underline">
+      <div class="text-xs uppercase text-slate-500">Vigentes</div>
+      <div class="mt-1 text-3xl font-bold text-emerald-600">{totalVigentes}</div>
+    </a>
+    <a href="/contratos?estado=por_vencer" class="card p-4 hover:bg-slate-50 no-underline">
+      <div class="text-xs uppercase text-slate-500">Por vencer (90d)</div>
+      <div class="mt-1 text-3xl font-bold text-amber-600">{totalPorVencer}</div>
+    </a>
+    <a href="/contratos?estado=vencido" class="card p-4 hover:bg-slate-50 no-underline">
+      <div class="text-xs uppercase text-slate-500">Vencidos</div>
+      <div class="mt-1 text-3xl font-bold text-red-600">{totalVencidos}</div>
+    </a>
+  </div>
+
+  <!-- Filtros -->
+  <form method="get" class="mt-4 flex flex-wrap items-end gap-3 text-sm">
+    <div>
+      <label class="block text-xs font-semibold text-slate-600 mb-1">Estado</label>
+      <select name="estado" class="input text-sm">
+        <option value="">Todos</option>
+        {estadosLista.map((s) => (
+          <option value={s} selected={filtroEstado === s}>{ESTADO_CONTRATO_LABEL[s]}</option>
+        ))}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-semibold text-slate-600 mb-1">Proveedor</label>
+      <select name="proveedorId" class="input text-sm">
+        <option value="">Todos</option>
+        {proveedoresAll.map((p) => (
+          <option value={p.id} selected={filtroProveedor === String(p.id)}>{p.nombre}</option>
+        ))}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-semibold text-slate-600 mb-1">Próximos a vencer</label>
+      <select name="proximos" class="input text-sm">
+        <option value="">—</option>
+        <option value="30" selected={proximos === "30"}>30 días</option>
+        <option value="60" selected={proximos === "60"}>60 días</option>
+        <option value="90" selected={proximos === "90"}>90 días</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-primary">Filtrar</button>
+    {(filtroEstado || filtroProveedor || proximos) && (
+      <a href="/contratos" class="btn-secondary">Limpiar</a>
+    )}
+  </form>
+
+  <!-- Tabla desktop -->
+  <div class="card mt-4 hidden sm:block overflow-hidden">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-2">Código</th>
+          <th class="px-4 py-2">Nombre</th>
+          <th class="px-4 py-2">Proveedor</th>
+          <th class="px-4 py-2">Fin</th>
+          <th class="px-4 py-2 text-center">Estado</th>
+          <th class="px-4 py-2 text-center">Equipos</th>
+          <th class="px-4 py-2 text-right">Costo</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {rowsRaw.length === 0 && <tr><td colspan="7" class="px-4 py-8 text-center text-slate-400">Sin contratos con esos filtros.</td></tr>}
+        {rowsRaw.map(({ c, prov, resp }) => {
+          const d = diasParaVencer(c.fechaFin);
+          const colorBorde = c.estado === "vencido" ? "border-l-4 border-red-500"
+            : c.estado === "por_vencer" ? "border-l-4 border-amber-500"
+            : c.estado === "vigente" ? "border-l-4 border-emerald-500"
+            : "border-l-4 border-transparent";
+          const diasTxt = d < 0 ? `vencido hace ${Math.abs(d)}d`
+            : d === 0 ? "hoy"
+            : `en ${d}d`;
+          return (
+            <tr class:list={["hover:bg-slate-50", colorBorde]}>
+              <td class="px-4 py-2 font-mono text-xs">{c.codigo}</td>
+              <td class="px-4 py-2">
+                <a class="font-medium text-slate-900 hover:underline" href={`/contratos/${c.id}`}>{c.nombre}</a>
+                {resp && <div class="text-xs text-slate-500">Resp: {resp.nombre}</div>}
+              </td>
+              <td class="px-4 py-2 text-slate-700">{prov?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs">
+                <div>{fmtFechaSimple(c.fechaFin)}</div>
+                <div class="text-slate-500">{diasTxt}</div>
+              </td>
+              <td class="px-4 py-2 text-center">
+                <span class={`badge ${ESTADO_CONTRATO_COLOR[c.estado as keyof typeof ESTADO_CONTRATO_COLOR]}`}>
+                  {ESTADO_CONTRATO_LABEL[c.estado as keyof typeof ESTADO_CONTRATO_LABEL]}
+                </span>
+              </td>
+              <td class="px-4 py-2 text-center text-slate-700">{conteoEquipos.get(c.id) ?? 0}</td>
+              <td class="px-4 py-2 text-right text-slate-700">${(c.costo ?? 0).toFixed(2)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Cards móvil -->
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden">
+    {rowsRaw.length === 0 && <div class="card p-6 text-center text-slate-400">Sin contratos con esos filtros.</div>}
+    {rowsRaw.map(({ c, prov }) => {
+      const d = diasParaVencer(c.fechaFin);
+      const colorBorde = c.estado === "vencido" ? "border-l-4 border-red-500"
+        : c.estado === "por_vencer" ? "border-l-4 border-amber-500"
+        : c.estado === "vigente" ? "border-l-4 border-emerald-500"
+        : "border-l-4 border-transparent";
+      const diasTxt = d < 0 ? `vencido hace ${Math.abs(d)}d` : d === 0 ? "hoy" : `en ${d}d`;
+      return (
+        <a href={`/contratos/${c.id}`} class:list={["card block p-4 hover:bg-slate-50 no-underline", colorBorde]}>
+          <div class="flex items-start justify-between gap-2">
+            <div class="font-mono text-xs text-slate-400">{c.codigo}</div>
+            <span class={`badge text-[10px] ${ESTADO_CONTRATO_COLOR[c.estado as keyof typeof ESTADO_CONTRATO_COLOR]}`}>
+              {ESTADO_CONTRATO_LABEL[c.estado as keyof typeof ESTADO_CONTRATO_LABEL]}
+            </span>
+          </div>
+          <div class="mt-1 text-base font-semibold text-slate-900">{c.nombre}</div>
+          <div class="mt-1 text-sm text-slate-600">{prov?.nombre ?? "—"}</div>
+          <div class="mt-2 text-xs text-slate-500">Fin: {fmtFechaSimple(c.fechaFin)} ({diasTxt}) · {conteoEquipos.get(c.id) ?? 0} equipos</div>
+        </a>
+      );
+    })}
+  </div>
+</Layout>

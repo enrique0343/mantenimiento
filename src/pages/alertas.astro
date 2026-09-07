@@ -1,0 +1,352 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { alertasEquipo, alertasEquipoActivos, activos, usuarios } from "@/lib/schema";
+import { eq, desc, inArray, asc, ne } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const puedeGestionar = user.rol === "admin" || user.rol === "jefe";
+
+const alertas = await db
+  .select({ al: alertasEquipo, u: usuarios })
+  .from(alertasEquipo)
+  .leftJoin(usuarios, eq(usuarios.id, alertasEquipo.cerradaPor))
+  .orderBy(desc(alertasEquipo.id));
+
+// Equipos afectados por alerta
+const alertaIds = alertas.map((a) => a.al.id);
+const vinculos = alertaIds.length
+  ? await db
+      .select({ v: alertasEquipoActivos, a: activos })
+      .from(alertasEquipoActivos)
+      .leftJoin(activos, eq(activos.id, alertasEquipoActivos.activoId))
+      .where(inArray(alertasEquipoActivos.alertaId, alertaIds))
+  : [];
+const equiposPorAlerta = new Map<number, { id: number; codigo: string; nombre: string }[]>();
+for (const { v, a } of vinculos) {
+  if (!a) continue;
+  const arr = equiposPorAlerta.get(v.alertaId) ?? [];
+  arr.push({ id: a.id, codigo: a.codigo, nombre: a.nombre });
+  equiposPorAlerta.set(v.alertaId, arr);
+}
+
+// Lista de equipos para el selector (todos los no dados de baja)
+const equiposLista = puedeGestionar
+  ? await db
+      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo })
+      .from(activos)
+      .where(ne(activos.estado, "baja"))
+      .orderBy(asc(activos.codigo))
+  : [];
+
+const abiertas = alertas.filter((a) => a.al.estado !== "cerrada");
+const cerradas = alertas.filter((a) => a.al.estado === "cerrada");
+
+const TIPO_META: Record<string, { label: string; badge: string }> = {
+  retiro: { label: "🚫 Retiro (recall)", badge: "bg-red-100 text-red-700" },
+  alerta: { label: "⚠️ Alerta de seguridad", badge: "bg-amber-100 text-amber-700" },
+  aviso: { label: "ℹ️ Aviso", badge: "bg-blue-100 text-blue-700" },
+};
+const FUENTE_LABEL: Record<string, string> = {
+  fabricante: "Fabricante", regulador: "Regulador", proveedor: "Proveedor", interna: "Interna",
+};
+const ESTADO_META: Record<string, { label: string; badge: string }> = {
+  abierta: { label: "Abierta", badge: "bg-red-100 text-red-700" },
+  en_proceso: { label: "En proceso", badge: "bg-amber-100 text-amber-700" },
+  cerrada: { label: "Cerrada", badge: "bg-emerald-100 text-emerald-700" },
+};
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
+const hoy = new Date().toISOString().slice(0, 10);
+---
+
+<Layout title="Alertas y retiros de equipo">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📢 Alertas y retiros de equipo</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        Registro JCI FMS.07.1 — alertas de fabricantes, retiros del mercado y avisos de seguridad, con la acción documentada.
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      {abiertas.length > 0 && <span class="badge bg-red-100 text-red-700">{abiertas.length} abierta(s)</span>}
+      {puedeGestionar && <button id="nuevaBtn" class="btn-primary">+ Registrar alerta</button>}
+    </div>
+  </div>
+
+  {alertas.length === 0 && (
+    <div class="card mt-6 p-10 text-center">
+      <div class="text-4xl">📢</div>
+      <h2 class="mt-3 font-semibold text-slate-800">Sin alertas registradas</h2>
+      <p class="mt-1 text-sm text-slate-500 max-w-lg mx-auto">
+        Cuando un fabricante, regulador o proveedor emita una alerta o retiro que afecte a tus equipos,
+        regístrala aquí con los equipos afectados y la acción tomada. Este registro es la evidencia del estándar FMS.07.1.
+      </p>
+      {puedeGestionar && <button id="nuevaBtn2" class="btn-primary mt-4">+ Registrar la primera</button>}
+    </div>
+  )}
+
+  {[
+    { titulo: "Abiertas y en proceso", items: abiertas, vacio: "Sin alertas pendientes — todo atendido. ✓" },
+    { titulo: "Cerradas", items: cerradas, vacio: "" },
+  ].map((seccion) => (alertas.length > 0 && (seccion.items.length > 0 || seccion.titulo.startsWith("Abiertas"))) && (
+    <div class="mt-6">
+      <h2 class="font-semibold text-slate-700">{seccion.titulo} ({seccion.items.length})</h2>
+      {seccion.items.length === 0 ? (
+        <p class="mt-2 text-sm text-emerald-700">{seccion.vacio}</p>
+      ) : (
+        <div class="mt-3 space-y-3">
+          {seccion.items.map(({ al, u }) => {
+            const equipos = equiposPorAlerta.get(al.id) ?? [];
+            const tm = TIPO_META[al.tipo] ?? TIPO_META.aviso;
+            const em = ESTADO_META[al.estado] ?? ESTADO_META.abierta;
+            const diasAbierta = Math.floor((new Date(hoy).getTime() - new Date(al.fechaAlerta).getTime()) / 86400_000);
+            return (
+              <div class="card p-4">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class={`badge ${tm.badge}`}>{tm.label}</span>
+                      <span class={`badge ${em.badge}`}>{em.label}</span>
+                      {al.estado !== "cerrada" && diasAbierta >= 0 && (
+                        <span class="text-[11px] text-slate-400">{diasAbierta === 0 ? "hoy" : `${diasAbierta} día(s) desde emisión`}</span>
+                      )}
+                    </div>
+                    <h3 class="mt-1.5 font-semibold text-slate-800">{al.titulo}</h3>
+                    <div class="mt-0.5 text-xs text-slate-500">
+                      {FUENTE_LABEL[al.fuente] ?? al.fuente} · Emitida: {fmt(al.fechaAlerta)}
+                      {al.referencia && <span class="ml-1 font-mono border border-slate-200 rounded px-1 py-0.5">{al.referencia}</span>}
+                    </div>
+                  </div>
+                  {puedeGestionar && (
+                    <button
+                      class="gestionar-btn btn-secondary btn-sm shrink-0"
+                      data-id={al.id}
+                      data-titulo={al.titulo}
+                      data-estado={al.estado}
+                      data-accion={al.accionTomada ?? ""}
+                    >✎ Gestionar</button>
+                  )}
+                </div>
+
+                {al.descripcion && <p class="mt-2 text-sm text-slate-600">{al.descripcion}</p>}
+
+                {equipos.length > 0 && (
+                  <div class="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
+                    <span class="text-slate-400 font-medium">Equipos afectados ({equipos.length}):</span>
+                    {equipos.map((e) => (
+                      <a href={`/activos/${e.id}`} class="rounded-md bg-slate-100 px-2 py-0.5 text-slate-700 hover:bg-brand-50 hover:text-brand-700">
+                        <span class="font-mono text-[10px]">{e.codigo}</span> {e.nombre}
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+                {al.accionTomada && (
+                  <div class="mt-2.5 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <span class="text-xs font-semibold uppercase text-slate-400 block">Acción tomada</span>
+                    {al.accionTomada}
+                    {al.estado === "cerrada" && al.cerradaEn && (
+                      <div class="mt-1 text-[11px] text-slate-400">
+                        Cerrada el {fmt(al.cerradaEn.slice(0, 10))}{u ? ` por ${u.nombre}` : ""}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  ))}
+
+  {puedeGestionar && (
+    <>
+      <!-- Modal nueva alerta -->
+      <div id="nuevaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+          <h3 class="text-lg font-semibold text-slate-900">📢 Registrar alerta / retiro</h3>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="label text-xs">Tipo *</label>
+              <select id="n_tipo" class="input">
+                <option value="alerta">⚠️ Alerta de seguridad</option>
+                <option value="retiro">🚫 Retiro (recall)</option>
+                <option value="aviso">ℹ️ Aviso</option>
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">Fuente *</label>
+              <select id="n_fuente" class="input">
+                <option value="fabricante">Fabricante</option>
+                <option value="regulador">Regulador</option>
+                <option value="proveedor">Proveedor</option>
+                <option value="interna">Interna</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Título *</label>
+              <input id="n_titulo" class="input" placeholder="Ej. Retiro de lote de bombas de infusión modelo X" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Descripción</label>
+              <textarea id="n_desc" class="input" rows="2" placeholder="Detalle de la alerta, lotes/series afectados…"></textarea>
+            </div>
+            <div>
+              <label class="label text-xs">Fecha de emisión *</label>
+              <input id="n_fecha" type="date" class="input" value={hoy} />
+            </div>
+            <div>
+              <label class="label text-xs">Referencia (nº aviso)</label>
+              <input id="n_ref" class="input" placeholder="Ej. FSN-2026-014" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs">Equipos afectados</label>
+              <input id="n_buscar" class="input mb-1.5" placeholder="🔍 Filtrar equipos…" />
+              <div id="n_equipos" class="max-h-40 overflow-y-auto rounded-lg border border-slate-200 p-2 space-y-1">
+                {equiposLista.map((e) => (
+                  <label class="eq-item flex items-center gap-2 text-xs text-slate-700 rounded px-1.5 py-1 hover:bg-slate-50 cursor-pointer" data-search={`${e.codigo} ${e.nombre}`.toLowerCase()}>
+                    <input type="checkbox" class="eq-cb" value={e.id} />
+                    <span class="font-mono text-[10px] text-slate-400">{e.codigo}</span>
+                    <span class="truncate">{e.nombre}</span>
+                    {e.tipo === "biomedico" && <span class="text-[9px] text-violet-500">bio</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <p id="n_err" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="n_cancel" class="btn-secondary">Cancelar</button>
+            <button id="n_save" class="btn-primary">Registrar alerta</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal gestionar (estado + acción) -->
+      <div id="gesModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-md p-5">
+          <h3 class="text-lg font-semibold text-slate-900">✎ Gestionar alerta</h3>
+          <p id="g_titulo" class="mt-1 text-sm text-slate-500"></p>
+          <input type="hidden" id="g_id" />
+          <div class="mt-4 space-y-3">
+            <div>
+              <label class="label text-xs">Estado</label>
+              <select id="g_estado" class="input">
+                <option value="abierta">Abierta</option>
+                <option value="en_proceso">En proceso</option>
+                <option value="cerrada">Cerrada</option>
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">Acción tomada (obligatoria para cerrar)</label>
+              <textarea id="g_accion" class="input" rows="3" placeholder="Ej. Se retiraron de servicio las 3 bombas del lote afectado y se coordinó el reemplazo con el proveedor."></textarea>
+            </div>
+          </div>
+          <p id="g_err" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="g_cancel" class="btn-secondary">Cancelar</button>
+            <button id="g_save" class="btn-primary">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </>
+  )}
+
+  {puedeGestionar && (
+    <script>
+      const $ = (i: string) => document.getElementById(i) as HTMLInputElement;
+      const show = (m: HTMLElement) => { m.classList.remove("hidden"); m.classList.add("flex"); };
+      const hide = (m: HTMLElement) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+
+      // ── Nueva alerta ──
+      const nuevaModal = document.getElementById("nuevaModal")!;
+      const abrirNueva = () => show(nuevaModal);
+      document.getElementById("nuevaBtn")?.addEventListener("click", abrirNueva);
+      document.getElementById("nuevaBtn2")?.addEventListener("click", abrirNueva);
+      document.getElementById("n_cancel")?.addEventListener("click", () => hide(nuevaModal));
+      nuevaModal.addEventListener("click", (e) => { if (e.target === nuevaModal) hide(nuevaModal); });
+
+      // Filtro de equipos en el selector
+      $("n_buscar")?.addEventListener("input", () => {
+        const q = $("n_buscar").value.trim().toLowerCase();
+        document.querySelectorAll<HTMLElement>(".eq-item").forEach((el) => {
+          el.style.display = !q || (el.dataset.search ?? "").includes(q) ? "" : "none";
+        });
+      });
+
+      document.getElementById("n_save")?.addEventListener("click", async () => {
+        const err = document.getElementById("n_err")!;
+        err.classList.add("hidden");
+        const titulo = $("n_titulo").value.trim();
+        const fecha = $("n_fecha").value;
+        if (!titulo || !fecha) {
+          err.textContent = "Título y fecha son obligatorios.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const activoIds = Array.from(document.querySelectorAll<HTMLInputElement>(".eq-cb:checked")).map((c) => Number(c.value));
+        const res = await fetch("/api/alertas", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            tipo: ($("n_tipo") as unknown as HTMLSelectElement).value,
+            fuente: ($("n_fuente") as unknown as HTMLSelectElement).value,
+            titulo,
+            descripcion: ($("n_desc") as unknown as HTMLTextAreaElement).value.trim() || null,
+            referencia: $("n_ref").value.trim() || null,
+            fechaAlerta: fecha,
+            activoIds,
+          }),
+        });
+        if (res.ok) { window.showToast?.("Alerta registrada", "success"); location.reload(); }
+        else {
+          err.textContent = "Error al registrar";
+          err.classList.remove("hidden");
+        }
+      });
+
+      // ── Gestionar ──
+      const gesModal = document.getElementById("gesModal")!;
+      document.querySelectorAll<HTMLButtonElement>(".gestionar-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          $("g_id").value = btn.dataset.id!;
+          document.getElementById("g_titulo")!.textContent = btn.dataset.titulo ?? "";
+          ($("g_estado") as unknown as HTMLSelectElement).value = btn.dataset.estado ?? "abierta";
+          ($("g_accion") as unknown as HTMLTextAreaElement).value = btn.dataset.accion ?? "";
+          document.getElementById("g_err")!.classList.add("hidden");
+          show(gesModal);
+        });
+      });
+      document.getElementById("g_cancel")?.addEventListener("click", () => hide(gesModal));
+      gesModal.addEventListener("click", (e) => { if (e.target === gesModal) hide(gesModal); });
+
+      document.getElementById("g_save")?.addEventListener("click", async () => {
+        const err = document.getElementById("g_err")!;
+        err.classList.add("hidden");
+        const estado = ($("g_estado") as unknown as HTMLSelectElement).value;
+        const accion = ($("g_accion") as unknown as HTMLTextAreaElement).value.trim();
+        if (estado === "cerrada" && !accion) {
+          err.textContent = "Para cerrar la alerta documenta la acción tomada.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const res = await fetch(`/api/alertas/${$("g_id").value}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ estado, accionTomada: accion || null }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) { window.showToast?.("Alerta actualizada", "success"); location.reload(); }
+        else {
+          err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+          err.classList.remove("hidden");
+        }
+      });
+    </script>
+  )}
+</Layout>

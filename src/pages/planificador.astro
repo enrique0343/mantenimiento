@@ -4,9 +4,11 @@ import { getDb } from "@/lib/db";
 import { ordenes, planesMantenimiento, activos, usuarios } from "@/lib/schema";
 import { eq, and, gte, lte, isNotNull } from "drizzle-orm";
 import { ESTADO_COLOR, TIPO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const monthParam = url.searchParams.get("m"); // YYYY-MM
 const today = new Date();
 const [yy, mm] = monthParam
@@ -32,21 +34,21 @@ const otRows = await db
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, firstStr), lte(ordenes.vencimiento, lastStr + "T23:59:59")));
+  .where(and(area ? eq(ordenes.rubro, area) : undefined, isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, firstStr), lte(ordenes.vencimiento, lastStr + "T23:59:59")));
 
 // Planes con proxima fecha en el mes
 const planRows = await db
   .select({ p: planesMantenimiento, a: activos })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-  .where(and(eq(planesMantenimiento.activo, true), gte(planesMantenimiento.proximaFecha, firstStr), lte(planesMantenimiento.proximaFecha, lastStr)));
+  .where(and(area ? activoAreaCondition(area) : undefined, eq(planesMantenimiento.activo, true), gte(planesMantenimiento.proximaFecha, firstStr), lte(planesMantenimiento.proximaFecha, lastStr)));
 
 // Carga por tecnico (OTs activas asignadas)
 const cargas = await db
   .select({ u: usuarios, o: ordenes })
   .from(ordenes)
   .innerJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(isNotNull(ordenes.asignadoA)));
+  .where(and(isNotNull(ordenes.asignadoA), area ? eq(ordenes.rubro, area) : undefined));
 
 const cargaMap = new Map<number, { nombre: string; abierta: number; en_proceso: number; completada: number; total: number }>();
 for (const r of cargas) {
@@ -98,10 +100,10 @@ const dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
       <p class="text-sm text-slate-500">Calendario de OTs con vencimiento y planes preventivos</p>
     </div>
     <div class="flex items-center gap-1">
-      <a href={`/planificador?m=${prevQ}`} class="btn-secondary px-3 py-1.5">←</a>
+      <a href={areaHref(`/planificador?m=${prevQ}`, area)} class="btn-secondary px-3 py-1.5">←</a>
       <span class="px-4 font-semibold capitalize">{monthLabel}</span>
-      <a href={`/planificador?m=${nextQ}`} class="btn-secondary px-3 py-1.5">→</a>
-      <a href="/planificador" class="ml-2 text-xs text-brand-700 hover:underline">Hoy</a>
+      <a href={areaHref(`/planificador?m=${nextQ}`, area)} class="btn-secondary px-3 py-1.5">→</a>
+      <a href={areaHref("/planificador", area)} class="ml-2 text-xs text-brand-700 hover:underline">Hoy</a>
     </div>
   </div>
 
@@ -127,13 +129,13 @@ const dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
           </div>
           <div class="space-y-1">
             {c.planes.slice(0, 3).map((p) => (
-              <a href={`/activos/${p.a?.id}`} title={`Plan: ${p.p.titulo}`}
+              <a href={areaHref(`/activos/${p.a?.id}`, area ?? p.a?.rubro)} title={`Plan: ${p.p.titulo}`}
                  class="block truncate rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200">
                 🛡 {p.p.titulo}
               </a>
             ))}
             {c.ots.slice(0, 3).map((r) => (
-              <a href={`/ordenes/${r.o.id}`} title={r.o.titulo}
+              <a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} title={r.o.titulo}
                  class:list={["block truncate rounded px-1.5 py-0.5 text-[10px] font-medium hover:opacity-80", ESTADO_COLOR[r.o.estado as EstadoOT]]}>
                 #{r.o.id} {r.o.titulo}
               </a>

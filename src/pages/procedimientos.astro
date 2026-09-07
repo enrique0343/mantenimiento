@@ -1,0 +1,214 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
+import { asc, inArray } from "drizzle-orm";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const db = getDb(Astro);
+const plantillasRows = await db.select().from(checklistPlantillas).orderBy(asc(checklistPlantillas.nombre));
+const itemsRows = plantillasRows.length > 0
+  ? await db.select().from(checklistPlantillaItems)
+      .where(inArray(checklistPlantillaItems.plantillaId, plantillasRows.map((p) => p.id)))
+      .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id))
+  : [];
+
+const plantillas = plantillasRows.map((p) => ({
+  ...p,
+  items: itemsRows.filter((it) => it.plantillaId === p.id),
+}));
+const plantillasJson = JSON.stringify(plantillas);
+
+const totalPasos = itemsRows.length;
+const totalCriticos = itemsRows.filter((it) => it.bloqueante).length;
+const totalMin = itemsRows.reduce((s, it) => s + (it.minutosEstimados ?? 0), 0);
+---
+
+<Layout title="Procedimientos estándar">
+  <div class="flex flex-wrap items-start justify-between gap-2">
+    <div>
+      <h1 class="text-2xl font-bold">📋 Procedimientos estándar</h1>
+      <p class="text-sm text-slate-500">Biblioteca normalizada de procedimientos de mantenimiento (JCI). Cada paso lleva criterio de aceptación, tiempo y recursos. Se usan al crear un plan en cada equipo.</p>
+    </div>
+    <button id="newBtn" class="btn-primary">+ Nuevo procedimiento</button>
+  </div>
+
+  <div class="mt-4 grid grid-cols-3 gap-3">
+    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Procedimientos</div><div class="mt-1 text-2xl font-bold text-slate-700">{plantillas.length}</div></div>
+    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Pasos totales</div><div class="mt-1 text-2xl font-bold text-slate-700">{totalPasos}</div></div>
+    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Puntos críticos</div><div class="mt-1 text-2xl font-bold text-red-600">{totalCriticos}</div></div>
+  </div>
+
+  <!-- Formulario crear/editar -->
+  <div id="form" class="card mt-4 hidden p-5">
+    <h2 id="formTitle" class="mb-3 font-semibold">Nuevo procedimiento</h2>
+    <input type="hidden" id="f_id" value="" />
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div><label class="label">Nombre *</label><input class="input" id="f_nombre" placeholder="Ej: Mantenimiento preventivo AC split" /></div>
+      <div><label class="label">Descripción</label><input class="input" id="f_descripcion" placeholder="Alcance / tipo de equipo" /></div>
+    </div>
+
+    <div class="mt-4">
+      <div class="flex items-center justify-between">
+        <label class="label mb-0">Pasos del procedimiento</label>
+        <button id="addItemBtn" type="button" class="btn-secondary text-xs">+ Agregar paso</button>
+      </div>
+      <p class="mt-1 text-xs text-slate-500">El <strong>criterio de aceptación</strong> es la condición esperada (ej: "≥ 35 psi"). Un <strong>punto crítico</strong> impide cerrar la OT si queda en desviación.</p>
+      <div id="itemsContainer" class="mt-3 space-y-2"></div>
+    </div>
+
+    <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
+    <div class="mt-4 flex gap-2">
+      <button id="saveBtn" class="btn-primary">Guardar procedimiento</button>
+      <button id="cancelBtn" class="btn-secondary">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- Listado -->
+  <div class="mt-6 space-y-4">
+    {plantillas.length === 0 && <p class="card p-4 text-sm text-slate-500">Sin procedimientos configurados. Crea el primero.</p>}
+    {plantillas.map((p) => (
+      <div class="card p-5" class:list={[!p.activa && "opacity-60"]}>
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 class="font-semibold text-slate-900">
+              {p.nombre}
+              {!p.activa && <span class="badge ml-2 bg-slate-200 text-slate-500 text-[10px]">Inactiva</span>}
+            </h3>
+            {p.descripcion && <p class="text-sm text-slate-500">{p.descripcion}</p>}
+            <p class="mt-0.5 text-xs text-slate-400">{p.items.length} pasos · {p.items.filter((it) => it.bloqueante).length} críticos · {p.items.reduce((s, it) => s + (it.minutosEstimados ?? 0), 0)} min estimados</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="edit-btn btn-secondary text-xs" data-id={p.id}>✎ Editar</button>
+            <button class="toggle-btn btn-secondary text-xs" data-id={p.id} data-activa={p.activa ? "1" : "0"}>{p.activa ? "Desactivar" : "Activar"}</button>
+            <button class="del-btn btn-secondary text-xs text-red-600" data-id={p.id}>🗑</button>
+          </div>
+        </div>
+        <ol class="mt-3 space-y-1.5 text-sm">
+          {p.items.map((it) => (
+            <li class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-l-2 border-slate-200 pl-3">
+              {it.bloqueante && <span class="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">🔴 CRÍTICO</span>}
+              <span class="font-medium text-slate-800">{it.texto}</span>
+              {it.criterioAceptacion && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">🎯 {it.criterioAceptacion}</span>}
+              {it.minutosEstimados != null && <span class="text-xs text-slate-500">⏱ {it.minutosEstimados} min</span>}
+              {it.materiales && <span class="text-xs text-slate-500">🧰 {it.materiales}</span>}
+            </li>
+          ))}
+        </ol>
+      </div>
+    ))}
+  </div>
+</Layout>
+
+<script define:vars={{ plantillasJson }}>
+  const plantillas = JSON.parse(plantillasJson);
+  const $ = (id) => document.getElementById(id);
+  const form = $("form");
+  const itemsContainer = $("itemsContainer");
+
+  function itemRow(data = {}) {
+    const div = document.createElement("div");
+    div.className = "proc-item rounded border border-slate-200 bg-slate-50 p-3";
+    div.innerHTML = `
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-12">
+        <div class="sm:col-span-12"><input class="input it-texto" placeholder="Paso a verificar *" /></div>
+        <div class="sm:col-span-6"><input class="input it-criterio" placeholder="Criterio de aceptación (ej: ≥ 35 psi)" /></div>
+        <div class="sm:col-span-2"><input class="input it-minutos" type="number" min="0" placeholder="min" /></div>
+        <div class="sm:col-span-4"><input class="input it-materiales" placeholder="Materiales / herramientas" /></div>
+        <div class="sm:col-span-12 flex items-center justify-between">
+          <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" class="it-bloqueante h-4 w-4" /> 🔴 Punto crítico (bloquea el cierre si queda en desviación)</label>
+          <button type="button" class="it-remove text-xs text-red-600 hover:underline">Quitar paso</button>
+        </div>
+      </div>`;
+    div.querySelector(".it-texto").value = data.texto ?? "";
+    div.querySelector(".it-criterio").value = data.criterioAceptacion ?? "";
+    div.querySelector(".it-minutos").value = data.minutosEstimados ?? "";
+    div.querySelector(".it-materiales").value = data.materiales ?? "";
+    div.querySelector(".it-bloqueante").checked = !!data.bloqueante;
+    div.querySelector(".it-remove").addEventListener("click", () => div.remove());
+    return div;
+  }
+
+  $("addItemBtn")?.addEventListener("click", () => itemsContainer.appendChild(itemRow()));
+
+  function abrirForm() { form.classList.remove("hidden"); form.scrollIntoView({ behavior: "smooth" }); }
+
+  $("newBtn")?.addEventListener("click", () => {
+    $("f_id").value = ""; $("f_nombre").value = ""; $("f_descripcion").value = "";
+    $("formTitle").textContent = "Nuevo procedimiento";
+    itemsContainer.innerHTML = "";
+    itemsContainer.appendChild(itemRow());
+    abrirForm();
+  });
+
+  $("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
+
+  document.querySelectorAll(".edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const p = plantillas.find((x) => x.id === Number(btn.dataset.id));
+      if (!p) return;
+      $("f_id").value = p.id; $("f_nombre").value = p.nombre; $("f_descripcion").value = p.descripcion ?? "";
+      $("formTitle").textContent = "Editar procedimiento";
+      itemsContainer.innerHTML = "";
+      (p.items.length ? p.items : [{}]).forEach((it) => itemsContainer.appendChild(itemRow(it)));
+      abrirForm();
+    });
+  });
+
+  document.querySelectorAll(".toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const activa = btn.dataset.activa === "1";
+      await fetch(`/api/checklist-plantillas/${btn.dataset.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ activa: !activa }),
+      });
+      location.reload();
+    });
+  });
+
+  document.querySelectorAll(".del-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este procedimiento? Los planes que ya lo usaron conservan su checklist.")) return;
+      await fetch(`/api/checklist-plantillas/${btn.dataset.id}`, { method: "DELETE" });
+      location.reload();
+    });
+  });
+
+  $("saveBtn")?.addEventListener("click", async () => {
+    const err = $("formErr");
+    err.classList.add("hidden");
+    const nombre = $("f_nombre").value.trim();
+    if (!nombre) { err.textContent = "El nombre es obligatorio."; err.classList.remove("hidden"); return; }
+    const items = [];
+    itemsContainer.querySelectorAll(".proc-item").forEach((row) => {
+      const texto = row.querySelector(".it-texto").value.trim();
+      if (!texto) return;
+      const min = row.querySelector(".it-minutos").value;
+      items.push({
+        texto,
+        criterioAceptacion: row.querySelector(".it-criterio").value.trim() || null,
+        bloqueante: row.querySelector(".it-bloqueante").checked,
+        minutosEstimados: min ? Number(min) : null,
+        materiales: row.querySelector(".it-materiales").value.trim() || null,
+      });
+    });
+    if (items.length === 0) { err.textContent = "Agrega al menos un paso al procedimiento."; err.classList.remove("hidden"); return; }
+    const id = $("f_id").value;
+    const payload = { nombre, descripcion: $("f_descripcion").value.trim() || null, items };
+    const res = await fetch(id ? `/api/checklist-plantillas/${id}` : "/api/checklist-plantillas", {
+      method: id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+      err.classList.remove("hidden");
+      return;
+    }
+    location.reload();
+  });
+</script>

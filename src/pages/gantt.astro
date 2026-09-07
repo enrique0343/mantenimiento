@@ -1,0 +1,268 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { planesMantenimiento, activos, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
+import { eq, asc, and } from "drizzle-orm";
+import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
+import { areaHref } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect("/");
+const db = getDb(Astro);
+
+const url = new URL(Astro.request.url);
+const sedeParam = url.searchParams.get("sede");
+const sedeId = sedeParam ? Number(sedeParam) : null;
+const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
+const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+const esTecnico = user.rol === "tecnico";
+
+const sucursalesList = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
+
+// ── Datos ────────────────────────────────────────────────────────────────────
+const planRowsAll = await db
+  .select({ p: planesMantenimiento, a: activos, s: sucursales, ub: ubicaciones })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(esTecnico
+    ? and(eq(planesMantenimiento.activo, true), eq(planesMantenimiento.asignadoA, user.id))
+    : eq(planesMantenimiento.activo, true));
+
+const actRowsAll = await db
+  .select({ a: actividades, c: actividadCategorias, s: sucursales, ub: ubicaciones })
+  .from(actividades)
+  .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
+  .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, actividades.ubicacionId))
+  .where(esTecnico
+    ? and(eq(actividades.activo, true), eq(actividades.asignadoA, user.id))
+    : eq(actividades.activo, true));
+
+const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
+const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
+
+// ── Horizonte de 12 meses desde el mes actual ────────────────────────────────
+const hoyD = new Date();
+const hoy = hoyD.toISOString().slice(0, 10);
+const horizonStart = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth(), 1));
+const horizonEnd = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth() + 12, 1));
+const horizonStartStr = horizonStart.toISOString().slice(0, 10);
+const horizonEndStr = horizonEnd.toISOString().slice(0, 10);
+
+const meses = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date(Date.UTC(horizonStart.getUTCFullYear(), horizonStart.getUTCMonth() + i, 1));
+  return {
+    label: d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", ""),
+    anio: String(d.getUTCFullYear()).slice(2),
+  };
+});
+
+const mesIndex = (fecha: string) => {
+  const d = new Date(fecha);
+  return (d.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 + (d.getUTCMonth() - horizonStart.getUTCMonth());
+};
+
+function proyectar(fechaInicial: string, frecuencia: Frecuencia, onOcc: (fecha: string) => void) {
+  let f = fechaInicial;
+  let guard = 0;
+  while (f < horizonStartStr && guard < 500) { const n = siguienteFecha(f, frecuencia); if (n <= f) return; f = n; guard++; }
+  guard = 0;
+  while (f < horizonEndStr && guard < 400) { onOcc(f); const n = siguienteFecha(f, frecuencia); if (n <= f) break; f = n; guard++; }
+}
+
+// ── Filas del Gantt ──────────────────────────────────────────────────────────
+type Fila = {
+  icono: string;
+  titulo: string;
+  contexto: string;
+  sede: string | null;
+  link: string;
+  frecuencia: string;
+  proximaFecha: string;
+  vencido: boolean;
+  critico: boolean;
+  counts: number[]; // ocurrencias por mes (12)
+};
+
+const filas: Fila[] = [];
+
+for (const r of planRows) {
+  const counts = Array(12).fill(0);
+  proyectar(r.p.proximaFecha, r.p.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) counts[mi]++;
+  });
+  filas.push({
+    icono: "🛠",
+    titulo: r.p.titulo,
+    contexto: r.a ? `${r.a.codigo} · ${r.a.nombre}` : "",
+    sede: r.s?.nombre ?? null,
+    link: areaHref(r.a ? `/activos/${r.a.id}` : "/cronograma", dominio ?? r.a?.rubro),
+    frecuencia: r.p.frecuencia,
+    proximaFecha: r.p.proximaFecha,
+    vencido: r.p.proximaFecha <= hoy,
+    critico: r.a?.criticidadOperacional === "alta",
+    counts,
+  });
+}
+for (const r of actRows) {
+  const counts = Array(12).fill(0);
+  proyectar(r.a.proximaFecha, r.a.frecuencia as Frecuencia, (fecha) => {
+    const mi = mesIndex(fecha);
+    if (mi >= 0 && mi < 12) counts[mi]++;
+  });
+  filas.push({
+    icono: r.c?.icono ?? "📌",
+    titulo: r.a.titulo,
+    contexto: r.a.codigo + (r.c ? ` · ${r.c.nombre}` : ""),
+    sede: r.s?.nombre ?? null,
+    link: areaHref(`/actividades/${r.a.id}`, dominio ?? r.a.rubro),
+    frecuencia: r.a.frecuencia,
+    proximaFecha: r.a.proximaFecha,
+    vencido: r.a.proximaFecha <= hoy,
+    critico: false,
+    counts,
+  });
+}
+
+// Vencidos primero, luego por próxima fecha
+filas.sort((a, b) => (Number(b.vencido) - Number(a.vencido)) || a.proximaFecha.localeCompare(b.proximaFecha));
+
+// Totales por mes (pie de tabla)
+const totalesMes = Array(12).fill(0);
+for (const f of filas) f.counts.forEach((c, i) => (totalesMes[i] += c));
+
+const FREC_ABREV: Record<string, string> = {
+  diaria: "D", semanal: "S", quincenal: "Q", mensual: "M",
+  bimestral: "2M", trimestral: "3M", semestral: "6M", anual: "A",
+};
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
+---
+
+<Layout title="Cronograma Gantt">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">📊 Cronograma Gantt — 12 meses</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {filas.length} rutina(s) proyectadas según su frecuencia
+        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <select id="sedeSel" class="input w-auto text-sm py-1.5">
+        <option value="">🏢 Todas las sedes</option>
+        {sucursalesList.map((s) => (
+          <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
+        ))}
+      </select>
+      <select id="dominioSel" class="input w-auto text-sm py-1.5">
+        <option value="">🏷 Todas las áreas</option>
+        {RUBRO_KEYS.map((k) => (
+          <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
+        ))}
+      </select>
+      <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">📅 Vista por fechas</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan anual</a>
+    </div>
+  </div>
+
+  {filas.length === 0 ? (
+    <div class="card mt-6 p-10 text-center text-sm text-slate-400">
+      Sin rutinas programadas {sedeActiva ? "para esta sede" : ""}.
+    </div>
+  ) : (
+    <div class="card mt-4 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs" style="min-width: 1000px">
+          <thead class="bg-slate-50 text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="sticky left-0 bg-slate-50 px-3 py-2 font-medium z-10" style="min-width: 240px">Rutina</th>
+              <th class="px-1 py-2 font-medium text-center w-10" title="Frecuencia: D diaria · S semanal · Q quincenal · M mensual · A anual">Frec.</th>
+              {meses.map((m, i) => (
+                <th class={`px-1 py-2 text-center capitalize ${i === 0 ? "bg-brand-50 text-brand-700 font-bold" : "font-medium"}`} style="min-width: 52px">
+                  {m.label}<span class="block text-[9px] font-normal text-slate-400">'{m.anio}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {filas.map((f) => (
+              <tr class="hover:bg-slate-50 group">
+                <td class="sticky left-0 bg-white group-hover:bg-slate-50 px-3 py-1.5 z-10 border-r border-slate-100">
+                  <a href={f.link} class="font-medium text-slate-800 hover:text-brand-700 block truncate max-w-[260px]" title={f.titulo}>
+                    {f.icono} {f.titulo} {f.critico && <span title="Equipo crítico">⚠</span>}
+                  </a>
+                  <div class="text-[10px] text-slate-400 truncate max-w-[260px]">
+                    {f.contexto}{f.sede && !sedeActiva ? ` · ${f.sede}` : ""}
+                    <span class={`ml-1 font-semibold ${f.vencido ? "text-red-600" : "text-slate-500"}`}>{f.vencido ? `⏰ ${fmt(f.proximaFecha)}` : fmt(f.proximaFecha)}</span>
+                  </div>
+                </td>
+                <td class="px-1 py-1.5 text-center text-[10px] font-mono text-slate-400">{FREC_ABREV[f.frecuencia] ?? "?"}</td>
+                {f.counts.map((c, i) => (
+                  <td class={`px-1 py-1.5 text-center ${i === 0 ? "bg-brand-50/40" : ""}`}>
+                    {c > 0 && (
+                      <span
+                        class={`inline-flex items-center justify-center min-w-[22px] h-5 rounded-md text-[10px] font-bold text-white px-1 ${f.vencido && i === 0 ? "bg-red-500" : f.critico ? "bg-amber-500" : "bg-brand-500"}`}
+                        title={`${c} mantenimiento(s) en ${meses[i].label}`}
+                      >
+                        {c > 1 ? `${c}×` : "●"}
+                      </span>
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          <tfoot class="bg-slate-50 border-t-2 border-slate-200">
+            <tr>
+              <td class="sticky left-0 bg-slate-50 px-3 py-2 font-semibold text-slate-700 z-10">Total por mes</td>
+              <td></td>
+              {totalesMes.map((t, i) => (
+                <td class={`px-1 py-2 text-center font-bold ${i === 0 ? "text-brand-700" : "text-slate-600"}`}>{t || "—"}</td>
+              ))}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  )}
+
+  <!-- Leyenda -->
+  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+    <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-brand-500"></span> Programado</span>
+    <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-amber-500"></span> Equipo crítico</span>
+    <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-red-500"></span> Vencido (mes actual)</span>
+    <span>· "2×" = veces en el mes · Frec.: D diaria, S semanal, Q quincenal, M mensual, 2M bimestral, 3M trimestral, 6M semestral, A anual</span>
+  </div>
+
+  <script>
+    function nav(param: string, value: string) {
+      const p = new URLSearchParams(location.search);
+      if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
+      p.delete("dominio");
+      if (value) p.set(param, value); else p.delete(param);
+      const s = p.toString();
+      location.href = `/gantt${s ? `?${s}` : ""}`;
+    }
+    document.getElementById("sedeSel")?.addEventListener("change", (e) => {
+      nav("sede", (e.currentTarget as HTMLSelectElement).value);
+    });
+    document.getElementById("dominioSel")?.addEventListener("change", (e) => {
+      nav("area", (e.currentTarget as HTMLSelectElement).value);
+    });
+  </script>
+</Layout>

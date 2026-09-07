@@ -1,0 +1,485 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  contratosMantenimiento, contratoEquipos, contratoAdjuntos, contratoComentarios,
+  proveedores, usuarios, activos,
+} from "@/lib/schema";
+import { eq, asc, and, inArray, ne } from "drizzle-orm";
+import {
+  ESTADO_CONTRATO_LABEL, ESTADO_CONTRATO_COLOR, TIPO_CONTRATO_LABEL, PERIODICIDAD_LABEL,
+  diasParaVencer, puedeGestionarContratos, puedeVerContratos,
+} from "@/lib/contratos";
+import { fmtFechaLarga, fmtFechaSimple } from "@/lib/datetime";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+if (!Number.isFinite(id)) return Astro.redirect("/contratos");
+
+const user = Astro.locals.user!;
+if (!puedeVerContratos(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const [row] = await db
+  .select({ c: contratosMantenimiento, prov: proveedores, resp: usuarios })
+  .from(contratosMantenimiento)
+  .leftJoin(proveedores, eq(proveedores.id, contratosMantenimiento.proveedorId))
+  .leftJoin(usuarios, eq(usuarios.id, contratosMantenimiento.responsableId))
+  .where(eq(contratosMantenimiento.id, id))
+  .limit(1);
+if (!row) return Astro.redirect("/contratos");
+
+const equipos = await db
+  .select({ a: activos })
+  .from(contratoEquipos)
+  .innerJoin(activos, eq(activos.id, contratoEquipos.activoId))
+  .where(eq(contratoEquipos.contratoId, id))
+  .orderBy(asc(activos.codigo));
+
+const equiposIds = new Set(equipos.map((e) => e.a.id));
+const equiposDisponibles = await db
+  .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+  .from(activos)
+  .where(ne(activos.estado, "baja"))
+  .orderBy(asc(activos.codigo));
+
+const adjs = await db.select().from(contratoAdjuntos).where(eq(contratoAdjuntos.contratoId, id));
+
+const coms = await db
+  .select({ c: contratoComentarios, u: usuarios })
+  .from(contratoComentarios)
+  .leftJoin(usuarios, eq(usuarios.id, contratoComentarios.usuarioId))
+  .where(eq(contratoComentarios.contratoId, id))
+  .orderBy(asc(contratoComentarios.id));
+
+// Historial (renovaciones anteriores encadenadas)
+const historial: any[] = [];
+let cursor = row.c.renovacionDeId;
+while (cursor) {
+  const [prev] = await db.select({
+    id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo,
+    nombre: contratosMantenimiento.nombre, fechaInicio: contratosMantenimiento.fechaInicio,
+    fechaFin: contratosMantenimiento.fechaFin, estado: contratosMantenimiento.estado,
+    renovacionDeId: contratosMantenimiento.renovacionDeId,
+  }).from(contratosMantenimiento).where(eq(contratosMantenimiento.id, cursor)).limit(1);
+  if (!prev) break;
+  historial.push(prev);
+  cursor = prev.renovacionDeId;
+}
+const [renovacion] = await db.select({
+  id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo,
+  nombre: contratosMantenimiento.nombre, estado: contratosMantenimiento.estado,
+}).from(contratosMantenimiento).where(eq(contratosMantenimiento.renovacionDeId, id)).limit(1);
+
+const c = row.c;
+const dias = diasParaVencer(c.fechaFin);
+const puedeGestionar = puedeGestionarContratos(user.rol);
+const puedeRenovar = puedeGestionar && (c.estado === "vigente" || c.estado === "por_vencer");
+const puedeCancelar = puedeGestionar && (c.estado === "vigente" || c.estado === "por_vencer");
+const esAdmin = user.rol === "admin";
+
+const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equiposIds.has(e.id)));
+---
+
+<Layout title={`Contrato ${c.codigo}`}>
+  <a href="/contratos" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+
+  <!-- Cabecera -->
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-2xl font-bold">{c.nombre}</h1>
+        <span class={`badge ${ESTADO_CONTRATO_COLOR[c.estado as keyof typeof ESTADO_CONTRATO_COLOR]}`}>
+          {ESTADO_CONTRATO_LABEL[c.estado as keyof typeof ESTADO_CONTRATO_LABEL]}
+        </span>
+        {(c.estado === "vigente" || c.estado === "por_vencer") && (
+          <span class={`badge ${dias <= 30 ? "bg-red-100 text-red-700" : dias <= 60 ? "bg-orange-100 text-orange-700" : dias <= 90 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+            {dias < 0 ? `Vencido hace ${Math.abs(dias)} días` : dias === 0 ? "Vence hoy" : `Faltan ${dias} días`}
+          </span>
+        )}
+      </div>
+      <p class="mt-1 font-mono text-xs text-slate-500">{c.codigo}{c.numeroContratoExterno ? ` · Folio proveedor: ${c.numeroContratoExterno}` : ""}</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {puedeRenovar && <button id="btnRenovar" type="button" class="btn-primary text-sm">🔄 Renovar</button>}
+      {puedeCancelar && <button id="btnCancelar" type="button" class="btn-secondary text-sm text-red-600">Cancelar contrato</button>}
+      {esAdmin && <button id="btnEliminar" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
+    </div>
+  </div>
+
+  <!-- Información -->
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="lg:col-span-2 space-y-4">
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">Información del contrato</h2>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+          <div><div class="text-xs uppercase text-slate-500">Proveedor</div><div>{row.prov?.nombre ?? "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Tipo</div><div>{TIPO_CONTRATO_LABEL[c.tipo] ?? c.tipo}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Fecha inicio</div><div>{fmtFechaSimple(c.fechaInicio)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Fecha fin</div><div class="font-semibold">{fmtFechaLarga(c.fechaFin)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Costo</div><div>${(c.costo ?? 0).toFixed(2)} <span class="text-xs text-slate-500">({PERIODICIDAD_LABEL[c.periodicidadCosto ?? "anual"] ?? c.periodicidadCosto})</span></div></div>
+          <div><div class="text-xs uppercase text-slate-500">Responsable interno</div><div>{row.resp?.nombre ?? "—"}</div></div>
+        </div>
+        {c.descripcion && (
+          <div class="mt-4">
+            <div class="text-xs uppercase text-slate-500">Descripción</div>
+            <p class="mt-1 whitespace-pre-wrap text-sm text-slate-700">{c.descripcion}</p>
+          </div>
+        )}
+        {c.alcance && (
+          <div class="mt-4">
+            <div class="text-xs uppercase text-slate-500">Alcance</div>
+            <p class="mt-1 whitespace-pre-wrap text-sm text-slate-700">{c.alcance}</p>
+          </div>
+        )}
+        {c.notas && (
+          <div class="mt-4">
+            <div class="text-xs uppercase text-slate-500">Notas</div>
+            <p class="mt-1 whitespace-pre-wrap text-sm text-slate-700">{c.notas}</p>
+          </div>
+        )}
+        {c.notasCancelacion && (
+          <div class="mt-4 rounded-lg border-l-4 border-red-500 bg-red-50 p-3 text-sm">
+            <strong>Motivo de cancelación:</strong>
+            <p class="mt-1 whitespace-pre-wrap">{c.notasCancelacion}</p>
+          </div>
+        )}
+        {c.notasRenovacion && (
+          <div class="mt-4 rounded-lg border-l-4 border-blue-500 bg-blue-50 p-3 text-sm">
+            <strong>Notas de renovación:</strong>
+            <p class="mt-1 whitespace-pre-wrap">{c.notasRenovacion}</p>
+          </div>
+        )}
+      </div>
+
+      <!-- Contacto del proveedor -->
+      {(c.contactoProveedor || c.telefonoContacto || c.emailContacto) && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">👤 Contacto del proveedor</h2>
+          <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            {c.contactoProveedor && <div><div class="text-xs uppercase text-slate-500">Persona</div><div>{c.contactoProveedor}</div></div>}
+            {c.telefonoContacto && <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div><a href={`tel:${c.telefonoContacto}`} class="text-brand-600 hover:underline">{c.telefonoContacto}</a></div></div>}
+            {c.emailContacto && <div><div class="text-xs uppercase text-slate-500">Email</div><div><a href={`mailto:${c.emailContacto}`} class="text-brand-600 hover:underline">{c.emailContacto}</a></div></div>}
+          </div>
+        </div>
+      )}
+
+      <!-- Equipos cubiertos -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">🛠 Equipos cubiertos ({equipos.length})</h2>
+          {puedeGestionar && <button id="btnAgregarEquipo" type="button" class="text-sm text-brand-600 hover:underline">+ Agregar equipo</button>}
+        </div>
+        {equipos.length === 0 ? (
+          <p class="mt-2 text-sm text-slate-400">Sin equipos vinculados.</p>
+        ) : (
+          <ul class="mt-3 space-y-1.5 text-sm">
+            {equipos.map(({ a }) => (
+              <li class="flex items-center justify-between gap-2 px-2 py-1 hover:bg-slate-50 rounded">
+                <a href={`/activos/${a.id}`} class="text-brand-600 hover:underline">
+                  <span class="font-mono text-xs text-slate-400 mr-2">{a.codigo}</span>
+                  {a.nombre}
+                </a>
+                {puedeGestionar && (
+                  <button type="button" class="btn-quitar-equipo text-xs text-red-600 hover:underline" data-id={a.id}>quitar</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <!-- Adjuntos -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">📎 Documentos ({adjs.length})</h2>
+          {puedeGestionar && (
+            <label class="text-sm text-brand-600 hover:underline cursor-pointer">
+              + Subir documento
+              <input id="fileInput" type="file" class="hidden" accept=".pdf,image/*" />
+            </label>
+          )}
+        </div>
+        {adjs.length === 0 ? (
+          <p class="mt-2 text-sm text-slate-400">Sin documentos adjuntos.</p>
+        ) : (
+          <ul class="mt-3 space-y-1.5 text-sm">
+            {adjs.map((a) => (
+              <li class="flex items-center justify-between gap-2 px-2 py-1 hover:bg-slate-50 rounded">
+                <a href={`/api/contratos/adjunto/${a.id}`} target="_blank" rel="noopener" class="text-brand-600 hover:underline truncate">
+                  📄 {a.nombre} <span class="text-xs text-slate-400">({(a.tamano / 1024).toFixed(0)} KB)</span>
+                </a>
+                {puedeGestionar && (
+                  <button type="button" class="btn-borrar-adj text-xs text-red-600 hover:underline" data-id={a.id}>borrar</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <!-- Bitácora -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">💬 Bitácora ({coms.length})</h2>
+        <ul class="mt-3 space-y-3 text-sm">
+          {coms.map((com) => (
+            <li class="rounded-md bg-slate-50 p-3">
+              <div class="text-xs text-slate-500">{com.u?.nombre ?? "—"} · {fmtFechaSimple(com.c.createdAt)}</div>
+              <div class="mt-1 whitespace-pre-wrap">{com.c.texto}</div>
+            </li>
+          ))}
+        </ul>
+        <form id="comForm" class="mt-3 flex gap-2">
+          <input id="comTexto" class="input flex-1 text-sm" placeholder="Agregar comentario..." />
+          <button class="btn-primary text-sm">Enviar</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Sidebar derecho: historial -->
+    <div class="space-y-4">
+      {(historial.length > 0 || renovacion) && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">🔄 Historial de renovaciones</h2>
+          <ul class="mt-3 space-y-2 text-sm">
+            {historial.map((h) => (
+              <li class="border-l-2 border-slate-300 pl-3">
+                <a href={`/contratos/${h.id}`} class="text-brand-600 hover:underline font-mono text-xs">{h.codigo}</a>
+                <div class="text-xs text-slate-600">{fmtFechaSimple(h.fechaInicio)} → {fmtFechaSimple(h.fechaFin)}</div>
+                <span class={`badge text-[10px] ${ESTADO_CONTRATO_COLOR[h.estado as keyof typeof ESTADO_CONTRATO_COLOR]}`}>
+                  {ESTADO_CONTRATO_LABEL[h.estado as keyof typeof ESTADO_CONTRATO_LABEL]}
+                </span>
+              </li>
+            ))}
+            <li class="border-l-2 border-emerald-500 pl-3">
+              <span class="font-mono text-xs text-emerald-700">{c.codigo} (actual)</span>
+            </li>
+            {renovacion && (
+              <li class="border-l-2 border-blue-500 pl-3">
+                <a href={`/contratos/${renovacion.id}`} class="text-brand-600 hover:underline font-mono text-xs">{renovacion.codigo}</a>
+                <div class="text-xs text-slate-600">renovación posterior</div>
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
+      <!-- Alertas enviadas -->
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-900">🔔 Alertas</h2>
+        <ul class="mt-3 space-y-1.5 text-xs text-slate-600">
+          <li>90 días: {c.alerta90dEnviadaEn ? <span class="text-emerald-600">✓ {fmtFechaSimple(c.alerta90dEnviadaEn)}</span> : <span class="text-slate-400">pendiente</span>}</li>
+          <li>60 días: {c.alerta60dEnviadaEn ? <span class="text-emerald-600">✓ {fmtFechaSimple(c.alerta60dEnviadaEn)}</span> : <span class="text-slate-400">pendiente</span>}</li>
+          <li>30 días: {c.alerta30dEnviadaEn ? <span class="text-emerald-600">✓ {fmtFechaSimple(c.alerta30dEnviadaEn)}</span> : <span class="text-slate-400">pendiente</span>}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Renovar -->
+  <div id="modalRenovar" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+      <div class="p-5">
+        <h3 class="text-lg font-bold">🔄 Renovar contrato</h3>
+        <p class="mt-1 text-xs text-slate-500">Se creará un contrato nuevo linkeado a este. El actual se marcará como "renovado".</p>
+        <div class="mt-3 space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="label">Nueva fecha inicio *</label>
+              <input id="rFechaInicio" class="input" type="date" required value={c.fechaFin} />
+            </div>
+            <div>
+              <label class="label">Nueva fecha fin *</label>
+              <input id="rFechaFin" class="input" type="date" required />
+            </div>
+          </div>
+          <div>
+            <label class="label">Nuevo costo</label>
+            <input id="rCosto" class="input" type="number" min="0" step="0.01" value={c.costo} />
+          </div>
+          <div>
+            <label class="label">Notas de renovación (opcional)</label>
+            <textarea id="rNotas" class="input" rows="3" placeholder="Cambios respecto al contrato anterior..."></textarea>
+          </div>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="rCopiar" type="checkbox" checked /> Copiar los mismos equipos
+          </label>
+          <p id="rErr" class="hidden text-sm text-red-600"></p>
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" id="rCancelar" class="btn-secondary text-sm">Cancelar</button>
+          <button type="button" id="rGuardar" class="btn-primary text-sm">Crear renovación</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Cancelar -->
+  <div id="modalCancelar" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+      <div class="p-5">
+        <h3 class="text-lg font-bold text-red-700">Cancelar contrato</h3>
+        <p class="mt-1 text-xs text-slate-500">Indica el motivo de cancelación (mínimo 3 caracteres).</p>
+        <textarea id="cNotas" class="input mt-3 w-full" rows="4" required></textarea>
+        <p id="cErr" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" id="cCerrar" class="btn-secondary text-sm">Volver</button>
+          <button type="button" id="cConfirm" class="btn-primary text-sm bg-red-600 hover:bg-red-700">Confirmar cancelación</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Agregar equipo -->
+  <div id="modalEquipo" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
+      <div class="p-5">
+        <h3 class="text-lg font-bold">Agregar equipo al contrato</h3>
+        <input id="eqBuscar" class="input mt-3 w-full text-sm" placeholder="Buscar por código o nombre..." />
+        <div id="eqLista" class="mt-2 max-h-64 overflow-y-auto border border-slate-200 rounded text-sm"></div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" id="eqCerrar" class="btn-secondary text-sm">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script define:vars={{ contratoId: id, equiposDispJson }}>
+    const DISP = JSON.parse(equiposDispJson);
+
+    // ── Renovar ─────────────────────────────────────────
+    const mRen = document.getElementById("modalRenovar");
+    document.getElementById("btnRenovar")?.addEventListener("click", () => mRen.classList.remove("hidden"));
+    document.getElementById("rCancelar")?.addEventListener("click", () => mRen.classList.add("hidden"));
+    document.getElementById("rGuardar")?.addEventListener("click", async () => {
+      const err = document.getElementById("rErr");
+      err.classList.add("hidden");
+      const fi = document.getElementById("rFechaInicio").value;
+      const ff = document.getElementById("rFechaFin").value;
+      if (!fi || !ff) { err.textContent = "Las fechas son obligatorias"; err.classList.remove("hidden"); return; }
+      const res = await fetch(`/api/contratos/${contratoId}/renovar`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          fechaInicio: fi, fechaFin: ff,
+          costo: Number(document.getElementById("rCosto").value || 0),
+          notasRenovacion: document.getElementById("rNotas").value.trim() || null,
+          copiarEquipos: document.getElementById("rCopiar").checked,
+        }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        location.href = `/contratos/${j.contrato.id}`;
+        return;
+      }
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error al renovar";
+      err.classList.remove("hidden");
+    });
+
+    // ── Cancelar ────────────────────────────────────────
+    const mCan = document.getElementById("modalCancelar");
+    document.getElementById("btnCancelar")?.addEventListener("click", () => mCan.classList.remove("hidden"));
+    document.getElementById("cCerrar")?.addEventListener("click", () => mCan.classList.add("hidden"));
+    document.getElementById("cConfirm")?.addEventListener("click", async () => {
+      const err = document.getElementById("cErr");
+      const notas = document.getElementById("cNotas").value.trim();
+      if (notas.length < 3) { err.textContent = "Indica el motivo (3+ caracteres)"; err.classList.remove("hidden"); return; }
+      const res = await fetch(`/api/contratos/${contratoId}/cancelar`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notasCancelacion: notas }),
+      });
+      if (res.ok) { location.reload(); return; }
+      const j = await res.json().catch(() => ({}));
+      err.textContent = typeof j.error === "string" ? j.error : "Error";
+      err.classList.remove("hidden");
+    });
+
+    // ── Eliminar ────────────────────────────────────────
+    document.getElementById("btnEliminar")?.addEventListener("click", async () => {
+      if (!confirm("¿Eliminar este contrato? Esta acción no se puede deshacer. Si tiene renovaciones posteriores, no se podrá eliminar.")) return;
+      const res = await fetch(`/api/contratos/${contratoId}`, { method: "DELETE" });
+      if (res.ok) { location.href = "/contratos"; return; }
+      const j = await res.json().catch(() => ({}));
+      alert("Error: " + (j.error ?? "desconocido"));
+    });
+
+    // ── Agregar/quitar equipos ──────────────────────────
+    const mEq = document.getElementById("modalEquipo");
+    const eqLista = document.getElementById("eqLista");
+    const eqBuscar = document.getElementById("eqBuscar");
+
+    function renderEqLista() {
+      const q = eqBuscar.value.trim().toLowerCase();
+      const filtrados = DISP.filter((e) =>
+        !q || `${e.codigo} ${e.nombre}`.toLowerCase().includes(q)
+      ).slice(0, 50);
+      eqLista.innerHTML = "";
+      for (const e of filtrados) {
+        const row = document.createElement("div");
+        row.className = "flex items-center justify-between gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer border-b border-slate-100";
+        row.innerHTML = `<span><span class="font-mono text-xs text-slate-400">${e.codigo}</span> ${e.nombre}</span>
+                         <button type="button" class="text-xs text-brand-600 font-medium">agregar</button>`;
+        row.querySelector("button").addEventListener("click", async () => {
+          const res = await fetch(`/api/contratos/${contratoId}/equipos`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ activoId: e.id }),
+          });
+          if (res.ok) { location.reload(); return; }
+          const j = await res.json().catch(() => ({}));
+          alert("Error: " + (j.error ?? "desconocido"));
+        });
+        eqLista.appendChild(row);
+      }
+      if (filtrados.length === 0) eqLista.innerHTML = '<div class="p-3 text-xs text-slate-400">Sin equipos.</div>';
+    }
+    document.getElementById("btnAgregarEquipo")?.addEventListener("click", () => {
+      eqBuscar.value = ""; renderEqLista(); mEq.classList.remove("hidden");
+    });
+    document.getElementById("eqCerrar")?.addEventListener("click", () => mEq.classList.add("hidden"));
+    eqBuscar?.addEventListener("input", renderEqLista);
+
+    document.querySelectorAll(".btn-quitar-equipo").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("¿Desvincular este equipo del contrato?")) return;
+        const res = await fetch(`/api/contratos/${contratoId}/equipos`, {
+          method: "DELETE", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ activoId: Number(btn.dataset.id) }),
+        });
+        if (res.ok) location.reload();
+      });
+    });
+
+    // ── Adjuntos ───────────────────────────────────────
+    document.getElementById("fileInput")?.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/contratos/${contratoId}/adjuntos`, { method: "POST", body: form });
+      if (res.ok) { location.reload(); return; }
+      const j = await res.json().catch(() => ({}));
+      alert("Error: " + (j.error ?? "desconocido"));
+    });
+    document.querySelectorAll(".btn-borrar-adj").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("¿Borrar este documento?")) return;
+        const res = await fetch(`/api/contratos/${contratoId}/adjuntos?adjuntoId=${btn.dataset.id}`, { method: "DELETE" });
+        if (res.ok) location.reload();
+      });
+    });
+
+    // ── Comentarios ────────────────────────────────────
+    document.getElementById("comForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const texto = document.getElementById("comTexto").value.trim();
+      if (!texto) return;
+      const res = await fetch(`/api/contratos/${contratoId}/comentarios`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texto }),
+      });
+      if (res.ok) location.reload();
+    });
+  </script>
+</Layout>

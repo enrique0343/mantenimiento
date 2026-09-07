@@ -4,7 +4,7 @@ import { getDb } from "./db";
 import { auditLog } from "./schema";
 
 export type Accion = "create" | "update" | "delete" | "estado" | "asignacion";
-export type Entidad = "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto";
+export type Entidad = "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto" | "contrato";
 
 export interface DiffEntry {
   antes: unknown;
@@ -45,6 +45,16 @@ const CAMPO_LABEL: Record<string, string> = {
   categoria: "Categoría",
   tipo: "Tipo",
   proveedorId: "Proveedor",
+  fechaAdquisicion: "Fecha de adquisición",
+  vidaUtilAnios: "Vida útil (años)",
+  valorAdquisicion: "Valor de adquisición",
+  responsableId: "Responsable",
+  criticidadOperacional: "Criticidad operacional",
+  requiereCalibracion: "Requiere calibración",
+  registroSanitario: "Registro sanitario",
+  claseRiesgo: "Clase de riesgo",
+  ultimaCalibracion: "Última calibración",
+  proximaCalibracion: "Próxima calibración",
   // Plan
   titulo: "Título",
   frecuencia: "Frecuencia",

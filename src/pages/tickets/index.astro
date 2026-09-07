@@ -3,15 +3,19 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { tickets, usuarios, sucursales, activos } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
-import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
+import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { tipoActivoFiltro } from "@/lib/especialidad";
+import { parseArea, areaHref, AREAS } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const url = new URL(Astro.request.url);
+const rawArea = url.searchParams.get("area");
+const area = parseArea(rawArea);
+if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
 const filtroEstado = url.searchParams.get("estado");
 const filtroVista = url.searchParams.get("vista"); // "mios" | null
 const verCerrados = url.searchParams.get("verCerrados") === "1";
@@ -27,6 +31,7 @@ const rowsRaw = await db
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
   .leftJoin(activos, eq(activos.id, tickets.activoId))
+  .where(area ? eq(tickets.rubro, area) : undefined)
   .orderBy(desc(tickets.id));
 
 // Estados activos: los que se muestran por defecto (vista limpia).
@@ -70,27 +75,32 @@ const esAdmin = user.rol === "admin";
 <Layout title="Tickets de soporte">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">Tickets de soporte</h1>
+      <h1 class="text-2xl font-bold">Solicitudes{area ? ` · ${AREAS[area].label}` : ""}</h1>
       <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
     </div>
     <div class="flex gap-2">
+      {esAdmin && (
+        <button id="bulkCloseBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700">
+          🔒 Cerrar admin (<span id="selCountClose">0</span>)
+        </button>
+      )}
       {esAdmin && (
         <button id="bulkDelBtn" class="hidden text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">
           🗑 Eliminar seleccionados (<span id="selCount">0</span>)
         </button>
       )}
-      <a href="/soporte" target="_blank" class="btn-secondary">Ver formulario público ↗</a>
+      <a href={areaHref("/soporte", area)} target="_blank" class="btn-secondary">Ver formulario público ↗</a>
     </div>
   </div>
 
   <!-- Toggle vista mios / todos -->
   <div class="mt-4 flex gap-1 text-xs">
-    <a href={`/tickets${filtroEstado ? `?estado=${filtroEstado}` : ""}${verCerrados ? (filtroEstado ? "&" : "?") + "verCerrados=1" : ""}`}
+    <a href={areaHref(`/tickets${filtroEstado ? `?estado=${filtroEstado}` : ""}${verCerrados ? (filtroEstado ? "&" : "?") + "verCerrados=1" : ""}`, area)}
        class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista !== "mios" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
       Todos
     </a>
     {esTecnico && (
-      <a href={`/tickets?vista=mios${filtroEstado ? `&estado=${filtroEstado}` : ""}${verCerrados ? "&verCerrados=1" : ""}`}
+      <a href={areaHref(`/tickets?vista=mios${filtroEstado ? `&estado=${filtroEstado}` : ""}${verCerrados ? "&verCerrados=1" : ""}`, area)}
          class:list={["rounded-md px-3 py-1.5 font-medium", filtroVista === "mios" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"]}>
         👤 Asignados a mí ({conteoMios})
       </a>
@@ -99,25 +109,25 @@ const esAdmin = user.rol === "admin";
 
   <!-- Filtros rapidos por estado -->
   <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
-    <a href={`/tickets${filtroVista ? `?vista=${filtroVista}` : ""}`}
+    <a href={areaHref(`/tickets${filtroVista ? `?vista=${filtroVista}` : ""}`, area)}
        class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerrados ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
       ⚡ Activos ({conteoActivos})
     </a>
     <span class="text-slate-300">·</span>
-    <a href={`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`}
+    <a href={areaHref(`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "nuevo" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
       🔵 Nuevos ({conteo.nuevo ?? 0})
     </a>
-    <a href={`/tickets?estado=asignado${filtroVista ? `&vista=${filtroVista}` : ""}`}
+    <a href={areaHref(`/tickets?estado=asignado${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "asignado" ? "bg-indigo-600 text-white" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"]}>
       🟦 Asignados ({conteoAsignados})
     </a>
-    <a href={`/tickets?estado=en_proceso${filtroVista ? `&vista=${filtroVista}` : ""}`}
+    <a href={areaHref(`/tickets?estado=en_proceso${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_proceso" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
       🟢 En progreso ({conteoEnProcesoTk})
     </a>
     {conteoNuevoSinAsignar > 0 && (
-      <a href={`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={areaHref(`/tickets?estado=nuevo${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
          class:list={["rounded-md px-2 py-1 font-medium bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"]}
          title="Tickets nuevos sin técnico asignado">
         🔴 Sin asignar ({conteoNuevoSinAsignar})
@@ -125,13 +135,13 @@ const esAdmin = user.rol === "admin";
     )}
     <span class="text-slate-300">·</span>
     {(["resuelto", "cerrado", "descartado"] as EstadoTicket[]).map((s) => (
-      <a href={`/tickets?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={areaHref(`/tickets?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
          class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_TICKET_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {ESTADO_TICKET_LABEL[s]} ({conteo[s] ?? 0})
       </a>
     ))}
     {!filtroEstado && (
-      <a href={`/tickets?verCerrados=1${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={areaHref(`/tickets?verCerrados=1${filtroVista ? `&vista=${filtroVista}` : ""}`, area)}
          class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerrados ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {verCerrados ? "🗂 Mostrando todos" : "🗂 Ver cerrados (" + conteoCerrados + ")"}
       </a>
@@ -142,7 +152,6 @@ const esAdmin = user.rol === "admin";
   <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden">
     {rows.length === 0 && <div class="card p-6 text-center text-slate-400">Sin tickets.</div>}
     {rows.map((r) => {
-      const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
       const asignadoAMi = r.t.asignadoA === user.id;
       const e = r.t.estado as EstadoTicket;
       const cardColor =
@@ -152,7 +161,7 @@ const esAdmin = user.rol === "admin";
         e === "en_proceso" ? "border-l-4 border-emerald-500" :
         "border-l-4 border-transparent";
       return (
-        <a href={`/tickets/${r.t.id}`} class:list={["card block p-4 hover:bg-slate-50 active:bg-slate-100 no-underline", cardColor]}>
+        <a href={areaHref(`/tickets/${r.t.id}`, area)} class:list={["card block p-4 hover:bg-slate-50 active:bg-slate-100 no-underline", cardColor]}>
           <div class="flex items-start justify-between gap-2">
             <div class="font-mono text-xs text-slate-400">
               {asignadoAMi && <span title="Asignado a ti" class="mr-1">👤</span>}
@@ -175,11 +184,13 @@ const esAdmin = user.rol === "admin";
               <span class="text-slate-600 truncate block">{r.t.solicitanteNombre}</span>
             </div>
             <div>
-              <span class="text-slate-400 block">SLA</span>
-              {sla === "vencido" && <span class="text-red-600 font-medium">⚠ Vencido</span>}
-              {sla === "warning" && <span class="text-amber-600 font-medium">Por vencer</span>}
-              {sla === "ok" && <span class="text-slate-600">{fmt(r.t.vencimientoSla)}</span>}
-              {sla === "n/a" && <span class="text-slate-400">—</span>}
+              <span class="text-slate-400 block">📅 Recibido</span>
+              <span class="text-slate-700">{r.t.createdAt ? new Date(r.t.createdAt).toLocaleDateString("es", { day: "2-digit", month: "short", timeZone: "America/El_Salvador" }) : "—"}</span>
+              {r.t.createdAt && !(e === "resuelto" || e === "cerrado" || e === "descartado") && (() => {
+                const dias = Math.floor((Date.now() - new Date(r.t.createdAt).getTime()) / 86400_000);
+                const color = dias >= 14 ? "text-red-600" : dias >= 7 ? "text-amber-700" : "text-slate-500";
+                return <div class={`text-[10px] ${color}`}>hace {dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</div>;
+              })()}
             </div>
           </div>
           <div class="mt-2 flex items-center gap-1.5">
@@ -205,14 +216,14 @@ const esAdmin = user.rol === "admin";
           <th class="px-4 py-2">Sucursal</th>
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
-          <th class="px-4 py-2">SLA</th>
           <th class="px-4 py-2">Asignado</th>
+          <th class="px-4 py-2">Recibido</th>
+          <th class="px-4 py-2">Días</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {rows.length === 0 && <tr><td colspan={esAdmin ? 9 : 8} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
+        {rows.length === 0 && <tr><td colspan={esAdmin ? 10 : 9} class="px-4 py-6 text-center text-slate-400">Sin tickets.</td></tr>}
         {rows.map((r) => {
-          const sla = slaStatus(r.t.vencimientoSla, r.t.estado as EstadoTicket);
           const asignadoAMi = r.t.asignadoA === user.id;
           const e = r.t.estado as EstadoTicket;
           const filaColor =
@@ -233,7 +244,7 @@ const esAdmin = user.rol === "admin";
                 #{r.t.id}
               </td>
               <td class="px-4 py-2">
-                <a class="font-medium text-slate-900 hover:underline" href={`/tickets/${r.t.id}`}>{r.t.asunto}</a>
+                <a class="font-medium text-slate-900 hover:underline" href={areaHref(`/tickets/${r.t.id}`, area)}>{r.t.asunto}</a>
                 {subestadoBadge && <span class="ml-2">{subestadoBadge}</span>}
                 <div class="text-xs text-slate-500 truncate max-w-md">{r.t.descripcion}</div>
               </td>
@@ -244,13 +255,17 @@ const esAdmin = user.rol === "admin";
               <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
               <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[r.t.prioridad]} capitalize`}>{r.t.prioridad}</span></td>
               <td class="px-4 py-2"><span class={`badge ${ESTADO_TICKET_COLOR[r.t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[r.t.estado as EstadoTicket]}</span></td>
-              <td class="px-4 py-2 text-xs">
-                {sla === "vencido" && <span class="font-medium text-red-600">⚠ Vencido</span>}
-                {sla === "warning" && <span class="font-medium text-amber-600">Por vencer</span>}
-                {sla === "ok" && <span class="text-slate-500">{fmt(r.t.vencimientoSla)}</span>}
-                {sla === "n/a" && <span class="text-slate-400">—</span>}
-              </td>
               <td class="px-4 py-2 text-slate-600">{r.a?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">
+                {r.t.createdAt ? new Date(r.t.createdAt).toLocaleDateString("es", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/El_Salvador" }) : "—"}
+              </td>
+              <td class="px-4 py-2 text-xs">
+                {r.t.createdAt && !(e === "resuelto" || e === "cerrado" || e === "descartado") ? (() => {
+                  const dias = Math.floor((Date.now() - new Date(r.t.createdAt).getTime()) / 86400_000);
+                  const color = dias >= 14 ? "bg-red-100 text-red-700" : dias >= 7 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+                  return <span class={`badge ${color}`}>{dias === 0 ? "hoy" : dias === 1 ? "1 día" : `${dias} días`}</span>;
+                })() : <span class="text-slate-400">—</span>}
+              </td>
             </tr>
           );
         })}
@@ -258,17 +273,60 @@ const esAdmin = user.rol === "admin";
     </table>
   </div>
 
+  <!-- Leyenda de colores de la columna "Días" -->
+  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+    <span class="font-medium text-slate-700">Días transcurridos:</span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+      <span>Verde · menos de 7 días (en plazo)</span>
+    </span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+      <span>Ámbar · 7 a 13 días (atención)</span>
+    </span>
+    <span class="inline-flex items-center gap-1.5">
+      <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500"></span>
+      <span>Rojo · 14 días o más (estancado)</span>
+    </span>
+    <span class="text-slate-400">· Tickets resueltos/cerrados/descartados no muestran días.</span>
+  </div>
+
+  {esAdmin && (
+    <div id="bulkCloseTicketModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo de tickets en lote</h3>
+        <p class="mt-1 text-sm text-slate-600">
+          Vas a cerrar <strong><span id="bulkCloseTicketCount">0</span> ticket(s)</strong> sin pasar por el flujo normal.
+          Cada uno queda en estado <em>cerrado</em> con la fecha actual como resolución. La OT asociada (si existe) <strong>no</strong> se toca.
+        </p>
+        <div class="mt-3">
+          <label class="label text-xs">Motivo común (comentario interno por ticket; el solicitante no lo verá)</label>
+          <textarea id="bulkCloseTicketMotivo" class="input w-full" rows="3" placeholder="Ej. Tickets antiguos sin acción, ya atendidos fuera del sistema. Cierre administrativo."></textarea>
+        </div>
+        <p id="bulkCloseTicketMsg" class="hidden mt-2 text-sm"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="bulkCloseTicketCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="bulkCloseTicketConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar los tickets seleccionados</button>
+        </div>
+      </div>
+    </div>
+  )}
+
   {esAdmin && (
     <script>
       const cbs = document.querySelectorAll<HTMLInputElement>(".tk-cb");
       const selAll = document.getElementById("selAll") as HTMLInputElement | null;
       const bulkBtn = document.getElementById("bulkDelBtn");
       const countEl = document.getElementById("selCount");
+      const bulkCloseBtn = document.getElementById("bulkCloseBtn");
+      const countCloseEl = document.getElementById("selCountClose");
 
       function refresh() {
         const sel = Array.from(cbs).filter((cb) => cb.checked);
         if (countEl) countEl.textContent = String(sel.length);
         if (bulkBtn) bulkBtn.classList.toggle("hidden", sel.length === 0);
+        if (countCloseEl) countCloseEl.textContent = String(sel.length);
+        if (bulkCloseBtn) bulkCloseBtn.classList.toggle("hidden", sel.length === 0);
       }
       selAll?.addEventListener("change", () => { cbs.forEach((cb) => (cb.checked = selAll.checked)); refresh(); });
       cbs.forEach((cb) => cb.addEventListener("change", refresh));
@@ -277,9 +335,11 @@ const esAdmin = user.rol === "admin";
         const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
         if (!ids.length) return;
         const txt = ids.length === 1 ? "este ticket" : `estos ${ids.length} tickets`;
-        if (!confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`)) return;
-        if (ids.length > 5 && !confirm(`Vas a borrar ${ids.length} tickets. ¿Confirmas?`)) return;
-        bulkBtn.setAttribute("disabled", "true");
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Eliminar tickets", `¿Eliminar ${txt}? Esta acción NO se puede deshacer.`)
+          : confirm(`¿Eliminar ${txt}? Esta acción NO se puede deshacer.`));
+        if (!ok) return;
+        (bulkBtn as HTMLButtonElement).disabled = true;
         bulkBtn.textContent = "Borrando...";
         const res = await fetch("/api/tickets/bulk-delete", {
           method: "POST",
@@ -288,12 +348,92 @@ const esAdmin = user.rol === "admin";
         });
         const j = await res.json().catch(() => ({}));
         if (res.ok) {
-          alert(`✓ ${j.borrados} ticket(s) eliminados`);
+          window.showToast?.(`${j.borrados} ticket(s) eliminados`, "success");
           location.reload();
         } else {
-          alert("✗ Error: " + (j.error ?? "desconocido"));
-          bulkBtn.removeAttribute("disabled");
+          window.showToast?.("Error: " + (j.error ?? "desconocido"), "error");
+          (bulkBtn as HTMLButtonElement).disabled = false;
         }
+      });
+
+      // ── Cierre administrativo en lote ───────────────────────────────────
+      const bcModal = document.getElementById("bulkCloseTicketModal");
+      const bcCount = document.getElementById("bulkCloseTicketCount");
+      const bcMotivo = document.getElementById("bulkCloseTicketMotivo") as HTMLTextAreaElement | null;
+      const bcMsg = document.getElementById("bulkCloseTicketMsg");
+      const bcConfirm = document.getElementById("bulkCloseTicketConfirm");
+      const bcCancel = document.getElementById("bulkCloseTicketCancel");
+
+      const closeBcModal = () => {
+        bcModal?.classList.add("hidden");
+        bcModal?.classList.remove("flex");
+      };
+
+      bulkCloseBtn?.addEventListener("click", () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length || !bcModal) return;
+        if (bcCount) bcCount.textContent = String(ids.length);
+        if (bcMotivo) bcMotivo.value = "";
+        bcMsg?.classList.add("hidden");
+        if (bcMsg) bcMsg.textContent = "";
+        bcModal.classList.remove("hidden");
+        bcModal.classList.add("flex");
+        bcMotivo?.focus();
+      });
+      bcCancel?.addEventListener("click", closeBcModal);
+      bcModal?.addEventListener("click", (e) => { if (e.target === bcModal) closeBcModal(); });
+
+      bcConfirm?.addEventListener("click", async () => {
+        const ids = Array.from(cbs).filter((cb) => cb.checked).map((cb) => Number(cb.dataset.id));
+        if (!ids.length || !bcConfirm) return;
+        const motivo = (bcMotivo?.value || "").trim();
+        const texto = motivo
+          ? `🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+          : "🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.";
+
+        bcConfirm.setAttribute("disabled", "true");
+        const originalLabel = bcConfirm.textContent;
+
+        let ok = 0;
+        let fail = 0;
+        const CONC = 5;
+        for (let i = 0; i < ids.length; i += CONC) {
+          const lote = ids.slice(i, i + CONC);
+          if (bcConfirm) bcConfirm.textContent = `Procesando ${Math.min(i + CONC, ids.length)} / ${ids.length}…`;
+          await Promise.all(lote.map(async (id) => {
+            try {
+              const cr = await fetch(`/api/tickets/${id}/comentario`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ texto, publico: false }),
+              });
+              if (!cr.ok) throw new Error("comentario");
+              const pr = await fetch(`/api/tickets/${id}`, {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ estado: "cerrado" }),
+              });
+              if (!pr.ok) throw new Error("patch");
+              ok++;
+            } catch {
+              fail++;
+            }
+          }));
+        }
+
+        if (bcConfirm) bcConfirm.textContent = originalLabel;
+        bcConfirm.removeAttribute("disabled");
+        if (bcMsg) {
+          if (fail === 0) {
+            bcMsg.textContent = `✓ ${ok} ticket(s) cerrados.`;
+            bcMsg.className = "mt-2 text-sm text-emerald-600";
+          } else {
+            bcMsg.textContent = `Cerrados: ${ok}. Con error: ${fail}. Revisa los que quedaron sin cerrar y reintenta.`;
+            bcMsg.className = "mt-2 text-sm text-amber-700";
+          }
+          bcMsg.classList.remove("hidden");
+        }
+        if (fail === 0) setTimeout(() => location.reload(), 800);
       });
     </script>
   )}

@@ -1,15 +1,19 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { activos, ubicaciones, sucursales, ordenes, planesMantenimiento } from "@/lib/schema";
+import { eq, asc, inArray, and, isNotNull, sql } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/activos");
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const sucursalFiltro = url.searchParams.get("sucursal");
 const tipoFiltro = url.searchParams.get("tipo");
 
@@ -18,6 +22,7 @@ const all = await db
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(area ? activoAreaCondition(area) : undefined)
   .orderBy(asc(activos.codigo));
 
 const filtered = all.filter((r) =>
@@ -31,6 +36,27 @@ const sucursalesList = await db
   .where(eq(sucursales.activa, true))
   .orderBy(sucursales.nombre);
 
+// Etiqueta de estado (JCI FMS.07): última intervención concluida y próxima programada
+const idsFiltrados = filtered.map((r) => r.a.id);
+const ultimaMap = new Map<number, string>();
+const proximaMap = new Map<number, string>();
+if (idsFiltrados.length > 0) {
+  const ultimas = await db
+    .select({ activoId: ordenes.activoId, f: sql<string>`MAX(${ordenes.completadaEn})` })
+    .from(ordenes)
+    .where(and(inArray(ordenes.activoId, idsFiltrados), isNotNull(ordenes.completadaEn)))
+    .groupBy(ordenes.activoId);
+  for (const u of ultimas) if (u.activoId && u.f) ultimaMap.set(u.activoId, u.f);
+
+  const proximas = await db
+    .select({ activoId: planesMantenimiento.activoId, f: sql<string>`MIN(${planesMantenimiento.proximaFecha})` })
+    .from(planesMantenimiento)
+    .where(and(inArray(planesMantenimiento.activoId, idsFiltrados), eq(planesMantenimiento.activo, true)))
+    .groupBy(planesMantenimiento.activoId);
+  for (const p of proximas) if (p.activoId && p.f) proximaMap.set(p.activoId, p.f);
+}
+const fmtEtiqueta = (s: string | undefined) => (s ? fmtFechaSoloCompacta(s.slice(0, 10)) : null);
+
 // Origen para construir el URL del QR. Astro.url sirve.
 const origin = Astro.url.origin;
 ---
@@ -38,16 +64,17 @@ const origin = Astro.url.origin;
 <Layout title="Imprimir códigos QR">
   <div class="flex flex-wrap items-center justify-between gap-2 print:hidden">
     <div>
-      <h1 class="text-2xl font-bold">Códigos QR de equipos</h1>
-      <p class="text-sm text-slate-500">Imprime para pegar en cada equipo. Al escanear con cualquier celular, abre la ficha del equipo.</p>
+      <h1 class="text-2xl font-bold">Códigos QR {area ? `· ${AREAS[area].label}` : "de activos"}</h1>
+      <p class="text-sm text-slate-500">Imprime las etiquetas del inventario seleccionado. Al escanear, se abre su ficha en el área correspondiente.</p>
     </div>
     <div class="flex gap-2">
-      <a href="/activos" class="btn-secondary">← Volver</a>
+      <a href={areaHref("/activos", area)} class="btn-secondary">← Volver</a>
       <button onclick="window.print()" class="btn-primary">🖨 Imprimir</button>
     </div>
   </div>
 
   <form class="card mt-3 flex flex-wrap items-end gap-3 p-3 print:hidden" method="get">
+    {area && <input type="hidden" name="area" value={area} />}
     <div>
       <label class="label text-xs">Sucursal</label>
       <select name="sucursal" class="input text-sm">
@@ -69,8 +96,10 @@ const origin = Astro.url.origin;
 
   <div class="qr-grid mt-4">
     {filtered.map((r) => {
-      const target = `${origin}/activos/${r.a.id}`;
+      const target = `${origin}${areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(target)}`;
+      const ultima = fmtEtiqueta(ultimaMap.get(r.a.id));
+      const proxima = fmtEtiqueta(proximaMap.get(r.a.id));
       return (
         <div class="qr-tag">
           <img src={qrUrl} alt={r.a.codigo} loading="lazy" />
@@ -82,6 +111,13 @@ const origin = Astro.url.origin;
               {r.s && <span> · 🏢 {r.s.nombre}</span>}
               {r.ub && <span> · 📍 {r.ub.nombre}</span>}
             </div>
+            {(ultima || proxima) && (
+              <div class="qr-fechas">
+                {ultima && <span>Últ. mant.: <b>{ultima}</b></span>}
+                {ultima && proxima && <span> · </span>}
+                {proxima && <span>Próx.: <b>{proxima}</b></span>}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -113,6 +149,7 @@ const origin = Astro.url.origin;
     .qr-code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; }
     .qr-name { font-size: 12px; margin-top: 2px; }
     .qr-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+    .qr-fechas { font-size: 10px; color: #334155; margin-top: 4px; border-top: 1px dashed #cbd5e1; padding-top: 4px; }
     @media print {
       .qr-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
       .qr-tag { border: 1px dashed #999; box-shadow: none; }

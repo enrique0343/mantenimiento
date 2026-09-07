@@ -22,15 +22,39 @@ export const GET: APIRoute = async (ctx) => {
   return Response.json({ plantilla: { ...plantilla, items } });
 };
 
+const itemSchema = z.union([
+  z.string().min(1),
+  z.object({
+    texto: z.string().min(1),
+    criterioAceptacion: z.string().nullable().optional(),
+    bloqueante: z.boolean().optional(),
+    minutosEstimados: z.number().int().positive().nullable().optional(),
+    materiales: z.string().nullable().optional(),
+  }),
+]);
+
+function normalizarItem(raw: z.infer<typeof itemSchema>, orden: number, plantillaId: number) {
+  const it = typeof raw === "string" ? { texto: raw } : raw;
+  return {
+    plantillaId,
+    texto: it.texto,
+    criterioAceptacion: ("criterioAceptacion" in it ? it.criterioAceptacion : null) ?? null,
+    bloqueante: ("bloqueante" in it ? it.bloqueante : false) ?? false,
+    minutosEstimados: ("minutosEstimados" in it ? it.minutosEstimados : null) ?? null,
+    materiales: ("materiales" in it ? it.materiales : null) ?? null,
+    orden,
+  };
+}
+
 const patchSchema = z.object({
   nombre: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
   activa: z.boolean().optional(),
-  items: z.array(z.string().min(1)).optional(),
+  items: z.array(itemSchema).optional(),
 });
 
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
   const body = await ctx.request.json().catch(() => null);
@@ -52,11 +76,7 @@ export const PATCH: APIRoute = async (ctx) => {
     await db.delete(checklistPlantillaItems).where(eq(checklistPlantillaItems.plantillaId, id));
     if (parsed.data.items.length) {
       await db.insert(checklistPlantillaItems).values(
-        parsed.data.items.map((texto, orden) => ({
-          plantillaId: id,
-          texto,
-          orden,
-        }))
+        parsed.data.items.map((raw, orden) => normalizarItem(raw, orden, id))
       );
     }
   }
@@ -66,7 +86,7 @@ export const PATCH: APIRoute = async (ctx) => {
 };
 
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
