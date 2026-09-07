@@ -1,4 +1,10 @@
 import type { Rol } from "./schema";
+import { eq } from "drizzle-orm";
+import type { getDb } from "./db";
+import { activos, ubicaciones, sucursales } from "./schema";
+import { parseArea, type AreaKey } from "./areas";
+import { rubroDeActivo } from "./rubros";
+
 
 export const TIPOS_OT = ["preventivo", "correctivo", "predictivo"] as const;
 export type TipoOT = (typeof TIPOS_OT)[number];
@@ -189,4 +195,52 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
     return { ok: false, error: `No puedes completar: hay ${bloqueantes.length} punto${bloqueantes.length === 1 ? "" : "s"} crítico${bloqueantes.length === 1 ? "" : "s"} en desviación. El equipo no puede volver a servicio: resuelve el punto (márcalo OK) o escala a un correctivo.` };
   }
   return { ok: true };
+}
+
+// Las áreas organizan el trabajo; no sustituyen los permisos ni la prioridad.
+
+type AreaTrabajoInput = {
+  rubro?: string | null;
+  activoId?: number | null;
+  sucursalId?: number | null;
+  ubicacionId?: number | null;
+};
+
+/** Valida pertenencia real, también cuando la solicitud es solo por ubicación. */
+export async function validarAreaTrabajo(db: ReturnType<typeof getDb>, input: AreaTrabajoInput): Promise<{ rubro: AreaKey } | { error: string }> {
+  let area = parseArea(input.rubro);
+  if (input.rubro != null && !area) return { error: "Área de mantenimiento inválida" };
+  let activo: typeof activos.$inferSelect | undefined;
+  if (input.activoId != null) {
+    if (!Number.isInteger(input.activoId) || input.activoId <= 0) return { error: "Equipo o instalación inválido" };
+    [activo] = await db.select().from(activos).where(eq(activos.id, input.activoId)).limit(1);
+    if (!activo) return { error: "Equipo o instalación no encontrado" };
+    const assetArea = rubroDeActivo(activo.rubro, activo.tipo);
+    if (area && area !== assetArea) return { error: "El equipo o instalación pertenece a otra área de mantenimiento" };
+    area = assetArea;
+    if (input.ubicacionId && activo.ubicacionId && input.ubicacionId !== activo.ubicacionId) return { error: "El equipo o instalación no pertenece a la ubicación seleccionada" };
+  }
+  if (!area) return { error: "Selecciona el área de mantenimiento" };
+  if (input.sucursalId != null) {
+    if (!Number.isInteger(input.sucursalId) || input.sucursalId <= 0) return { error: "Sucursal inválida" };
+    const [sucursal] = await db.select({ id: sucursales.id }).from(sucursales).where(eq(sucursales.id, input.sucursalId)).limit(1);
+    if (!sucursal) return { error: "Sucursal no encontrada" };
+  }
+  const locationIds = [...new Set([input.ubicacionId, activo?.ubicacionId].filter((id): id is number => id != null))];
+  for (const locationId of locationIds) {
+    if (!Number.isInteger(locationId) || locationId <= 0) return { error: "Ubicación inválida" };
+    const [ubicacion] = await db.select({ sucursalId: ubicaciones.sucursalId }).from(ubicaciones).where(eq(ubicaciones.id, locationId)).limit(1);
+    if (!ubicacion) return { error: "Ubicación no encontrada" };
+    if (input.sucursalId && ubicacion.sucursalId !== input.sucursalId) return { error: "La ubicación no pertenece a la sucursal seleccionada" };
+  }
+  return { rubro: area };
+}
+
+export function validarContextoArea(request: Request, rubro: string | null): Response | null {
+  const raw = new URL(request.url).searchParams.get("area");
+  if (raw === null) return null;
+  const area = parseArea(raw);
+  if (!area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  if (rubro !== area) return Response.json({ error: "El registro pertenece a otra área de mantenimiento" }, { status: 400 });
+  return null;
 }

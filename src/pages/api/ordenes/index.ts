@@ -11,9 +11,13 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
+import { parseArea } from "@/lib/areas";
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+
 export const prerender = false;
 
 const createSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().optional().nullable(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
@@ -37,7 +41,11 @@ export const GET: APIRoute = async (ctx) => {
   const estado = url.searchParams.get("estado") as any;
   const asignado = url.searchParams.get("asignado");
 
+  const rawArea = url.searchParams.get("area");
+  const area = parseArea(rawArea);
+  if (rawArea !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   const conditions = [];
+  if (area) conditions.push(eq(ordenes.rubro, area));
   if (estado) conditions.push(eq(ordenes.estado, estado));
   if (asignado === "me") conditions.push(eq(ordenes.asignadoA, user.id));
   // Restricción de visibilidad: técnicos solo ven sus OTs
@@ -72,6 +80,11 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
 
+  const areaResult = await validarAreaTrabajo(db, parsed.data);
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  const contextError = validarContextoArea(ctx.request, areaResult.rubro);
+  if (contextError) return contextError;
+
   // Si no se proporcionó vencimiento explícito y hay equipo, calcular desde SLA
   let vencimiento = parsed.data.vencimiento ?? null;
   if (!vencimiento && parsed.data.activoId) {
@@ -84,6 +97,7 @@ export const POST: APIRoute = async (ctx) => {
     .insert(ordenes)
     .values({
       ...parsed.data,
+      rubro: areaResult.rubro,
       vencimiento,
       creadoPor: user.id,
       // Si la OT nace ya asignada, registramos la marca de asignación para que

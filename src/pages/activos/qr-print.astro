@@ -4,13 +4,16 @@ import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales, ordenes, planesMantenimiento } from "@/lib/schema";
 import { eq, asc, inArray, and, isNotNull, sql } from "drizzle-orm";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/activos");
+if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const sucursalFiltro = url.searchParams.get("sucursal");
 const tipoFiltro = url.searchParams.get("tipo");
 
@@ -19,6 +22,7 @@ const all = await db
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(area ? activoAreaCondition(area) : undefined)
   .orderBy(asc(activos.codigo));
 
 const filtered = all.filter((r) =>
@@ -60,16 +64,17 @@ const origin = Astro.url.origin;
 <Layout title="Imprimir códigos QR">
   <div class="flex flex-wrap items-center justify-between gap-2 print:hidden">
     <div>
-      <h1 class="text-2xl font-bold">Códigos QR de equipos</h1>
-      <p class="text-sm text-slate-500">Imprime para pegar en cada equipo. Al escanear con cualquier celular, abre la ficha del equipo.</p>
+      <h1 class="text-2xl font-bold">Códigos QR {area ? `· ${AREAS[area].label}` : "de activos"}</h1>
+      <p class="text-sm text-slate-500">Imprime las etiquetas del inventario seleccionado. Al escanear, se abre su ficha en el área correspondiente.</p>
     </div>
     <div class="flex gap-2">
-      <a href="/activos" class="btn-secondary">← Volver</a>
+      <a href={areaHref("/activos", area)} class="btn-secondary">← Volver</a>
       <button onclick="window.print()" class="btn-primary">🖨 Imprimir</button>
     </div>
   </div>
 
   <form class="card mt-3 flex flex-wrap items-end gap-3 p-3 print:hidden" method="get">
+    {area && <input type="hidden" name="area" value={area} />}
     <div>
       <label class="label text-xs">Sucursal</label>
       <select name="sucursal" class="input text-sm">
@@ -91,7 +96,7 @@ const origin = Astro.url.origin;
 
   <div class="qr-grid mt-4">
     {filtered.map((r) => {
-      const target = `${origin}/activos/${r.a.id}`;
+      const target = `${origin}${areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(target)}`;
       const ultima = fmtEtiqueta(ultimaMap.get(r.a.id));
       const proxima = fmtEtiqueta(proximaMap.get(r.a.id));

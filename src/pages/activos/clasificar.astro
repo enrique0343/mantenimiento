@@ -2,12 +2,14 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, asc, ne } from "drizzle-orm";
+import { eq, asc, ne, and } from "drizzle-orm";
 import { RUBRO_KEYS, RUBROS, SUBCAT_KEYS, SUBCATS_BIOMEDICO, rubroDeActivo } from "@/lib/rubros";
+import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
 export const prerender = false;
+const area = parseArea(Astro.url.searchParams.get("area"));
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/activos");
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const db = getDb(Astro);
 
 const rows = await db
@@ -15,7 +17,7 @@ const rows = await db
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(ne(activos.estado, "baja"))
+  .where(and(ne(activos.estado, "baja"), area ? activoAreaCondition(area) : undefined))
   .orderBy(asc(activos.codigo));
 
 const sucursalesList = await db
@@ -29,19 +31,19 @@ const bioSinSubcat = rows.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "
 const sinCriticidad = rows.filter((r) => !r.a.criticidadOperacional).length;
 
 const CRIT = [
-  { v: "alta", label: "A — Crítico" },
-  { v: "media", label: "B — Importante" },
-  { v: "baja", label: "C — General" },
+  { v: "alta", label: "Alta" },
+  { v: "media", label: "Media" },
+  { v: "baja", label: "Baja" },
 ];
 ---
 
 <Layout title="Clasificar equipos">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <a href="/activos" class="text-xs text-slate-400 hover:text-slate-600">← Equipos</a>
-      <h1 class="mt-1 text-2xl font-bold">🏷 Clasificación de equipos</h1>
+      <a href={areaHref("/activos", area)} class="text-xs text-slate-400 hover:text-slate-600">← Equipos</a>
+      <h1 class="mt-1 text-2xl font-bold">Clasificación {area ? `· ${AREAS[area].label}` : "de activos"}</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Fase 1 del Sistema de Planificación: dominio, subcategoría biomédica y criticidad A/B/C.
+        Área de mantenimiento, subcategoría biomédica y criticidad Alta, Media o Baja.
         Cada cambio se guarda al instante.
       </p>
     </div>
@@ -69,7 +71,7 @@ const CRIT = [
       </select>
     </div>
     <div>
-      <label class="label text-xs">Dominio</label>
+      <label class="label text-xs">Área de mantenimiento</label>
       <select id="fDominio" class="input text-sm">
         <option value="">Todos</option>
         {RUBRO_KEYS.map((k) => <option value={k}>{RUBROS[k].icono} {RUBROS[k].label}</option>)}
@@ -80,9 +82,9 @@ const CRIT = [
       <label class="label text-xs">Criticidad</label>
       <select id="fCrit" class="input text-sm">
         <option value="">Todas</option>
-        <option value="alta">A — Crítico</option>
-        <option value="media">B — Importante</option>
-        <option value="baja">C — General</option>
+        <option value="alta">Alta</option>
+        <option value="media">Media</option>
+        <option value="baja">Baja</option>
         <option value="__sin__">Sin asignar</option>
       </select>
     </div>
@@ -95,7 +97,7 @@ const CRIT = [
           <tr>
             <th class="px-3 py-2">Equipo</th>
             <th class="px-3 py-2">Sede / Ubicación</th>
-            <th class="px-3 py-2">Dominio</th>
+            <th class="px-3 py-2">Área de mantenimiento</th>
             <th class="px-3 py-2">Subcategoría biomédica</th>
             <th class="px-3 py-2">Criticidad</th>
           </tr>
@@ -113,7 +115,7 @@ const CRIT = [
                 data-crit={r.a.criticidadOperacional ?? "__sin__"}
               >
                 <td class="px-3 py-2">
-                  <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">
+                  <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">
                     <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span> {r.a.nombre}
                   </a>
                   <div class="text-[10px] text-slate-400">{r.a.marca ?? ""} {r.a.modelo ?? ""} · tipo: {r.a.tipo}</div>
@@ -138,8 +140,8 @@ const CRIT = [
                   </select>
                 </td>
                 <td class="px-3 py-2">
-                  <select class="crit-sel rounded border px-1.5 py-1 text-xs" class:list={[r.a.criticidadOperacional ? "border-slate-200 bg-white text-slate-700" : "border-red-300 bg-red-50 text-red-800"]} data-id={r.a.id}>
-                    <option value="">— Elegir —</option>
+                  <select required class="crit-sel rounded border px-1.5 py-1 text-xs" class:list={[r.a.criticidadOperacional ? "border-slate-200 bg-white text-slate-700" : "border-red-300 bg-red-50 text-red-800"]} data-id={r.a.id}>
+                    <option value="" disabled>— Elegir —</option>
                     {CRIT.map((c) => (
                       <option value={c.v} selected={r.a.criticidadOperacional === c.v}>{c.label}</option>
                     ))}
@@ -155,9 +157,7 @@ const CRIT = [
 
   <div class="mt-3 text-xs text-slate-500">
     <span class="font-medium text-slate-600">Criticidad:</span>
-    A = la falla compromete vida del paciente, continuidad o cumplimiento legal (preventivo estricto + repuesto crítico) ·
-    B = degrada el servicio con redundancia parcial (preventivo programado) ·
-    C = impacto menor (preventivo básico o correctivo planificado).
+    Alta: una falla afecta la seguridad o un servicio esencial. Media: limita la operación con una alternativa temporal. Baja: impacto localizado que permite programar la intervención. La urgencia de cada solicitud se evalúa por separado.
   </div>
 
   <script>
@@ -176,7 +176,8 @@ const CRIT = [
         return true;
       }
       sel.value = prev;
-      window.showToast?.("No se pudo guardar", "error");
+      const error = await r.json().catch(() => ({}));
+      window.showToast?.(typeof error.error === "string" ? error.error : "No se pudo guardar", "error");
       return false;
     }
 
@@ -197,6 +198,8 @@ const CRIT = [
             sub.disabled = true;
           }
           fila.dataset.dominio = sel.value || "__sin__";
+          const areaActual = new URL(location.href).searchParams.get("area");
+          if (areaActual && sel.value !== areaActual) { location.reload(); return; }
           sel.className = sel.className.replace("border-amber-300 bg-amber-50 text-amber-800", "border-slate-200 bg-white text-slate-700");
         }
       });

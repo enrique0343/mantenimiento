@@ -10,6 +10,8 @@ import { logAudit } from "@/lib/audit";
 import { crearNotificacion } from "@/lib/notif-app";
 import { fmtFechaLarga } from "@/lib/datetime";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
@@ -27,6 +29,9 @@ export const GET: APIRoute = async (ctx) => {
     .where(eq(tickets.id, id))
     .limit(1);
   if (!r) return Response.json({ error: "No encontrado" }, { status: 404 });
+
+  const contextError = validarContextoArea(ctx.request, r.t.rubro);
+  if (contextError) return contextError;
 
   const coms = await db
     .select({ c: ticketComentarios, u: usuarios })
@@ -53,6 +58,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 const updateSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   estado: z.enum(["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   asignadoA: z.number().int().nullable().optional(),
@@ -74,6 +80,13 @@ export const PATCH: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [actual] = await db.select().from(tickets).where(eq(tickets.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
+
+  const contextError = validarContextoArea(ctx.request, actual.rubro);
+  if (contextError) return contextError;
+  if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una solicitud no puede cambiarse" }, { status: 400 });
+  const effective = { ...actual, ...parsed.data };
+  const areaResult = await validarAreaTrabajo(db, effective);
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
 
   const data: Record<string, unknown> = { ...parsed.data, updatedAt: new Date().toISOString() };
 
@@ -120,13 +133,17 @@ export const PATCH: APIRoute = async (ctx) => {
           titulo: actual.asunto,
           descripcion: desc,
           tipo: "correctivo",
-          prioridad: actual.prioridad,
+          prioridad: effective.prioridad,
           estado: "abierta",
-          activoId: actual.activoId,
+          rubro: areaResult.rubro,
+          activoId: effective.activoId,
+          sucursalId: effective.sucursalId,
+          ubicacionId: effective.ubicacionId,
+          ubicacionDetalle: effective.ubicacion,
           asignadoA: parsed.data.asignadoA!,
           asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
           creadoPor: user.id,
-          vencimiento: actual.vencimientoSla,
+          vencimiento: (data.vencimientoSla as string | undefined) ?? actual.vencimientoSla,
         })
         .returning();
       nuevaOtId = orden.id;
@@ -239,6 +256,10 @@ export const DELETE: APIRoute = async (ctx) => {
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
+  const [ticket] = await db.select().from(tickets).where(eq(tickets.id, id)).limit(1);
+  if (!ticket) return Response.json({ error: "No encontrado" }, { status: 404 });
+  const contextError = validarContextoArea(ctx.request, ticket.rubro);
+  if (contextError) return contextError;
   // ticket_comentarios tiene cascade delete; encuestas tiene set null
   try {
     await db.delete(tickets).where(eq(tickets.id, id));

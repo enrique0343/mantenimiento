@@ -616,3 +616,9 @@ const TIPOS_UB = [
   });
 
 </script>
+
+<script>
+const openLinkedTab = () => { const key=location.hash.slice(1); if (["empresa","sucursales","correo","compras","checklists"].includes(key)) document.querySelector<HTMLButtonElement>(`[data-tab="${key}"]`)?.click(); };
+openLinkedTab();
+window.addEventListener("hashchange", openLinkedTab);
+</script>

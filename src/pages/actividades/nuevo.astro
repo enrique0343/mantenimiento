@@ -4,11 +4,13 @@ import { getDb } from "@/lib/db";
 import { actividadCategorias, sucursales, ubicaciones, usuarios, proveedores } from "@/lib/schema";
 import { eq, asc, and, inArray } from "drizzle-orm";
 import { puedeAdministrarActividades } from "@/lib/actividades";
+import { parseArea, areaHref, AREAS, AREA_KEYS } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (!puedeAdministrarActividades(user.rol)) return Astro.redirect("/actividades");
 
+const area = parseArea(Astro.url.searchParams.get("area"));
 const db = getDb(Astro);
 const cats = await db.select().from(actividadCategorias).where(eq(actividadCategorias.activo, true)).orderBy(asc(actividadCategorias.orden));
 const sucs = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
@@ -20,7 +22,7 @@ const hoy = new Date().toISOString().slice(0, 10);
 ---
 
 <Layout title="Nueva actividad">
-  <a href="/actividades" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <a href={areaHref("/actividades", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
   <h1 class="mt-2 text-2xl font-bold">Nueva actividad recurrente</h1>
 
   <form id="form" class="card mt-4 space-y-5 p-5">
@@ -31,10 +33,17 @@ const hoy = new Date().toISOString().slice(0, 10);
         <input class="input" id="titulo" required placeholder="Ej: Limpieza trampa de grasa cocina" />
       </div>
       <div>
+        <label class="label" for="rubro">Área de mantenimiento *</label>
+        <select class="input" id="rubro" required>
+          <option value="">— Seleccionar área —</option>
+          {AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}
+        </select>
+      </div>
+      <div>
         <label class="label">Categoría</label>
         <select class="input" id="categoriaId">
           <option value="">— Seleccionar —</option>
-          {cats.map((c) => <option value={c.id}>{c.icono} {c.nombre}</option>)}
+          {cats.map((c) => <option value={c.id} data-area={c.rubro}>{c.icono} {c.nombre}</option>)}
         </select>
       </div>
       <div class="sm:col-span-2">
@@ -140,12 +149,23 @@ const hoy = new Date().toISOString().slice(0, 10);
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit">Crear actividad</button>
-      <a class="btn-secondary" href="/actividades">Cancelar</a>
+      <a class="btn-secondary" href={areaHref("/actividades", area)}>Cancelar</a>
     </div>
   </form>
 
-  <script define:vars={{ ubJson }}>
+  <script define:vars={{ ubJson, area }}>
     const allUbs = JSON.parse(ubJson);
+    const areaEl = document.getElementById("rubro");
+    const categoryEl = document.getElementById("categoriaId");
+    function filterCategories() {
+      for (const option of categoryEl.options) {
+        option.hidden = !!(option.dataset.area && option.dataset.area !== areaEl.value);
+        option.disabled = option.hidden;
+      }
+      if (categoryEl.selectedOptions[0]?.disabled) categoryEl.value = "";
+    }
+    areaEl.addEventListener("change", filterCategories);
+    filterCategories();
     const sucEl = document.getElementById("sucursalId");
     const ubEl = document.getElementById("ubicacionId");
     sucEl?.addEventListener("change", () => {
@@ -177,6 +197,7 @@ const hoy = new Date().toISOString().slice(0, 10);
       const asignV = document.getElementById("asignadoA").value;
       const provV = document.getElementById("proveedorExternoId").value;
       const payload = {
+        rubro: v("rubro"),
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
         categoriaId: catV ? Number(catV) : null,
@@ -193,7 +214,7 @@ const hoy = new Date().toISOString().slice(0, 10);
         proveedorExternoId: provV ? Number(provV) : null,
         notas: v("notas") || null,
       };
-      const res = await fetch("/api/actividades", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      const res = await fetch(`/api/actividades?area=${encodeURIComponent(payload.rubro)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         err.textContent = typeof j.error === "string" ? j.error : "Error al crear";
@@ -201,7 +222,7 @@ const hoy = new Date().toISOString().slice(0, 10);
         return;
       }
       const j = await res.json();
-      location.href = `/actividades/${j.actividad.id}`;
+      location.href = `/actividades/${j.actividad.id}?area=${encodeURIComponent(payload.rubro)}`;
     });
   </script>
 </Layout>

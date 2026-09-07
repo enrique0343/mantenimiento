@@ -210,3 +210,18 @@ El cron real corre cada día a las **06:00 hora El Salvador** (12:00 UTC).
 - El middleware (`src/middleware.ts`) bloquea acceso no autenticado a todo excepto `/login` y `/api/auth/*`.
 - Los adjuntos se sirven proxiando R2 a través de `/api/adjuntos/[id]` para mantener el control de acceso (no se exponen URLs públicas).
 - Límite de subida: 10 MB por archivo (ajustable en `src/pages/api/ordenes/[id]/adjuntos.ts`).
+
+
+## Áreas de mantenimiento
+
+El portal abre cuatro espacios: aire acondicionado, infraestructura, equipos generales y equipos biomédicos. Cada espacio reúne su resumen, solicitudes, órdenes, inventario y planificación. Los formularios guardan el área y los listados la filtran en el servidor. La criticidad operacional del activo tiene tres valores: alta, media y baja; la prioridad de una orden se mantiene independiente.
+
+Usuarios, ubicaciones, almacén, proveedores y otros recursos siguen compartidos. Recursos, Indicadores y Administración agrupan las herramientas generales. Flota y Extintores ya no tienen páginas ni endpoints activos; se conserva el esquema histórico para no alterar cuentas ni migraciones anteriores.
+
+La migración `0047_areas_mantenimiento.sql` es aditiva: agrega información técnica y área a solicitudes, órdenes y actividades, con índices y clasificación de registros previos. No modifica usuarios. Un activo con solicitudes, órdenes o proyectos vinculados no se puede mover a otra área; sus demás datos siguen editables.
+
+### Verificación y publicación
+
+Con Node 24, ejecutar `npm ci`, `npm test` y `npm run build`. Las cinco suites usan SQLite local en memoria y no envían correos. Cubren aislamiento entre áreas, formularios y APIs, conversión de solicitudes, planificación, búsqueda y generación automática.
+
+El workflow de GitHub prueba y construye antes de migrar. Publica automáticamente solo si existen `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`; si faltan, lo informa y deja la publicación a la conexión autorizada de Cloudflare. Antes de publicar, guardar el marcador actual de D1 y verificar qué migraciones están pendientes. Nunca cargar los datos de prueba en producción.

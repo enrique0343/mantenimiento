@@ -4,16 +4,20 @@ import { getDb } from "@/lib/db";
 import { activos, variablesPredictivas, mediciones } from "@/lib/schema";
 import { eq, desc } from "drizzle-orm";
 import { ESTADO_ALERTA_COLOR, ESTADO_ALERTA_LABEL, type EstadoAlerta } from "@/lib/predictivo";
+import { areaHref, parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
-if (!Number.isFinite(id)) return Astro.redirect("/activos");
+if (!Number.isFinite(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [act] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
-if (!act) return Astro.redirect("/activos");
+if (!act) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const area = rubroDeActivo(act.rubro, act.tipo);
+if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
 
 const vars = await db.select().from(variablesPredictivas).where(eq(variablesPredictivas.activoId, id)).orderBy(variablesPredictivas.nombre);
 
@@ -46,7 +50,7 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
 ---
 
 <Layout title={`Predictivo · ${act.nombre}`}>
-  <a href={`/activos/${id}`} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
+  <a href={areaHref(`/activos/${id}`, area)} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
   <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Mantenimiento predictivo</h1>
@@ -139,7 +143,7 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
     })}
   </div>
 
-  <script define:vars={{ activoId: id }}>
+  <script define:vars={{ activoId: id, area }}>
     const $ = (id) => document.getElementById(id);
 
     $("newVarBtn")?.addEventListener("click", () => $("newVarForm").classList.remove("hidden"));
@@ -192,7 +196,7 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
         const j = await res.json();
         if (j.ordenAutomatica) {
           if (confirm(`Medición crítica detectada. Se generó OT #${j.ordenAutomatica.id}. ¿Abrirla?`)) {
-            location.href = `/ordenes/${j.ordenAutomatica.id}`;
+            location.href = `/ordenes/${j.ordenAutomatica.id}?area=${area}`;
             return;
           }
         }

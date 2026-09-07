@@ -6,6 +6,8 @@ import { requireUser } from "@/lib/auth";
 import { puedeAdministrarActividades } from "@/lib/actividades";
 import { siguienteFecha } from "@/lib/frecuencias";
 
+import { parseArea } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 // Genera una OT inmediatamente para la actividad y avanza proximaFecha al siguiente ciclo.
@@ -15,6 +17,9 @@ export const POST: APIRoute = async (ctx) => {
   if (!puedeAdministrarActividades(user.rol)) return new Response("Sin permisos", { status: 403 });
 
   const id = Number(ctx.params.id);
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
 
   const [r] = await db
@@ -26,6 +31,10 @@ export const POST: APIRoute = async (ctx) => {
   if (!r) return Response.json({ error: "Actividad no existe" }, { status: 404 });
   const a = r.a;
   const cat = r.c;
+  const rubro = areaDeActividad(a.rubro, cat?.rubro);
+  if (area && rubro !== area) return Response.json({ error: "Actividad no encontrada en esta área" }, { status: 404 });
+  if (!rubro) return Response.json({ error: "Clasifica el área de la actividad antes de generar una orden" }, { status: 400 });
+  if (!a.activo) return Response.json({ error: "La actividad está inactiva" }, { status: 400 });
 
   const titulo = `[Actividad${cat ? ` · ${cat.icono ?? ""} ${cat.nombre}` : ""}] ${a.titulo}`;
   const venc = new Date(a.proximaFecha);
@@ -38,6 +47,7 @@ export const POST: APIRoute = async (ctx) => {
       titulo,
       descripcion: a.descripcion ?? null,
       tipo: "preventivo",
+      rubro,
       prioridad: a.prioridad,
       estado: "abierta",
       actividadId: a.id,

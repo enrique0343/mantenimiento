@@ -1,0 +1,6 @@
+---
+import Layout from "@/layouts/Layout.astro";
+interface Props {title:string; description:string; groups:{label:string;links:{href:string;label:string;description:string;show?:boolean}[]}[];}
+const {title,description,groups}=Astro.props;
+---
+<Layout title={title}><div class="workspace-heading"><div><span class="area-eyebrow">Gestión compartida</span><h1>{title}</h1><p>{description}</p></div></div>{groups.filter(g=>g.links.some(l=>l.show!==false)).map(g=><section class="module-group"><h2>{g.label}</h2><div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{g.links.filter(l=>l.show!==false).map(l=><a class="module-card" href={l.href}><strong>{l.label} <span aria-hidden="true">↗</span></strong><p>{l.description}</p></a>)}</div></section>)}</Layout>

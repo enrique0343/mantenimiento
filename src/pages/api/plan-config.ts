@@ -5,6 +5,8 @@ import { getDb } from "@/lib/db";
 import { appConfig } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
+import { parseArea } from "@/lib/areas";
+
 export const prerender = false;
 
 // Solo se aceptan claves del documento del plan anual (prefijo "plan.")
@@ -20,9 +22,13 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = schema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
   const now = new Date().toISOString();
-  for (const [clave, valor] of Object.entries(parsed.data.valores)) {
+  for (const [key, valor] of Object.entries(parsed.data.valores)) {
+    const clave = area ? `plan.${area}.${key.slice(5)}` : key;
     const [existente] = await db.select().from(appConfig).where(eq(appConfig.clave, clave));
     if (existente) {
       await db.update(appConfig).set({ valor, updatedAt: now }).where(eq(appConfig.clave, clave));

@@ -6,6 +6,8 @@ import { actividades, actividadCategorias, sucursales, ubicaciones, usuarios, pr
 import { requireUser } from "@/lib/auth";
 import { puedeVerActividades, puedeAdministrarActividades } from "@/lib/actividades";
 
+import { parseArea, AREA_KEYS } from "@/lib/areas";
+import { areaDeActividad, validarContextoActividad } from "@/lib/actividades";
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
@@ -13,6 +15,9 @@ export const GET: APIRoute = async (ctx) => {
   if (!user) return response;
   if (!puedeVerActividades(user.rol)) return new Response("Sin permisos", { status: 403 });
   const id = Number(ctx.params.id);
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
 
   const [r] = await db
@@ -25,7 +30,7 @@ export const GET: APIRoute = async (ctx) => {
     .leftJoin(proveedores, eq(proveedores.id, actividades.proveedorExternoId))
     .where(eq(actividades.id, id))
     .limit(1);
-  if (!r) return Response.json({ error: "No encontrado" }, { status: 404 });
+  if (!r || (area && areaDeActividad(r.a.rubro, r.c?.rubro) !== area)) return Response.json({ error: "No encontrado en esta área" }, { status: 404 });
 
   const ots = await db
     .select()
@@ -48,6 +53,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 const updateSchema = z.object({
+  rubro: z.enum(AREA_KEYS).optional(),
   codigo: z.string().min(1).optional(),
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
@@ -75,8 +81,16 @@ export const PATCH: APIRoute = async (ctx) => {
   const body = await ctx.request.json().catch(() => null);
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
-  const [row] = await db.update(actividades).set(parsed.data).where(eq(actividades.id, id)).returning();
+  const [actual] = await db.select().from(actividades).where(eq(actividades.id, id)).limit(1);
+  if (!actual || (area && actual.rubro !== area)) return Response.json({ error: "No encontrado en esta área" }, { status: 404 });
+  if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una actividad existente se conserva para mantener su historial." }, { status: 400 });
+  const contexto = await validarContextoActividad(db, { ...actual, ...parsed.data });
+  if (contexto.error) return Response.json({ error: contexto.error }, { status: 400 });
+  const [row] = await db.update(actividades).set({ ...parsed.data, rubro: contexto.rubro!, sucursalId: contexto.sucursalId }).where(eq(actividades.id, id)).returning();
   return Response.json({ actividad: row });
 };
 
@@ -84,7 +98,12 @@ export const DELETE: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx, ["admin"]);
   if (!user) return response;
   const id = Number(ctx.params.id);
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
+  const [actual] = await db.select().from(actividades).where(eq(actividades.id, id)).limit(1);
+  if (!actual || (area && actual.rubro !== area)) return Response.json({ error: "No encontrado en esta área" }, { status: 404 });
   await db.update(actividades).set({ activo: false }).where(eq(actividades.id, id));
   return Response.json({ ok: true });
 };

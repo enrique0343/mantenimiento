@@ -4,10 +4,15 @@ import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
 import { desc, sql, eq } from "drizzle-orm";
 import { normalizarCategoria } from "@/lib/categorias-equipos";
+import { AREAS, AREA_KEYS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { CRITICIDAD_LABEL, CRITICIDAD_COLOR } from "@/lib/inventario-jci";
 export const prerender = false;
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
+const criticidadFiltro = url.searchParams.get("criticidad");
 const sucursalFiltro = url.searchParams.get("sucursal");
 const ubicacionFiltro = url.searchParams.get("ubicacion");
 const tipoFiltro = url.searchParams.get("tipo");
@@ -19,9 +24,11 @@ const rows = await db
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(area ? activoAreaCondition(area) : undefined)
   .orderBy(desc(activos.id));
 
 const filtered = rows.filter((r) =>
+  (!criticidadFiltro || r.a.criticidadOperacional === criticidadFiltro) &&
   (!sucursalFiltro || r.suc?.id === Number(sucursalFiltro)) &&
   (!ubicacionFiltro || r.ub?.id === Number(ubicacionFiltro)) &&
   (!tipoFiltro || r.a.tipo === tipoFiltro) &&
@@ -29,6 +36,7 @@ const filtered = rows.filter((r) =>
 );
 
 const user = Astro.locals.user!;
+const canCreate = user.rol === "admin" || user.rol === "tecnico";
 const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
 
 const planesCount = await db
@@ -80,6 +88,8 @@ const estadoColor: Record<string, string> = {
 
 function urlConVista(v: string) {
   const p = new URLSearchParams();
+  if (area) p.set("area", area);
+  if (criticidadFiltro) p.set("criticidad", criticidadFiltro);
   if (sucursalFiltro) p.set("sucursal", sucursalFiltro);
   if (ubicacionFiltro) p.set("ubicacion", ubicacionFiltro);
   if (tipoFiltro) p.set("tipo", tipoFiltro);
@@ -89,19 +99,24 @@ function urlConVista(v: string) {
 }
 ---
 
-<Layout title="Equipos">
+<Layout title={area ? `${AREAS[area].inventoryLabel} · ${AREAS[area].label}` : "Inventario"}>
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold">Equipos / Activos</h1>
-      <p class="text-sm text-slate-500">{rows.length} equipos · mostrando <span id="visibleCount">{filtered.length}</span></p>
+      <p class="text-sm font-semibold text-brand-700">{area ? AREAS[area].label : "Todas las áreas"}</p>
+      <h1 class="text-2xl font-bold">{area ? AREAS[area].inventoryLabel : "Inventario de activos"}</h1>
+      <p class="text-sm text-slate-500">{rows.length} registros · mostrando <span id="visibleCount">{filtered.length}</span></p>
     </div>
     <div class="flex flex-wrap gap-2">
-      {(user.rol === "admin" || user.rol === "jefe") && <a href="/activos/clasificar" class="btn-secondary text-sm">🏷 Clasificar</a>}
-      <a href="/activos/qr-print" class="btn-secondary text-sm">🔳 Imprimir QRs</a>
-      {user.rol === "admin" && <a href="/activos/importar" class="btn-secondary text-sm">📥 Importar CSV</a>}
-      {canEdit && <a href="/activos/nuevo" class="btn-primary">+ Nuevo equipo</a>}
+      {(user.rol === "admin" || user.rol === "jefe") && <a href={areaHref("/activos/clasificar", area)} class="btn-secondary text-sm">🏷 Clasificar</a>}
+      <a href={areaHref("/activos/qr-print", area)} class="btn-secondary text-sm">🔳 Imprimir QRs</a>
+      {user.rol === "admin" && <a href={areaHref("/activos/importar", area)} class="btn-secondary text-sm">📥 Importar CSV</a>}
+      {canCreate && <a href={areaHref("/activos/nuevo", area)} class="btn-primary">+ {area ? AREAS[area].createLabel : "Registrar activo"}</a>}
     </div>
   </div>
+
+  <nav class="mt-4 flex flex-wrap gap-2" aria-label="Inventario por área">
+    {AREA_KEYS.map((key) => <a href={areaHref("/activos", key)} aria-current={area === key ? "page" : undefined} class:list={["rounded-lg border px-3 py-2 text-sm", area === key ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}>{AREAS[key].label}</a>)}
+  </nav>
 
   <!-- Búsqueda en vivo -->
   <div class="mt-4">
@@ -116,6 +131,7 @@ function urlConVista(v: string) {
   <!-- Filtros -->
   <div class="card mt-3 p-3">
     <form id="filterForm" class="flex flex-wrap items-end gap-3" method="get">
+      {area && <input type="hidden" name="area" value={area} />}
       <input type="hidden" name="vista" value={vistaParam} />
       <div>
         <label class="label text-xs">Sucursal</label>
@@ -131,11 +147,10 @@ function urlConVista(v: string) {
         </select>
       </div>
       <div>
-        <label class="label text-xs">Tipo</label>
-        <select name="tipo" class="input text-sm">
-          <option value="">Todos</option>
-          <option value="general" selected={tipoFiltro === "general"}>🔧 General</option>
-          <option value="biomedico" selected={tipoFiltro === "biomedico"}>🩺 Biomédico</option>
+        <label class="label text-xs" for="criticidad">Criticidad</label>
+        <select name="criticidad" id="criticidad" class="input text-sm">
+          <option value="">Todas</option>
+          {(["alta", "media", "baja"] as const).map((key) => <option value={key} selected={criticidadFiltro === key}>{CRITICIDAD_LABEL[key]}</option>)}
         </select>
       </div>
       <div>
@@ -148,7 +163,7 @@ function urlConVista(v: string) {
         </select>
       </div>
       <button class="btn-primary text-sm">Filtrar</button>
-      {(sucursalFiltro || ubicacionFiltro || tipoFiltro || catFiltro) && <a href={`/activos?vista=${vistaParam}`} class="btn-secondary text-sm">Limpiar</a>}
+      {(sucursalFiltro || ubicacionFiltro || tipoFiltro || catFiltro || criticidadFiltro) && <a href={areaHref(`/activos?vista=${vistaParam}`, area)} class="btn-secondary text-sm">Limpiar</a>}
       <div class="ml-auto flex gap-1 text-xs">
         <a href={urlConVista("tabla")} class:list={["rounded px-3 py-1.5", vistaParam === "tabla" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📋 Tabla</a>
         <a href={urlConVista("grupos")} class:list={["rounded px-3 py-1.5", vistaParam === "grupos" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📂 Por categoría</a>
@@ -159,15 +174,15 @@ function urlConVista(v: string) {
   {vistaParam === "grupos" ? (
     <div class="mt-4 space-y-4" id="resultsContainer">
       {gruposOrdenados.length === 0 && (
-        <div class="card p-6 text-center text-slate-400">Sin equipos con esos filtros.</div>
+        <div class="card p-6 text-center text-slate-400">No hay registros en esta área con esos filtros.</div>
       )}
       {gruposOrdenados.map(([categoria, items]) => (
-        <div class="card overflow-hidden grupo-card" data-search={`${categoria}`.toLowerCase()}>
+        <div class="card overflow-x-auto grupo-card" data-search={`${categoria}`.toLowerCase()}>
           <div class="flex items-center justify-between bg-slate-50 px-4 py-2.5">
             <h3 class="font-semibold text-slate-700">
               {items[0]?.a.tipo === "biomedico" ? "🩺" : "🔧"} {categoria}
             </h3>
-            <span class="text-xs font-medium text-slate-500"><span class="grupo-count">{items.length}</span> equipos</span>
+            <span class="text-xs font-medium text-slate-500"><span class="grupo-count">{items.length}</span> registros</span>
           </div>
           <table class="w-full text-left text-sm">
             <thead class="bg-white text-xs uppercase text-slate-500">
@@ -177,6 +192,7 @@ function urlConVista(v: string) {
                 <th class="px-4 py-1.5">Marca / Modelo</th>
                 <th class="px-4 py-1.5">Sucursal</th>
                 <th class="px-4 py-1.5">Ubicación</th>
+                <th class="px-4 py-1.5">Criticidad</th>
                 <th class="px-4 py-1.5">Estado</th>
               </tr>
             </thead>
@@ -185,11 +201,12 @@ function urlConVista(v: string) {
                 <tr class="hover:bg-slate-50 row-search" data-search={`${r.a.codigo} ${r.a.nombre} ${r.a.marca ?? ""} ${r.a.modelo ?? ""} ${r.suc?.nombre ?? ""} ${r.ub?.nombre ?? ""} ${r.a.ubicacion ?? ""}`.toLowerCase()}>
                   <td class="px-4 py-1.5 font-mono text-xs">{r.a.codigo}</td>
                   <td class="px-4 py-1.5">
-                    <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
+                    <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
                   </td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+                  <td class="px-4 py-1.5"><span class={`badge ${CRITICIDAD_COLOR[r.a.criticidadOperacional ?? "media"]}`}>{CRITICIDAD_LABEL[r.a.criticidadOperacional ?? "media"]}</span></td>
                   <td class="px-4 py-1.5"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
                 </tr>
               ))}
@@ -199,43 +216,43 @@ function urlConVista(v: string) {
       ))}
     </div>
   ) : (
-    <div class="card mt-4 overflow-hidden" id="resultsContainer">
+    <div class="card mt-4 overflow-x-auto" id="resultsContainer">
       <table class="w-full text-left text-sm">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
             <th class="px-4 py-2">Código</th>
             <th class="px-4 py-2">Nombre</th>
-            <th class="px-4 py-2">Tipo / Categoría</th>
+            <th class="px-4 py-2">Área / Categoría</th>
             <th class="px-4 py-2">Marca / Modelo</th>
             <th class="px-4 py-2">Sucursal</th>
             <th class="px-4 py-2">Ubicación</th>
+            <th class="px-4 py-2">Criticidad</th>
             <th class="px-4 py-2">Estado</th>
             <th class="px-4 py-2">Cronograma</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100" id="tableBody">
           {filtered.length === 0 && (
-            <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">Sin equipos con esos filtros.</td></tr>
+            <tr><td colspan="9" class="px-4 py-6 text-center text-slate-500">No hay registros en esta área con esos filtros.</td></tr>
           )}
           {filtered.map((r) => (
             <tr class="hover:bg-slate-50 row-search" data-search={`${r.a.codigo} ${r.a.nombre} ${r.a.marca ?? ""} ${r.a.modelo ?? ""} ${r.suc?.nombre ?? ""} ${r.ub?.nombre ?? ""} ${r.a.ubicacion ?? ""}`.toLowerCase()}>
               <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
               <td class="px-4 py-2">
-                <a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
+                <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
               </td>
               <td class="px-4 py-2 text-xs">
-                {r.a.tipo === "biomedico"
-                  ? <span class="badge bg-purple-100 text-purple-700">🩺 Biomédico</span>
-                  : <span class="badge bg-slate-100 text-slate-600">🔧 General</span>}
+                <span class="badge bg-brand-50 text-brand-700">{AREAS[rubroDeActivo(r.a.rubro, r.a.tipo)].label}</span>
                 {r.a.categoria && <div class="mt-0.5 text-slate-500">{normalizarCategoria(r.a.categoria, r.a.tipo)}</div>}
               </td>
               <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+              <td class="px-4 py-2"><span class={`badge ${CRITICIDAD_COLOR[r.a.criticidadOperacional ?? "media"]}`}>{CRITICIDAD_LABEL[r.a.criticidadOperacional ?? "media"]}</span></td>
               <td class="px-4 py-2"><span class={`badge ${estadoColor[r.a.estado]}`}>{r.a.estado}</span></td>
               <td class="px-4 py-2">
                 {planesByActivo.get(r.a.id) ? (
-                  <a href={`/activos/${r.a.id}#planes`} class="badge bg-blue-100 text-blue-700 hover:bg-blue-200">{planesByActivo.get(r.a.id)} plan(es)</a>
+                  <a href={areaHref(`/activos/${r.a.id}#planes`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="badge bg-blue-100 text-blue-700 hover:bg-blue-200">{planesByActivo.get(r.a.id)} plan(es)</a>
                 ) : canEdit ? (
                   <button type="button" class="prog-btn text-xs font-medium text-brand-700 hover:underline" data-activo-id={r.a.id} data-activo-label={`${r.a.codigo} · ${r.a.nombre}`} data-activo-lugar={[r.suc?.nombre, r.ub?.nombre ?? r.a.ubicacion].filter(Boolean).join(" · ")}>+ Programar</button>
                 ) : (

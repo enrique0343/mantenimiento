@@ -45,6 +45,7 @@ interface Window {
 
 declare namespace App {
   interface Locals extends Runtime {
+    area?: import("./lib/areas").AreaKey | null;
     user?: {
       id: number;
       email: string;

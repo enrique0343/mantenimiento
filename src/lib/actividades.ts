@@ -1,4 +1,37 @@
 // Helpers del módulo Actividades recurrentes.
+import { eq } from "drizzle-orm";
+import { actividadCategorias, ubicaciones, sucursales } from "@/lib/schema";
+import type { getDb } from "@/lib/db";
+import { parseArea } from "@/lib/areas";
+
+export const areaDeActividad = (rubro?: string | null, categoriaRubro?: string | null) =>
+  parseArea(rubro) ?? parseArea(categoriaRubro);
+
+// Una rutina por ubicación conserva su propia área aunque no tenga categoría.
+export async function validarContextoActividad(
+  db: ReturnType<typeof getDb>,
+  data: { rubro?: string | null; categoriaId?: number | null; ubicacionId?: number | null; sucursalId?: number | null },
+) {
+  const rubro = parseArea(data.rubro);
+  if (!rubro) return { error: "Selecciona el área de mantenimiento." };
+  if (data.categoriaId) {
+    const [categoria] = await db.select().from(actividadCategorias).where(eq(actividadCategorias.id, data.categoriaId)).limit(1);
+    if (!categoria?.activo) return { error: "La categoría no está disponible." };
+    if (categoria.rubro && categoria.rubro !== rubro) return { error: "La categoría corresponde a otra área." };
+  }
+  let sucursalId = data.sucursalId ?? null;
+  if (data.ubicacionId) {
+    const [ubicacion] = await db.select().from(ubicaciones).where(eq(ubicaciones.id, data.ubicacionId)).limit(1);
+    if (!ubicacion?.activa) return { error: "La ubicación no está disponible." };
+    if (sucursalId && ubicacion.sucursalId !== sucursalId) return { error: "La ubicación no pertenece a la sucursal seleccionada." };
+    sucursalId = ubicacion.sucursalId;
+  }
+  if (sucursalId) {
+    const [sucursal] = await db.select().from(sucursales).where(eq(sucursales.id, sucursalId)).limit(1);
+    if (!sucursal?.activa) return { error: "La sucursal no está disponible." };
+  }
+  return { rubro, sucursalId };
+}
 
 export function puedeVerActividades(rol: string): boolean {
   return rol !== "motorista" && rol !== "proveedor";

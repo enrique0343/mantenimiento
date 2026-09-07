@@ -15,9 +15,12 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+
 export const prerender = false;
 
 const updateSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
@@ -56,6 +59,9 @@ export const GET: APIRoute = async (ctx) => {
     .limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const contextError = validarContextoArea(ctx.request, row.orden.rubro);
+  if (contextError) return contextError;
+
   const coms = await db
     .select({ c: comentarios, u: usuarios })
     .from(comentarios)
@@ -90,6 +96,14 @@ export const PATCH: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
+
+  const contextError = validarContextoArea(ctx.request, actual.rubro);
+  if (contextError) return contextError;
+  if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una orden no puede cambiarse" }, { status: 400 });
+  if (parsed.data.activoId !== undefined) {
+    const areaResult = await validarAreaTrabajo(db, { ...actual, ...parsed.data });
+    if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  }
 
   const { reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras, ...rest } = parsed.data;
   // horasTrabajadas se calcula SIEMPRE en el servidor (al cerrar la OT).
@@ -487,6 +501,9 @@ export const DELETE: APIRoute = async (ctx) => {
   const env = (ctx.locals as any).runtime?.env;
   const [ot] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!ot) return Response.json({ error: "No encontrada" }, { status: 404 });
+
+  const contextError = validarContextoArea(ctx.request, ot.rubro);
+  if (contextError) return contextError;
 
   // Borrar adjuntos de R2
   const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));

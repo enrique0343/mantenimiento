@@ -4,7 +4,7 @@
 export type CriticidadOperacional = "alta" | "media" | "baja";
 
 export const CRITICIDAD_LABEL: Record<CriticidadOperacional, string> = {
-  alta: "Crítica",
+  alta: "Alta",
   media: "Media",
   baja: "Baja",
 };
@@ -17,9 +17,9 @@ export const CRITICIDAD_COLOR: Record<CriticidadOperacional, string> = {
 
 // Descripción operativa (qué implica cada nivel para JCI / continuidad de servicio)
 export const CRITICIDAD_DESC: Record<CriticidadOperacional, string> = {
-  alta: "No tolera estar fuera de servicio: soporte vital, sin respaldo o de uso continuo.",
-  media: "Tolera downtime corto; existe alternativa o el impacto es acotado.",
-  baja: "Puede esperar; no afecta la continuidad del servicio.",
+  alta: "Su falla puede afectar la seguridad o interrumpir un servicio esencial.",
+  media: "Su falla limita parte de la operación; existe una alternativa temporal.",
+  baja: "Su falla tiene un impacto localizado y permite programar la intervención.",
 };
 
 export type ResultadoCalibracion = "conforme" | "conforme_con_ajuste" | "no_conforme";

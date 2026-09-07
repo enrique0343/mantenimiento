@@ -7,6 +7,7 @@ import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket 
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { proyectos } from "@/lib/schema";
+import { parseArea, areaHref, AREAS } from "@/lib/areas";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -26,6 +27,10 @@ const [r] = await db
   .limit(1);
 if (!r) return Astro.redirect("/tickets");
 const t = r.t;
+const area = parseArea(t.rubro);
+const rawArea = Astro.url.searchParams.get("area");
+if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
+if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 
 const coms = await db
   .select({ c: ticketComentarios, u: usuarios })
@@ -59,7 +64,7 @@ if (t.proyectoId) {
 
 <Layout title={`Ticket #${t.id}`}>
   <div class="flex items-center justify-between">
-    <a href="/tickets" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    <a href={areaHref("/tickets", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
     <div class="flex gap-2">
       {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
         <button id="cierreAdminTicketBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
@@ -89,14 +94,14 @@ if (t.proyectoId) {
   )}
 
   {esAdmin && (
-    <script define:vars={{ ticketId: t.id }}>
+    <script define:vars={{ ticketId: t.id, area }}>
       document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
         const ok = await (window.confirmAction
           ? window.confirmAction("Eliminar ticket", "¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")
           : confirm("¿Eliminar este ticket? Esta acción NO se puede deshacer."));
         if (!ok) return;
         const res = await fetch(`/api/tickets/${ticketId}`, { method: "DELETE" });
-        if (res.ok) { location.href = "/tickets"; }
+        if (res.ok) { location.href = `/tickets?area=${encodeURIComponent(area || "")}`; }
         else { const j = await res.json().catch(() => ({})); window.showToast?.("Error: " + (j.error ?? "desconocido"), "error"); }
       });
 
@@ -159,10 +164,10 @@ if (t.proyectoId) {
       <p class="mt-1 font-mono text-xs text-slate-500">#{t.id} · Token <span class="rounded bg-slate-100 px-1.5 py-0.5">{t.trackingToken}</span></p>
     </div>
     {t.otId && (
-      <a href={`/ordenes/${t.otId}`} class="btn-secondary">Ver OT #{t.otId} →</a>
+      <a href={areaHref(`/ordenes/${t.otId}`, area)} class="btn-secondary">Ver OT #{t.otId} →</a>
     )}
     {proyectoVinc && (
-      <a href={`/proyectos/${proyectoVinc.id}`} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
+      <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
 
@@ -173,7 +178,7 @@ if (t.proyectoId) {
       <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div><div class="text-xs uppercase text-slate-500">Solicitante</div><div>{t.solicitanteNombre}</div><div class="text-xs text-slate-500">{t.solicitanteEmail}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div>{t.solicitanteTelefono ?? "—"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Tipo</div><div>{t.tipoMantenimiento === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Área</div><div>{area ? AREAS[area].label : "Sin clasificar"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Sucursal</div><div>{r.s?.nombre ?? "—"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Ubicación</div><div>{r.ub?.nombre ?? "—"}{t.ubicacion && <span class="block text-xs text-slate-500">{t.ubicacion}</span>}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Equipo</div><div>{r.act ? `${r.act.codigo} - ${r.act.nombre}` : "—"}</div></div>
@@ -252,12 +257,12 @@ if (t.proyectoId) {
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
                 <p class="font-semibold text-sm">¿Es un trabajo grande?</p>
                 <p class="mt-1">Si el trabajo requiere evaluación, presupuesto o múltiples OTs (remodelaciones, instalaciones, traslados), conviértelo en proyecto en lugar de generar una OT directa.</p>
-                <a href={`/proyectos/nuevo?ticketId=${t.id}`} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
+                <a href={areaHref(`/proyectos/nuevo?ticketId=${t.id}`, area)} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
               </div>
             )}
             {proyectoVinc && (
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
-                📂 Este ticket está vinculado al proyecto <a href={`/proyectos/${proyectoVinc.id}`} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
+                📂 Este ticket está vinculado al proyecto <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
               </div>
             )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
@@ -272,7 +277,7 @@ if (t.proyectoId) {
             )}
             {t.otId && (
               <div class="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800">
-                ✅ Este ticket ya tiene <a href={`/ordenes/${t.otId}`} class="font-bold underline">OT #{t.otId}</a> asociada.
+                ✅ Este ticket ya tiene <a href={areaHref(`/ordenes/${t.otId}`, area)} class="font-bold underline">OT #{t.otId}</a> asociada.
               </div>
             )}
           </div>
@@ -305,7 +310,7 @@ if (t.proyectoId) {
     </div>
   </div>
 
-  <script define:vars={{ id }}>
+  <script define:vars={{ id, area }}>
     document.getElementById("saveBtn")?.addEventListener("click", async () => {
       const msg = document.getElementById("saveMsg");
       msg.classList.add("hidden");
@@ -325,7 +330,7 @@ if (t.proyectoId) {
       const j = await res.json().catch(() => ({}));
       if (j.otCreada) {
         // Si se creó OT automáticamente, lleva al usuario directo a esa OT
-        location.href = `/ordenes/${j.otCreada}`;
+        location.href = `/ordenes/${j.otCreada}?area=${encodeURIComponent(area || "")}`;
       } else {
         location.reload();
       }

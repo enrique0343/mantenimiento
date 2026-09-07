@@ -10,6 +10,7 @@ import {
   type EstadoOT,
 } from "@/lib/ordenes";
 import { fmtCantidad } from "@/lib/inventario";
+import { parseArea, areaHref, AREAS, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -31,6 +32,10 @@ const [row] = await db
 if (!row) return Astro.redirect("/ordenes");
 
 const o = row.orden;
+const area = parseArea(o.rubro);
+const rawArea = Astro.url.searchParams.get("area");
+if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
+if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
 
@@ -102,6 +107,7 @@ const activosLista = puedeAsignarActivo
   ? await db
       .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
       .from(activos)
+      .where(area ? activoAreaCondition(area) : eq(activos.id, -1))
       .orderBy(asc(activos.codigo))
   : [];
 const ubicacionesLista = puedeAsignarActivo
@@ -157,12 +163,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 ---
 
 <Layout title={`Orden #${o.id}`}>
-  <a href="/ordenes" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
   <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
       <div class="flex flex-wrap items-center gap-2">
         <h1 class="text-2xl font-bold">{o.titulo}</h1>
+        {area && <span class="badge bg-teal-100 text-teal-800">{AREAS[area].label}</span>}
         <span class={`badge ${TIPO_COLOR[o.tipo]} capitalize`}>{o.tipo}</span>
         <span class={`badge ${PRIO_COLOR[o.prioridad]} capitalize`}>{o.prioridad}</span>
         <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
@@ -404,7 +411,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <div class="col-span-2">
               <div class="text-xs uppercase text-slate-500">Equipo</div>
               <div id="activoLabel" class="mt-0.5">
-                <a class="font-medium text-brand-700 hover:underline" href={`/activos/${row.activo.id}`}>
+                <a class="font-medium text-brand-700 hover:underline" href={areaHref(`/activos/${row.activo.id}`, area)}>
                   {row.activo.codigo} · {row.activo.nombre}
                 </a>
                 <span class="ml-2 text-xs text-slate-500">
@@ -1108,6 +1115,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
   <script define:vars={{
     id,
+    area,
     checklistJson: o.checklistEjecucion ?? null,
     itemsRepJson,
     ubicacionesData: ubicacionesLista,
@@ -1215,7 +1223,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!confirm("¿Eliminar esta OT permanentemente?\n\nEsta acción borra la OT, sus comentarios y adjuntos. Si vino de un plan o actividad recurrente, el cron podrá generar otra en el siguiente ciclo. No se puede deshacer.")) return;
       const r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
       if (r.ok) {
-        location.href = "/ordenes";
+        location.href = `/ordenes?area=${encodeURIComponent(area || "")}`;
       } else {
         alert("Error al eliminar la OT");
       }

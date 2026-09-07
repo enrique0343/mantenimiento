@@ -1,5 +1,7 @@
 ---
 import "@/styles/globals.css";
+import AppIcon from "@/components/AppIcon.astro";
+import { AREA_KEYS, AREAS, parseArea, areaHref } from "@/lib/areas";
 
 interface Props {
   title?: string;
@@ -11,96 +13,16 @@ const path = Astro.url.pathname;
 
 const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
-const isOperativo = user?.rol === "admin" || user?.rol === "jefe" || user?.rol === "tecnico";
-const isMotorista = user?.rol === "motorista";
-const verFlota = isAdminOrJefe || isMotorista;
-const esProveedor = user?.rol === "proveedor";
-
-interface Link { href: string; label: string; icon: string; show?: boolean }
-interface Separator { sep: true }
-type NavItem = Link | Separator;
-
-const motoLinks: Link[] = [
-  { href: "/mi-panel", label: "Mi panel",  icon: "🏠" },
-  { href: "/flota",    label: "Flota",     icon: "🚗" },
-  { href: "/tickets",  label: "Reportes",  icon: "🎫" },
-  { href: "/manual",   label: "Manual",    icon: "📖" },
-];
-
-const homeHref  = user?.rol === "tecnico" ? "/mi-panel" : "/";
-const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
-
-// Orden del menú agrupado:
-//  1. Operación diaria  ── lo que se mira/usa cada día
-//  2. Planificación  ── cronogramas, gantt y el plan anual
-//  3. Activos y mantenimiento  ── datos maestros y rutinas
-//  4. Compras e inventario  ── ciclo de adquisición y stock
-//  5. Análisis y seguimiento  ── métricas y presupuesto
-//  6. Gobernanza y administración  ── procesos JCI, usuarios, config
-//  7. Ayuda  ── manual de usuario
-// Ocultos del menú (accesibles por URL): /planificador, /raci, /requisiciones.
-const allLinks: NavItem[] = [
-  // 1. Operación diaria
-  { href: homeHref,         label: homeLabel,       icon: "🏠" },
-  { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
-  { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
-  { href: "/taller",        label: "Taller (Lean)", icon: "🗂", show: isOperativo },
-  { sep: true },
-  // 2. Planificación
-  { href: "/cronograma",    label: "Cronograma",    icon: "📅", show: !isMotorista && !esProveedor },
-  { href: "/gantt",         label: "Gantt 12 meses", icon: "📊", show: !isMotorista && !esProveedor },
-  { href: "/plan-mantenimiento", label: "Plan anual", icon: "📄", show: isOperativo || user?.rol === "visualizador" },
-  { href: "/calibraciones", label: "Calibraciones", icon: "🩺", show: isOperativo },
-  { href: "/proyectos",     label: "Proyectos",     icon: "📂", show: isOperativo },
-  { sep: true },
-  // 3. Activos y mantenimiento
-  { href: "/activos",       label: "Equipos",       icon: "🛠",  show: !isMotorista },
-  { href: "/actividades",   label: "Actividades",   icon: "📌", show: isOperativo },
-  { href: "/seguridad",     label: "Extintores",    icon: "🧯", show: isOperativo },
-  { href: "/electrico",     label: "Eléctrico",     icon: "⚡", show: isOperativo || user?.rol === "visualizador" },
-  { href: "/alertas",       label: "Alertas equipo", icon: "📢", show: isOperativo || user?.rol === "visualizador" },
-  { href: "/flota",         label: "Flota",         icon: "🚗", show: verFlota },
-  { sep: true },
-  // 4. Compras e inventario
-  { href: "/inventario",         label: "Inventario",    icon: "📦", show: !isMotorista },
-  { href: "/solicitudes-compra", label: "Compras",       icon: "🛍", show: isOperativo },
-  { href: "/proveedores",        label: "Proveedores",   icon: "🏢", show: isAdminOrJefe },
-  { href: "/contratos",          label: "Contratos",     icon: "📜", show: isAdminOrJefe },
-  { sep: true },
-  // 5. Análisis y seguimiento
-  { href: "/kpis",          label: "KPIs",          icon: "📊", show: isAdminOrJefe },
-  { href: "/cumplimiento",  label: "Cumplimiento",  icon: "✅", show: isAdminOrJefe },
-  { href: "/presupuesto",   label: "Presupuesto",   icon: "💰", show: isAdminOrJefe },
-  { href: "/satisfaccion",  label: "Satisfacción",  icon: "⭐", show: isAdminOrJefe },
-  { href: "/reportes",      label: "Reportes",      icon: "📑", show: isAdminOrJefe },
-  { sep: true },
-  // 6. Gobernanza y administración
-  { href: "/procedimientos", label: "Procedimientos", icon: "📋", show: isAdminOrJefe },
-  { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
-  { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
-  { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
-  { sep: true },
-  // 7. Ayuda
-  { href: "/manual",        label: "Manual",        icon: "📖" },
-];
-
-// Filtra por rol y colapsa separadores huérfanos (consecutivos al inicio/fin o
-// repetidos cuando un grupo entero queda vacío para ese rol).
-const filteredItems: NavItem[] = [];
-for (const item of allLinks) {
-  if ("sep" in item) {
-    const last = filteredItems[filteredItems.length - 1];
-    if (last && !("sep" in last)) filteredItems.push(item);
-  } else if (item.show === undefined || item.show) {
-    filteredItems.push(item);
-  }
-}
-while (filteredItems.length && "sep" in filteredItems[filteredItems.length - 1]) {
-  filteredItems.pop();
-}
-
-const navLinks: NavItem[] = isMotorista ? motoLinks : filteredItems;
-
+const isOperativo = isAdminOrJefe || user?.rol === "tecnico";
+const area = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
+const info = area ? AREAS[area] : null;
+const operationalTabs = area ? [
+  {href: `/areas/${area}`, label: "Resumen", show: true},
+  {href: areaHref("/tickets", area), label: "Solicitudes", show: true},
+  {href: areaHref("/ordenes", area), label: "Órdenes", show: !["motorista","proveedor"].includes(user?.rol ?? "")},
+  {href: areaHref("/activos", area), label: info!.inventoryLabel, show: user?.rol !== "motorista"},
+  {href: areaHref("/planes", area), label: "Planes", show: isOperativo || user?.rol === "visualizador"},
+].filter(x=>x.show) : [];
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",
   jefe:         "Jefe",
@@ -112,7 +34,7 @@ const ROL_LABEL: Record<string, string> = {
 };
 
 const isActive = (href: string) =>
-  path === href || (href !== "/" && href.length > 1 && path.startsWith(href));
+  path === href.split("?")[0] || (href.split("?")[0] !== "/" && path.startsWith(href.split("?")[0] + "/"));
 ---
 
 <!doctype html>
@@ -135,11 +57,11 @@ const isActive = (href: string) =>
     {!hideNav && user ? (
       <div class="flex min-h-screen">
         <!-- Sidebar -->
-        <aside class="sidebar flex flex-col bg-slate-900 text-white" id="sidebar">
+        <aside class="sidebar flex flex-col text-white" id="sidebar">
           <!-- Logo -->
           <div class="flex items-center gap-3 px-4 py-4 border-b border-slate-700/60">
             <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-base shadow-md">
-              ⚙️
+              <AppIcon name="equipment" />
             </div>
             <a href="/" class="leading-tight min-w-0">
               <div class="font-bold text-white text-sm">Avante</div>
@@ -147,24 +69,16 @@ const isActive = (href: string) =>
             </a>
           </div>
 
-          <!-- Nav links -->
-          <nav class="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-            {navLinks.map((l) => "sep" in l ? (
-              <div class="my-2 border-t border-slate-700/40"></div>
-            ) : (
-              <a
-                href={l.href}
-                class:list={[
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
-                  isActive(l.href)
-                    ? "bg-brand-600 text-white shadow-sm"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                ]}
-              >
-                <span class="text-base w-5 text-center shrink-0">{l.icon}</span>
-                <span class="truncate">{l.label}</span>
-              </a>
-            ))}
+          <nav class="app-nav" aria-label="Navegación principal">
+            <a href="/" class:list={["app-nav-link", {active:path === "/"}]} aria-current={path === "/" ? "page" : undefined}><AppIcon name="home" /><span>Panorama general</span></a>
+            <div class="app-nav-label">Áreas de mantenimiento</div>
+            {AREA_KEYS.map(key => <a href={`/areas/${key}`} class:list={["app-nav-link", {active:area === key}]} aria-current={area === key ? "page" : undefined}><AppIcon name={AREAS[key].icon}/><span>{AREAS[key].label}</span></a>)}
+            <div class="app-nav-label">Gestión compartida</div>
+            <a href="/recursos" class:list={["app-nav-link", {active:path === "/recursos"}]}><AppIcon name="box"/><span>Recursos</span></a>
+            {isAdminOrJefe && <a href="/indicadores" class:list={["app-nav-link", {active:path === "/indicadores"}]}><AppIcon name="report"/><span>Indicadores y reportes</span></a>}
+            {isAdminOrJefe && <a href="/administracion" class:list={["app-nav-link", {active:path === "/administracion"}]}><AppIcon name="settings"/><span>Administración</span></a>}
+            {user.rol !== "motorista" && <a href="/mi-panel" class="app-nav-link"><AppIcon name="equipment"/><span>Mi trabajo</span></a>}
+            <a href="/manual" class="app-nav-link"><AppIcon name="book"/><span>Ayuda</span></a>
           </nav>
 
           <!-- Usuario + Salir -->
@@ -190,7 +104,7 @@ const isActive = (href: string) =>
         <div class="flex-1 flex flex-col min-w-0">
           <!-- Topbar -->
           <header class="flex items-center justify-between gap-3 bg-white border-b border-slate-200 px-4 py-2.5 shadow-sm">
-            <button id="menuToggle" class="md:hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 transition-colors text-xl">☰</button>
+            <button id="menuToggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar" class="md:hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 transition-colors text-xl">☰</button>
             <button id="searchOpen" class="flex flex-1 items-center gap-2 max-w-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-sm text-slate-400 hover:bg-white hover:border-slate-300 hover:text-slate-500 transition-all">
               <span class="text-slate-400">🔍</span>
               <span class="truncate">Buscar OT, equipo, ticket…</span>
@@ -221,7 +135,8 @@ const isActive = (href: string) =>
             </div>
           </div>
 
-          <main class="flex-1 p-4 sm:p-6">
+          <main class="app-content flex-1 p-4 sm:p-6">
+            {info && <div class="area-context"><div class="area-context-heading"><span class="area-symbol"><AppIcon name={info.icon} size={23}/></span><div><span class="area-eyebrow">Área de mantenimiento</span><strong>{info.label}</strong></div></div><nav class="area-tabs" aria-label={`Secciones de ${info.label}`}>{operationalTabs.map(tab=><a href={tab.href} class:list={[{active:isActive(tab.href)}]} aria-current={isActive(tab.href)?"page":undefined}>{tab.label}</a>)}</nav></div>}
             <slot />
           </main>
         </div>
@@ -265,6 +180,20 @@ const isActive = (href: string) =>
 
     <!-- Toast container -->
     <div id="toastContainer" class="fixed bottom-5 right-5 z-[200] flex flex-col gap-2 pointer-events-none max-w-xs" aria-live="polite"></div>
+
+
+    {area && <script is:inline define:vars={{currentArea:area}}>
+      (() => {
+        const paths = ["/activos", "/tickets", "/ordenes", "/planes", "/actividades", "/cronograma", "/planificador", "/gantt", "/plan-mantenimiento"];
+        document.querySelectorAll("a[href]").forEach(link => {
+          const url = new URL(link.href, location.origin);
+          if (url.origin === location.origin && !url.searchParams.has("area") && paths.some(p=>url.pathname === p || url.pathname.startsWith(p+"/"))) {
+            url.searchParams.set("area", currentArea);
+            link.href = url.pathname + url.search + url.hash;
+          }
+        });
+      })();
+    </script>}
 
     <script is:inline>
       // ─── Toast system ─────────────────────────────────────────────────────────
@@ -397,7 +326,7 @@ const isActive = (href: string) =>
 
         function buscar(q) {
           results.innerHTML = '<p class="p-4 text-center text-slate-400">Buscando…</p>';
-          fetch("/api/search?q=" + encodeURIComponent(q))
+          fetch("/api/search?q=" + encodeURIComponent(q) + (searchArea ? "&area=" + encodeURIComponent(searchArea) : ""))
             .then(function (r) { return r.json(); })
             .then(function (j) { renderResultados(j.resultados); })
             .catch(function () { results.innerHTML = '<p class="p-4 text-center text-red-500">Error al buscar</p>'; });
@@ -547,16 +476,17 @@ const isActive = (href: string) =>
         toggle.addEventListener("click", function (e) {
           e.stopPropagation();
           sidebar.classList.toggle("open");
+          toggle.setAttribute("aria-expanded", String(sidebar.classList.contains("open")));
         });
         // Tap fuera cierra
         document.addEventListener("click", function (e) {
           if (sidebar.classList.contains("open") && !sidebar.contains(e.target) && e.target !== toggle) {
-            sidebar.classList.remove("open");
+            sidebar.classList.remove("open"); toggle.setAttribute("aria-expanded", "false");
           }
         });
         // Tap en cualquier link del sidebar lo cierra
         sidebar.querySelectorAll("a").forEach(function (a) {
-          a.addEventListener("click", function () { sidebar.classList.remove("open"); });
+          a.addEventListener("click", function () { sidebar.classList.remove("open"); toggle.setAttribute("aria-expanded", "false"); });
         });
       }
     </script>

@@ -6,6 +6,8 @@ import { eq, asc, and } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
+import { parseArea, areaHref } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -18,7 +20,7 @@ const esTecnico = user.rol === "tecnico";
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
-const dominioParam = url.searchParams.get("dominio");
+const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 
 const sucursalesList = await db
@@ -59,7 +61,7 @@ const actRowsAll = await db
 const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
 const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
-const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
 // Unificar en un solo timeline
@@ -86,7 +88,7 @@ const items: Item[] = [
     titulo: r.p.titulo,
     fecha: r.p.proximaFecha,
     frecuencia: r.p.frecuencia,
-    link: `/activos/${r.a?.id}`,
+    link: areaHref(`/activos/${r.a?.id}`, dominio ?? r.a?.rubro),
     contexto: r.a ? `${r.a.codigo} · ${r.a.nombre}` : "",
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a?.ubicacion ?? null,
@@ -101,7 +103,7 @@ const items: Item[] = [
     titulo: r.a.titulo,
     fecha: r.a.proximaFecha,
     frecuencia: r.a.frecuencia,
-    link: `/actividades/${r.a.id}`,
+    link: areaHref(`/actividades/${r.a.id}`, dominio ?? r.a.rubro),
     contexto: `${r.a.codigo}${r.c ? ` · ${r.c.nombre}` : ""}`,
     sucursal: r.s?.nombre ?? null,
     ubicacion: r.ub?.nombre ?? r.a.ubicacionDetalle ?? null,
@@ -223,17 +225,18 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
-      <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por categoría">
-        <option value="">🏷 Todas las categorías</option>
+      <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por área">
+        <option value="">🏷 Todas las áreas</option>
         {RUBRO_KEYS.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
-      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📊 Gantt</a>
-      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan</a>
-      <a href="/actividades" class="btn-secondary">📌 Actividades</a>
+      <a href={areaHref("/planificador", dominio)} class="btn-secondary">Planificador mensual</a>
+      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📊 Gantt</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan</a>
+      <a href={areaHref("/actividades", dominio)} class="btn-secondary">📌 Actividades</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
-        <a href="/planes" class="btn-secondary">🛠 Gestionar planes</a>
+        <a href={areaHref("/planes", dominio)} class="btn-secondary">🛠 Gestionar planes</a>
       )}
     </div>
   </div>
@@ -241,6 +244,8 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
   <script>
     function navCrono(param: string, value: string) {
       const p = new URLSearchParams(location.search);
+      if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
+      p.delete("dominio");
       if (value) p.set(param, value); else p.delete(param);
       const s = p.toString();
       location.href = `/cronograma${s ? `?${s}` : ""}`;
@@ -249,7 +254,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       navCrono("sede", (e.currentTarget as HTMLSelectElement).value);
     });
     document.getElementById("dominioFiltro")?.addEventListener("change", (e) => {
-      navCrono("dominio", (e.currentTarget as HTMLSelectElement).value);
+      navCrono("area", (e.currentTarget as HTMLSelectElement).value);
     });
   </script>
 
@@ -376,6 +381,8 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
 
   {puedeGenerar && (
     <script>
+      import { areaHref, parseArea } from "@/lib/areas";
+      const area = parseArea(new URLSearchParams(location.search).get("area"));
       document.querySelectorAll<HTMLButtonElement>(".generar-ot-btn").forEach((btn) => {
         btn.addEventListener("click", async (e) => {
           e.preventDefault();
@@ -389,11 +396,11 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
           btn.disabled = true;
           btn.textContent = "Generando...";
           const url = tipo === "plan" ? `/api/planes/${id}/generar-ot` : `/api/actividades/${id}/generar-ot`;
-          const res = await fetch(url, { method: "POST" });
+          const res = await fetch(areaHref(url, area), { method: "POST" });
           const j = await res.json().catch(() => ({}));
           if (res.ok && j.orden) {
             // Redirige a la nueva OT
-            location.href = `/ordenes/${j.orden.id}`;
+            location.href = areaHref(`/ordenes/${j.orden.id}`, area);
           } else {
             window.showToast?.("✗ " + (j.error ?? "Error al generar OT"), "error");
             btn.disabled = false;
@@ -413,7 +420,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
         const id = el.dataset.id;
         el.disabled = true;
         const url = tipo === "plan" ? `/api/planes/${id}` : `/api/actividades/${id}`;
-        const res = await fetch(url, {
+        const res = await fetch(areaHref(url, area), {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),

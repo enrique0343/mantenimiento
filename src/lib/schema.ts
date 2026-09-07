@@ -106,6 +106,7 @@ export const activos = sqliteTable("activos", {
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
   // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
   rubro: text("rubro"),
+  datosTecnicos: text("datos_tecnicos"),
   // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
   subcategoria: text("subcategoria"),
   // Inspección de aceptación / entrada en servicio (JCI FMS.07)
@@ -138,6 +139,7 @@ export const activos = sqliteTable("activos", {
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
   tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo"] }).notNull().default("correctivo"),
@@ -330,6 +332,7 @@ export const requisicionItems = sqliteTable("requisicion_items", {
 
 // ─── Helpdesk ────────────────────────────────────────────────────────────────
 export const tickets = sqliteTable("tickets", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   trackingToken: text("tracking_token").notNull().unique(),
   solicitanteNombre: text("solicitante_nombre").notNull(),
@@ -628,6 +631,7 @@ export const actividadCategorias = sqliteTable("actividad_categorias", {
 });
 
 export const actividades = sqliteTable("actividades", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   codigo: text("codigo").notNull().unique(),
   titulo: text("titulo").notNull(),

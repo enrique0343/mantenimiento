@@ -3,19 +3,24 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
 import { eq, and, inArray, asc } from "drizzle-orm";
-import { CATEGORIAS_GENERAL, CATEGORIAS_BIOMEDICO } from "@/lib/categorias-equipos";
+import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
+import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
+import { AREAS, areaHref, parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
-if (!Number.isFinite(id)) return Astro.redirect("/activos");
+if (!Number.isFinite(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(`/activos/${id}`);
 
 const db = getDb(Astro);
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
-if (!a) return Astro.redirect("/activos");
+if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const area = rubroDeActivo(a.rubro, a.tipo);
+if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
 
 // Determina sucursal actual a partir de la ubicación (si la tiene)
 let sucursalActualId: number | null = null;
@@ -37,24 +42,20 @@ const ubJson = JSON.stringify(ubRows);
 ---
 
 <Layout title={`Editar · ${a.nombre}`}>
-  <a href={`/activos/${id}`} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
-  <h1 class="mt-2 text-2xl font-bold">Editar equipo</h1>
+  <a href={areaHref(`/activos/${id}`, area)} class="text-sm text-slate-500 hover:underline">&larr; Volver al equipo</a>
+  <h1 class="mt-2 text-2xl font-bold">Editar {area === "infraestructura" ? "instalación" : area === "aires" ? "unidad" : "equipo"}</h1>
+  <p class="mt-1 text-sm font-medium text-brand-700">{AREAS[area].label}</p>
   <p class="text-sm text-slate-500 font-mono">{a.codigo}</p>
 
   <form id="form" class="card mt-4 space-y-5 p-5">
+    <ActivoAreaFields area={area} datosTecnicos={a.datosTecnicos} />
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div>
-        <label class="label">Tipo *</label>
-        <select class="input" id="tipo">
-          <option value="general" selected={a.tipo === "general"}>General / Industrial</option>
-          <option value="biomedico" selected={a.tipo === "biomedico"}>Biomédico</option>
-        </select>
-      </div>
+      <input type="hidden" id="tipo" value={area === "biomedico" ? "biomedico" : "general"} />
       <div>
         <label class="label">Categoría</label>
         <input class="input" id="categoria" list="categoriasList" value={a.categoria ?? ""} />
         <datalist id="categoriasList"></datalist>
-        <p class="mt-1 text-xs text-slate-500">Las sugerencias cambian según el tipo.</p>
+        <p class="mt-1 text-xs text-slate-500">Las sugerencias corresponden al área seleccionada.</p>
       </div>
       <div>
         <label class="label">Código *</label>
@@ -161,8 +162,8 @@ const ubJson = JSON.stringify(ubRows);
     </div>
 
     <div class="border-t border-slate-200 pt-5">
-      <h2 class="mb-3 font-semibold text-brand-700">🏷 Datos patrimoniales y criticidad (JCI)</h2>
-      <p class="text-xs text-slate-500 mb-3">Trazabilidad del ciclo de vida y prioridad operativa del equipo. La criticidad indica cuánto tolera estar fuera de servicio.</p>
+      <h2 class="mb-3 font-semibold text-brand-700">🏷 Datos patrimoniales y criticidad</h2>
+      <p class="text-xs text-slate-500 mb-3">La criticidad evalúa el impacto de una falla del equipo o instalación. Es independiente de la urgencia de una solicitud.</p>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label class="label">Fecha de adquisición</label>
@@ -185,7 +186,7 @@ const ubJson = JSON.stringify(ubRows);
         </div>
         <div>
           <label class="label">Criticidad operacional *</label>
-          <select class="input" id="criticidadOperacional">
+          <select class="input" id="criticidadOperacional" required>
             {(["alta", "media", "baja"] as const).map((c) => (
               <option value={c} selected={(a.criticidadOperacional ?? "media") === c}>{CRITICIDAD_LABEL[c]}</option>
             ))}
@@ -230,11 +231,11 @@ const ubJson = JSON.stringify(ubRows);
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit">Guardar cambios</button>
-      <a class="btn-secondary" href={`/activos/${id}`}>Cancelar</a>
+      <a class="btn-secondary" href={areaHref(`/activos/${id}`, area)}>Cancelar</a>
     </div>
   </form>
 
-  <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, catGeneral: CATEGORIAS_GENERAL, catBio: CATEGORIAS_BIOMEDICO, critDescJson: CRITICIDAD_DESC }}>
+  <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC }}>
     const allUbs = JSON.parse(ubJson);
 
     // Descripción de criticidad operacional
@@ -244,20 +245,21 @@ const ubJson = JSON.stringify(ubRows);
       if (critDescEl) critDescEl.textContent = critDescJson[critSel.value] ?? "";
     });
 
-    // Tipo biomédico toggle
+    const areaSel = document.getElementById("rubro");
     const tipoSel = document.getElementById("tipo");
-    const bioFields = document.getElementById("bioFields");
-    const toggleBio = () => bioFields?.classList.toggle("hidden", tipoSel?.value !== "biomedico");
-
-    // Categorías dinámicas
-    const catList = document.getElementById("categoriasList");
-    const refreshCategorias = () => {
-      const opciones = tipoSel?.value === "biomedico" ? catBio : catGeneral;
-      catList.innerHTML = opciones.map((c) => `<option value="${c}"></option>`).join("");
-    };
-    refreshCategorias();
-    tipoSel?.addEventListener("change", refreshCategorias);
-    tipoSel?.addEventListener("change", toggleBio);
+    function actualizarArea() {
+      const key = areaSel.value;
+      tipoSel.value = key === "biomedico" ? "biomedico" : "general";
+      document.getElementById("bioFields").classList.toggle("hidden", key !== "biomedico");
+      document.getElementById("aireFields").classList.toggle("hidden", key !== "aires");
+      document.getElementById("infraFields").classList.toggle("hidden", key !== "infraestructura");
+      document.getElementById("servicioFields").classList.toggle("hidden", !["equipo_general", "biomedico"].includes(key));
+      for (const el of document.querySelectorAll("#aireFields input, #infraFields input, #servicioFields input")) el.disabled = el.closest(".hidden") !== null;
+      const list = document.getElementById("categoriasList");
+      list.replaceChildren(...(categoriasPorArea[key] ?? []).map((c) => { const option = document.createElement("option"); option.value = c; return option; }));
+    }
+    areaSel.addEventListener("change", actualizarArea);
+    actualizarArea();
 
     // Sucursal → ubicación
     const sucEl = document.getElementById("sucursalSel");
@@ -302,6 +304,10 @@ const ubJson = JSON.stringify(ubRows);
         ubicacion: v("ubicacion") || null,
         estado: sv("estado"),
         tipo: sv("tipo"),
+        rubro: sv("rubro"),
+        datosTecnicos: sv("rubro") === "aires" ? { tipoUnidad: v("tipoUnidad") || null, capacidadBtuH: v("capacidadBtuH") ? Number(v("capacidadBtuH")) : null, refrigerante: v("refrigerante") || null }
+          : sv("rubro") === "infraestructura" ? { tipoInstalacion: v("tipoInstalacion") || null, sector: v("sector") || null }
+          : { servicio: v("servicio") || null },
         categoria: v("categoria") || null,
         numeroActivo: v("numeroActivo") || null,
         marca: v("marca") || null,
@@ -344,7 +350,7 @@ const ubJson = JSON.stringify(ubRows);
         err.classList.remove("hidden");
         return;
       }
-      location.href = `/activos/${id}`;
+      location.href = `/activos/${id}?area=${encodeURIComponent(sv("rubro"))}`;
     });
   </script>
 </Layout>

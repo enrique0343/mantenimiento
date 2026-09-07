@@ -11,14 +11,20 @@ import {
   CRITICIDAD_LABEL, CRITICIDAD_COLOR, RESULTADO_CALIB_LABEL, RESULTADO_CALIB_COLOR,
   CATEGORIA_DOC_LABEL, vidaUtilRemanente, vidaUtilVencida, finVidaUtil, llevaCalibracion,
 } from "@/lib/inventario-jci";
+import { AREAS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { leerDatosTecnicos } from "@/lib/activo-area";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
-if (!Number.isFinite(id)) return Astro.redirect("/activos");
+if (!Number.isFinite(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const db = getDb(Astro);
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
-if (!a) return Astro.redirect("/activos");
+if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const area = rubroDeActivo(a.rubro, a.tipo);
+if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
+const datosTecnicos = leerDatosTecnicos(a.datosTecnicos);
 
 // Sucursal + ubicación + proveedor (vía FKs)
 let sucursalInfo: { id: number; nombre: string } | null = null;
@@ -96,7 +102,7 @@ function parsearCambios(json: string | null) {
     }));
   } catch { return []; }
 }
-const isBio = a.tipo === "biomedico";
+const isBio = area === "biomedico";
 
 // Contratos vigentes/por vencer que cubren este equipo
 const contratosActivoRaw = await db
@@ -171,48 +177,55 @@ const respaldaARows = await db
 // Candidatos para vincular como respaldo (solo admin/jefe gestiona)
 const candidatosRespaldo = canJefe
   ? await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
-      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"))).orderBy(asc(activos.codigo))
+      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"), activoAreaCondition(area))).orderBy(asc(activos.codigo))
   : [];
 const fueraDeServicio = a.estado === "averiado" || a.estado === "mantenimiento";
 const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operativo");
 ---
 
 <Layout title={a.nombre}>
-  <a href="/activos" class="text-sm text-slate-500 hover:underline">&larr; Equipos</a>
+  <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">&larr; {AREAS[area].inventoryLabel} · {AREAS[area].label}</a>
 
   <div class="mt-2 flex items-start justify-between gap-4">
     <div>
       <div class="flex items-center gap-2">
         <h1 class="text-2xl font-bold">{a.nombre}</h1>
-        {isBio ? (
-          <span class="badge bg-purple-100 text-purple-700">Biomedico</span>
-        ) : (
-          <span class="badge bg-slate-100 text-slate-600">General</span>
-        )}
+        <span class="badge bg-brand-50 text-brand-700">{AREAS[area].label}</span>
         <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">⚑ {CRITICIDAD_LABEL[criticidad]}</span>
       </div>
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
     {canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={`/activos/${a.id}/hoja-vida`} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={`/activos/${a.id}/historial`} class="btn-secondary">📜 Historial</a>
-        <a href={`/activos/${a.id}/editar`} class="btn-primary">✎ Editar</a>
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
+        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">✎ Editar</a>
         {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
       </div>
     )}
     {!canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={`/activos/${a.id}/hoja-vida`} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={`/activos/${a.id}/historial`} class="btn-secondary">📜 Historial</a>
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
       </div>
     )}
   </div>
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">
-      <h2 class="font-semibold">Datos del equipo</h2>
+      <h2 class="font-semibold">Datos de {area === "infraestructura" ? "la instalación" : area === "aires" ? "la unidad" : "equipo"}</h2>
       <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+        {area === "aires" && <>
+          <div><div class="text-xs uppercase text-slate-500">Tipo de unidad</div><div>{datosTecnicos.tipoUnidad || "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Capacidad (BTU/h)</div><div>{datosTecnicos.capacidadBtuH?.toLocaleString("es-SV") || "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Refrigerante</div><div>{datosTecnicos.refrigerante || "—"}</div></div>
+        </>}
+        {area === "infraestructura" && <>
+          <div><div class="text-xs uppercase text-slate-500">Tipo de instalación</div><div>{datosTecnicos.tipoInstalacion || "—"}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Sector</div><div>{datosTecnicos.sector || "—"}</div></div>
+        </>}
+        {(area === "equipo_general" || area === "biomedico") && <div><div class="text-xs uppercase text-slate-500">Servicio / función</div><div>{datosTecnicos.servicio || "—"}</div></div>}
+
         <div><div class="text-xs uppercase text-slate-500">Marca / Modelo</div><div>{[a.marca, a.modelo].filter(Boolean).join(" / ") || "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Serie</div><div class="font-mono text-xs">{a.serial ?? "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Año</div><div>{a.anio ?? "-"}</div></div>
@@ -307,7 +320,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   </div>
 
   <div class="mt-4 flex flex-wrap gap-2">
-    <a href={`/activos/${a.id}/predictivo`} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
+    <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
   </div>
 
   <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
@@ -506,7 +519,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
           {respaldosRows.map((r) => (
             <li class="flex items-center justify-between gap-3 py-2">
               <div class="min-w-0 flex-1">
-                <a href={`/activos/${r.eq_.id}`} class="font-medium text-brand-700 hover:underline">{r.eq_.codigo} · {r.eq_.nombre}</a>
+                <a href={areaHref(`/activos/${r.eq_.id}`, rubroDeActivo(r.eq_.rubro, r.eq_.tipo))} class="font-medium text-brand-700 hover:underline">{r.eq_.codigo} · {r.eq_.nombre}</a>
                 <span class:list={["ml-2 badge text-[10px]", r.eq_.estado === "operativo" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"]}>{r.eq_.estado}</span>
                 {r.rel.notas && <div class="text-xs text-slate-500">{r.rel.notas}</div>}
               </div>
@@ -798,7 +811,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {ordsRel.map((o) => (
           <li class="flex items-center justify-between py-2">
-            <a href={`/ordenes/${o.id}`} class="text-brand-700 hover:underline">#{o.id} - {o.titulo}</a>
+            <a href={areaHref(`/ordenes/${o.id}`, area)} class="text-brand-700 hover:underline">#{o.id} - {o.titulo}</a>
             <span class="text-xs text-slate-500 capitalize">{o.tipo} · {o.estado.replace("_"," ")}</span>
           </li>
         ))}
@@ -1138,7 +1151,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     document.getElementById("deleteBtn")?.addEventListener("click", async () => {
       if (!confirm("¿Eliminar este equipo? Esta acción borra también sus planes de mantenimiento, OTs no se borran.")) return;
       const res = await fetch(`/api/activos/${activoId}`, { method: "DELETE" });
-      if (res.ok) location.href = "/activos";
+      if (res.ok) location.href = `/activos?area=${encodeURIComponent(new URL(location.href).searchParams.get("area") || "")}`;
       else alert("Error al eliminar");
     });
   </script>

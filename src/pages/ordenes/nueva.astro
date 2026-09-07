@@ -3,9 +3,15 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
 import { asc, eq, and, inArray } from "drizzle-orm";
+import { parseArea, areaHref, AREAS, AREA_KEYS, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const rawArea = url.searchParams.get("area");
+const area = parseArea(rawArea);
+if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
+
 
 const activosList = await db
   .select({
@@ -15,6 +21,7 @@ const activosList = await db
     ubicacionId: activos.ubicacionId,
   })
   .from(activos)
+  .where(area ? activoAreaCondition(area) : eq(activos.id, -1))
   .orderBy(asc(activos.codigo));
 
 const ubicacionesList = await db
@@ -40,10 +47,18 @@ const activosJson = JSON.stringify(activosList);
 ---
 
 <Layout title="Nueva orden">
-  <a href="/ordenes" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
-  <h1 class="mt-2 text-2xl font-bold">Nueva orden de trabajo</h1>
+  <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Nueva orden{area ? ` · ${AREAS[area].label}` : " de trabajo"}</h1>
 
   <form id="form" class="card mt-4 space-y-4 p-5">
+    <div>
+      <label class="label" for="rubro">Área de mantenimiento *</label>
+      <select class="input" id="rubro" required disabled={!!area}>
+        <option value="">— Selecciona el área —</option>
+        {AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}
+      </select>
+      <p class="mt-1 text-xs text-slate-500">La orden quedará dentro de esta área. Puedes registrar trabajo por ubicación sin seleccionar un equipo.</p>
+    </div>
     <div>
       <label class="label">Título *</label>
       <input class="input" id="titulo" required placeholder="Ej: Cambio de filtro AC sala 3" />
@@ -151,11 +166,15 @@ const activosJson = JSON.stringify(activosList);
     <p id="err" class="hidden text-sm text-red-600"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit">Crear orden</button>
-      <a class="btn-secondary" href="/ordenes">Cancelar</a>
+      <a class="btn-secondary" href={areaHref("/ordenes", area)}>Cancelar</a>
     </div>
   </form>
 
-  <script define:vars={{ ubicacionesJson, activosJson }}>
+  <script define:vars={{ ubicacionesJson, activosJson, area }}>
+    document.getElementById("rubro")?.addEventListener("change", (event) => {
+      const selected = event.target.value;
+      if (selected) location.href = `/ordenes/nueva?area=${encodeURIComponent(selected)}`;
+    });
     const UBICACIONES = JSON.parse(ubicacionesJson);
     const ACTIVOS = JSON.parse(activosJson);
 
@@ -272,6 +291,7 @@ const activosJson = JSON.stringify(activosList);
       }
 
       const payload = {
+        rubro: area || v("rubro"),
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
         tipo: v("tipo"),
@@ -306,7 +326,7 @@ const activosJson = JSON.stringify(activosList);
         await fetch(`/api/ordenes/${otId}/adjuntos`, { method: "POST", body: fd }).catch(() => {});
       }
 
-      location.href = `/ordenes/${otId}`;
+      location.href = `/ordenes/${otId}?area=${encodeURIComponent(j.orden.rubro)}`;
     });
   </script>
 </Layout>

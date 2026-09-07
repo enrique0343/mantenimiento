@@ -4,12 +4,15 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { eq, and, inArray, gte, lt, isNotNull, asc, desc, sql } from "drizzle-orm";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { parseArea, areaHref } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
 
 const db = getDb(Astro);
+const area = parseArea(Astro.url.searchParams.get("area"));
+const areaCondition = area ? eq(ordenes.rubro, area) : undefined;
 
 // Semana actual (lunes–domingo) en hora de El Salvador.
 const sv = new Date(Date.now() - 6 * 3600_000);
@@ -25,7 +28,7 @@ const abiertas = await db
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"]))
+  .where(and(areaCondition, inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"])))
   .orderBy(asc(ordenes.vencimiento));
 
 // Completadas esta semana (throughput).
@@ -34,7 +37,7 @@ const completadasSemana = await db
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicio), lt(ordenes.completadaEn, fin)))
+  .where(and(areaCondition, isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicio), lt(ordenes.completadaEn, fin)))
   .orderBy(desc(ordenes.completadaEn));
 
 // ── Datos para la reunión semanal ──
@@ -42,7 +45,7 @@ const completadasSemana = await db
 const prevSemana = await db
   .select({ completadaEn: ordenes.completadaEn, vencimiento: ordenes.vencimiento })
   .from(ordenes)
-  .where(and(eq(ordenes.tipo, "preventivo"), isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, inicio), lt(ordenes.vencimiento, fin)));
+  .where(and(areaCondition, eq(ordenes.tipo, "preventivo"), isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, inicio), lt(ordenes.vencimiento, fin)));
 const prevProg = prevSemana.length;
 const prevATiempo = prevSemana.filter((p) => p.completadaEn && p.vencimiento && p.completadaEn <= p.vencimiento).length;
 const cumplimiento = prevProg > 0 ? Math.round((prevATiempo / prevProg) * 100) : null;
@@ -51,7 +54,7 @@ const cumplimiento = prevProg > 0 ? Math.round((prevATiempo / prevProg) * 100) :
 const correctivosSemana = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
-  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), lt(ordenes.createdAt, fin)));
+  .where(and(areaCondition, eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), lt(ordenes.createdAt, fin)));
 const nCorrectivos = Number(correctivosSemana[0]?.n ?? 0);
 
 const vencidas = abiertas.filter((r) => r.o.vencimiento && r.o.vencimiento < ahoraIso);
@@ -94,7 +97,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
             {col.items.map((r) => {
               const vencida = col.estado !== "completada" && r.o.vencimiento && r.o.vencimiento < ahoraIso;
               return (
-                <a href={`/ordenes/${r.o.id}`} class:list={["block rounded-md border p-2 text-sm hover:shadow-sm transition", vencida ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"]}>
+                <a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class:list={["block rounded-md border p-2 text-sm hover:shadow-sm transition", vencida ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"]}>
                   <div class="flex items-center justify-between gap-1">
                     <span class="font-medium text-slate-800">#{r.o.id}</span>
                     <span class={`badge text-[10px] ${PRIO_COLOR[r.o.prioridad] ?? ""}`}>{r.o.prioridad}</span>
@@ -153,7 +156,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
           <tbody class="divide-y divide-slate-100">
             {vencidas.map((r) => (
               <tr class="hover:bg-slate-50">
-                <td class="px-4 py-2"><a href={`/ordenes/${r.o.id}`} class="text-brand-700 hover:underline">#{r.o.id} {r.o.titulo}</a></td>
+                <td class="px-4 py-2"><a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class="text-brand-700 hover:underline">#{r.o.id} {r.o.titulo}</a></td>
                 <td class="px-4 py-2 font-mono text-xs text-slate-600">{r.a?.codigo ?? "—"}</td>
                 <td class="px-4 py-2 text-xs">{r.u?.nombre ?? "Sin asignar"}</td>
                 <td class="px-4 py-2 font-mono text-xs text-red-600">{fmt(r.o.vencimiento)}</td>
@@ -165,7 +168,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
       )}
     </div>
 
-    <p class="mt-3 text-xs text-slate-500">💡 Para la reunión semanal: revisa cumplimiento, ataca el backlog vencido, y confirma que ningún equipo crítico quede sin cobertura (ver <a href="/contingencia" class="text-brand-600 hover:underline">Contingencia</a> y <a href="/cronograma" class="text-brand-600 hover:underline">Cronograma</a>).</p>
+    <p class="mt-3 text-xs text-slate-500">💡 Para la reunión semanal: revisa cumplimiento, ataca el backlog vencido, y confirma que ningún equipo crítico quede sin cobertura (ver <a href="/contingencia" class="text-brand-600 hover:underline">Contingencia compartida</a> y <a href={areaHref("/cronograma", area)} class="text-brand-600 hover:underline">Cronograma</a>).</p>
   </div>
 
   <script>

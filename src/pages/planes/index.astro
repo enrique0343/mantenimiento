@@ -3,13 +3,15 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contratosMantenimiento } from "@/lib/schema";
 import { eq, desc, inArray } from "drizzle-orm";
+import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/cronograma");
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/cronograma", Astro.url.searchParams.get("area")));
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const fSucursal = url.searchParams.get("sucursal");
 const fFrecuencia = url.searchParams.get("frecuencia");
 const fEstado = url.searchParams.get("estado") ?? "activos";
@@ -21,6 +23,7 @@ const rows = await db
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(area ? activoAreaCondition(area) : undefined)
   .orderBy(desc(planesMantenimiento.id));
 
 const filtered = rows.filter((r) =>
@@ -57,12 +60,14 @@ const FREC_LABEL: Record<string, string> = {
       <p class="text-sm text-slate-500">{rows.length} en total · mostrando {filtered.length}</p>
     </div>
     <div class="flex gap-2">
-      <a href="/cronograma" class="btn-secondary">📅 Cronograma</a>
+      <a href={areaHref("/planificador", area)} class="btn-secondary">Planificador mensual</a>
+      <a href={areaHref("/cronograma", area)} class="btn-secondary">📅 Cronograma</a>
     </div>
   </div>
 
   <!-- Filtros -->
   <form class="card mt-3 flex flex-wrap items-end gap-3 p-3" method="get">
+    {area && <input type="hidden" name="area" value={area} />}
     <div>
       <label class="label text-xs">Sucursal</label>
       <select name="sucursal" class="input text-sm">
@@ -86,7 +91,7 @@ const FREC_LABEL: Record<string, string> = {
       </select>
     </div>
     <button class="btn-primary text-sm">Filtrar</button>
-    {(fSucursal || fFrecuencia || fEstado !== "activos") && <a href="/planes" class="btn-secondary text-sm">Limpiar</a>}
+    {(fSucursal || fFrecuencia || fEstado !== "activos") && <a href={areaHref("/planes", area)} class="btn-secondary text-sm">Limpiar</a>}
   </form>
 
   <!-- Barra de acciones bulk (aparece cuando hay seleccionados) -->
@@ -125,7 +130,7 @@ const FREC_LABEL: Record<string, string> = {
               {r.p.descripcion && <div class="text-xs text-slate-500 truncate max-w-md">{r.p.descripcion}</div>}
             </td>
             <td class="px-3 py-2 text-xs">
-              {r.a ? <a href={`/activos/${r.a.id}`} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
+              {r.a ? <a href={areaHref(`/activos/${r.a.id}`, area ?? r.a.rubro)} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
             </td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
             <td class="px-3 py-2 capitalize text-xs">{FREC_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
@@ -158,6 +163,8 @@ const FREC_LABEL: Record<string, string> = {
   </div>
 
   <script>
+    import { areaHref, parseArea } from "@/lib/areas";
+    const area = parseArea(new URLSearchParams(location.search).get("area"));
     const selAll = document.getElementById("selAll") as HTMLInputElement;
     const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>(".row-chk"));
     const bulkBar = document.getElementById("bulkBar")!;
@@ -191,7 +198,7 @@ const FREC_LABEL: Record<string, string> = {
         : `¿${verbo} ${ids.length} plan(es)?`;
       if (!confirm(msg)) return;
 
-      const r = await fetch("/api/planes/bulk", {
+      const r = await fetch(areaHref("/api/planes/bulk", area), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ accion, ids }),
@@ -210,7 +217,7 @@ const FREC_LABEL: Record<string, string> = {
     // ── Modalidad / contrato inline ──
     async function patchPlan(sel: HTMLSelectElement, body: Record<string, unknown>, prev: string) {
       sel.disabled = true;
-      const r = await fetch(`/api/planes/${sel.dataset.id}`, {
+      const r = await fetch(areaHref(`/api/planes/${sel.dataset.id}`, area), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
