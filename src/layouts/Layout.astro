@@ -21,6 +21,7 @@ const operationalTabs = area ? [
   {href: areaHref("/tickets", area), label: "Solicitudes", show: true},
   {href: areaHref("/ordenes", area), label: "Órdenes", show: !["motorista","proveedor"].includes(user?.rol ?? "")},
   {href: areaHref("/activos", area), label: info!.inventoryLabel, show: user?.rol !== "motorista"},
+  {href: areaHref("/conjuntos", area), label: "Conjuntos", show: isOperativo || user?.rol === "visualizador"},
   {href: areaHref("/planes", area), label: "Planes", show: isOperativo || user?.rol === "visualizador"},
 ].filter(x=>x.show) : [];
 const ROL_LABEL: Record<string, string> = {
@@ -184,7 +185,7 @@ const isActive = (href: string) =>
 
     {area && <script is:inline define:vars={{currentArea:area}}>
       (() => {
-        const paths = ["/activos", "/tickets", "/ordenes", "/planes", "/actividades", "/cronograma", "/planificador", "/gantt", "/plan-mantenimiento"];
+        const paths = ["/activos", "/conjuntos", "/tickets", "/ordenes", "/planes", "/actividades", "/cronograma", "/planificador", "/gantt", "/plan-mantenimiento"];
         document.querySelectorAll("a[href]").forEach(link => {
           const url = new URL(link.href, location.origin);
           if (url.origin === location.origin && !url.searchParams.has("area") && paths.some(p=>url.pathname === p || url.pathname.startsWith(p+"/"))) {

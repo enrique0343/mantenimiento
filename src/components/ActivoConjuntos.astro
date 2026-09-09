@@ -1,0 +1,26 @@
+---
+import { areaHref } from "@/lib/areas";
+import { fmtFechaLarga } from "@/lib/datetime";
+import type { getConjuntosDelActivo } from "@/lib/conjuntos";
+interface Props { relaciones: Awaited<ReturnType<typeof getConjuntosDelActivo>>; }
+const { relaciones } = Astro.props;
+---
+{relaciones.length > 0 && <section class="card mt-4 p-5" aria-labelledby="conjuntos-del-equipo">
+  <h2 id="conjuntos-del-equipo" class="font-semibold text-slate-900">Pertenencia a conjuntos</h2>
+  <p class="mt-1 text-sm text-slate-500">Se conservan las incorporaciones y retiros de este equipo.</p>
+  <ul class="mt-3 divide-y divide-slate-100">
+    {relaciones.map(r => <li class="py-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <a class="font-medium text-brand-700 hover:underline" href={areaHref(`/conjuntos/${r.conjuntoId}`, r.rubro)}>{r.codigo} · {r.nombre}</a>
+        <span class={`badge ${r.retiradoEn ? "bg-slate-100 text-slate-600" : "bg-emerald-100 text-emerald-800"}`}>{r.retiradoEn ? "Participación anterior" : "Componente actual"}</span>
+      </div>
+      <p class="mt-1 text-sm">Función: {r.funcion}</p>
+      <p class="mt-1 text-xs text-slate-500">Incorporado: {fmtFechaLarga(r.incorporadoEn)}{r.retiradoEn && <> · Retirado: {fmtFechaLarga(r.retiradoEn)}</>}</p>
+      <details class="mt-2 text-sm"><summary class="cursor-pointer text-slate-600">Ver motivos y trazabilidad</summary>
+        <p class="mt-2 whitespace-pre-wrap"><strong>Incorporación:</strong> {r.motivoAlta}</p>
+        {r.motivoRetiro && <p class="mt-1 whitespace-pre-wrap"><strong>Retiro:</strong> {r.motivoRetiro}</p>}
+        <a class="mt-2 inline-block text-brand-700 hover:underline" href={areaHref(`/conjuntos/${r.conjuntoId}#trazabilidad`, r.rubro)}>Consultar historial del conjunto →</a>
+      </details>
+    </li>)}
+  </ul>
+</section>}

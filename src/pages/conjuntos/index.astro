@@ -1,0 +1,51 @@
+---
+import ConjuntoShell from "@/components/ConjuntoShell.astro";
+import AppIcon from "@/components/AppIcon.astro";
+import { getConjuntos } from "@/lib/conjuntos";
+import { AREAS, AREA_KEYS, areaHref, parseArea } from "@/lib/areas";
+export const prerender = false;
+const user = Astro.locals.user;
+if (!user) return Astro.redirect("/login");
+if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) return new Response("No tienes acceso a los conjuntos.", { status:403 });
+const canManage = ["admin", "jefe"].includes(user.rol);
+const area = parseArea(Astro.url.searchParams.get("area"));
+const query = (Astro.url.searchParams.get("q") ?? "").trim();
+const showArchived = Astro.url.searchParams.get("archivados") === "1";
+const rows = await getConjuntos(Astro, area);
+const active = rows.filter((row) => row.activo);
+const matches = rows.filter((row) => (showArchived || row.activo) && `${row.codigo} ${row.nombre}`.toLocaleLowerCase("es").includes(query.toLocaleLowerCase("es")));
+const availabilityLabels: Record<string, string> = { disponible:"Disponible", no_disponible:"No disponible", sin_definir:"Por definir" };
+const criticalityLabels: Record<string,string> = { alta:"Alta", media:"Media", baja:"Baja" };
+---
+<ConjuntoShell title="Conjuntos de equipos">
+  <header class="cq-head">
+    <div>
+      <p class="cq-eyebrow">{area ? AREAS[area].label : "Todas las áreas"}</p>
+      <h1>Conjuntos de equipos</h1>
+      <p class="cq-muted mt-2">Equipos que trabajan juntos, con su ficha e historial individual.</p>
+    </div>
+    {canManage && <a href={areaHref("/conjuntos/nuevo", area)} class="btn-primary">+ Crear conjunto</a>}
+  </header>
+  <div class="cq-notice">Agrupa una torre, estación o sistema sin duplicar activos. Cada incorporación y reemplazo conserva el equipo, la fecha, el responsable y el motivo.</div>
+  <div class="cq-stats">
+    <div class="cq-stat"><span class="cq-muted">Conjuntos activos</span><strong>{active.length}</strong></div>
+    <div class="cq-stat"><span class="cq-muted">Disponibles</span><strong>{active.filter((row) => row.disponibilidad?.estado === "disponible").length}</strong></div>
+    <div class="cq-stat"><span class="cq-muted">Componentes asignados</span><strong>{active.reduce((sum, row) => sum + row.componentes, 0)}</strong></div>
+  </div>
+  <form method="get" class="cq-panel cq-filters">
+    <div class="cq-search"><label class="label" for="buscar">Buscar conjunto</label><input type="search" id="buscar" name="q" class="input" value={query} placeholder="Nombre o código" /></div>
+    <div><label class="label" for="areaFiltro">Área</label><select class="input" name="area" id="areaFiltro"><option value="">Todas las áreas</option>{AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}</select></div>
+    <label class="inline-flex items-center gap-2 pb-2 text-sm"><input type="checkbox" name="archivados" value="1" checked={showArchived} /> Incluir archivados</label>
+    <button class="btn-secondary" type="submit">Filtrar</button>
+  </form>
+  <p class="cq-muted mb-3">{matches.length} {matches.length === 1 ? "conjunto" : "conjuntos"}</p>
+  {matches.length ? <div class="cq-grid">
+    {matches.map((row) => <article class="cq-panel">
+      <div class="cq-card-head"><p class="cq-eyebrow">{row.codigo}</p><span class="cq-badge" data-tone={row.activo && row.disponibilidad?.estado === "disponible" ? "good" : row.activo && row.disponibilidad?.estado === "no_disponible" ? "warn" : undefined}>{!row.activo ? "Archivado" : availabilityLabels[row.disponibilidad?.estado] ?? "Por definir"}</span></div>
+      <a class="cq-card-title" href={areaHref(`/conjuntos/${row.id}`, row.rubro)}>{row.nombre}</a>
+      <p class="cq-muted">{AREAS[parseArea(row.rubro) ?? "equipo_general"].label} · Criticidad {criticalityLabels[row.criticidad]?.toLowerCase() ?? row.criticidad}</p>
+      {row.activo && row.disponibilidad?.estado === "no_disponible" && <p class="cq-field-help mt-3">{row.disponibilidad.motivos[0]}{row.disponibilidad.motivos.length > 1 ? ` (+${row.disponibilidad.motivos.length - 1} más)` : ""}</p>}
+      <div class="cq-card-footer"><span class="cq-muted">{row.componentes} {row.componentes === 1 ? "componente" : "componentes"}</span><a class="cq-link inline-flex items-center gap-2" href={areaHref(`/conjuntos/${row.id}`, row.rubro)}>Ver conjunto <AppIcon name="arrow" size={16} /></a></div>
+    </article>)}
+  </div> : <div class="cq-panel cq-empty"><AppIcon name="equipment" size={31} /><h2>{rows.length ? "No hay conjuntos con estos filtros" : "El primer conjunto empieza con sus equipos"}</h2><p>{rows.length ? "Cambia la búsqueda o incluye los conjuntos archivados para consultar su historial." : "Por ejemplo, crea una torre de videolaparoscopía y asígnale la cámara, el cabezal, el insuflador y la fuente de luz. Cada componente conserva sus mantenimientos."}</p>{canManage && <a href={areaHref("/conjuntos/nuevo", area)} class="btn-primary">Crear conjunto</a>}</div>}
+</ConjuntoShell>

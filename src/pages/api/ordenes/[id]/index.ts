@@ -16,6 +16,7 @@ import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
 
 export const prerender = false;
 
@@ -51,7 +52,7 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   const [row] = await db
-    .select({ orden: ordenes, activo: activos, asignado: usuarios })
+    .select({ orden: ordenes, activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre }, asignado: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -63,7 +64,7 @@ export const GET: APIRoute = async (ctx) => {
   if (contextError) return contextError;
 
   const coms = await db
-    .select({ c: comentarios, u: usuarios })
+    .select({ c: comentarios, u: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(comentarios)
     .leftJoin(usuarios, eq(usuarios.id, comentarios.usuarioId))
     .where(eq(comentarios.ordenId, id))
@@ -101,6 +102,9 @@ export const PATCH: APIRoute = async (ctx) => {
   if (contextError) return contextError;
   if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una orden no puede cambiarse" }, { status: 400 });
   if (parsed.data.activoId !== undefined) {
+    if (parsed.data.activoId !== actual.activoId && await ordenesTienenConjunto(ctx, [id])) {
+      return Response.json({ error: "El equipo de esta orden está registrado en la trazabilidad de un conjunto. Conserva la orden original y abre otra para el equipo que corresponda." }, { status: 409 });
+    }
     const areaResult = await validarAreaTrabajo(db, { ...actual, ...parsed.data });
     if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   }
@@ -216,7 +220,16 @@ export const PATCH: APIRoute = async (ctx) => {
     data.asignadoEn = parsed.data.asignadoA ? now : null;
   }
 
-  const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
+  let row: typeof ordenes.$inferSelect | undefined;
+  try {
+    [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
+  } catch (error) {
+    if (parsed.data.activoId !== undefined && parsed.data.activoId !== actual.activoId
+      && await ordenesTienenConjunto(ctx, [id])) {
+      return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
+    }
+    throw error;
+  }
 
   // Audit: cambio de estado (con resumen legible)
   if (parsed.data.estado && parsed.data.estado !== actual.estado) {
@@ -505,24 +518,27 @@ export const DELETE: APIRoute = async (ctx) => {
   const contextError = validarContextoArea(ctx.request, ot.rubro);
   if (contextError) return contextError;
 
-  // Borrar adjuntos de R2
-  const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
-  if (adjs.length && env?.R2) {
-    await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
+  if (await ordenesTienenConjunto(ctx, [id])) {
+    return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
   }
 
-  // Limpiar FKs sin cascade (preserva historial)
-  try { await db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)); } catch {}
-  try { await db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)); } catch {}
-  try { await db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)); } catch {}
-
-  await logAudit(ctx, { entidad: "orden", entidadId: id, accion: "delete", resumen: `OT eliminada: "${ot.titulo}"` });
-
+  // Los archivos se retiran únicamente después de que la base confirme el
+  // borrado. Una asociación concurrente a un conjunto debe preservar todo.
+  const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
   try {
-    await db.delete(ordenes).where(eq(ordenes.id, id));
+    await db.batch([
+      db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)),
+      db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)),
+      db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)),
+      db.delete(ordenes).where(eq(ordenes.id, id)),
+    ]);
   } catch (e: any) {
+    if (await ordenesTienenConjunto(ctx, [id])) return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
     return Response.json({ error: `No se pudo borrar: ${e?.message ?? e}` }, { status: 500 });
   }
+
+  if (adjs.length && env?.R2) await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
+  await logAudit(ctx, { entidad: "orden", entidadId: id, accion: "delete", resumen: `OT eliminada: "${ot.titulo}"` });
 
   if (ot.planId) {
     try { await db.update(planesMantenimiento).set({ ultimaGeneracion: null }).where(eq(planesMantenimiento.id, ot.planId)); } catch {}

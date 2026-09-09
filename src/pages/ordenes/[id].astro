@@ -1,5 +1,6 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import { getConjuntoDeOrden } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra } from "@/lib/schema";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
@@ -20,7 +21,13 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [row] = await db
-  .select({ orden: ordenes, activo: activos, asignado: usuarios, ubicacion: ubicaciones, sucursal: sucursales })
+  .select({
+    orden: ordenes,
+    activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo, ubicacion: activos.ubicacion, serial: activos.serial, marca: activos.marca, modelo: activos.modelo },
+    asignado: { id: usuarios.id, nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    ubicacion: { id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo },
+    sucursal: { id: sucursales.id, nombre: sucursales.nombre },
+  })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -38,6 +45,8 @@ if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) re
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
+const conjuntoOrigen = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
+  ? await getConjuntoDeOrden(Astro, id) : null;
 
 // Si la OT NO tiene activo pero SÍ tiene sucursalId/ubicacionId propios
 // (porque se creó como trabajo general con sucursal/ubicación), los cargamos.
@@ -60,7 +69,7 @@ const [cierraUsr] = o.cerradoPor
   : [null];
 
 const coms = await db
-  .select({ c: comentarios, u: usuarios })
+  .select({ c: comentarios, u: { id: usuarios.id, nombre: usuarios.nombre } })
   .from(comentarios)
   .leftJoin(usuarios, eq(usuarios.id, comentarios.usuarioId))
   .where(eq(comentarios.ordenId, id))
@@ -87,7 +96,7 @@ const totalRepuestos = repuestosRows.reduce(
 );
 
 // Costo: mano de obra (horas × tarifa del técnico asignado) + repuestos
-const tarifaTecnico = Number((row.asignado as any)?.tarifaHora ?? 0);
+const tarifaTecnico = Number(row.asignado?.tarifaHora ?? 0);
 const horasTrab = Number(o.horasTrabajadas ?? 0);
 const costoManoObra = horasTrab * tarifaTecnico;
 const costoTotal = costoManoObra + totalRepuestos;
@@ -102,7 +111,7 @@ const itemsActivos = await db
 const itemsRepJson = JSON.stringify(itemsActivos);
 
 // Selectores en cascada: sucursal → ubicación → equipo
-const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol);
+const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol) && !conjuntoOrigen;
 const activosLista = puedeAsignarActivo
   ? await db
       .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
@@ -165,6 +174,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 <Layout title={`Orden #${o.id}`}>
   <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
+  {conjuntoOrigen && <section class="card mt-4 border-l-4 border-brand-500 p-4 text-sm">
+    <p class="font-medium">Conjunto registrado al vincular esta orden</p>
+    <a class="mt-1 inline-block text-brand-700 hover:underline" href={areaHref(`/conjuntos/${conjuntoOrigen.conjuntoId}#mantenimiento`, conjuntoOrigen.rubro)}>{conjuntoOrigen.codigo} · {conjuntoOrigen.nombre}</a>
+    <p class="mt-1 text-slate-600">{conjuntoOrigen.funcion}: {conjuntoOrigen.activoCodigo} · {conjuntoOrigen.activoNombre}</p>
+    <p class="mt-1 text-xs text-slate-500">Esta referencia se conserva aunque el componente sea reemplazado.</p>
+  </section>}
+
   <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
       <div class="flex flex-wrap items-center gap-2">
@@ -183,7 +199,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
         <button id="cierreAdminBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
       )}
-      {user.rol === "admin" && (
+      {user.rol === "admin" && !conjuntoOrigen && (
         <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
       )}
     </div>

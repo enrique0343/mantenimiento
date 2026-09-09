@@ -1,0 +1,224 @@
+---
+import ConjuntoShell from "@/components/ConjuntoShell.astro";
+import { ConjuntoError, getConjuntoDetalle, normalizarFechaConjunto } from "@/lib/conjuntos";
+import { getDb } from "@/lib/db";
+import { activos, conjuntoComponentes, ubicaciones, sucursales } from "@/lib/schema";
+import { and, asc, eq, isNull, ne, notExists } from "drizzle-orm";
+import { AREAS, areaHref, parseArea } from "@/lib/areas";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { FRECUENCIAS } from "@/lib/frecuencias";
+export const prerender = false;
+const user = Astro.locals.user;
+if (!user) return Astro.redirect("/login");
+if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) return new Response("No tienes acceso a los conjuntos.", { status:403 });
+const id = Number(Astro.params.id);
+if (!/^\d+$/.test(Astro.params.id ?? "") || !Number.isSafeInteger(id) || id < 1) return new Response("Conjunto no encontrado.", { status:404 });
+const rawDate = Astro.url.searchParams.get("fecha")?.trim();
+let historicalDate: string | null = null;
+if (rawDate) {
+  try {
+    const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(rawDate) ? `${rawDate}:00` : rawDate;
+    historicalDate = normalizarFechaConjunto(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(withSeconds) ? `${withSeconds}-06:00` : withSeconds);
+  } catch (error) {
+    if (error instanceof ConjuntoError) return new Response(error.message, { status:error.status });
+    throw error;
+  }
+}
+const detail = await getConjuntoDetalle(Astro, id, historicalDate);
+if (!detail) return new Response("Conjunto no encontrado.", { status:404 });
+const { conjunto, puestos, historialComponentes, eventos, ordenes, planes } = detail;
+const area = parseArea(conjunto.rubro)!;
+Astro.locals.area = area;
+const db = getDb(Astro);
+const historical = !!historicalDate;
+const canManage = ["admin", "jefe"].includes(user.rol) && !historical;
+const canWork = ["admin", "jefe", "tecnico"].includes(user.rol);
+const currentUrl = areaHref(`/conjuntos/${id}`, area);
+const locations = await db.select({ id:ubicaciones.id, nombre:ubicaciones.nombre, activa:ubicaciones.activa, sucursal:sucursales.nombre }).from(ubicaciones).leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId)).orderBy(asc(sucursales.nombre), asc(ubicaciones.nombre));
+const location = locations.find((entry) => entry.id === conjunto.ubicacionId);
+const catalog = canManage && conjunto.activo ? await db.select({ id:activos.id, codigo:activos.codigo, nombre:activos.nombre, serial:activos.serial, rubro:activos.rubro, tipo:activos.tipo, estado:activos.estado }).from(activos).where(and(ne(activos.estado, "baja"), notExists(db.select({ id:conjuntoComponentes.id }).from(conjuntoComponentes).where(and(eq(conjuntoComponentes.activoId, activos.id), isNull(conjuntoComponentes.retiradoEn)))))).orderBy(asc(activos.codigo)) : [];
+const occupied = puestos.filter((puesto) => puesto.componente).length;
+const statusLabels:Record<string,string> = { operativo:"Operativo", averiado:"Averiado", mantenimiento:"En mantenimiento", baja:"Dado de baja", pendiente:"Pendiente", en_progreso:"En progreso", en_proceso:"En proceso", completada:"Completada", cancelada:"Cancelada", cerrada:"Cerrada", abierta:"Abierta", programada:"Programada", asignada:"Asignada" };
+const availabilityLabels:Record<string,string> = { disponible:"Disponible", no_disponible:"No disponible", sin_definir:"Por definir" };
+const criticalityLabels:Record<string,string> = { alta:"Alta", media:"Media", baja:"Baja" };
+const actionLabels:Record<string,string> = { crear:"Conjunto registrado", editar:"Datos actualizados", archivar:"Conjunto archivado", reactivar:"Conjunto reactivado", incorporar:"Componente incorporado", retirar:"Componente retirado", reemplazar:"Componente reemplazado" };
+function dateLabel(value:string | null | undefined) {
+  if (!value) return "—";
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value.replace(" ", "T")}Z`;
+  return new Date(normalized).toLocaleString("es-SV", { timeZone:"America/El_Salvador", day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false });
+}
+const localInputDate = (value:string) => new Date(new Date(value).getTime() - 6 * 3600000).toISOString().slice(0, 19);
+function snapshotLines(value:unknown): { label:string; value:string }[] {
+  if (!value || typeof value !== "object") return [{ label:"Registro", value:"Sin composición anterior" }];
+  const snapshot = value as { conjunto?: Record<string,unknown>; puestos?: Array<{ funcion:string; esencial:boolean; componente?: { codigo:string; nombre:string; serial?:string } | null }> };
+  const data = snapshot.conjunto;
+  const lines:{label:string;value:string}[] = [];
+  if (data) {
+    lines.push({ label:"Conjunto", value:`${data.codigo ?? ""} · ${data.nombre ?? ""}` });
+    if (data.descripcion) lines.push({ label:"Descripción", value:String(data.descripcion) });
+    if (data.criticidad) lines.push({ label:"Criticidad", value:criticalityLabels[String(data.criticidad)] ?? String(data.criticidad) });
+    if ("activo" in data) lines.push({ label:"Registro", value:data.activo ? "Activo" : "Archivado" });
+    if ("ubicacionId" in data) lines.push({ label:"Ubicación registrada", value:data.ubicacionNombre ? String(data.ubicacionNombre) : data.ubicacionId ? `Referencia ${data.ubicacionId}` : "Sin asignar" });
+  }
+  for (const puesto of snapshot.puestos ?? []) lines.push({ label:`${puesto.funcion}${puesto.esencial ? " · Esencial" : ""}`, value:puesto.componente ? `${puesto.componente.codigo} · ${puesto.componente.nombre}${puesto.componente.serial ? `\nSerie: ${puesto.componente.serial}` : ""}` : "Vacante" });
+  return lines.length ? lines : [{ label:"Composición", value:"Sin componentes" }];
+}
+---
+<ConjuntoShell title={conjunto.nombre}>
+  <a class="cq-link" href={areaHref("/conjuntos", area)}>← Volver a conjuntos</a>
+  <header class="cq-head">
+    <div><p class="cq-eyebrow">{conjunto.codigo} · {AREAS[area].label}</p><h1>{conjunto.nombre}</h1>{conjunto.descripcion && <p class="cq-muted mt-2 max-w-3xl whitespace-pre-wrap">{conjunto.descripcion}</p>}</div>
+    <div class="cq-actions"><span class="cq-badge" data-tone={conjunto.criticidad === "alta" ? "bad" : conjunto.criticidad === "media" ? "warn" : undefined}>Criticidad {criticalityLabels[conjunto.criticidad]?.toLowerCase()}</span>{!conjunto.activo && <span class="cq-badge">Archivado</span>}{canManage && <a class="btn-secondary" href="#editar-conjunto">Editar conjunto</a>}</div>
+  </header>
+  {historical ? <div class="cq-notice" data-tone="warn"><strong>Composición al {dateLabel(historicalDate)}.</strong><p>Composición al momento seleccionado; estados de equipos corresponden a su ficha actual. Los datos generales del conjunto y el historial muestran el registro vigente.</p><a class="cq-link mt-2 inline-block" href={currentUrl}>Volver a la composición actual</a></div> : <div class="cq-grid">
+    <div class="cq-panel"><p class="cq-eyebrow">Disponibilidad actual</p><h2>{!conjunto.activo ? "Conjunto archivado" : availabilityLabels[detail.disponibilidad?.estado ?? "sin_definir"]}</h2><p class="cq-muted mt-2">{detail.disponibilidad?.estado === "disponible" ? "Todos los puestos esenciales tienen un equipo operativo." : detail.disponibilidad?.estado === "sin_definir" ? "Define componentes esenciales para evaluar si el conjunto puede funcionar." : "Hay puestos esenciales que requieren atención."}</p>{detail.disponibilidad?.motivos?.length > 0 && <ul class="mt-3 list-disc pl-5 text-sm text-amber-800 space-y-1">{detail.disponibilidad.motivos.map((reason) => <li>{reason}</li>)}</ul>}</div>
+    <div class="cq-panel"><p class="cq-eyebrow">Identificación del conjunto</p><dl class="cq-meta !mt-2"><div><dt>Componentes</dt><dd>{occupied} asignados · {puestos.length - occupied} vacantes</dd></div><div><dt>Ubicación</dt><dd>{location ? `${location.sucursal ? `${location.sucursal} · ` : ""}${location.nombre}` : "Sin asignar"}</dd></div><div><dt>Registrado</dt><dd>{dateLabel(conjunto.createdAt)}</dd></div><div><dt>Último cambio</dt><dd>{dateLabel(conjunto.updatedAt)}</dd></div></dl></div>
+  </div>}
+  <nav class="cq-nav" aria-label="Secciones del conjunto"><a href="#componentes">Componentes</a>{!historical && <a href="#mantenimiento">Mantenimiento</a>}<a href="#trazabilidad">Trazabilidad</a></nav>
+
+  <section id="componentes" class="cq-section" aria-labelledby="componentesTitulo">
+    <div class="cq-section-head"><div><h2 id="componentesTitulo">{historical ? "Componentes en la fecha seleccionada" : "Componentes del conjunto"}</h2><p class="cq-muted mt-1">Cada puesto representa una función, como cámara, cabezal o insuflador.</p></div>{canManage && conjunto.activo && <button class="btn-primary" type="button" data-componente-accion="incorporar" disabled={!catalog.length}>+ Incorporar componente</button>}</div>
+    {canManage && conjunto.activo && !catalog.length && <div class="cq-notice mb-4">No hay equipos disponibles para incorporar. Los equipos dados de baja o que ya pertenecen a un conjunto no aparecen en la selección.{user.rol === "admin" && <a class="cq-link block mt-2" href={areaHref("/activos/nuevo", area)}>Registrar un equipo individual</a>}</div>}
+    {puestos.length ? <div class="cq-grid">{puestos.map((puesto) => <article class:list={["cq-panel", !puesto.componente && "cq-vacant"]}>
+      <div class="cq-card-head"><h3>{puesto.funcion}</h3><span class="cq-badge">{puesto.esencial ? "Esencial" : "Complementario"}</span></div>
+      {puesto.componente ? <>
+        <a href={areaHref(`/activos/${puesto.componente.activoId}`, puesto.componente.rubro)} class="cq-card-title">{puesto.componente.nombre}</a>
+        <p class="cq-muted">{puesto.componente.codigo} · Serie: {puesto.componente.serial || "No registrada"}</p>
+        <dl class="cq-meta"><div><dt>{historical ? "Estado actual del equipo" : "Estado del equipo"}</dt><dd><span class="cq-badge" data-tone={puesto.componente.estado === "operativo" ? "good" : "warn"}>{statusLabels[puesto.componente.estado] ?? puesto.componente.estado}</span></dd></div><div><dt>Área del equipo</dt><dd>{AREAS[parseArea(puesto.componente.rubro) ?? "equipo_general"].label}</dd></div><div class="cq-full"><dt>Incorporado</dt><dd>{dateLabel(puesto.componente.incorporadoEn)}</dd></div></dl>
+        <div class="cq-card-footer"><a class="cq-link" href={areaHref(`/activos/${puesto.componente.activoId}`, puesto.componente.rubro)}>Ficha del equipo</a>{!historical && canWork && <a class="cq-link" href={areaHref(`/ordenes/nueva?activoId=${puesto.componente.activoId}`, puesto.componente.rubro)}>Registrar mantenimiento</a>}</div>
+        {canManage && conjunto.activo && <div class="cq-actions mt-4"><button type="button" class="btn-secondary btn-sm" data-componente-accion="reemplazar" data-puesto={puesto.id} data-funcion={puesto.funcion} data-equipo={`${puesto.componente.codigo} · ${puesto.componente.nombre}`} disabled={!catalog.length}>Reemplazar</button><button type="button" class="btn-secondary btn-sm text-red-700" data-componente-accion="retirar" data-puesto={puesto.id} data-funcion={puesto.funcion} data-equipo={`${puesto.componente.codigo} · ${puesto.componente.nombre}`}>Retirar</button></div>}
+      </> : <><p class="cq-card-title">Puesto vacante</p><p class="cq-muted">{puesto.esencial ? "Este puesto necesita un equipo operativo para que el conjunto esté disponible." : "La función se conserva para una futura incorporación."}</p>{canManage && conjunto.activo && <button class="btn-secondary mt-5" type="button" data-componente-accion="incorporar" data-puesto={puesto.id} data-funcion={puesto.funcion} disabled={!catalog.length}>Asignar equipo a este puesto</button>}</>}
+    </article>)}</div> : <div class="cq-panel cq-empty"><h3>{historical ? "No había componentes en ese momento" : "Este conjunto aún no tiene componentes"}</h3><p>{historical ? "Selecciona una fecha posterior para consultar cómo se fue conformando." : "Incorpora los equipos registrados y describe la función de cada uno. Marca como esencial cualquier componente cuya ausencia impida el funcionamiento."}</p></div>}
+  </section>
+
+  {!historical && <section id="mantenimiento" class="cq-section" aria-labelledby="mantenimientoTitulo">
+    <div class="cq-section-head"><div><h2 id="mantenimientoTitulo">Mantenimiento por componente</h2><p class="cq-muted mt-1">Cada equipo conserva sus planes y órdenes al entrar o salir del conjunto.</p></div></div>
+    <div class="cq-notice mb-5">Un reemplazo no transfiere los planes del equipo anterior. Revisa el mantenimiento propio del nuevo componente desde su ficha.</div>
+    <h3 class="mb-3">Planes vigentes de los componentes actuales</h3>
+    {planes.length ? <div class="cq-table-wrap"><table class="cq-table"><caption>Planes de mantenimiento de los componentes actuales</caption><thead><tr><th scope="col">Plan</th><th scope="col">Equipo</th><th scope="col">Frecuencia</th><th scope="col">Próxima ejecución</th><th scope="col">Consulta</th></tr></thead><tbody>{planes.map((plan) => <tr><td>{plan.titulo}</td><td><span class="block">{plan.activoNombre}</span><span class="cq-muted">{plan.activoCodigo}</span></td><td>{FRECUENCIAS.find((item) => item.value === plan.frecuencia)?.label ?? plan.frecuencia}</td><td>{fmtFechaSoloCompacta(plan.proximaFecha)}</td><td><a class="cq-link" href={areaHref(`/activos/${plan.activoId}#planes`, plan.rubro)}>Ver plan en la ficha</a></td></tr>)}</tbody></table></div> : <div class="cq-panel"><p class="cq-muted">{user.rol === "tecnico" ? "No hay planes de mantenimiento vigentes visibles para tu perfil en los componentes actuales." : "Los componentes actuales no tienen planes de mantenimiento vigentes."}</p></div>}
+    {puestos.some((puesto) => puesto.componente) && <div class="cq-actions mt-4">{puestos.filter((puesto) => puesto.componente).map((puesto) => <a class="btn-secondary btn-sm" href={areaHref(`/activos/${puesto.componente!.activoId}#planes`, puesto.componente!.rubro)}>{canWork ? "Planificar" : "Consultar planes"}: {puesto.funcion}</a>)}</div>}
+    <div class="cq-section-head mt-7"><div><h3>Órdenes vinculadas al conjunto</h3><p class="cq-muted mt-1">Órdenes vinculadas mientras el componente pertenecía al conjunto. La fecha indica cuándo se registró esta vinculación, que permanece después de un reemplazo.</p></div></div>
+    {ordenes.length ? <div class="cq-table-wrap"><table class="cq-table"><caption>Órdenes de trabajo con pertenencia registrada a este conjunto</caption><thead><tr><th scope="col">Orden</th><th scope="col">Componente al vincularla</th><th scope="col">Función</th><th scope="col">Estado</th><th scope="col">Vinculada al conjunto</th></tr></thead><tbody>{ordenes.map((order) => <tr><td><a class="cq-link" href={areaHref(`/ordenes/${order.id}`, order.rubro)}>{order.titulo}</a><span class="cq-muted block mt-1">OT {order.id} · {order.tipo}</span></td><td><span class="block">{order.activoNombre}</span><span class="cq-muted">{order.activoCodigo}</span></td><td>{order.funcion}</td><td><span class="cq-badge">{statusLabels[order.estado] ?? order.estado}</span></td><td>{dateLabel(order.vinculadaEn)}</td></tr>)}</tbody></table></div> : <div class="cq-panel"><p class="cq-muted">No hay órdenes vinculadas visibles para tu perfil. Las órdenes anteriores a la incorporación se conservan en la ficha de cada equipo.</p></div>}
+  </section>}
+
+  <section id="trazabilidad" class="cq-section" aria-labelledby="trazabilidadTitulo">
+    <div class="cq-section-head"><div><h2 id="trazabilidadTitulo">Trazabilidad del conjunto</h2><p class="cq-muted mt-1">Consulta su composición en el tiempo y el motivo de cada cambio.</p></div></div>
+    <form method="get" class="cq-panel cq-filters" action={`/conjuntos/${id}`}>
+      <input type="hidden" name="area" value={area} />
+      <div><label class="label" for="fechaComposicion">Composición a fecha y hora</label><input class="input" id="fechaComposicion" type="datetime-local" name="fecha" required step="1" max={localInputDate(new Date().toISOString())} value={historicalDate ? localInputDate(historicalDate) : undefined} /><p class="cq-field-help">Hora de El Salvador. Consulta hasta el segundo seleccionado.</p></div>
+      <button class="btn-secondary" type="submit">Consultar composición</button>{historical && <a class="cq-link pb-2" href={currentUrl}>Ver composición actual</a>}
+    </form>
+    <details class="cq-panel"><summary class="cq-link cursor-pointer">Historial de pertenencia · {historialComponentes.length} {historialComponentes.length === 1 ? "registro" : "registros"}</summary>
+      <p class="cq-muted my-4">Nombre, código y serie conservados al incorporar el equipo. Todos los períodos permanecen disponibles.</p>
+      {historialComponentes.length ? <div class="cq-table-wrap"><table class="cq-table"><caption>Períodos de pertenencia de equipos al conjunto</caption><thead><tr><th scope="col">Equipo y función</th><th scope="col">Incorporación</th><th scope="col">Retiro</th></tr></thead><tbody>{historialComponentes.map((component) => <tr><td><a class="cq-link" href={areaHref(`/activos/${component.activoId}`, component.rubro)}>{component.codigo} · {component.nombre}</a><span class="cq-muted block mt-1">{component.funcion} · Serie: {component.serial || "No registrada"}</span></td><td><span class="block">{dateLabel(component.incorporadoEn)}</span><span class="cq-muted block mt-1">{component.incorporadoPorNombre}</span><p class="mt-2 whitespace-pre-wrap">{component.motivoAlta}</p></td><td>{component.retiradoEn ? <><span class="block">{dateLabel(component.retiradoEn)}</span><span class="cq-muted block mt-1">{component.retiradoPorNombre}</span><p class="mt-2 whitespace-pre-wrap">{component.motivoRetiro}</p></> : <span class="cq-badge" data-tone="good">Incorporado actualmente</span>}</td></tr>)}</tbody></table></div> : <p class="cq-muted">Todavía no se han registrado incorporaciones.</p>}
+    </details>
+    <div class="cq-panel mt-5"><h3>Movimientos y cambios</h3><p class="cq-muted mt-1">Fecha, responsable y motivo registrados en cada operación. Horarios de El Salvador.</p>
+      <div class="cq-timeline">{eventos.map((entry) => <article class="cq-event"><div class="cq-card-head"><h3>{actionLabels[entry.accion] ?? "Cambio registrado"}</h3><time class="cq-muted" datetime={entry.fecha}>{dateLabel(entry.fecha)}</time></div><p class="cq-muted mt-1">{entry.actorNombre}</p><p class="mt-2 text-sm whitespace-pre-wrap">{entry.motivo}</p><a class="cq-link inline-block mt-2" href={areaHref(`/conjuntos/${id}?fecha=${encodeURIComponent(entry.fecha)}`, area)}>Ver composición en este cambio</a><details><summary>Ver registro anterior y posterior</summary><div class="cq-event-changes">{[{title:"Antes", value:entry.antes}, {title:"Después", value:entry.despues}].map((snapshot) => <div><strong class="text-sm">{snapshot.title}</strong><dl>{snapshotLines(snapshot.value).map((line) => <><dt>{line.label}</dt><dd>{line.value}</dd></>)}</dl></div>)}</div></details></article>)}</div>
+      {!eventos.length && <p class="cq-muted mt-4">No hay movimientos registrados.</p>}
+    </div>
+  </section>
+
+  {canManage && <section id="editar-conjunto" class="cq-section" aria-labelledby="editarTitulo"><details class="cq-panel cq-edit"><summary id="editarTitulo">Editar datos del conjunto</summary><p class="cq-muted mt-3 mb-5">El código y el área se conservan. Cada cambio queda registrado con su motivo.</p><form id="editarConjunto" data-conjunto={id} data-version={conjunto.version} data-url={currentUrl}>
+    <div class="cq-fields"><div class="cq-full"><label class="label" for="editarNombre">Nombre *</label><input class="input" id="editarNombre" name="nombre" value={conjunto.nombre} maxlength="200" required /></div><div class="cq-full"><label class="label" for="editarDescripcion">Descripción</label><textarea class="input" id="editarDescripcion" name="descripcion" rows="3" maxlength="2000">{conjunto.descripcion ?? ""}</textarea></div><div><label class="label" for="editarCriticidad">Criticidad *</label><select class="input" id="editarCriticidad" name="criticidad" required>{Object.entries(criticalityLabels).map(([key,label]) => <option value={key} selected={key === conjunto.criticidad}>{label}</option>)}</select></div><div><label class="label" for="editarUbicacion">Ubicación</label><select class="input" id="editarUbicacion" name="ubicacionId"><option value="">Sin asignar</option>{locations.filter((entry) => entry.activa || entry.id === conjunto.ubicacionId).map((entry) => <option value={entry.id} selected={entry.id === conjunto.ubicacionId}>{entry.sucursal ? `${entry.sucursal} · ` : ""}{entry.nombre}{!entry.activa ? " (inactiva)" : ""}</option>)}</select></div><div class="cq-full"><label class="label" for="editarMotivo">Motivo del cambio *</label><textarea class="input" id="editarMotivo" name="motivo" required minlength="3" maxlength="500" rows="2"></textarea></div></div>
+    <p class="cq-error mt-4" data-error role="alert" tabindex="-1"></p><a class="cq-link mt-3" href={currentUrl} data-refresh hidden>Actualizar ficha y revisar los cambios</a><button class="btn-primary mt-5" type="submit">Guardar cambios</button>
+  </form>
+  <form id="archivarConjunto" class="cq-divider" data-conjunto={id} data-version={conjunto.version} data-url={currentUrl} data-activar={conjunto.activo ? "false" : "true"}><h3>{conjunto.activo ? "Archivar conjunto" : "Reactivar conjunto"}</h3><p class="cq-muted mt-2">{conjunto.activo ? "El archivo conserva todo el historial. Primero deben retirarse los componentes que siguen incorporados." : "La reactivación conserva la trazabilidad y permite incorporar equipos nuevamente."}</p><label class="label mt-4" for="archivoMotivo">Motivo {conjunto.activo ? "del archivo" : "de la reactivación"} *</label><textarea class="input" id="archivoMotivo" name="motivo" required minlength="3" maxlength="500" rows="2" disabled={conjunto.activo && occupied > 0}></textarea><p class="cq-error mt-4" data-error role="alert" tabindex="-1"></p><a class="cq-link mt-3" href={currentUrl} data-refresh hidden>Actualizar ficha y revisar los cambios</a><button type="submit" class="btn-secondary mt-4" disabled={conjunto.activo && occupied > 0}>{conjunto.activo ? "Archivar conservando historial" : "Reactivar conjunto"}</button>{conjunto.activo && occupied > 0 && <p class="cq-field-help">Hay {occupied} componentes incorporados. Retíralos indicando el motivo antes de archivar.</p>}</form>
+  </details></section>}
+
+  {canManage && conjunto.activo && <dialog id="componenteDialog" class="cq-dialog" aria-labelledby="accionTitulo"><form id="componenteForm" data-conjunto={id} data-version={conjunto.version} data-url={currentUrl}><div class="cq-dialog-head"><div><p class="cq-eyebrow">Composición con trazabilidad</p><h2 id="accionTitulo">Incorporar componente</h2></div><button class="btn-secondary btn-sm" type="button" data-cancel aria-label="Cerrar formulario">Cerrar</button></div><p id="accionContexto" class="cq-muted"></p><div id="puestoFields"><label class="label" for="funcion">Función o puesto *</label><input class="input" id="funcion" name="funcion" maxlength="100" placeholder="Ej.: Insuflador" /><label class="mt-4 inline-flex items-center gap-2 text-sm"><input type="checkbox" name="esencial" id="esencial" checked /> Esencial para el funcionamiento</label><p class="cq-field-help">Si falta o no está operativo, el conjunto no estará disponible. Esta función se conservará cuando reemplaces el equipo.</p></div><div id="equipoFields"><label class="label" for="equipoFiltro">Buscar equipo disponible</label><input class="input mb-3" id="equipoFiltro" type="search" placeholder="Código, nombre o serie" autocomplete="off" /><label class="label" for="componenteActivo">Equipo a incorporar *</label><select class="input" id="componenteActivo" name="activoId"><option value="">Selecciona un equipo</option>{catalog.map((asset) => <option value={asset.id}>{asset.codigo} · {asset.nombre}{asset.serial ? ` · S/N ${asset.serial}` : ""} · {AREAS[parseArea(asset.rubro) ?? (asset.tipo === "biomedico" ? "biomedico" : "equipo_general")].label} · {statusLabels[asset.estado] ?? asset.estado}</option>)}</select><p class="cq-field-help">Incluye equipos de todas las áreas que no están dados de baja ni pertenecen a otro puesto.</p></div><div class="cq-notice" id="accionAviso"></div><div><label class="label" for="componenteMotivo">Motivo *</label><textarea class="input" id="componenteMotivo" name="motivo" required minlength="3" maxlength="500" rows="3" placeholder="Describe por qué se realiza este cambio"></textarea><p class="cq-field-help">Tu nombre y la fecha de registro se añadirán automáticamente.</p></div><p class="cq-error" data-error role="alert" tabindex="-1"></p><a class="cq-link" href={currentUrl} data-refresh hidden>Actualizar ficha y revisar los cambios</a><div class="cq-actions"><button class="btn-primary" type="submit" id="componenteGuardar">Confirmar incorporación</button><button class="btn-secondary" type="button" data-cancel>Cancelar</button></div></form></dialog>}
+</ConjuntoShell>
+
+<script>
+  const modal = document.querySelector<HTMLDialogElement>("#componenteDialog");
+  const componentForm = document.querySelector<HTMLFormElement>("#componenteForm");
+  let action = "incorporar";
+  let slotId:number | null = null;
+  let slotFunction = "";
+  let busy = false;
+  const select = document.querySelector<HTMLSelectElement>("#componenteActivo");
+  const options = select ? Array.from(select.options).map((option) => ({ value:option.value, text:option.text })) : [];
+  function filterOptions(query = "") {
+    if (!select) return;
+    const selected = select.value;
+    select.replaceChildren(...options.filter((option) => !option.value || option.text.toLocaleLowerCase("es").includes(query.toLocaleLowerCase("es"))).map((option) => new Option(option.text, option.value, false, option.value === selected)));
+  }
+  document.querySelector<HTMLInputElement>("#equipoFiltro")?.addEventListener("input", (event) => filterOptions((event.target as HTMLInputElement).value));
+  modal?.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
+  document.querySelectorAll<HTMLButtonElement>("[data-cancel]").forEach((button) => button.addEventListener("click", () => { if (!busy) modal?.close(); }));
+  document.querySelectorAll<HTMLButtonElement>("[data-componente-accion]").forEach((button) => button.addEventListener("click", () => {
+    if (!modal || !componentForm || !select) return;
+    componentForm.reset();
+    filterOptions();
+    action = button.dataset.componenteAccion ?? "incorporar";
+    slotId = button.dataset.puesto ? Number(button.dataset.puesto) : null;
+    slotFunction = button.dataset.funcion ?? "";
+    const title = document.querySelector<HTMLElement>("#accionTitulo")!;
+    title.textContent = action === "retirar" ? "Retirar componente" : action === "reemplazar" ? "Reemplazar componente" : "Incorporar componente";
+    document.querySelector<HTMLElement>("#accionContexto")!.textContent = slotId ? `${button.dataset.funcion}${button.dataset.equipo ? ` · ${button.dataset.equipo}` : " · Puesto vacante"}` : "Asigna un equipo registrado a una función del conjunto.";
+    const newSlot = action === "incorporar" && !slotId;
+    document.querySelector<HTMLElement>("#puestoFields")!.hidden = !newSlot;
+    const functionInput = document.querySelector<HTMLInputElement>("#funcion")!;
+    functionInput.required = newSlot;
+    functionInput.disabled = !newSlot;
+    document.querySelector<HTMLElement>("#equipoFields")!.hidden = action === "retirar";
+    select.required = action !== "retirar";
+    select.disabled = action === "retirar";
+    document.querySelector<HTMLElement>("#accionAviso")!.textContent = action === "retirar" ? "El puesto quedará vacante. El equipo conserva su ficha, sus planes y todo su historial." : action === "reemplazar" ? "El equipo anterior saldrá y el nuevo ocupará su puesto en una sola operación. Los mantenimientos anteriores siguen vinculados al equipo que los recibió." : "El equipo conservará su inventario, su área y sus planes. Esta incorporación quedará registrada en ambos historiales.";
+    componentForm.querySelector<HTMLElement>("[data-error]")!.textContent = "";
+    componentForm.querySelector<HTMLElement>("[data-refresh]")!.hidden = true;
+    const save = document.querySelector<HTMLButtonElement>("#componenteGuardar")!;
+    save.textContent = action === "retirar" ? "Confirmar retiro" : action === "reemplazar" ? "Confirmar reemplazo" : "Confirmar incorporación";
+    save.disabled = false;
+    modal.showModal();
+    if (newSlot) functionInput.focus(); else if (action !== "retirar") document.querySelector<HTMLInputElement>("#equipoFiltro")!.focus(); else document.querySelector<HTMLTextAreaElement>("#componenteMotivo")!.focus();
+  }));
+  async function saveForm(form:HTMLFormElement, method:string, payload:Record<string,unknown>, components = false) {
+    if (busy) return;
+    const error = form.querySelector<HTMLElement>("[data-error]")!;
+    error.textContent = "";
+    if (String(payload.motivo ?? "").trim().length < 3) { error.textContent = "Escribe un motivo de al menos 3 caracteres."; error.focus(); return; }
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const previous = button.textContent;
+    busy = true;
+    button.disabled = true;
+    button.textContent = "Guardando…";
+    let stale = false;
+    try {
+      const result = await fetch(`/api/conjuntos/${form.dataset.conjunto}${components ? "/componentes" : ""}`, { method, headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ ...payload, version:Number(form.dataset.version) }) });
+      const json = await result.json().catch(() => ({}));
+      stale = result.status === 409;
+      if (!result.ok) throw new Error(json.error ?? "No se pudo guardar el cambio. Inténtalo de nuevo.");
+      window.location.reload();
+    } catch (cause) {
+      error.textContent = cause instanceof Error ? cause.message : "No se pudo conectar. Revisa tu conexión y vuelve a intentarlo.";
+      error.focus();
+      form.querySelector<HTMLElement>("[data-refresh]")!.hidden = !stale;
+      button.disabled = stale;
+      button.textContent = previous;
+      busy = false;
+    }
+  }
+  componentForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(componentForm);
+    const payload:Record<string,unknown> = { accion:action, motivo:String(data.get("motivo") ?? "").trim() };
+    if (slotId) payload.puestoId = slotId;
+    if (action !== "retirar") payload.activoId = Number(data.get("activoId"));
+    if (action === "incorporar") { payload.funcion = slotId ? slotFunction : String(data.get("funcion") ?? "").trim(); payload.esencial = data.get("esencial") === "on"; }
+    void saveForm(componentForm, "POST", payload, true);
+  });
+  const editForm = document.querySelector<HTMLFormElement>("#editarConjunto");
+  editForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(editForm);
+    const value = (key:string) => String(data.get(key) ?? "").trim();
+    void saveForm(editForm, "PATCH", { nombre:value("nombre"), descripcion:value("descripcion"), criticidad:value("criticidad"), ubicacionId:value("ubicacionId") ? Number(value("ubicacionId")) : null, motivo:value("motivo") });
+  });
+  const archiveForm = document.querySelector<HTMLFormElement>("#archivarConjunto");
+  archiveForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveForm(archiveForm, "PATCH", { activo:archiveForm.dataset.activar === "true", motivo:String(new FormData(archiveForm).get("motivo") ?? "").trim() });
+  });
+  if (window.location.hash === "#editar-conjunto") document.querySelector<HTMLDetailsElement>("#editar-conjunto details")?.setAttribute("open", "");
+  document.querySelector<HTMLAnchorElement>('a[href="#editar-conjunto"]')?.addEventListener("click", () => document.querySelector<HTMLDetailsElement>("#editar-conjunto details")?.setAttribute("open", ""));
+</script>

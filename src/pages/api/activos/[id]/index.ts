@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { activos, tickets, ordenes, proyectos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit, calcularDiff } from "@/lib/audit";
+import { activoTieneHistorialConjunto, MENSAJE_ACTIVO_TRAZADO } from "@/lib/trazabilidad-conjuntos";
 import { rubroDeActivo } from "@/lib/rubros";
 import { activoAreaCondition } from "@/lib/areas";
 import { datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
@@ -114,7 +115,17 @@ export const DELETE: APIRoute = async (ctx) => {
   if (!user) return response;
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
-  await db.delete(activos).where(eq(activos.id, id));
+  if (await activoTieneHistorialConjunto(ctx, id)) {
+    return Response.json({ error: MENSAJE_ACTIVO_TRAZADO }, { status: 409 });
+  }
+  try {
+    await db.delete(activos).where(eq(activos.id, id));
+  } catch (error) {
+    if (await activoTieneHistorialConjunto(ctx, id)) {
+      return Response.json({ error: MENSAJE_ACTIVO_TRAZADO }, { status: 409 });
+    }
+    throw error;
+  }
   await logAudit(ctx, { entidad: "activo", entidadId: id, accion: "delete", resumen: "Equipo eliminado" });
   return Response.json({ ok: true });
 };
