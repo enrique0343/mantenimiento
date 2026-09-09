@@ -7,6 +7,7 @@ import {
   tickets, movimientosInventario, extintorEventos,
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
 
 export const prerender = false;
 
@@ -28,27 +29,28 @@ export const POST: APIRoute = async (ctx) => {
   const env = getEnv(ctx);
   const ids = parsed.data.ids;
 
+  if (await ordenesTienenConjunto(ctx, ids)) {
+    return Response.json({ error: "La selección contiene una orden que debe conservarse. " + MENSAJE_ORDEN_TRAZADA }, { status: 409 });
+  }
+
   const ots = await db.select().from(ordenes).where(inArray(ordenes.id, ids));
   if (!ots.length) return Response.json({ ok: true, borradas: 0 });
 
-  // 1) Borrar adjuntos de R2 (las filas en DB se borran por cascade)
+  // Comprobar y borrar en una transacción antes de tocar los archivos R2.
   const adjs = await db.select().from(adjuntos).where(inArray(adjuntos.ordenId, ids));
-  if (adjs.length) {
-    await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
-  }
-
-  // 2) Limpiar FKs sin cascade — poner a NULL para preservar el historial en
-  //    tickets/movimientos/eventos extintores
-  try { await db.update(tickets).set({ otId: null }).where(inArray(tickets.otId, ids)); } catch (e) { console.error("clean tickets:", e); }
-  try { await db.update(movimientosInventario).set({ ordenId: null }).where(inArray(movimientosInventario.ordenId, ids)); } catch (e) { console.error("clean movimientos:", e); }
-  try { await db.update(extintorEventos).set({ otId: null }).where(inArray(extintorEventos.otId, ids)); } catch (e) { console.error("clean extintor eventos:", e); }
-
-  // 3) Borrar las OTs (cascade limpia comentarios, adjuntos, repuestos, firmas, etc.)
   try {
-    await db.delete(ordenes).where(inArray(ordenes.id, ids));
+    await db.batch([
+      db.update(tickets).set({ otId: null }).where(inArray(tickets.otId, ids)),
+      db.update(movimientosInventario).set({ ordenId: null }).where(inArray(movimientosInventario.ordenId, ids)),
+      db.update(extintorEventos).set({ otId: null }).where(inArray(extintorEventos.otId, ids)),
+      db.delete(ordenes).where(inArray(ordenes.id, ids)),
+    ]);
   } catch (e: any) {
+    if (await ordenesTienenConjunto(ctx, ids)) return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
     return Response.json({ error: `No se pudieron borrar las OTs: ${e?.message ?? e}` }, { status: 500 });
   }
+
+  if (adjs.length) await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
 
   // 4) Resetear planes/actividades vinculadas para que el cron pueda regenerar
   const planIds = Array.from(new Set(ots.map((o) => o.planId).filter((x): x is number => !!x)));

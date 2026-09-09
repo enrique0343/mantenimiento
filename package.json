@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs",
+    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs",
     "preview": "wrangler pages dev ./dist --d1=DB --r2=R2 --compatibility-date=2025-01-01",
     "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true --commit-message=deploy",
     "db:generate": "drizzle-kit generate",

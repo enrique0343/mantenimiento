@@ -1,5 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
+import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos } from "@/lib/schema";
 import { eq, asc, desc, and, inArray, ne } from "drizzle-orm";
@@ -85,7 +87,9 @@ const auditRows = await db
 
 const user = Astro.locals.user!;
 const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
-const canDelete = user.rol === "admin";
+const conjuntosHistorial = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
+  ? await getConjuntosDelActivo(Astro, id) : [];
+const canDelete = user.rol === "admin" && conjuntosHistorial.length === 0;
 const canJefe = user.rol === "admin" || user.rol === "jefe";
 
 const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
@@ -210,6 +214,8 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
       </div>
     )}
   </div>
+
+  <ActivoConjuntos relaciones={conjuntosHistorial} />
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">
@@ -651,7 +657,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <!-- Cronograma de mantenimiento -->
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
-      <h2 class="font-semibold">Cronograma de mantenimiento preventivo</h2>
+      <h2 id="planes" class="font-semibold scroll-mt-24">Cronograma de mantenimiento preventivo</h2>
       {canEdit && <button id="newPlanBtn" class="btn-primary">+ Agregar al cronograma</button>}
     </div>
 

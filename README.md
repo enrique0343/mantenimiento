@@ -222,6 +222,20 @@ La migración `0047_areas_mantenimiento.sql` es aditiva: agrega información té
 
 ### Verificación y publicación
 
-Con Node 24, ejecutar `npm ci`, `npm test` y `npm run build`. Las cinco suites usan SQLite local en memoria y no envían correos. Cubren aislamiento entre áreas, formularios y APIs, conversión de solicitudes, planificación, búsqueda y generación automática.
+Con Node 24, ejecutar `npm ci`, `npm test` y `npm run build`. Las suites usan SQLite local en memoria y no envían correos. Cubren aislamiento entre áreas, formularios y APIs, conversión de solicitudes, planificación, búsqueda, generación automática y trazabilidad de conjuntos.
 
 El workflow de GitHub prueba y construye antes de migrar. Publica automáticamente solo si existen `CLOUDFLARE_API_TOKEN` y `CLOUDFLARE_ACCOUNT_ID`; si faltan, lo informa y deja la publicación a la conexión autorizada de Cloudflare. Antes de publicar, guardar el marcador actual de D1 y verificar qué migraciones están pendientes. Nunca cargar los datos de prueba en producción.
+
+## Conjuntos y trazabilidad
+
+Cada área incluye **Conjuntos**. Un conjunto, como una torre de videolaparoscopía, agrupa equipos independientes sin duplicar el inventario. Puede incluir componentes de otras áreas: por ejemplo, una torre biomédica con un carro de equipos generales. Administradores y jefes gestionan la composición; técnicos y visualizadores pueden consultarla.
+
+Cada posición describe una función y si es esencial. Incorporar, retirar o reemplazar requiere un motivo y registra automáticamente la fecha y el usuario responsable. El reemplazo cierra la vinculación anterior y abre otra en la misma operación. Los componentes conservan sus códigos, series, planes e historial individual; los planes no se transfieren al equipo de reemplazo. Un equipo solo puede estar incorporado en un conjunto a la vez.
+
+La ficha ofrece composición actual, consulta por fecha, cambios con valores anteriores y posteriores, planes de componentes actuales y órdenes vinculadas al conjunto. La pertenencia también se consulta desde la ficha y el historial del equipo. Cada orden nueva captura su conjunto al asignarle un componente; esa asociación permanece aunque después se sustituya el equipo. Las órdenes anteriores a la incorporación no se atribuyen retroactivamente al conjunto.
+
+La disponibilidad refleja los puestos esenciales y el estado actual de sus componentes. Una vacante o un componente no operativo impide mostrarlo disponible. Sin puestos esenciales queda sin definir. Esta señal es independiente de la criticidad alta, media o baja. La consulta histórica muestra la composición, sin atribuirle los estados actuales de los equipos.
+
+La migración aditiva `0048_conjuntos_trazabilidad.sql` conserva los datos y usuarios existentes. Los eventos y vínculos históricos no se pueden reescribir ni borrar. Los equipos y órdenes relacionados quedan protegidos frente a la eliminación; se pueden dar de baja o cancelar según corresponda. Solo se archivan conjuntos vacíos, y sus posiciones e historial permanecen consultables.
+
+Las escrituras de composición usan transacciones y versiones para rechazar cambios simultáneos desactualizados. La suite `scripts/test-conjuntos.mjs` aplica las migraciones reales y comprueba autenticación, permisos, reemplazos, composición histórica, instantáneas, concurrencia, fallos transaccionales y protección de adjuntos.

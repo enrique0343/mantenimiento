@@ -2,7 +2,7 @@ import { defineMiddleware } from "astro:middleware";
 import { getCurrentUser } from "./lib/auth";
 import { parseArea } from "./lib/areas";
 import { getDb } from "./lib/db";
-import { activos, ordenes, tickets, actividades } from "./lib/schema";
+import { activos, ordenes, tickets, actividades, conjuntos } from "./lib/schema";
 import { eq } from "drizzle-orm";
 import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
 
@@ -61,11 +61,14 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   ctx.locals.area = pathArea ?? parseArea(requestedArea);
   // Detail pages derive their workspace from the saved record, even when opened
   // from a notification or QR without a query string.
-  const recordPath = path.match(/^\/(activos|ordenes|tickets|actividades)\/(\d+)(?:\/|$)/);
+  const recordPath = path.match(/^\/(activos|ordenes|tickets|actividades|conjuntos)\/(\d+)(?:\/|$)/);
   if (recordPath) {
     const db = getDb(ctx);
     const id = Number(recordPath[2]);
-    if (recordPath[1] === "activos") {
+    if (recordPath[1] === "conjuntos") {
+      const [c] = await db.select({ rubro: conjuntos.rubro }).from(conjuntos).where(eq(conjuntos.id, id)).limit(1);
+      if (c) ctx.locals.area = parseArea(c.rubro);
+    } else if (recordPath[1] === "activos") {
       const [a] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, id)).limit(1);
       if (a) ctx.locals.area = rubroDeActivo(a.rubro, a.tipo);
     } else if (recordPath[1] === "actividades") {

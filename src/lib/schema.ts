@@ -1162,3 +1162,66 @@ export const raciAsignaciones = sqliteTable("raci_asignaciones", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 export type RaciAsignacion = typeof raciAsignaciones.$inferSelect;
+
+// ─── Conjuntos operativos y trazabilidad de composición ──────────────────────
+export const conjuntos = sqliteTable("conjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }).notNull(),
+  criticidad: text("criticidad", { enum: ["alta", "media", "baja"] }).notNull(),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id, { onDelete: "restrict" }),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  version: integer("version").notNull().default(1),
+  ultimaOperacionId: text("ultima_operacion_id").notNull().unique(),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  updatedAt: text("updated_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+export const conjuntoPuestos = sqliteTable("conjunto_puestos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  funcion: text("funcion").notNull(),
+  esencial: integer("esencial", { mode: "boolean" }).notNull(),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+export const conjuntoComponentes = sqliteTable("conjunto_componentes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  puestoId: integer("puesto_id").notNull().references(() => conjuntoPuestos.id, { onDelete: "restrict" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "restrict" }),
+  incorporadoEn: text("incorporado_en").notNull(),
+  retiradoEn: text("retirado_en"),
+  incorporadoPor: integer("incorporado_por").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  retiradoPor: integer("retirado_por").references(() => usuarios.id, { onDelete: "restrict" }),
+  motivoAlta: text("motivo_alta").notNull(),
+  motivoRetiro: text("motivo_retiro"),
+  activoCodigo: text("activo_codigo").notNull(),
+  activoNombre: text("activo_nombre").notNull(),
+  activoSerial: text("activo_serial"),
+  incorporadoPorNombre: text("incorporado_por_nombre").notNull(),
+  retiradoPorNombre: text("retirado_por_nombre"),
+});
+export const conjuntoEventos = sqliteTable("conjunto_eventos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  fecha: text("fecha").notNull(),
+  accion: text("accion", { enum: ["crear", "editar", "archivar", "reactivar", "incorporar", "retirar", "reemplazar"] }).notNull(),
+  motivo: text("motivo").notNull(),
+  actorId: integer("actor_id").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  actorNombre: text("actor_nombre").notNull(),
+  antes: text("antes"),
+  despues: text("despues").notNull(),
+});
+export const ordenConjuntos = sqliteTable("orden_conjuntos", {
+  ordenId: integer("orden_id").primaryKey().references(() => ordenes.id, { onDelete: "restrict" }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  puestoId: integer("puesto_id").notNull().references(() => conjuntoPuestos.id, { onDelete: "restrict" }),
+  componenteId: integer("componente_id").notNull().references(() => conjuntoComponentes.id, { onDelete: "restrict" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "restrict" }),
+  fecha: text("fecha").notNull(),
+  funcion: text("funcion").notNull(),
+  activoCodigo: text("activo_codigo").notNull(),
+  activoNombre: text("activo_nombre").notNull(),
+  activoSerial: text("activo_serial"),
+});

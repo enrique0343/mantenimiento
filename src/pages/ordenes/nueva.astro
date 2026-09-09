@@ -44,6 +44,9 @@ const tecnicos = await db
 
 const ubicacionesJson = JSON.stringify(ubicacionesList);
 const activosJson = JSON.stringify(activosList);
+const preseleccion = url.searchParams.get("activoId");
+const activoPreseleccionado = preseleccion ? activosList.find(a => String(a.id) === preseleccion)?.id : null;
+if (preseleccion && !activoPreseleccionado) return new Response("El equipo no está disponible en el área seleccionada.", { status: 400 });
 ---
 
 <Layout title="Nueva orden">
@@ -60,7 +63,7 @@ const activosJson = JSON.stringify(activosList);
       <p class="mt-1 text-xs text-slate-500">La orden quedará dentro de esta área. Puedes registrar trabajo por ubicación sin seleccionar un equipo.</p>
     </div>
     <div>
-      <label class="label">Título *</label>
+      <label class="label" for="titulo">Título *</label>
       <input class="input" id="titulo" required placeholder="Ej: Cambio de filtro AC sala 3" />
     </div>
     <div>
@@ -123,7 +126,7 @@ const activosJson = JSON.stringify(activosList);
         </div>
         <p class="text-xs text-slate-500 mt-1 ml-6">Marca esta casilla si la intervención es sobre un equipo registrado. Si es un trabajo general (limpieza, instalación, área), déjalo sin marcar.</p>
         <div id="equipoBox" class="mt-3 hidden">
-          <label class="label text-xs">Equipo *</label>
+          <label class="label text-xs" for="activoId">Equipo *</label>
           <select class="input text-sm" id="activoId">
             <option value="">Selecciona la ubicación primero</option>
           </select>
@@ -170,7 +173,7 @@ const activosJson = JSON.stringify(activosList);
     </div>
   </form>
 
-  <script define:vars={{ ubicacionesJson, activosJson, area }}>
+  <script define:vars={{ ubicacionesJson, activosJson, area, activoPreseleccionado }}>
     document.getElementById("rubro")?.addEventListener("change", (event) => {
       const selected = event.target.value;
       if (selected) location.href = `/ordenes/nueva?area=${encodeURIComponent(selected)}`;
@@ -216,18 +219,29 @@ const activosJson = JSON.stringify(activosList);
     ubSel.addEventListener("change", actualizarEquipos);
 
     function actualizarEquipos() {
+      const anterior = activoSel.value;
       activoSel.innerHTML = "";
       if (!conEquipoCk.checked) return;
       const ubid = Number(ubSel.value);
-      if (!ubid) {
-        activoSel.disabled = true;
-        activoSel.appendChild(new Option("Selecciona la ubicación primero", ""));
-        return;
-      }
-      const eqs = ACTIVOS.filter((a) => a.ubicacionId === ubid);
+      const eqs = ACTIVOS.filter((a) => !a.ubicacionId || (ubid && a.ubicacionId === ubid));
       activoSel.disabled = eqs.length === 0;
-      activoSel.appendChild(new Option(eqs.length === 0 ? "Sin equipos en esta ubicación" : "— Selecciona el equipo —", ""));
+      activoSel.appendChild(new Option(eqs.length === 0 ? (ubid ? "Sin equipos en esta ubicación" : "Selecciona la ubicación primero") : "— Selecciona el equipo —", ""));
       eqs.forEach((a) => activoSel.appendChild(new Option(`${a.codigo} · ${a.nombre}`, String(a.id))));
+      if (eqs.some(a => String(a.id) === anterior)) activoSel.value = anterior;
+    }
+
+    const equipoInicial = ACTIVOS.find(a => a.id === activoPreseleccionado);
+    if (equipoInicial) {
+      conEquipoCk.checked = true;
+      conEquipoCk.dispatchEvent(new Event("change"));
+      const lugar = UBICACIONES.find(u => u.id === equipoInicial.ubicacionId);
+      if (lugar) {
+        sucSel.value = String(lugar.sucursalId);
+        sucSel.dispatchEvent(new Event("change"));
+        ubSel.value = String(lugar.id);
+      }
+      actualizarEquipos();
+      activoSel.value = String(equipoInicial.id);
     }
 
     // ─── Fotos pendientes (se suben tras crear la OT) ──────────────────────
