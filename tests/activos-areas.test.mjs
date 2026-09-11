@@ -15,7 +15,17 @@ class Statement {
  async all(){return {results:sqlite.prepare(this.sql).all(...this.params),success:true};}
  async run(){return {meta:sqlite.prepare(this.sql).run(...this.params),success:true};}
 }
-const DB={prepare(sql){return new Statement(sql);}};
+const DB={
+ prepare(sql){return new Statement(sql);},
+ async batch(statements){
+  sqlite.exec('BEGIN IMMEDIATE');
+  try {
+   const results=await Promise.all(statements.map(statement=>statement.all()));
+   sqlite.exec('COMMIT');
+   return results;
+  } catch(error){sqlite.exec('ROLLBACK');throw error;}
+ },
+};
 const secret='local-asset-integration-test-only';
 const users=['admin','tecnico','jefe','solicitante'];
 const tokens={};
@@ -31,7 +41,7 @@ const fields={aires:{tipoUnidad:'Mini split',capacidadBtuH:12000,refrigerante:'R
 const ids={};
 for(const [idx,area] of AREA_KEYS.entries()){
  const out=await expect(collection.POST,ctx('POST','/api/activos',{codigo:'TEST-'+area,nombre:'Prueba '+area,rubro:area,datosTecnicos:fields[area],criticidadOperacional:['alta','media','baja'][idx%3]}),201);
- ids[area]=out.activo.id;assert.equal(out.activo.rubro,area);assert.deepEqual(JSON.parse(out.activo.datosTecnicos),fields[area]);assert.equal(out.activo.tipo,area==='biomedico'?'biomedico':'general');
+ ids[area]=out.activo.id;assert.equal(out.activo.rubro,area);assert.deepEqual(JSON.parse(out.activo.datosTecnicos),Object.fromEntries(Object.entries(fields[area]).map(([key,value])=>[key,typeof value==='string'?value.toUpperCase():value])));assert.equal(out.activo.tipo,area==='biomedico'?'biomedico':'general');
 }
 for(const area of AREA_KEYS){const out=await expect(collection.GET,ctx('GET','/api/activos?area='+area),200);assert.deepEqual(out.activos.map(a=>a.id),[ids[area]]);}
 await expect(collection.GET,ctx('GET','/api/activos?area=vehiculos'),400);

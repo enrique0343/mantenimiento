@@ -6,6 +6,7 @@ import { eq, and, inArray, asc } from "drizzle-orm";
 import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
+import UppercaseFields from "@/components/UppercaseFields.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
@@ -53,37 +54,39 @@ const ubJson = JSON.stringify(ubRows);
       <input type="hidden" id="tipo" value={area === "biomedico" ? "biomedico" : "general"} />
       <div>
         <label class="label">Categoría</label>
-        <input class="input" id="categoria" list="categoriasList" value={a.categoria ?? ""} />
+        <input class="input" id="categoria" data-uppercase autocapitalize="characters" list="categoriasList" value={a.categoria ?? ""} />
         <datalist id="categoriasList"></datalist>
         <p class="mt-1 text-xs text-slate-500">Las sugerencias corresponden al área seleccionada.</p>
       </div>
       <div>
-        <label class="label">Código *</label>
-        <input class="input" id="codigo" required value={a.codigo} />
+        <label class="label" for="codigo">Código</label>
+        <input class="input bg-slate-50" id="codigo" readonly value={a.codigo} />
+        <p class="mt-1 text-xs text-slate-500">El código asignado se conserva.</p>
       </div>
       <div>
         <label class="label">Número de activo</label>
-        <input class="input" id="numeroActivo" value={a.numeroActivo ?? ""} />
+        <input class="input" id="numeroActivo" data-uppercase autocapitalize="characters" value={a.numeroActivo ?? ""} />
       </div>
       <div class="sm:col-span-2">
-        <label class="label">Nombre *</label>
-        <input class="input" id="nombre" required value={a.nombre} />
+        <label class="label" for="nombre">Nombre</label>
+        <input class="input" id="nombre" data-uppercase autocapitalize="characters" value={a.nombre} aria-describedby="nombreHelp" />
+        <p class="mt-1 text-xs text-slate-500" id="nombreHelp">Si lo dejas vacío, se registrará como pendiente de identificar.</p>
       </div>
       <div class="sm:col-span-2">
         <label class="label">Descripción</label>
-        <textarea class="input" id="descripcion" rows="2">{a.descripcion ?? ""}</textarea>
+        <textarea class="input" id="descripcion" data-uppercase autocapitalize="characters" rows="2">{a.descripcion ?? ""}</textarea>
       </div>
       <div>
         <label class="label">Marca</label>
-        <input class="input" id="marca" value={a.marca ?? ""} />
+        <input class="input" id="marca" data-uppercase autocapitalize="characters" value={a.marca ?? ""} />
       </div>
       <div>
         <label class="label">Modelo</label>
-        <input class="input" id="modelo" value={a.modelo ?? ""} />
+        <input class="input" id="modelo" data-uppercase autocapitalize="characters" value={a.modelo ?? ""} />
       </div>
       <div>
         <label class="label">Número de serie</label>
-        <input class="input" id="serial" value={a.serial ?? ""} />
+        <input class="input" id="serial" data-uppercase autocapitalize="characters" value={a.serial ?? ""} />
       </div>
       <div>
         <label class="label">Año</label>
@@ -110,7 +113,7 @@ const ubJson = JSON.stringify(ubRows);
 
       <div class="sm:col-span-2">
         <label class="label">Detalle de ubicación / texto libre</label>
-        <input class="input" id="ubicacion" value={a.ubicacion ?? ""} />
+        <input class="input" id="ubicacion" data-uppercase autocapitalize="characters" value={a.ubicacion ?? ""} />
       </div>
 
       <div>
@@ -185,8 +188,8 @@ const ubJson = JSON.stringify(ubRows);
           </select>
         </div>
         <div>
-          <label class="label">Criticidad operacional *</label>
-          <select class="input" id="criticidadOperacional" required>
+          <label class="label">Criticidad operacional</label>
+          <select class="input" id="criticidadOperacional">
             {(["alta", "media", "baja"] as const).map((c) => (
               <option value={c} selected={(a.criticidadOperacional ?? "media") === c}>{CRITICIDAD_LABEL[c]}</option>
             ))}
@@ -205,7 +208,7 @@ const ubJson = JSON.stringify(ubRows);
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label class="label">Registro sanitario (DNM)</label>
-          <input class="input" id="registroSanitario" value={a.registroSanitario ?? ""} />
+          <input class="input" id="registroSanitario" data-uppercase autocapitalize="characters" value={a.registroSanitario ?? ""} />
         </div>
         <div>
           <label class="label">Clase de riesgo</label>
@@ -234,6 +237,7 @@ const ubJson = JSON.stringify(ubRows);
       <a class="btn-secondary" href={areaHref(`/activos/${id}`, area)}>Cancelar</a>
     </div>
   </form>
+  <UppercaseFields />
 
   <script define:vars={{ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC }}>
     const allUbs = JSON.parse(ubJson);
@@ -298,7 +302,6 @@ const ubJson = JSON.stringify(ubRows);
       const provVal = document.getElementById("proveedorSel")?.value;
 
       const payload = {
-        codigo: v("codigo"),
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
         ubicacion: v("ubicacion") || null,

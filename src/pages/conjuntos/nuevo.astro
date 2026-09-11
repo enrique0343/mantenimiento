@@ -1,5 +1,6 @@
 ---
 import ConjuntoShell from "@/components/ConjuntoShell.astro";
+import UppercaseFields from "@/components/UppercaseFields.astro";
 import { getDb } from "@/lib/db";
 import { ubicaciones, sucursales } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
@@ -16,18 +17,19 @@ const locations = await getDb(Astro).select({ id:ubicaciones.id, nombre:ubicacio
   <header class="cq-head"><div><p class="cq-eyebrow">Equipos que funcionan juntos</p><h1>Crear conjunto</h1><p class="cq-muted mt-2">Primero identifica el conjunto. Después podrás incorporar sus componentes.</p></div></header>
   <form id="crearConjunto" class="cq-panel cq-form">
     <div class="cq-fields">
-      <div><label class="label" for="codigo">Código del conjunto *</label><input class="input" id="codigo" name="codigo" required maxlength="60" placeholder="CON-BIO-001" /><p class="cq-field-help">Identificador propio de la agrupación. Se conserva en su historial.</p></div>
+      <div><label class="label" for="codigo">Código del conjunto *</label><input class="input" id="codigo" data-uppercase autocapitalize="characters" name="codigo" required maxlength="60" placeholder="CON-BIO-001" /><p class="cq-field-help">Identificador propio de la agrupación. Se conserva en su historial.</p></div>
       <div><label class="label" for="rubro">Área del conjunto *</label><select class="input" id="rubro" name="rubro" required><option value="">Selecciona un área</option>{AREA_KEYS.map((key) => <option value={key} selected={key === area}>{AREAS[key].label}</option>)}</select><p class="cq-field-help">Puede incluir componentes de otras áreas. El área del conjunto no cambiará después.</p></div>
-      <div class="cq-full"><label class="label" for="nombre">Nombre del conjunto *</label><input class="input" id="nombre" name="nombre" required maxlength="200" placeholder="Torre de videolaparoscopía · Quirófano 1" /></div>
-      <div class="cq-full"><label class="label" for="descripcion">Descripción</label><textarea class="input" id="descripcion" name="descripcion" rows="3" maxlength="2000" placeholder="Función del conjunto y detalles para identificarlo"></textarea></div>
+      <div class="cq-full"><label class="label" for="nombre">Nombre del conjunto *</label><input class="input" id="nombre" data-uppercase autocapitalize="characters" name="nombre" required maxlength="200" placeholder="Torre de videolaparoscopía · Quirófano 1" /></div>
+      <div class="cq-full"><label class="label" for="descripcion">Descripción</label><textarea class="input" id="descripcion" data-uppercase autocapitalize="characters" name="descripcion" rows="3" maxlength="2000" placeholder="Función del conjunto y detalles para identificarlo"></textarea></div>
       <div><label class="label" for="criticidad">Criticidad del conjunto *</label><select class="input" id="criticidad" name="criticidad" required><option value="alta">Alta</option><option value="media" selected>Media</option><option value="baja">Baja</option></select><p class="cq-field-help">Impacto de una falla del conjunto. Cada componente mantiene su propia criticidad.</p></div>
       <div><label class="label" for="ubicacionId">Ubicación del conjunto</label><select class="input" id="ubicacionId" name="ubicacionId"><option value="">Sin asignar</option>{locations.map((location) => <option value={location.id}>{location.sucursal ? `${location.sucursal} · ` : ""}{location.nombre}</option>)}</select><p class="cq-field-help">No cambia la ubicación registrada en las fichas de sus componentes.</p></div>
     </div>
-    <div class="cq-divider"><label class="label" for="motivo">Motivo del registro *</label><textarea class="input" id="motivo" name="motivo" required minlength="3" maxlength="500" rows="2" placeholder="Ej.: Registrar la composición inicial de la torre instalada en quirófano"></textarea><p class="cq-field-help">Quedará en la trazabilidad con tu nombre y la fecha de registro.</p></div>
+    <div class="cq-divider"><label class="label" for="motivo">Motivo del registro *</label><textarea class="input" id="motivo" data-uppercase autocapitalize="characters" name="motivo" required minlength="3" maxlength="500" rows="2" placeholder="Ej.: Registrar la composición inicial de la torre instalada en quirófano"></textarea><p class="cq-field-help">Quedará en la trazabilidad con tu nombre y la fecha de registro.</p></div>
     <div class="cq-notice mt-5">La disponibilidad se definirá al incorporar los componentes y marcar cuáles son esenciales para el funcionamiento.</div>
     <p class="cq-error mt-4" id="crearError" role="alert" tabindex="-1"></p>
     <div class="cq-actions mt-6"><button class="btn-primary" type="submit">Crear y agregar componentes</button><a class="btn-secondary" href={areaHref("/conjuntos", area)}>Cancelar</a></div>
   </form>
+  <UppercaseFields />
 </ConjuntoShell>
 <script>
   const form = document.querySelector<HTMLFormElement>("#crearConjunto");
