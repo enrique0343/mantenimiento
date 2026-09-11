@@ -80,7 +80,7 @@ export async function enviarResumenSemanalSatisfaccion(
   if (admins.length === 0) return { enviados: 0, razon: "Sin destinatarios" };
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
 
   // HTML
   const rankingHtml = rankingList.length === 0 ? "" : `

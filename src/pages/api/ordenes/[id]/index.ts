@@ -364,7 +364,7 @@ export const PATCH: APIRoute = async (ctx) => {
       const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
       const env = (ctx.locals as any)?.runtime?.env ?? {};
-      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
       const otUrl = `${baseUrl}/ordenes/${row.id}`;
 
       // Detecta si es reasignación (ya tenía técnico) vs primera asignación

@@ -7,5 +7,5 @@ compatibility_date = "2025-01-01"
 crons = ["0 12 * * *"]
 
 [vars]
-APP_URL = "https://mantenimiento-49c.pages.dev"
+APP_URL = "https://mantenimiento.complejoavante.dev"
 # CRON_SECRET se configura como secret con: wrangler secret put CRON_SECRET

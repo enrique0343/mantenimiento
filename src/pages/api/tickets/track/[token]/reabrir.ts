@@ -114,7 +114,7 @@ export const POST: APIRoute = async (ctx) => {
   // 6) Notificar al técnico y al jefe
   try {
     const env = (ctx.locals as any)?.runtime?.env ?? {};
-    const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+    const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
     const otUrl = `${baseUrl}/ordenes/${ot.id}`;
 
     // Técnico asignado

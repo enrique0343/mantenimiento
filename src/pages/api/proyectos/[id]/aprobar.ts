@@ -53,7 +53,7 @@ export const POST: APIRoute = async (ctx) => {
       const [creador] = await db.select().from(usuarios).where(eq(usuarios.id, actual.creadoPor)).limit(1);
       if (creador?.email) {
         const env = (ctx.locals as any)?.runtime?.env ?? {};
-        const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+        const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
         const url = `${baseUrl}/proyectos/${id}`;
         const primer = (creador.nombre ?? "").split(" ")[0] || creador.nombre;
         const titulo = parsed.data.decision === "aprobado" ? "Tu proyecto fue aprobado" : "Tu proyecto fue rechazado";

@@ -13,7 +13,7 @@ const HORAS_RECORDATORIO = 48;
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  return env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  return env.APP_URL || "https://mantenimiento.complejoavante.dev";
 }
 
 export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ enviados: number }> {

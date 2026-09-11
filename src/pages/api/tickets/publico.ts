@@ -77,7 +77,7 @@ export const POST: APIRoute = async (ctx) => {
       }
 
       const env = (ctx.locals as any)?.runtime?.env ?? {};
-      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
       const ticketUrl = `${baseUrl}/tickets/${row.id}`;
 
       ctx.locals.runtime.ctx.waitUntil(
@@ -107,7 +107,7 @@ export const POST: APIRoute = async (ctx) => {
 
     // Confirmacion al solicitante
     const env2 = (ctx.locals as any)?.runtime?.env ?? {};
-    const baseUrl2 = env2.APP_URL || "https://mantenimiento-49c.pages.dev";
+    const baseUrl2 = env2.APP_URL || "https://mantenimiento.complejoavante.dev";
     const trackUrl = `${baseUrl2}/soporte/track/${row.trackingToken}`;
     ctx.locals.runtime.ctx.waitUntil(
       sendMail(ctx, {

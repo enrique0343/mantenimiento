@@ -156,7 +156,7 @@ export const PATCH: APIRoute = async (ctx) => {
         /*
         if (creador.email) {
           const env = (ctx.locals as any)?.runtime?.env ?? {};
-          const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+          const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
           ctx.locals.runtime.ctx.waitUntil(
             sendMail(ctx, {
               to: creador.email,
