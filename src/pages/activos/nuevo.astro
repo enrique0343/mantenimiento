@@ -6,10 +6,11 @@ import { eq, and, inArray, asc } from "drizzle-orm";
 import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
+import UppercaseFields from "@/components/UppercaseFields.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
 export const prerender = false;
-const area = parseArea(Astro.url.searchParams.get("area"));
-const titulo = area ? AREAS[area].createLabel : "Registrar activo";
+const area = parseArea(Astro.url.searchParams.get("area")) ?? "equipo_general";
+const titulo = AREAS[area].createLabel;
 
 const user = Astro.locals.user!;
 if (!["admin", "tecnico"].includes(user.rol)) {
@@ -32,6 +33,7 @@ const ubJson = JSON.stringify(ubRows);
 <Layout title={titulo}>
   <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
   <h1 class="mt-2 text-2xl font-bold" id="formTitle">{titulo}</h1>
+  <p class="mt-2 text-sm text-slate-500">Puedes guardar el registro ahora y completar sus datos después. El código se asigna automáticamente.</p>
 
   <form id="form" class="card mt-4 space-y-5 p-5">
     <ActivoAreaFields area={area} />
@@ -39,37 +41,38 @@ const ubJson = JSON.stringify(ubRows);
       <input type="hidden" id="tipo" value={area === "biomedico" ? "biomedico" : "general"} />
       <div>
         <label class="label">Categoría</label>
-        <input class="input" id="categoria" list="categoriasList" placeholder="Selecciona o escribe..." />
+        <input class="input" id="categoria" data-uppercase autocapitalize="characters" list="categoriasList" placeholder="Selecciona o escribe..." />
         <datalist id="categoriasList"></datalist>
         <p class="mt-1 text-xs text-slate-500">Las sugerencias corresponden al área seleccionada.</p>
       </div>
       <div>
-        <label class="label">Codigo interno *</label>
-        <input class="input" id="codigo" required placeholder="EQ-001" />
+        <label class="label" for="codigo">Código interno</label>
+        <input class="input bg-slate-50" id="codigo" readonly placeholder="Se asigna automáticamente al guardar" />
       </div>
       <div>
         <label class="label">Numero de activo</label>
-        <input class="input" id="numeroActivo" placeholder="Ej: AC-2024-001" />
+        <input class="input" id="numeroActivo" data-uppercase autocapitalize="characters" placeholder="Ej: AC-2024-001" />
       </div>
       <div class="sm:col-span-2">
-        <label class="label">Nombre *</label>
-        <input class="input" id="nombre" required />
+        <label class="label" for="nombre">Nombre</label>
+        <input class="input" id="nombre" data-uppercase autocapitalize="characters" aria-describedby="nombreHelp" />
+        <p class="mt-1 text-xs text-slate-500" id="nombreHelp">Si lo dejas vacío, se registrará como pendiente de identificar.</p>
       </div>
       <div class="sm:col-span-2">
         <label class="label">Descripcion</label>
-        <textarea class="input" id="descripcion" placeholder="Describe el equipo o instalación y su función" rows="2"></textarea>
+        <textarea class="input" id="descripcion" data-uppercase autocapitalize="characters" placeholder="Describe el equipo o instalación y su función" rows="2"></textarea>
       </div>
       <div>
         <label class="label">Marca</label>
-        <input class="input" id="marca" />
+        <input class="input" id="marca" data-uppercase autocapitalize="characters" />
       </div>
       <div>
         <label class="label">Modelo</label>
-        <input class="input" id="modelo" />
+        <input class="input" id="modelo" data-uppercase autocapitalize="characters" />
       </div>
       <div>
         <label class="label">Numero de serie</label>
-        <input class="input" id="serial" />
+        <input class="input" id="serial" data-uppercase autocapitalize="characters" />
       </div>
       <div>
         <label class="label">Año</label>
@@ -97,7 +100,7 @@ const ubJson = JSON.stringify(ubRows);
 
       <div class="sm:col-span-2">
         <label class="label">{sucRows.length > 0 ? "Ubicacion adicional / Detalle" : "Ubicacion"}</label>
-        <input class="input" id="ubicacion" placeholder="Ej: Sala 3 - Quirofano A" />
+        <input class="input" id="ubicacion" data-uppercase autocapitalize="characters" placeholder="Ej: Sala 3 - Quirofano A" />
       </div>
 
       <div>
@@ -145,8 +148,8 @@ const ubJson = JSON.stringify(ubRows);
           </select>
         </div>
         <div>
-          <label class="label">Criticidad operacional *</label>
-          <select class="input" id="criticidadOperacional" required>
+          <label class="label">Criticidad operacional</label>
+          <select class="input" id="criticidadOperacional">
             {(["alta", "media", "baja"] as const).map((c) => (
               <option value={c} selected={c === "media"}>{CRITICIDAD_LABEL[c]}</option>
             ))}
@@ -194,7 +197,7 @@ const ubJson = JSON.stringify(ubRows);
         </div>
         <div>
           <label class="label">Título del plan (opcional)</label>
-          <input class="input" id="mantenimientoTitulo" placeholder="Ej: Limpieza filtros y revisión general" />
+          <input class="input" id="mantenimientoTitulo" data-uppercase autocapitalize="characters" placeholder="Ej: Limpieza filtros y revisión general" />
         </div>
       </div>
     </div>
@@ -231,7 +234,7 @@ const ubJson = JSON.stringify(ubRows);
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label class="label">Registro sanitario (DNM)</label>
-          <input class="input" id="registroSanitario" placeholder="DNM-XXXX" />
+          <input class="input" id="registroSanitario" data-uppercase autocapitalize="characters" placeholder="DNM-XXXX" />
         </div>
         <div>
           <label class="label">Clase de riesgo</label>
@@ -254,12 +257,13 @@ const ubJson = JSON.stringify(ubRows);
       </div>
     </div>
 
-    <p id="err" class="hidden text-sm text-red-600"></p>
+    <p id="err" class="hidden text-sm text-red-600" role="alert" tabindex="-1"></p>
     <div class="flex gap-2">
       <button class="btn-primary" type="submit" id="saveBtn">{titulo}</button>
       <a class="btn-secondary" href={areaHref("/activos", area)}>Cancelar</a>
     </div>
   </form>
+  <UppercaseFields />
 
   <script define:vars={{ ubJson, categoriasPorArea: CATEGORIAS_POR_AREA, areas: AREAS, critDescJson: CRITICIDAD_DESC }}>
     const allUbs = JSON.parse(ubJson);
@@ -309,14 +313,16 @@ const ubJson = JSON.stringify(ubRows);
     // Form submit
     const form = document.getElementById("form");
     const err = document.getElementById("err");
+    const saveBtn = document.getElementById("saveBtn");
+    let saving = false;
     form?.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (saving) return;
       err?.classList.add("hidden");
       const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
       const sv = (id) => document.getElementById(id)?.value ?? "";
       const isBio = sv("tipo") === "biomedico";
       const payload = {
-        codigo: v("codigo"),
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
         ubicacion: v("ubicacion") || null,
@@ -360,18 +366,33 @@ const ubJson = JSON.stringify(ubRows);
         payload.mantenimientoTitulo = v("mantenimientoTitulo") || null;
         payload.mantenimientoPrioridad = sv("mantenimientoPrioridad") || "media";
       }
-      const res = await fetch("/api/activos", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
+      saving = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Guardando…";
+      try {
+        const res = await fetch("/api/activos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
         const j = await res.json().catch(() => ({}));
-        if (err) { err.textContent = typeof j.error === "string" ? j.error : "Error al crear"; err.classList.remove("hidden"); }
-        return;
+        if (!res.ok) {
+          if (err) { err.textContent = typeof j.error === "string" ? j.error : "Error al crear"; err.classList.remove("hidden"); err.focus(); }
+          return;
+        }
+        if (!Number.isSafeInteger(j.activo?.id)) throw new Error("No se recibió la ficha creada");
+        location.href = `/activos/${j.activo.id}?area=${encodeURIComponent(j.activo.rubro)}`;
+      } catch {
+        if (err) {
+          err.textContent = "No se pudo confirmar el registro. Revisa el inventario antes de volver a guardarlo.";
+          err.classList.remove("hidden");
+          err.focus();
+        }
+      } finally {
+        saving = false;
+        saveBtn.disabled = false;
+        saveBtn.textContent = areas[sv("rubro")]?.createLabel ?? "Registrar activo";
       }
-      const j = await res.json();
-      location.href = `/activos/${j.activo.id}?area=${encodeURIComponent(j.activo.rubro)}`;
     });
   </script>
 </Layout>

@@ -2,26 +2,26 @@
 import { AREAS, AREA_KEYS, type AreaKey } from "@/lib/areas";
 import { leerDatosTecnicos } from "@/lib/activo-area";
 interface Props { area: AreaKey | null; datosTecnicos?: string | null; }
-const { area, datosTecnicos } = Astro.props;
+const { area: requestedArea, datosTecnicos } = Astro.props;
+const area = requestedArea ?? "equipo_general";
 const datos = leerDatosTecnicos(datosTecnicos);
 ---
 <div class="rounded-xl border border-brand-200 bg-brand-50 p-4">
-  <label class="label" for="rubro">Área de mantenimiento *</label>
-  <select class="input" id="rubro" required>
-    <option value="" selected={!area}>Selecciona un área</option>
+  <label class="label" for="rubro">Área de mantenimiento</label>
+  <select class="input" id="rubro">
     {AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}
   </select>
   <p class="mt-2 text-sm text-slate-600">El registro, sus órdenes y sus planes se encontrarán en esta área.</p>
 </div>
 <div id="aireFields" class:list={["grid grid-cols-1 gap-4 sm:grid-cols-3", area !== "aires" && "hidden"]}>
-  <div><label class="label" for="tipoUnidad">Tipo de unidad</label><input class="input" id="tipoUnidad" value={datos.tipoUnidad ?? ""} list="tiposUnidad" placeholder="Ej. Mini split" maxlength="200" /><datalist id="tiposUnidad"><option value="Mini split" /><option value="Cassette" /><option value="Piso techo" /><option value="Ventana" /><option value="Central" /><option value="VRF / VRV" /><option value="Chiller" /></datalist></div>
+  <div><label class="label" for="tipoUnidad">Tipo de unidad</label><input class="input" id="tipoUnidad" data-uppercase autocapitalize="characters" value={datos.tipoUnidad ?? ""} list="tiposUnidad" placeholder="Ej. Mini split" maxlength="200" /><datalist id="tiposUnidad"><option value="Mini split" /><option value="Cassette" /><option value="Piso techo" /><option value="Ventana" /><option value="Central" /><option value="VRF / VRV" /><option value="Chiller" /></datalist></div>
   <div><label class="label" for="capacidadBtuH">Capacidad (BTU/h)</label><input class="input" id="capacidadBtuH" type="number" min="1" max="10000000" step="any" value={datos.capacidadBtuH ?? ""} placeholder="Ej. 12000" /></div>
-  <div><label class="label" for="refrigerante">Refrigerante</label><input class="input" id="refrigerante" value={datos.refrigerante ?? ""} maxlength="200" placeholder="Ej. R-410A" /></div>
+  <div><label class="label" for="refrigerante">Refrigerante</label><input class="input" id="refrigerante" data-uppercase autocapitalize="characters" value={datos.refrigerante ?? ""} maxlength="200" placeholder="Ej. R-410A" /></div>
 </div>
 <div id="infraFields" class:list={["grid grid-cols-1 gap-4 sm:grid-cols-2", area !== "infraestructura" && "hidden"]}>
-  <div><label class="label" for="tipoInstalacion">Tipo de instalación</label><input class="input" id="tipoInstalacion" value={datos.tipoInstalacion ?? ""} maxlength="200" placeholder="Ej. Red hidráulica, cubierta" /></div>
-  <div><label class="label" for="sector">Sector</label><input class="input" id="sector" value={datos.sector ?? ""} maxlength="200" placeholder="Ej. Edificio A · zona norte" /></div>
+  <div><label class="label" for="tipoInstalacion">Tipo de instalación</label><input class="input" id="tipoInstalacion" data-uppercase autocapitalize="characters" value={datos.tipoInstalacion ?? ""} maxlength="200" placeholder="Ej. Red hidráulica, cubierta" /></div>
+  <div><label class="label" for="sector">Sector</label><input class="input" id="sector" data-uppercase autocapitalize="characters" value={datos.sector ?? ""} maxlength="200" placeholder="Ej. Edificio A · zona norte" /></div>
 </div>
 <div id="servicioFields" class:list={[area !== "equipo_general" && area !== "biomedico" && "hidden"]}>
-  <label class="label" for="servicio">Servicio / función</label><input class="input" id="servicio" value={datos.servicio ?? ""} maxlength="200" placeholder="Servicio al que está asignado el equipo" />
+  <label class="label" for="servicio">Servicio / función</label><input class="input" id="servicio" data-uppercase autocapitalize="characters" value={datos.servicio ?? ""} maxlength="200" placeholder="Servicio al que está asignado el equipo" />
 </div>

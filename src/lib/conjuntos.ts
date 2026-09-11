@@ -25,20 +25,20 @@ async function lectorConjuntos(ctx: Context) {
   if (!CONJUNTO_LECTORES.some(rol => rol === user.rol)) throw new ConjuntoError("Sin permisos para consultar conjuntos", 403);
   return user;
 }
-const motivoSchema = z.string().trim().min(3).max(500);
+const motivoSchema = z.string().trim().toUpperCase().min(3).max(500);
 const idSchema = z.number().int().positive().safe();
 export const conjuntoCrearSchema = z.object({
-  codigo: z.string().trim().min(1).max(60), nombre: z.string().trim().min(1).max(200),
-  descripcion: z.string().trim().max(2000).nullable().optional(), rubro: z.enum(AREA_KEYS),
+  codigo: z.string().trim().toUpperCase().min(1).max(60), nombre: z.string().trim().toUpperCase().min(1).max(200),
+  descripcion: z.string().trim().toUpperCase().max(2000).nullable().optional(), rubro: z.enum(AREA_KEYS),
   criticidad: z.enum(["alta", "media", "baja"]), ubicacionId: idSchema.nullable().optional(), motivo: motivoSchema,
 }).strict();
 export const conjuntoEditarSchema = z.object({
-  version: idSchema, nombre: z.string().trim().min(1).max(200).optional(),
-  descripcion: z.string().trim().max(2000).nullable().optional(), criticidad: z.enum(["alta", "media", "baja"]).optional(),
+  version: idSchema, nombre: z.string().trim().toUpperCase().min(1).max(200).optional(),
+  descripcion: z.string().trim().toUpperCase().max(2000).nullable().optional(), criticidad: z.enum(["alta", "media", "baja"]).optional(),
   ubicacionId: idSchema.nullable().optional(), activo: z.boolean().optional(), motivo: motivoSchema,
 }).strict().refine(value => Object.keys(value).some(key => key !== "version" && key !== "motivo"), "Indica qué dato deseas cambiar");
 export const conjuntoComponenteSchema = z.discriminatedUnion("accion", [
-  z.object({ accion: z.literal("incorporar"), version: idSchema, activoId: idSchema, funcion: z.string().trim().min(1).max(100), esencial: z.boolean(), motivo: motivoSchema, puestoId: idSchema.optional() }).strict(),
+  z.object({ accion: z.literal("incorporar"), version: idSchema, activoId: idSchema, funcion: z.string().trim().toUpperCase().min(1).max(100), esencial: z.boolean(), motivo: motivoSchema, puestoId: idSchema.optional() }).strict(),
   z.object({ accion: z.literal("retirar"), version: idSchema, puestoId: idSchema, motivo: motivoSchema }).strict(),
   z.object({ accion: z.literal("reemplazar"), version: idSchema, puestoId: idSchema, activoId: idSchema, motivo: motivoSchema }).strict(),
 ]);

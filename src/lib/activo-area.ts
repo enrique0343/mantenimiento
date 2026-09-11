@@ -12,10 +12,19 @@ const camposTecnicos = z.object({
 }).strict();
 
 // Acepta objetos desde formularios/API y JSON desde almacenamiento/importaciones.
-export const datosTecnicosSchema = z.preprocess((value) => {
+const parsearDatosTecnicos = (value: unknown) => {
   if (typeof value !== "string") return value;
   try { return JSON.parse(value); } catch { return value; }
-}, camposTecnicos.nullable().optional());
+};
+export const datosTecnicosSchema = z.preprocess(parsearDatosTecnicos, camposTecnicos.nullable().optional());
+
+// Validate the final stored length after Unicode uppercasing. Reading legacy
+// data continues to use its original schema and never rewrites prior values.
+const textoTecnicoRegistro = z.string().trim().toUpperCase().max(200).nullable().optional();
+export const datosTecnicosRegistroSchema = z.preprocess(parsearDatosTecnicos, camposTecnicos.extend({
+  tipoUnidad: textoTecnicoRegistro, refrigerante: textoTecnicoRegistro,
+  tipoInstalacion: textoTecnicoRegistro, sector: textoTecnicoRegistro, servicio: textoTecnicoRegistro,
+}).nullable().optional());
 
 export type DatosTecnicos = z.infer<typeof camposTecnicos>;
 const camposPorArea: Record<RubroKey, (keyof DatosTecnicos)[]> = {
@@ -36,5 +45,5 @@ export function datosTecnicosValidosParaArea(area: RubroKey, datos: DatosTecnico
 
 export function serializarDatosTecnicos(area: RubroKey, datos: DatosTecnicos | null | undefined): string | null {
   const entries = Object.entries(datos ?? {}).filter(([key, value]) => camposPorArea[area].includes(key as keyof DatosTecnicos) && value != null && value !== "");
-  return entries.length ? JSON.stringify(Object.fromEntries(entries)) : null;
+  return entries.length ? JSON.stringify(Object.fromEntries(entries.map(([key, value]) => [key, typeof value === "string" ? value.trim().toUpperCase() : value]))) : null;
 }

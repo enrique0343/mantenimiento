@@ -8,24 +8,25 @@ import { logAudit, calcularDiff } from "@/lib/audit";
 import { activoTieneHistorialConjunto, MENSAJE_ACTIVO_TRAZADO } from "@/lib/trazabilidad-conjuntos";
 import { rubroDeActivo } from "@/lib/rubros";
 import { activoAreaCondition } from "@/lib/areas";
-import { datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
+import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
+import { textoRegistro, nombrePendienteActivo, esCodigoDuplicado } from "@/lib/registro-activos";
 
 export const prerender = false;
 
 const updateSchema = z.object({
-  codigo: z.string().min(1).optional(),
-  nombre: z.string().min(1).optional(),
-  descripcion: z.string().nullable().optional(),
-  ubicacion: z.string().nullable().optional(),
+  codigo: textoRegistro,
+  nombre: textoRegistro,
+  descripcion: textoRegistro,
+  ubicacion: textoRegistro,
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
   tipo: z.enum(["general", "biomedico"]).optional(),
-  categoria: z.string().nullable().optional(),
-  numeroActivo: z.string().nullable().optional(),
-  marca: z.string().nullable().optional(),
-  modelo: z.string().nullable().optional(),
-  serial: z.string().nullable().optional(),
+  categoria: textoRegistro,
+  numeroActivo: textoRegistro,
+  marca: textoRegistro,
+  modelo: textoRegistro,
+  serial: textoRegistro,
   anio: z.number().int().nullable().optional(),
-  registroSanitario: z.string().nullable().optional(),
+  registroSanitario: textoRegistro,
   claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
   ultimaCalibracion: z.string().nullable().optional(),
   proximaCalibracion: z.string().nullable().optional(),
@@ -39,7 +40,7 @@ const updateSchema = z.object({
   subcategoria: z.enum(["soporte_vida", "diagnostico", "tratamiento", "esterilizacion", "cadena_frio", "imagenologia", "apoyo"]).nullable().optional(),
   aceptacionFecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   aceptacionResultado: z.enum(["aprobado", "condicionado", "rechazado"]).nullable().optional(),
-  aceptacionNotas: z.string().nullable().optional(),
+  aceptacionNotas: textoRegistro,
   requiereCalibracion: z.boolean().optional(),
   ubicacionId: z.number().int().nullable().optional(),
   proveedorId: z.number().int().nullable().optional(),
@@ -82,6 +83,14 @@ export const PATCH: APIRoute = async (ctx) => {
   if (!datosTecnicosValidosParaArea(rubro, parsed.data.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
   data.rubro = rubro;
   data.tipo = tipo;
+  // Empty optional fields must never erase the permanent identifier or its QR.
+  if (!parsed.data.codigo) delete data.codigo;
+  else if (parsed.data.codigo !== actual.codigo) {
+    const existentes = await db.select({ id: activos.id, codigo: activos.codigo }).from(activos);
+    if (existentes.some(a => a.id !== id && a.codigo.trim().toUpperCase() === parsed.data.codigo)) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
+    data.qrCode = `QR-${parsed.data.codigo}`;
+  }
+  if (parsed.data.nombre !== undefined) data.nombre = parsed.data.nombre || nombrePendienteActivo(rubro);
   if (parsed.data.datosTecnicos !== undefined || cambiaArea) {
     data.datosTecnicos = serializarDatosTecnicos(rubro, parsed.data.datosTecnicos === undefined ? leerDatosTecnicos(actual.datosTecnicos) : parsed.data.datosTecnicos);
   }
@@ -89,13 +98,19 @@ export const PATCH: APIRoute = async (ctx) => {
 
   // Los trabajos conservan su área, incluso al cerrarse. La comprobación forma
   // parte de la escritura para no separar el control de vínculos del cambio.
-  const [row] = await db.update(activos).set(data).where(and(
+  let row: typeof activos.$inferSelect | undefined;
+  try {
+    [row] = await db.update(activos).set(data).where(and(
     eq(activos.id, id),
     activoAreaCondition(areaActual),
     cambiaArea ? sql`NOT EXISTS (SELECT 1 FROM ${tickets} WHERE ${tickets.activoId} = ${id})` : undefined,
     cambiaArea ? sql`NOT EXISTS (SELECT 1 FROM ${ordenes} WHERE ${ordenes.activoId} = ${id})` : undefined,
     cambiaArea ? sql`NOT EXISTS (SELECT 1 FROM ${proyectos} WHERE ${proyectos.activoId} = ${id})` : undefined,
-  )).returning();
+    )).returning();
+  } catch (error) {
+    if (esCodigoDuplicado(error)) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
+    throw error;
+  }
   if (!row) return Response.json({ error: cambiaArea
     ? "No se puede cambiar el área porque este activo tiene solicitudes, órdenes o proyectos vinculados, o su área fue modificada por otra persona. Actualiza la página; puedes editar sus demás datos conservando el área."
     : "El área del activo cambió mientras editabas. Actualiza la página antes de guardar.",

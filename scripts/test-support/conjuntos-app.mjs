@@ -19,6 +19,9 @@ export async function setupConjuntos() {
       export * as detail from './src/pages/api/conjuntos/[id]/index';
       export * as components from './src/pages/api/conjuntos/[id]/componentes';
       export * as assets from './src/pages/api/activos/[id]/index';
+      export * as assetCreate from './src/pages/api/activos/index';
+      export * as assetImport from './src/pages/api/admin/import-equipos';
+      export * as assetArea from './src/lib/activo-area';
       export * as orders from './src/pages/api/ordenes/index';
       export * as order from './src/pages/api/ordenes/[id]/index';
       export * as bulkOrderDelete from './src/pages/api/ordenes/bulk-delete';

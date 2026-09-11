@@ -6,7 +6,8 @@ import { activos, ubicaciones, sucursales } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { AREA_KEYS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
-import { datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
+import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
+import { textoRegistro } from "@/lib/registro-activos";
 
 export const prerender = false;
 
@@ -16,21 +17,21 @@ export const prerender = false;
 // Cualquier columna extra se ignora. Solo codigo + nombre son obligatorias.
 
 const itemSchema = z.object({
-  codigo: z.string().min(1),
-  nombre: z.string().min(1),
+  codigo: z.string().trim().toUpperCase().min(1),
+  nombre: z.string().trim().toUpperCase().min(1),
   tipo: z.enum(["general", "biomedico"]).optional(),
   rubro: z.enum(AREA_KEYS).optional(),
   criticidadOperacional: z.enum(["alta", "media", "baja"]).default("media"),
   datosTecnicos: datosTecnicosSchema,
-  categoria: z.string().optional().nullable(),
-  marca: z.string().optional().nullable(),
-  modelo: z.string().optional().nullable(),
-  serial: z.string().optional().nullable(),
+  categoria: textoRegistro,
+  marca: textoRegistro,
+  modelo: textoRegistro,
+  serial: textoRegistro,
   anio: z.number().int().optional().nullable(),
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
   ubicacion_nombre: z.string().optional().nullable(),
   sucursal_nombre: z.string().optional().nullable(),
-  descripcion: z.string().optional().nullable(),
+  descripcion: textoRegistro,
 });
 
 function parseCsv(text: string): Array<Record<string, string>> {
@@ -97,7 +98,7 @@ export const POST: APIRoute = async (ctx) => {
 
   // Códigos existentes (para skip)
   const existRows = await db.select({ codigo: activos.codigo }).from(activos);
-  const codigosExist = new Set(existRows.map((e) => e.codigo));
+  const codigosExist = new Set(existRows.map((e) => e.codigo.toUpperCase()));
 
   const errores: Array<{ fila: number; codigo?: string; error: string }> = [];
   const aInsertar: any[] = [];

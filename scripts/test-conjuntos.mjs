@@ -75,7 +75,7 @@ try {
   assert.equal(current.puestos.length, 0);
   assert.equal(current.eventos.length, 1);
   assert.equal(current.eventos[0].actorNombre, 'Prueba admin');
-  assert.equal(current.eventos[0].motivo, base.motivo);
+  assert.equal(current.eventos[0].motivo, base.motivo.toUpperCase());
   assert.equal(one('SELECT creado_por FROM conjuntos WHERE id=?', id).creado_por, 1);
   fail(await create(), 409);
   fail(await create({ codigo: base.codigo.toLowerCase() }), 409);
@@ -101,7 +101,7 @@ try {
   const beforeJoin = Date.now();
   current = ok(await change(id, joinData, { rol: 'jefe' }));
   const afterJoin = Date.now();
-  const camera = current.puestos.find((row) => row.funcion === 'Cámara');
+  const camera = current.puestos.find((row) => row.funcion === 'CÁMARA');
   assert(camera?.componente);
   assert.equal(camera.componente.activoId, 1);
   const joinedAt = camera.componente.incorporadoEn;
@@ -109,7 +109,7 @@ try {
   assert.equal(current.disponibilidad.estado, 'disponible', 'Low component criticality does not mean unavailable');
   assert.equal(current.conjunto.criticidad, 'alta');
   assert.equal(current.historialComponentes[0].incorporadoPorNombre, 'Prueba jefe');
-  assert.equal(current.historialComponentes[0].motivoAlta, joinData.motivo);
+  assert.equal(current.historialComponentes[0].motivoAlta, joinData.motivo.toUpperCase());
   fail(await change(id, { accion: 'reemplazar', version: current.conjunto.version, puestoId: camera.id, activoId: 1, motivo: 'No reemplazar con el mismo equipo' }), 400);
   fail(await change(secondary, { accion: 'retirar', version: (await detail(secondary)).conjunto.version, puestoId: camera.id, motivo: 'No retirar puesto de otro conjunto' }), 400);
   assert.deepEqual(current.planes.map((row) => row.id), [1]);
@@ -147,7 +147,7 @@ try {
   }
 
   current = ok(await change(id, { accion: 'incorporar', version: current.conjunto.version, activoId: 2, funcion: 'Cabezal', esencial: true, motivo: 'Instalación del cabezal' }));
-  const head = current.puestos.find((row) => row.funcion === 'Cabezal');
+  const head = current.puestos.find((row) => row.funcion === 'CABEZAL');
   current = ok(await change(id, { accion: 'incorporar', version: current.conjunto.version, activoId: 4, funcion: 'Carro auxiliar', esencial: false, motivo: 'Asignación de mobiliario auxiliar' }));
   assert.equal(current.disponibilidad.estado, 'disponible', 'A broken optional position does not block essential operation');
   assert.equal(one('SELECT rubro FROM activos WHERE id=4').rubro, 'equipo_general', 'Cross-area grouping preserves component area');
@@ -164,9 +164,9 @@ try {
   assert.equal(current.disponibilidad.estado, 'no_disponible', 'A vacant essential position prevents availability');
   const headHistory = current.historialComponentes.find((row) => row.activoId === 2);
   assert.equal(headHistory.retiradoPorNombre, 'Prueba admin');
-  assert.equal(headHistory.motivoRetiro, 'Retiro temporal para revisión');
+  assert.equal(headHistory.motivoRetiro, 'RETIRO TEMPORAL PARA REVISIÓN');
   current = ok(await change(id, { accion: 'incorporar', version: current.conjunto.version, puestoId: head.id, activoId: 2, funcion: 'Debe conservarse', esencial: false, motivo: 'Reinstalación tras revisión' }));
-  assert.equal(current.puestos.find((row) => row.id === head.id).funcion, 'Cabezal');
+  assert.equal(current.puestos.find((row) => row.id === head.id).funcion, 'CABEZAL');
   assert.equal(current.puestos.find((row) => row.id === head.id).esencial, true);
   assert.equal(current.disponibilidad.estado, 'disponible');
 
@@ -199,7 +199,7 @@ try {
   result = await change(id, { accion: 'incorporar', version: current.conjunto.version, activoId: 3, funcion: 'Fuente de luz', esencial: true, motivo: 'Operación con revisión concurrente' });
   fail(result, 409);
   assert.equal(one('SELECT count(*) AS n FROM conjunto_componentes WHERE activo_id=3').n, 0);
-  assert.equal(one('SELECT count(*) AS n FROM conjunto_puestos WHERE funcion=?', 'Fuente de luz').n, 0);
+  assert.equal(one('SELECT count(*) AS n FROM conjunto_puestos WHERE funcion=?', 'FUENTE DE LUZ').n, 0);
   current = await detail(id);
 
   // Another set claims a free physical component after this request validated it.
@@ -251,9 +251,9 @@ try {
   }
   assert.equal(originalHistory.retiradoPorNombre, 'Prueba jefe');
   assert.equal(newHistory.incorporadoPorNombre, 'Prueba jefe');
-  assert.equal(originalHistory.motivoRetiro, 'Reemplazo definitivo por daño en módulo');
-  assert.equal(newHistory.motivoAlta, 'Reemplazo definitivo por daño en módulo');
-  const replacementEvent = current.eventos.find((event) => event.motivo === 'Reemplazo definitivo por daño en módulo');
+  assert.equal(originalHistory.motivoRetiro, 'REEMPLAZO DEFINITIVO POR DAÑO EN MÓDULO');
+  assert.equal(newHistory.motivoAlta, 'REEMPLAZO DEFINITIVO POR DAÑO EN MÓDULO');
+  const replacementEvent = current.eventos.find((event) => event.motivo === 'REEMPLAZO DEFINITIVO POR DAÑO EN MÓDULO');
   assert.equal(replacementEvent.actorNombre, 'Prueba jefe');
   assert(replacementEvent.antes && typeof replacementEvent.antes === 'object');
   assert(replacementEvent.despues && typeof replacementEvent.despues === 'object');
@@ -375,7 +375,7 @@ try {
   fail(await edit(id, { version: current.conjunto.version, nombre: 'Edición sin evento no válida', motivo: 'Debe revertirse todo' }), 500);
   assert.equal(snapshots(), before, 'Editing metadata without its traceability event must roll back');
   current = ok(await edit(id, { version: current.conjunto.version, nombre: 'Torre principal', criticidad: 'media', motivo: 'Identificación y evaluación actualizadas' }));
-  assert.equal(current.conjunto.nombre, 'Torre principal');
+  assert.equal(current.conjunto.nombre, 'TORRE PRINCIPAL');
   assert.equal(current.conjunto.criticidad, 'media');
   for (const position of current.puestos.filter((row) => row.componente)) {
     current = ok(await change(id, { accion: 'retirar', version: current.conjunto.version, puestoId: position.id, motivo: 'Desmontaje documentado para archivo' }));
@@ -384,7 +384,7 @@ try {
   current = ok(await edit(id, { version: current.conjunto.version, activo: false, motivo: 'Archivo de conjunto desinstalado' }));
   assert.equal(current.conjunto.activo, false);
   assert.equal(current.historialComponentes.length, historyCount);
-  assert(current.eventos.some((event) => event.motivo === 'Archivo de conjunto desinstalado'));
+  assert(current.eventos.some((event) => event.motivo === 'ARCHIVO DE CONJUNTO DESINSTALADO'));
   fail(await change(id, { accion: 'incorporar', version: current.conjunto.version, activoId: 7, funcion: 'Reserva', esencial: true, motivo: 'No debe ocupar un conjunto archivado' }), 409);
   assert.equal(json(rows('SELECT * FROM usuarios ORDER BY id')), usersBefore, 'All user accounts remain unchanged');
   assert.equal(json(rows('SELECT * FROM planes_mantenimiento ORDER BY id')), plansBefore);
