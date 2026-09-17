@@ -1,6 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
+import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos } from "@/lib/schema";
@@ -216,6 +217,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   </div>
 
   <ActivoConjuntos relaciones={conjuntosHistorial} />
+  <CatalogoAireOrigen modeloAireId={a.modeloAireId} snapshot={a.modeloAireSnapshot} />
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">

@@ -10,10 +10,14 @@ import { rubroDeActivo } from "@/lib/rubros";
 import { activoAreaCondition } from "@/lib/areas";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
 import { textoRegistro, nombrePendienteActivo, esCodigoDuplicado } from "@/lib/registro-activos";
+import { errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
 
 export const prerender = false;
 
 const updateSchema = z.object({
+  modeloAireId: z.never().optional(),
+  modeloAireVersion: z.never().optional(),
+  modeloAireSnapshot: z.never().optional(),
   codigo: textoRegistro,
   nombre: textoRegistro,
   descripcion: textoRegistro,
@@ -78,6 +82,7 @@ export const PATCH: APIRoute = async (ctx) => {
   const areaActual = rubroDeActivo(actual.rubro, actual.tipo);
   const rubro = rubroDeActivo(parsed.data.rubro === undefined ? actual.rubro : parsed.data.rubro, parsed.data.tipo ?? actual.tipo);
   const cambiaArea = rubro !== areaActual;
+  if (actual.modeloAireId !== null && cambiaArea) return Response.json({ error: "Esta unidad proviene de una ficha de aire acondicionado y debe conservar esa área. Puedes editar sus demás datos." }, { status: 409 });
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (parsed.data.tipo && parsed.data.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
   if (!datosTecnicosValidosParaArea(rubro, parsed.data.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
@@ -108,6 +113,8 @@ export const PATCH: APIRoute = async (ctx) => {
     cambiaArea ? sql`NOT EXISTS (SELECT 1 FROM ${proyectos} WHERE ${proyectos.activoId} = ${id})` : undefined,
     )).returning();
   } catch (error) {
+    const catalogoError = errorCatalogoAire(error);
+    if (catalogoError) return respuestaErrorCatalogoAire(catalogoError);
     if (esCodigoDuplicado(error)) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
     throw error;
   }

@@ -82,6 +82,36 @@ export const usuarios = sqliteTable("usuarios", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Fichas reutilizables de modelos de aire acondicionado ────────────────────
+export const modelosAire = sqliteTable("modelos_aire", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull().unique(),
+  descripcion: text("descripcion"),
+  categoria: text("categoria"),
+  marca: text("marca"),
+  modelo: text("modelo"),
+  datosTecnicos: text("datos_tecnicos"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  version: integer("version").notNull().default(1),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  creadoPorNombre: text("creado_por_nombre").notNull(),
+  actualizadoPor: integer("actualizado_por").notNull().references(() => usuarios.id),
+  actualizadoPorNombre: text("actualizado_por_nombre").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const modelosAireHistorial = sqliteTable("modelos_aire_historial", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  modeloAireId: integer("modelo_aire_id").notNull().references(() => modelosAire.id),
+  version: integer("version").notNull(),
+  fecha: text("fecha").notNull(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  usuarioNombre: text("usuario_nombre").notNull(),
+  accion: text("accion", { enum: ["crear", "editar", "archivar", "reactivar"] }).notNull(),
+  snapshot: text("snapshot").notNull(),
+}, table => [index("modelos_aire_historial_modelo_idx").on(table.modeloAireId)]);
+
 // ─── Activos / Equipos ────────────────────────────────────────────────────────
 export const activos = sqliteTable("activos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -107,6 +137,9 @@ export const activos = sqliteTable("activos", {
   // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
   rubro: text("rubro"),
   datosTecnicos: text("datos_tecnicos"),
+  // Origen inmutable: una ficha puede cambiar sin reescribir unidades registradas.
+  modeloAireId: integer("modelo_aire_id").references(() => modelosAire.id),
+  modeloAireSnapshot: text("modelo_aire_snapshot"),
   // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
   subcategoria: text("subcategoria"),
   // Inspección de aceptación / entrada en servicio (JCI FMS.07)

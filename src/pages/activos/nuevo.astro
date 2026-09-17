@@ -7,10 +7,13 @@ import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
 import UppercaseFields from "@/components/UppercaseFields.astro";
+import ModeloAireSelector from "@/components/ModeloAireSelector.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area")) ?? "equipo_general";
 const titulo = AREAS[area].createLabel;
+const registrado = Astro.url.searchParams.get("registrado");
+const registroAnterior = registrado && /^AC-[A-F0-9]{12}$/.test(registrado) ? registrado : null;
 
 const user = Astro.locals.user!;
 if (!["admin", "tecnico"].includes(user.rol)) {
@@ -34,8 +37,10 @@ const ubJson = JSON.stringify(ubRows);
   <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
   <h1 class="mt-2 text-2xl font-bold" id="formTitle">{titulo}</h1>
   <p class="mt-2 text-sm text-slate-500">Puedes guardar el registro ahora y completar sus datos después. El código se asigna automáticamente.</p>
+  {registroAnterior && <p class="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800" role="status">Unidad {registroAnterior} registrada. Ya puedes ingresar la siguiente unidad.</p>}
 
   <form id="form" class="card mt-4 space-y-5 p-5">
+    <ModeloAireSelector area={area} />
     <ActivoAreaFields area={area} />
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <input type="hidden" id="tipo" value={area === "biomedico" ? "biomedico" : "general"} />
@@ -258,8 +263,9 @@ const ubJson = JSON.stringify(ubRows);
     </div>
 
     <p id="err" class="hidden text-sm text-red-600" role="alert" tabindex="-1"></p>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap gap-2">
       <button class="btn-primary" type="submit" id="saveBtn">{titulo}</button>
+      <button class:list={["btn-secondary", area !== "aires" && "hidden"]} type="submit" id="saveAnotherBtn">Guardar y registrar otra unidad</button>
       <a class="btn-secondary" href={areaHref("/activos", area)}>Cancelar</a>
     </div>
   </form>
@@ -289,6 +295,7 @@ const ubJson = JSON.stringify(ubRows);
       list.replaceChildren(...(categoriasPorArea[key] ?? []).map((c) => { const option = document.createElement("option"); option.value = c; return option; }));
       document.getElementById("formTitle").textContent = areas[key]?.createLabel ?? "Registrar activo";
       document.getElementById("saveBtn").textContent = areas[key]?.createLabel ?? "Registrar activo";
+      document.getElementById("saveAnotherBtn").classList.toggle("hidden", key !== "aires");
     }
     areaSel.addEventListener("change", actualizarArea);
     actualizarArea();
@@ -314,6 +321,7 @@ const ubJson = JSON.stringify(ubRows);
     const form = document.getElementById("form");
     const err = document.getElementById("err");
     const saveBtn = document.getElementById("saveBtn");
+    const saveAnotherBtn = document.getElementById("saveAnotherBtn");
     let saving = false;
     form?.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -322,6 +330,7 @@ const ubJson = JSON.stringify(ubRows);
       const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
       const sv = (id) => document.getElementById(id)?.value ?? "";
       const isBio = sv("tipo") === "biomedico";
+      const registrarOtra = e.submitter?.id === "saveAnotherBtn" && sv("rubro") === "aires";
       const payload = {
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
@@ -351,6 +360,10 @@ const ubJson = JSON.stringify(ubRows);
         criticidadOperacional: sv("criticidadOperacional") || "media",
         requiereCalibracion: document.getElementById("requiereCalibracion")?.checked ?? false,
       };
+      if (sv("rubro") === "aires" && sv("modeloAireId")) {
+        payload.modeloAireId = Number(sv("modeloAireId"));
+        payload.modeloAireVersion = Number(sv("modeloAireVersion"));
+      }
       if (isBio) {
         payload.registroSanitario = v("registroSanitario") || null;
         payload.claseRiesgo = sv("claseRiesgo") || null;
@@ -368,6 +381,7 @@ const ubJson = JSON.stringify(ubRows);
       }
       saving = true;
       saveBtn.disabled = true;
+      saveAnotherBtn.disabled = true;
       saveBtn.textContent = "Guardando…";
       try {
         const res = await fetch("/api/activos", {
@@ -381,6 +395,14 @@ const ubJson = JSON.stringify(ubRows);
           return;
         }
         if (!Number.isSafeInteger(j.activo?.id)) throw new Error("No se recibió la ficha creada");
+        if (registrarOtra) {
+          const next = new URL("/activos/nuevo", location.origin);
+          next.searchParams.set("area", "aires");
+          next.searchParams.set("registrado", j.activo.codigo);
+          if (payload.modeloAireId) next.searchParams.set("modeloAireId", String(payload.modeloAireId));
+          location.href = next.pathname + next.search;
+          return;
+        }
         location.href = `/activos/${j.activo.id}?area=${encodeURIComponent(j.activo.rubro)}`;
       } catch {
         if (err) {
@@ -391,6 +413,7 @@ const ubJson = JSON.stringify(ubRows);
       } finally {
         saving = false;
         saveBtn.disabled = false;
+        saveAnotherBtn.disabled = false;
         saveBtn.textContent = areas[sv("rubro")]?.createLabel ?? "Registrar activo";
       }
     });

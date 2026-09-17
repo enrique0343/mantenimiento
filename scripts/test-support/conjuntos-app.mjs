@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-export async function setupConjuntos() {
+export async function setupConjuntos({ modules = {}, beforeMigration } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'mantenimiento-conjuntos-'));
   const filename = path.join(temporary, 'routes.mjs');
   await build({
@@ -27,6 +27,7 @@ export async function setupConjuntos() {
       export * as bulkOrderDelete from './src/pages/api/ordenes/bulk-delete';
       export * as conjuntos from './src/lib/conjuntos';
       export { createSessionToken, setSessionCookie } from './src/lib/auth';
+      ${Object.entries(modules).map(([name, file]) => `export * as ${name} from ${JSON.stringify(`./src/${file}`)};`).join('\n')}
     `, resolveDir: root, loader: 'ts' },
     outfile: filename, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent',
     plugins: [{ name: 'no-external-effects', setup(builder) {
@@ -46,6 +47,7 @@ export async function setupConjuntos() {
   const migrations = (await fs.readdir(path.join(root, 'migrations'))).filter((name) => /^\d{4}.*\.sql$/.test(name)).sort();
   assert(migrations.some((name) => name.startsWith('0048_')), 'Traceability migration must exist');
   for (const migration of migrations) {
+    await beforeMigration?.(sqlite, migration);
     try { sqlite.exec(await fs.readFile(path.join(root, 'migrations', migration), 'utf8')); }
     catch (error) { throw new Error(`Real migration failed: ${migration}`, { cause: error }); }
   }
