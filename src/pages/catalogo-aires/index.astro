@@ -1,0 +1,49 @@
+---
+import ConjuntoShell from "@/components/ConjuntoShell.astro";
+import AppIcon from "@/components/AppIcon.astro";
+import { getModelosAire } from "@/lib/catalogo-aires";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+const user = Astro.locals.user;
+if (!user) return Astro.redirect("/login");
+if (Astro.url.searchParams.get("area") !== "aires") return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, "aires"));
+const canManage = ["admin", "tecnico"].includes(user.rol);
+const query = (Astro.url.searchParams.get("q") ?? "").trim();
+const showArchived = Astro.url.searchParams.get("archivados") === "1";
+const rows = await getModelosAire(Astro, showArchived);
+const search = query.toLocaleUpperCase("es");
+const matches = rows.filter(row => [row.nombre, row.marca, row.modelo, row.categoria, row.datosTecnicos?.tipoUnidad, row.datosTecnicos?.refrigerante, row.datosTecnicos?.capacidadBtuH].filter(value => value != null).join(" ").toLocaleUpperCase("es").includes(search));
+---
+<ConjuntoShell title="Catálogo de aires acondicionados">
+  <header class="cq-head">
+    <div><p class="cq-eyebrow">Aire acondicionado</p><h1>Catálogo de aires</h1><p class="cq-muted mt-2">Guarda las características de un modelo una vez y reutilízalas en cada unidad.</p></div>
+    <div class="cq-actions"><a href="/activos?area=aires" class="btn-secondary">Ver unidades</a>{canManage && <a href="/catalogo-aires/nuevo?area=aires" class="btn-primary">+ Crear ficha de modelo</a>}</div>
+  </header>
+  <div class="cq-notice mb-6">Una ficha reúne los datos comunes del producto. Cada unidad registrada tendrá su propio código, número de serie, ubicación e historial de mantenimiento.</div>
+  <form method="get" class="cq-panel cq-filters">
+    <input type="hidden" name="area" value="aires" />
+    <div class="cq-search"><label class="label" for="buscar">Buscar modelo</label><input id="buscar" name="q" class="input" type="search" value={query} placeholder="Nombre, marca, modelo o capacidad" /></div>
+    <label class="inline-flex items-center gap-2 pb-2 text-sm"><input type="checkbox" name="archivados" value="1" checked={showArchived} /> Incluir archivadas</label>
+    <button class="btn-secondary" type="submit">Buscar</button>
+    {(query || showArchived) && <a href="/catalogo-aires?area=aires" class="cq-link pb-2">Limpiar filtros</a>}
+  </form>
+  <p class="cq-muted mb-3">{matches.length} {matches.length === 1 ? "ficha" : "fichas"}{showArchived ? " · Incluye archivadas" : " disponibles"}</p>
+  {matches.length ? <div class="cq-grid">
+    {matches.map(row => <article class="cq-panel">
+      <div class="cq-card-head"><p class="cq-eyebrow">Versión {row.version}</p><span class="cq-badge" data-tone={row.activo ? "good" : undefined}>{row.activo ? "Disponible" : "Archivada"}</span></div>
+      <a href={`/catalogo-aires/${row.id}?area=aires`} class="cq-card-title">{row.nombre}</a>
+      <p class="cq-muted">{[row.marca, row.modelo].filter(Boolean).join(" · ") || "Marca y modelo por completar"}</p>
+      <dl class="cq-meta">
+        <div><dt>Tipo de unidad</dt><dd>{row.datosTecnicos?.tipoUnidad || "Sin especificar"}</dd></div>
+        <div><dt>Capacidad (BTU/h)</dt><dd>{row.datosTecnicos?.capacidadBtuH?.toLocaleString("es-SV") || "Sin especificar"}</dd></div>
+        <div><dt>Refrigerante</dt><dd>{row.datosTecnicos?.refrigerante || "Sin especificar"}</dd></div>
+        <div><dt>Categoría</dt><dd>{row.categoria || "Sin especificar"}</dd></div>
+      </dl>
+      <div class="cq-card-footer"><a href={`/catalogo-aires/${row.id}?area=aires`} class="cq-link">Ver ficha e historial</a>{canManage && row.activo && <a href={`/activos/nuevo?area=aires&modeloAireId=${row.id}`} class="btn-secondary">Registrar unidad</a>}</div>
+    </article>)}
+  </div> : <div class="cq-panel cq-empty">
+    <AppIcon name="wind" size={31} /><h2>{query || showArchived ? "No hay fichas con estos filtros" : "Crea la primera ficha de modelo"}</h2>
+    <p>{query || showArchived ? "Prueba con otro nombre, marca o modelo, o limpia los filtros." : "Registra las características que se repiten en tus aires acondicionados. Después selecciona la ficha para crear cada unidad sin volver a escribir esos datos."}</p>
+    {canManage && !query && !showArchived && <a href="/catalogo-aires/nuevo?area=aires" class="btn-primary">Crear ficha de modelo</a>}
+  </div>}
+</ConjuntoShell>

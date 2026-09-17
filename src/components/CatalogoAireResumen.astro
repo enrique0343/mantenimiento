@@ -1,0 +1,23 @@
+---
+interface Props {
+  modelo: {
+    nombre?: string | null; descripcion?: string | null; categoria?: string | null;
+    marca?: string | null; modelo?: string | null;
+    datosTecnicos?: { tipoUnidad?: string | null; capacidadBtuH?: number | null; refrigerante?: string | null } | null;
+  };
+  incluirNombre?: boolean;
+}
+const { modelo, incluirNombre = false } = Astro.props;
+const datos = modelo.datosTecnicos ?? {};
+const campos = [
+  ...(incluirNombre ? [["Nombre", modelo.nombre]] : []),
+  ["Marca", modelo.marca], ["Modelo del fabricante", modelo.modelo],
+  ["Categoría", modelo.categoria], ["Tipo de unidad", datos.tipoUnidad],
+  ["Capacidad (BTU/h)", typeof datos.capacidadBtuH === "number" ? datos.capacidadBtuH.toLocaleString("es-SV") : null],
+  ["Refrigerante", datos.refrigerante],
+];
+---
+<dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 text-sm">
+  {campos.map(([label, value]) => <div><dt class="text-xs text-slate-500">{label}</dt><dd class="mt-1 break-words">{value || "Sin especificar"}</dd></div>)}
+  <div class="sm:col-span-2"><dt class="text-xs text-slate-500">Descripción</dt><dd class="mt-1 break-words whitespace-pre-wrap">{modelo.descripcion || "Sin especificar"}</dd></div>
+</dl>

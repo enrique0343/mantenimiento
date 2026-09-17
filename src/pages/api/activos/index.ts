@@ -9,6 +9,7 @@ import { activoAreaCondition, parseArea, AREA_KEYS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
 import { textoRegistro, generarCodigoActivo, nombrePendienteActivo, esCodigoDuplicado } from "@/lib/registro-activos";
+import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
 
 export const prerender = false;
 
@@ -58,12 +59,16 @@ const baseSchema = {
 
 const createSchema = z.object({
   ...baseSchema,
+  modeloAireId: z.number().int().positive().safe().optional(),
+  modeloAireVersion: z.number().int().positive().safe().optional(),
+  modeloAireSnapshot: z.never().optional(),
   // Configuración opcional de mantenimiento preventivo automático
   mantenimientoFrecuencia: z.enum(["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"]).optional().nullable(),
   mantenimientoProximaFecha: z.string().optional().nullable(),
   mantenimientoTitulo: textoRegistro,
   mantenimientoPrioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
-});
+}).refine(value => (value.modeloAireId === undefined) === (value.modeloAireVersion === undefined),
+  "Selecciona una ficha con su versión actual");
 
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
@@ -72,10 +77,27 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
-  const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad, ...activoData } = parsed.data;
+  const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad,
+    modeloAireId, modeloAireVersion, ...datosUnidad } = parsed.data;
+  let activoData = datosUnidad;
   const rubro = rubroDeActivo(activoData.rubro, activoData.tipo);
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (activoData.tipo && activoData.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
+  let modeloAireSnapshot: string | null = null;
+  if (modeloAireId !== undefined && modeloAireVersion !== undefined) {
+    if (rubro !== "aires") return Response.json({ error: "Las fichas del catálogo solo se pueden usar para aires acondicionados" }, { status: 400 });
+    try {
+      const ficha = await modeloAireParaAlta(ctx, modeloAireId, modeloAireVersion);
+      modeloAireSnapshot = JSON.stringify(snapshotModeloAire(ficha));
+      // Omitted shared data inherits the model; explicit values/null belong to this unit.
+      const compartidos = { nombre: ficha.nombre, descripcion: ficha.descripcion, categoria: ficha.categoria,
+        marca: ficha.marca, modelo: ficha.modelo };
+      activoData = { ...compartidos, ...activoData,
+        datosTecnicos: activoData.datosTecnicos === null ? null
+          : { ...(ficha.datosTecnicos ?? {}), ...(activoData.datosTecnicos ?? {}) },
+      };
+    } catch (error) { return respuestaErrorCatalogoAire(error); }
+  }
   if (!datosTecnicosValidosParaArea(rubro, activoData.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
   const automatico = !activoData.codigo;
   if (!automatico) {
@@ -89,6 +111,7 @@ export const POST: APIRoute = async (ctx) => {
     const data: typeof activos.$inferInsert = {
       ...activoData, codigo, nombre: activoData.nombre || nombrePendienteActivo(rubro), rubro, tipo,
       datosTecnicos: serializarDatosTecnicos(rubro, activoData.datosTecnicos), qrCode: `QR-${codigo}`,
+      modeloAireId: modeloAireId ?? null, modeloAireSnapshot,
     };
     try {
       const registro = db.insert(activos).values(data).returning();
@@ -109,6 +132,8 @@ export const POST: APIRoute = async (ctx) => {
       }
       return Response.json({ activo: row }, { status: 201 });
     } catch (error) {
+      const catalogoError = errorCatalogoAire(error);
+      if (catalogoError) return respuestaErrorCatalogoAire(catalogoError);
       if (!esCodigoDuplicado(error)) throw error;
       if (!automatico) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
     }

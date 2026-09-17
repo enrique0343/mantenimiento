@@ -1,0 +1,97 @@
+---
+import ConjuntoShell from "@/components/ConjuntoShell.astro";
+import CatalogoAireFields from "@/components/CatalogoAireFields.astro";
+import CatalogoAireResumen from "@/components/CatalogoAireResumen.astro";
+import UppercaseFields from "@/components/UppercaseFields.astro";
+import { getModeloAireDetalle } from "@/lib/catalogo-aires";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+const user = Astro.locals.user;
+if (!user) return Astro.redirect("/login");
+if (Astro.url.searchParams.get("area") !== "aires") return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, "aires"));
+const id = Number(Astro.params.id);
+if (!Number.isSafeInteger(id) || id < 1) return new Response("Ficha de modelo no encontrada.", { status: 404 });
+const detail = await getModeloAireDetalle(Astro, id);
+if (!detail) return new Response("Ficha de modelo no encontrada.", { status: 404 });
+const { modelo, unidades, historial } = detail;
+const canManage = ["admin", "tecnico"].includes(user.rol);
+const formatDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString("es-SV", { timeZone: "America/El_Salvador" }) : "Fecha no disponible";
+const actions: Record<string, string> = { crear: "Ficha creada", editar: "Características actualizadas", archivar: "Ficha archivada", reactivar: "Ficha reactivada" };
+const states: Record<string, string> = { operativo: "Operativo", averiado: "Averiado", mantenimiento: "En mantenimiento", baja: "De baja" };
+---
+<ConjuntoShell title={modelo.nombre}>
+  <a class="cq-link" href="/catalogo-aires?area=aires">← Volver al catálogo de aires</a>
+  <header class="cq-head">
+    <div><p class="cq-eyebrow">Aire acondicionado · Ficha de modelo</p><h1>{modelo.nombre}</h1><div class="cq-actions mt-3"><span class="cq-badge" data-tone={modelo.activo ? "good" : undefined}>{modelo.activo ? "Disponible para registrar unidades" : "Archivada"}</span><span class="cq-muted">Versión {modelo.version}</span></div></div>
+    {canManage && modelo.activo && <a class="btn-primary" href={`/activos/nuevo?area=aires&modeloAireId=${modelo.id}`}>Registrar unidad</a>}
+  </header>
+  {!modelo.activo && <div class="cq-notice mb-5" data-tone="warn">Esta ficha está archivada y no se ofrece al registrar nuevas unidades. Sus unidades e historial siguen disponibles.{canManage && " Puedes reactivarla al final de esta página."}</div>}
+  <nav class="cq-nav" aria-label="Secciones de la ficha"><a href="#caracteristicas">Características</a><a href="#unidades">Unidades registradas ({unidades.length})</a><a href="#historial">Historial ({historial.length})</a></nav>
+  <section class="cq-panel cq-section" id="caracteristicas" aria-labelledby="caracteristicasTitulo">
+    <h2 id="caracteristicasTitulo">Características comunes</h2>
+    <CatalogoAireResumen modelo={modelo} />
+    <p class="cq-field-help mt-5">Actualizada el {formatDate(modelo.updatedAt)}{modelo.actualizadoPorNombre ? ` por ${modelo.actualizadoPorNombre}` : ""}.</p>
+    {canManage && <details class="cq-edit cq-divider">
+      <summary>Editar ficha de modelo</summary>
+      <div class="cq-notice mt-4 mb-5">Los cambios crearán una nueva versión para próximos registros. Las unidades existentes conservarán sus datos y la versión que utilizaron al crearse.</div>
+      <form id="editarFichaAire" data-id={modelo.id} data-version={modelo.version}>
+        <CatalogoAireFields modelo={modelo} />
+        <p id="editarError" class="cq-error mt-4" role="alert" tabindex="-1"></p>
+        <div class="cq-actions mt-5"><button class="btn-primary" type="submit">Guardar nueva versión</button><a href={`/catalogo-aires/${modelo.id}?area=aires`} class="btn-secondary">Descartar cambios</a></div>
+      </form>
+    </details>}
+  </section>
+  <section class="cq-section" id="unidades" aria-labelledby="unidadesTitulo">
+    <div class="cq-section-head"><div><h2 id="unidadesTitulo">Unidades registradas con esta ficha</h2><p class="cq-muted mt-1">Cada unidad conserva su código, serie, ubicación y mantenimientos propios.</p></div></div>
+    {unidades.length ? <div class="cq-table-wrap"><table class="cq-table"><caption>Unidades registradas con esta ficha de modelo</caption><thead><tr><th scope="col">Unidad</th><th scope="col">Número de serie</th><th scope="col">Ubicación</th><th scope="col">Estado</th></tr></thead><tbody>
+      {unidades.map(unit => <tr><td><a class="cq-link" href={`/activos/${unit.id}?area=aires`}>{unit.nombre}</a><p class="cq-muted mt-1">{unit.codigo}</p></td><td>{unit.serial || "Sin registrar"}</td><td>{unit.ubicacion || "Sin asignar"}</td><td>{states[unit.estado] ?? unit.estado}</td></tr>)}
+    </tbody></table></div> : <div class="cq-panel"><p class="cq-muted">Aún no hay unidades registradas con esta ficha.{canManage && modelo.activo && " Usa «Registrar unidad» para crear la primera."}</p></div>}
+  </section>
+  <section class="cq-panel cq-section" id="historial" aria-labelledby="historialTitulo">
+    <div class="cq-section-head"><div><h2 id="historialTitulo">Historial de la ficha</h2><p class="cq-muted mt-1">Fecha, responsable y copia de las características en cada versión.</p></div></div>
+    {historial.length ? <div class="cq-timeline">{historial.map(event => <article class="cq-event">
+      <h3>{actions[event.accion] ?? "Ficha actualizada"} · Versión {event.version}</h3><p class="cq-muted mt-1">{formatDate(event.fecha)} · {event.usuarioNombre || "Usuario no disponible"}</p>
+      {event.snapshot && <details><summary>Ver características de esta versión</summary><p class="cq-field-help mt-3">Estado de la ficha: {event.snapshot.activo ? "Disponible" : "Archivada"}</p><CatalogoAireResumen modelo={event.snapshot} incluirNombre /></details>}
+    </article>)}</div> : <p class="cq-muted">No hay movimientos registrados.</p>}
+  </section>
+  {canManage && <section class="cq-panel cq-section" aria-labelledby="disponibilidadTitulo">
+    <h2 id="disponibilidadTitulo">{modelo.activo ? "Archivar ficha" : "Reactivar ficha"}</h2>
+    <p class="cq-muted mt-2">{modelo.activo ? "Archiva esta ficha cuando ya no quieras utilizarla para nuevas unidades. Conservarás sus unidades e historial y podrás reactivarla después." : "Al reactivar esta ficha, volverá a estar disponible al registrar nuevas unidades. Sus versiones anteriores se conservan."}</p>
+    <form id="estadoFichaAire" data-id={modelo.id} data-version={modelo.version} data-next-active={modelo.activo ? "false" : "true"} class="mt-4">
+      <p id="estadoError" class="cq-error mb-4" role="alert" tabindex="-1"></p><button class="btn-secondary" type="submit">{modelo.activo ? "Archivar ficha" : "Reactivar ficha"}</button>
+    </form>
+  </section>}
+  <UppercaseFields />
+</ConjuntoShell>
+<script>
+  import { datosFichaAire, errorFichaAire } from "@/components/catalogo-aire-form";
+  let saving = false;
+  for (const kind of ["editar", "estado"] as const) {
+    const form = document.querySelector<HTMLFormElement>(`#${kind}FichaAire`);
+    form?.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (saving) return;
+      const error = document.querySelector<HTMLElement>(`#${kind}Error`)!;
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+      const originalLabel = button.textContent;
+      error.textContent = "";
+      const fields = kind === "editar" ? datosFichaAire(form) : { activo: form.dataset.nextActive === "true" };
+      if ("nombre" in fields && !fields.nombre) { error.textContent = "Escribe un nombre para reconocer esta ficha."; error.focus(); return; }
+      saving = true;
+      document.querySelectorAll<HTMLButtonElement>('#editarFichaAire button[type="submit"], #estadoFichaAire button[type="submit"]').forEach(element => { element.disabled = true; });
+      button.textContent = "Guardando…";
+      try {
+        const result = await fetch(`/api/catalogo-aires/${form.dataset.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: Number(form.dataset.version), ...fields }) });
+        const json = await result.json().catch(() => ({}));
+        if (!result.ok) throw new Error(errorFichaAire(json, result.status === 409 ? "Esta ficha cambió mientras la tenías abierta. Recarga la página y revisa la versión actual antes de guardar." : "No se pudo actualizar la ficha. Revisa los datos e inténtalo de nuevo."));
+        window.location.reload();
+      } catch (cause) {
+        error.textContent = cause instanceof TypeError ? "No se pudo confirmar el guardado. Revisa tu conexión y recarga la ficha para comprobar el resultado antes de volver a intentarlo." : cause instanceof Error ? cause.message : "No se pudo actualizar la ficha. Recarga la página para comprobar su estado.";
+        error.focus();
+        saving = false;
+        document.querySelectorAll<HTMLButtonElement>('#editarFichaAire button[type="submit"], #estadoFichaAire button[type="submit"]').forEach(element => { element.disabled = false; });
+        button.textContent = originalLabel;
+      }
+    });
+  }
+</script>
