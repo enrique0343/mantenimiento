@@ -1,6 +1,7 @@
 // Exercise the catalog and physical equipment through public handlers, real
 // migrations, authenticated sessions and transactional SQLite. Never production.
 import assert from 'node:assert/strict';
+import { unstable_splitSqlQuery } from 'wrangler';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 
 const originalFetch = globalThis.fetch;
@@ -18,6 +19,14 @@ try {
     modules: {
       catalogList: 'pages/api/catalogo-aires/index',
       catalogDetail: 'pages/api/catalogo-aires/[id]/index',
+    },
+    migrationStatements(migration, source) {
+      if (!migration.startsWith('0049_')) return [source];
+      // D1 receives independently split statements. A complete SQLite script
+      // may succeed even when Wrangler truncates CASE/END inside a trigger.
+      const statements = unstable_splitSqlQuery(source);
+      assert.equal(statements.length, 15, 'Wrangler must preserve all 15 complete catalog migration statements');
+      return statements;
     },
     beforeMigration(sqlite, migration) {
       if (!migration.startsWith('0049_')) return;
@@ -328,7 +337,7 @@ try {
   }
   assert.deepEqual(rows('PRAGMA foreign_key_check'), []);
   assert.equal(networkCalls, 0);
-  console.log(`PASS: ${fixture.requests} solicitudes de catálogo de aires; fichas reutilizables, unidades independientes, datos opcionales, mayúsculas Unicode, versiones concurrentes, trazabilidad inmutable, permisos, migración conservadora y transacciones atómicas.`);
+  console.log(`PASS: ${fixture.requests} solicitudes de catálogo de aires; migración D1 dividida en 15 sentencias por Wrangler, fichas reutilizables, unidades independientes, datos opcionales, mayúsculas Unicode, versiones concurrentes, trazabilidad inmutable, permisos, migración conservadora y transacciones atómicas.`);
 } finally {
   await fixture?.close();
   globalThis.fetch = originalFetch;

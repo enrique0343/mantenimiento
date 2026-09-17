@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-export async function setupConjuntos({ modules = {}, beforeMigration } = {}) {
+export async function setupConjuntos({ modules = {}, beforeMigration, migrationStatements } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'mantenimiento-conjuntos-'));
   const filename = path.join(temporary, 'routes.mjs');
   await build({
@@ -48,7 +48,11 @@ export async function setupConjuntos({ modules = {}, beforeMigration } = {}) {
   assert(migrations.some((name) => name.startsWith('0048_')), 'Traceability migration must exist');
   for (const migration of migrations) {
     await beforeMigration?.(sqlite, migration);
-    try { sqlite.exec(await fs.readFile(path.join(root, 'migrations', migration), 'utf8')); }
+    try {
+      const source = await fs.readFile(path.join(root, 'migrations', migration), 'utf8');
+      const statements = migrationStatements ? await migrationStatements(migration, source) : [source];
+      for (const statement of statements) sqlite.exec(statement);
+    }
     catch (error) { throw new Error(`Real migration failed: ${migration}`, { cause: error }); }
   }
   assert.equal(sqlite.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);

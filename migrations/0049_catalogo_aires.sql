@@ -34,7 +34,7 @@ CREATE INDEX modelos_aire_historial_modelo_idx ON modelos_aire_historial(modelo_
 CREATE TRIGGER modelos_aire_insertar_historial AFTER INSERT ON modelos_aire
 BEGIN
   INSERT INTO modelos_aire_historial (modelo_aire_id, version, fecha, usuario_id, usuario_nombre, accion, snapshot)
-  VALUES (NEW.id, NEW.version, NEW.created_at, NEW.creado_por, NEW.creado_por_nombre, 'crear', json_object('id', NEW.id, 'version', NEW.version, 'nombre', NEW.nombre, 'descripcion', NEW.descripcion, 'categoria', NEW.categoria, 'marca', NEW.marca, 'modelo', NEW.modelo, 'datosTecnicos', json(NEW.datos_tecnicos), 'activo', json(CASE WHEN NEW.activo = 1 THEN 'true' ELSE 'false' END)));
+  VALUES (NEW.id, NEW.version, NEW.created_at, NEW.creado_por, NEW.creado_por_nombre, 'crear', json_object('id', NEW.id, 'version', NEW.version, 'nombre', NEW.nombre, 'descripcion', NEW.descripcion, 'categoria', NEW.categoria, 'marca', NEW.marca, 'modelo', NEW.modelo, 'datosTecnicos', json(NEW.datos_tecnicos), 'activo', json( CASE WHEN NEW.activo = 1 THEN 'true' ELSE 'false' END )));
 END;
 CREATE TRIGGER modelos_aire_validar_version BEFORE UPDATE ON modelos_aire
 WHEN NEW.id IS NOT OLD.id OR NEW.version != OLD.version + 1
@@ -45,8 +45,8 @@ CREATE TRIGGER modelos_aire_actualizar_historial AFTER UPDATE ON modelos_aire
 BEGIN
   INSERT INTO modelos_aire_historial (modelo_aire_id, version, fecha, usuario_id, usuario_nombre, accion, snapshot)
   VALUES (NEW.id, NEW.version, NEW.updated_at, NEW.actualizado_por, NEW.actualizado_por_nombre,
-    CASE WHEN OLD.activo = 1 AND NEW.activo = 0 THEN 'archivar'
-         WHEN OLD.activo = 0 AND NEW.activo = 1 THEN 'reactivar' ELSE 'editar' END, json_object('id', NEW.id, 'version', NEW.version, 'nombre', NEW.nombre, 'descripcion', NEW.descripcion, 'categoria', NEW.categoria, 'marca', NEW.marca, 'modelo', NEW.modelo, 'datosTecnicos', json(NEW.datos_tecnicos), 'activo', json(CASE WHEN NEW.activo = 1 THEN 'true' ELSE 'false' END)));
+    ( CASE WHEN OLD.activo = 1 AND NEW.activo = 0 THEN 'archivar'
+         WHEN OLD.activo = 0 AND NEW.activo = 1 THEN 'reactivar' ELSE 'editar' END ), json_object('id', NEW.id, 'version', NEW.version, 'nombre', NEW.nombre, 'descripcion', NEW.descripcion, 'categoria', NEW.categoria, 'marca', NEW.marca, 'modelo', NEW.modelo, 'datosTecnicos', json(NEW.datos_tecnicos), 'activo', json( CASE WHEN NEW.activo = 1 THEN 'true' ELSE 'false' END )));
 END;
 CREATE TRIGGER modelos_aire_no_eliminar BEFORE DELETE ON modelos_aire
 BEGIN SELECT RAISE(ABORT, 'CATALOGO_AIRES_ARCHIVAR'); END;
@@ -63,11 +63,11 @@ CREATE INDEX activos_modelo_aire_idx ON activos(modelo_aire_id);
 CREATE TRIGGER activos_validar_modelo_aire BEFORE INSERT ON activos
 WHEN NEW.modelo_aire_id IS NOT NULL OR NEW.modelo_aire_snapshot IS NOT NULL
 BEGIN
-  SELECT CASE WHEN NEW.modelo_aire_id IS NULL OR NEW.modelo_aire_snapshot IS NULL
+  SELECT ( CASE WHEN NEW.modelo_aire_id IS NULL OR NEW.modelo_aire_snapshot IS NULL
     OR NEW.rubro IS NOT 'aires' OR NEW.tipo IS NOT 'general'
     OR NOT json_valid(NEW.modelo_aire_snapshot)
-    THEN RAISE(ABORT, 'CATALOGO_AIRES_VINCULO_INVALIDO') END;
-  SELECT CASE WHEN NOT EXISTS (
+    THEN RAISE(ABORT, 'CATALOGO_AIRES_VINCULO_INVALIDO') END );
+  SELECT ( CASE WHEN NOT EXISTS (
     SELECT 1 FROM modelos_aire m WHERE m.id = NEW.modelo_aire_id AND m.activo = 1
       AND m.id IS json_extract(NEW.modelo_aire_snapshot, '$.id')
       AND m.version IS json_extract(NEW.modelo_aire_snapshot, '$.version')
@@ -77,7 +77,7 @@ BEGIN
       AND m.marca IS json_extract(NEW.modelo_aire_snapshot, '$.marca')
       AND m.modelo IS json_extract(NEW.modelo_aire_snapshot, '$.modelo')
       AND json(m.datos_tecnicos) IS json_extract(NEW.modelo_aire_snapshot, '$.datosTecnicos')
-  ) THEN RAISE(ABORT, 'CATALOGO_AIRES_DESACTUALIZADO') END;
+  ) THEN RAISE(ABORT, 'CATALOGO_AIRES_DESACTUALIZADO') END );
 END;
 -- Los datos propios de la unidad siguen editables; únicamente el origen se conserva.
 CREATE TRIGGER activos_preservar_modelo_aire BEFORE UPDATE ON activos
