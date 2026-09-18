@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs",
+    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs && npm run test:sgo",
     "preview": "wrangler pages dev ./dist --d1=DB --r2=R2 --compatibility-date=2025-01-01",
     "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true --commit-message=deploy",
     "db:generate": "drizzle-kit generate",
@@ -14,7 +14,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply mantenimiento-db --remote",
     "db:seed:local": "wrangler d1 execute mantenimiento-db --local --file=./scripts/seed.sql",
     "db:seed:remote": "wrangler d1 execute mantenimiento-db --remote --file=./scripts/seed.sql",
-    "typecheck": "astro check"
+    "typecheck": "astro check",
+    "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.2.1",
