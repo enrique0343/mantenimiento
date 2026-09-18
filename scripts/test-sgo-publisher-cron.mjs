@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
+import { createOriginCheckMiddleware } from '../node_modules/astro/dist/core/app/middlewares.js';
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'mantenimiento-sgo-cron-'));
 const output = path.join(temporary, 'worker.mjs');
@@ -52,6 +53,13 @@ function assertLegacy(call) {
   assert.equal(call.init.body, '{}');
 }
 
+test('versioned production configuration preserves legacy origin and public SGO activation without secrets', async () => {
+  const config = await fs.readFile(new URL('../cron-worker/wrangler.toml', import.meta.url), 'utf8');
+  assert.match(config, /^APP_URL = "https:\/\/mantenimiento-49c\.pages\.dev"$/m);
+  assert.match(config, /^SGO_INTEGRATION_ENABLED = "true"$/m);
+  assert.match(config, /^SGO_API_ORIGIN = "https:\/\/mantenimiento\.complejoavante\.dev"$/m);
+  assert.doesNotMatch(config, /^(?:SGO_PUBLISH_SECRET|CRON_SECRET)\s*=/m);
+});
 test('flag absent, false, 1 or TRUE does not add a scheduled request', async () => {
   for (const flag of [undefined, 'false', '1', 'TRUE', '']) {
     const result = await harness({ SGO_INTEGRATION_ENABLED: flag });
@@ -66,9 +74,32 @@ test('opt-in scheduled publishing uses its own origin/secret and POST without re
   assert.equal(publish.url, PUBLISH); assert.equal(publish.init.method, 'POST');
   assert.equal(publish.headers.get('x-sgo-publish-secret'), env.SGO_PUBLISH_SECRET);
   assert.equal(publish.headers.get('x-cron-secret'), null);
+  assert.equal(publish.headers.get('content-type'), 'application/json');
+  assert.equal(publish.headers.get('origin'), env.SGO_API_ORIGIN);
   assert.equal(publish.init.redirect, 'manual'); assert(publish.init.signal instanceof AbortSignal);
   assert(result.results.every(x => x.status === 'fulfilled'));
   assert(result.logs.includes('[sgo-snapshot] published')); assertSafeLogs(result.logs);
+});
+test('real Astro origin protection rejects the old request and accepts both scheduled publishers', async () => {
+  const originCheck = createOriginCheckMiddleware();
+  const protectedPublisher = (input, init) => {
+    const request = new Request(input, init);
+    return originCheck({ request, url: new URL(request.url), isPrerendered: false }, successful);
+  };
+  const oldRequest = await protectedPublisher(PUBLISH, {
+    method: 'POST', headers: { 'X-SGO-Publish-Secret': env.SGO_PUBLISH_SECRET },
+  });
+  assert.equal(oldRequest.status, 403);
+  assert.match(await oldRequest.text(), /Cross-site POST form submissions are forbidden/);
+  for (const cron of ['0 12 * * *', '5 * * * *']) {
+    const result = await harness({ SGO_API_ORIGIN: env.SGO_API_ORIGIN + '/' }, protectedPublisher, 'scheduled', cron);
+    assert(result.results.every(x => x.status === 'fulfilled'));
+    const publish = result.calls.find(call => call.url === PUBLISH);
+    assert.equal(publish.headers.get('origin'), env.SGO_API_ORIGIN, 'origin is canonicalized from trusted configuration');
+    assert.equal(publish.headers.get('content-type'), 'application/json');
+    assert.equal(publish.init.body, undefined, 'no request data is needed for snapshot publication');
+    assert(result.logs.includes('[sgo-snapshot] published')); assertSafeLogs(result.logs);
+  }
 });
 test('hourly trigger publishes once and never invokes preventive generation', async () => {
   const result = await harness({}, successful, 'scheduled', '5 * * * *');

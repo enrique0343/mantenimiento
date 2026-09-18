@@ -8,4 +8,7 @@ crons = ["0 12 * * *", "5 * * * *"]
 
 [vars]
 APP_URL = "https://mantenimiento-49c.pages.dev"
+SGO_INTEGRATION_ENABLED = "true"
+SGO_API_ORIGIN = "https://mantenimiento.complejoavante.dev"
 # CRON_SECRET se configura como secret con: wrangler secret put CRON_SECRET
+# SGO_PUBLISH_SECRET también es un secret; nunca se guarda en este archivo.
