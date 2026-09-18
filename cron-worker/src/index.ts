@@ -1,6 +1,5 @@
-// Cron Worker que se dispara cada dia a las 06:00 hora El Salvador (12:00 UTC).
-// Hace POST al endpoint /api/cron/generar-preventivos del sitio Pages,
-// autenticado con CRON_SECRET.
+// Preventivos diarios a las 06:00 de El Salvador (12:00 UTC).
+// El horario adicional publica exclusivamente cortes SGO cuando está habilitado.
 
 export interface Env {
   APP_URL: string;
@@ -11,9 +10,11 @@ export interface Env {
 }
 
 export default {
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(runCron(env));
-    if (env.SGO_INTEGRATION_ENABLED === "true") {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const dailyPreventives = event.cron === "0 12 * * *";
+    const hourlySnapshot = event.cron === "5 * * * *";
+    if (dailyPreventives) ctx.waitUntil(runCron(env));
+    if ((dailyPreventives || hourlySnapshot) && env.SGO_INTEGRATION_ENABLED === "true") {
       ctx.waitUntil(publishSgoSnapshot(env));
     }
   },

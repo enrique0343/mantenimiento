@@ -21,7 +21,7 @@ const env = {
   SGO_PUBLISH_SECRET: 'fixture-sgo-publish-secret-0123456789abcdef',
 };
 const successful = () => Response.json({ ok: true, snapshot_id: 'snapshot-ficticio-1234' });
-async function harness(overrides = {}, responder = successful, action = 'scheduled') {
+async function harness(overrides = {}, responder = successful, action = 'scheduled', cron = '0 12 * * *') {
   const saved = { fetch: globalThis.fetch, log: console.log, error: console.error };
   const calls = [], logs = [], pending = [];
   const configured = { ...env, ...overrides };
@@ -36,7 +36,7 @@ async function harness(overrides = {}, responder = successful, action = 'schedul
   try {
     const ctx = { waitUntil(promise) { pending.push(Promise.resolve(promise).then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))); } };
     const response = action === 'scheduled'
-      ? await worker.scheduled({}, configured, ctx)
+      ? await worker.scheduled({ cron }, configured, ctx)
       : await worker.fetch(new Request('https://cron.example.invalid/run', { headers: { 'x-cron-secret': configured.CRON_SECRET } }), configured);
     return { calls, logs, results: await Promise.all(pending), response };
   } finally { globalThis.fetch = saved.fetch; console.log = saved.log; console.error = saved.error; }
@@ -69,6 +69,23 @@ test('opt-in scheduled publishing uses its own origin/secret and POST without re
   assert.equal(publish.init.redirect, 'manual'); assert(publish.init.signal instanceof AbortSignal);
   assert(result.results.every(x => x.status === 'fulfilled'));
   assert(result.logs.includes('[sgo-snapshot] published')); assertSafeLogs(result.logs);
+});
+test('hourly trigger publishes once and never invokes preventive generation', async () => {
+  const result = await harness({}, successful, 'scheduled', '5 * * * *');
+  assert.equal(result.calls.length, 1); assert.equal(result.results.length, 1);
+  assert.equal(result.calls[0].url, PUBLISH); assert.equal(result.calls[0].headers.get('x-cron-secret'), null);
+  assert.equal(result.calls[0].headers.get('x-sgo-publish-secret'), env.SGO_PUBLISH_SECRET);
+  assert.equal(result.results[0].status, 'fulfilled'); assertSafeLogs(result.logs);
+  for (const flag of [undefined, 'false', '1', 'TRUE']) {
+    const disabled = await harness({ SGO_INTEGRATION_ENABLED: flag }, successful, 'scheduled', '5 * * * *');
+    assert.equal(disabled.calls.length, 0); assert.equal(disabled.results.length, 0);
+  }
+});
+test('unrecognized cron schedules execute neither job', async () => {
+  for (const cron of ['', '0 * * * *', '*/5 * * * *']) {
+    const result = await harness({}, successful, 'scheduled', cron);
+    assert.equal(result.calls.length, 0); assert.equal(result.results.length, 0);
+  }
 });
 test('manual /run remains preventive-only even with integration enabled', async () => {
   const result = await harness({}, successful, 'manual');
