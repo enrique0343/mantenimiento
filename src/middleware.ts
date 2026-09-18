@@ -1,4 +1,5 @@
 import { defineMiddleware } from "astro:middleware";
+import { handleSgoRequest, handleSnapshotPublish } from "./lib/sgo/handler.mjs";
 import { getCurrentUser } from "./lib/auth";
 import { parseArea } from "./lib/areas";
 import { getDb } from "./lib/db";
@@ -32,6 +33,15 @@ function isPublic(path: string): boolean {
 export const onRequest = defineMiddleware(async (ctx, next) => {
   const url = new URL(ctx.request.url);
   const path = url.pathname;
+
+  // A separate server principal protects the integration before cookie auth.
+  // No human role or public-path exemption authorizes this namespace.
+  if (path === "/api/integraciones/sgo/v1" || path.startsWith("/api/integraciones/sgo/v1/")) {
+    return handleSgoRequest(ctx.request, ctx.locals.runtime?.env);
+  }
+  if (path === "/api/cron/sgo-snapshot" || path === "/api/cron/sgo-snapshot/") {
+    return handleSnapshotPublish(ctx.request, ctx.locals.runtime?.env);
+  }
 
   const user = await getCurrentUser(ctx).catch(() => null);
   if (user) ctx.locals.user = user;

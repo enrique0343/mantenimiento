@@ -1,0 +1,4164 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Mantenimiento → SGO Avante · API privada de consulta",
+    "version": "1.0.0-rc.1",
+    "description": "CONTRATO PROPUESTO r2, NO IMPLEMENTADO NI DESPLEGADO. Perfil inicial correctivos-v1: recursos asset/order e indicadores MNT-01/02/03/06/11. Proyección de consulta privada entre servidores, sin modificar diseño/roles/permisos humanos. Cloudflare Access Service Auth y JWT validado en origen permanecen intactos. Los demás DTOs se reservan para fase2 y devuelven409; los KPI conocidos fuera del perfil retornan null/insufficient_data/outside_active_profile sin evaluación. Snapshots inmutables, eventos deduplicados por pareja+seq y pertenencias independientes, versiones explícitas y bootstrap completo al cambiar conjunto/proyección. Ejemplos ficticios; no acreditan capacidad productiva. Solo GET, demás405. No datos clínicos, credenciales, PII, salarios ni toda la base. Ningún GET materializa capturas, escribe negocio o envía notificaciones.\nRC1 implementado localmente: cálculos GET deterministas sobre snapshots inmutables, sin escritura; ID de cálculo firmado. Producción permanece desactivada. Véase IMPLEMENTACION-FASE-1.md."
+  },
+  "servers": [
+    {
+      "url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1",
+      "description": "Ruta propuesta en Mantenimiento; no implica disponibilidad actual."
+    }
+  ],
+  "security": [
+    {
+      "AccessClientId": [],
+      "AccessClientSecret": []
+    }
+  ],
+  "x-origin-authentication": {
+    "required": true,
+    "description": "Access aplica una política Service Auth restringida al service token del consumidor y a esta ruta. El origen valida criptográficamente Cf-Access-Jwt-Assertion: issuer de equipo autorizado, audience exacta, exp/nbf, algoritmo permitido, firma/JWKS con rotación y sujeto de servicio. No confiar solo en presencia de headers, CF-Access-Client-Id o JWT decodificado sin verificar. Rechazar acceso directo a pages.dev/workers.dev si evade la validación. Resolver principal desde identidad verificada; allowlist de TUPLAS (site_id,maintenance_area_id), nunca producto cartesiano. Revalidar en cada página/drilldown. Secretos en stores de Cloudflare, rotación y revocación fuera de chat/documento; no se solicitan ni muestran sus valores. Cursor HMAC ligado explícitamente a grantVersion y revalidación de concesiones; no ampliar permisos generales. Solo GET; otros métodos405."
+  },
+  "x-synchronization-contract": {
+    "description": "Bootstrap completo e incremental transaccional por pareja autorizada contra snapshot inmutable. Secuencias monotónicas POR PAREJA, revisiones por entidad; journal global solo interno para corte coherente, nunca exponer watermark ni actividad de otros ámbitos. Identidad de evento/deduplicación: (source_instance_id,site_id,maintenance_area_id,seq). Clave de pertenencia/proyección: (source_instance_id,resource,id,site_id,maintenance_area_id), con última revision, último seq aplicado y tombstone por esa pertenencia. No deduplicar globalmente por entidad+revision. Un traslado A→B incrementa una vez la revisión de entidad y emite remove/scope_changed en A y upsert en B con ESA MISMA revisión; ambos son válidos y se aplican aunque el otro ya se haya recibido. El retiro toca solo A, jamás elimina B. Conservar high-water por pertenencia: seq atrasado/duplicado no se reaplica, y una revisión anterior nunca sobrescribe una posterior en ESA pertenencia. A→B→A con revisión nueva no se deshace por recibir tarde el primer retiro. En snapshot de bootstrap guardar baseline_seq=through_seq(C) por pareja/versiones y rechazar eventos <= baseline de esa generación; una ausencia en el snapshot no justifica aceptar retiradas antiguas. Secuencias solo comparables dentro de la misma pareja y versión compatible. Perfil inicial fijo correctivos-v1 con asset/order. Si cambia projection_version o resource_set_version, se habilita un recurso pending→ready, cambia el perfil o se introduce un recurso, el consumidor descarta la continuidad incremental de la versión vieja para esa pareja y comienza bootstrap COMPLETO de TODOS los recursos admitidos en un nuevo snapshot C, sin filtros de período/actualización. Preparar generación aislada; nunca publicar recursos parciales. Publicar generación y checkpoint through_seq(C), versiones y conjunto en una única transacción local solo después de completar páginas y reconciliación. Después leer cambios >through_seq(C) de esa misma pareja/versiones. Hasta completar el bootstrap el recurso nuevo figura no sincronizado y los KPI que dependan de él tienen value=null/data_status=insufficient_data/reason_code=resource_not_synchronized. No marcar la sincronización LOCAL del consumidor como ready ni avanzar checkpoint viejo al nuevo corte para saltar la carga inicial; readiness de la API indica que el recurso puede leerse para bootstrap, no que SGO ya lo cargó. La última generación completa puede conservarse únicamente como desactualizada y bajo permisos actuales. Desajuste de versiones en /changes:409 resync_required sin datos ni avance; historial/cursor fuera de retención:410. Cambios en negocio durante bootstrap se recuperan desde el corte C. No inventar filas históricas que no existan. Cambios de negocio y outbox deben ser atómicos. Cada página/lote se confirma junto a su checkpoint durable. Revocar permisos invalida cursores por grantVersion; no revelar destino de retiros. Reaperturas/cancelaciones/correcciones conservan identidad e invalidan cálculos afectados, con nuevo calculation_id/supersedes. mapping_version sigue siendo propiedad de SGO. MTTR real, sesiones e indisponibilidad temporal siguen pendientes y fuera de perfil hasta ampliar captura, evidencia, calendario y autorización. Nada de esto habilita ni despliega producción."
+  },
+  "paths": {
+    "/meta": {
+      "get": {
+        "operationId": "getIntegrationMeta",
+        "summary": "Consultar capacidades y captura publicada",
+        "description": "Filtrada por principal. Devuelve solo pares de alcance permitidos y estado real de cada recurso. Si no existe una captura válida,503; esta operación no crea una. No expone configuración de credenciales, usuarios o identificadores de SGO ajenos. meta.scope=null y meta.through_seq=null; readiness.minimum_available_seq=null. Publica scope_checkpoints solo de pares autorizados, sin watermark global. source_updated_at/history_available_from se limitan a fuentes autorizadas. Anuncia active_profile, projection_version, resource_set_version, recursos/indicadores admitidos y versiones por pareja. Cambio de conjunto/habilitación requiere bootstrap completo; readiness no sustituye el estado local resource_not_synchronized.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalSnapshotId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso todavía no implementado/publicado o snapshot incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/references": {
+      "get": {
+        "operationId": "getIntegrationReferences",
+        "summary": "Consultar sedes y áreas autorizadas",
+        "description": "Filtra sede, área y pares por la allowlist exacta del principal. SGO mantiene la tabla de correspondencia estable con sus IDs; nombres son etiquetas y nunca claves de unión. meta.scope=null y meta.through_seq=null; no exportar una secuencia global. Todos los metadatos de actualización se derivan exclusivamente de referencias autorizadas.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalSnapshotId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferencesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso todavía no implementado/publicado o snapshot incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/records": {
+      "get": {
+        "operationId": "getIntegrationRecords",
+        "summary": "Consultar registros seguros por ámbito y captura",
+        "description": "Exige exactamente un par sede/área y snapshot publicado. Orden estable por ID dentro del recurso y snapshot. Bootstrap: recorrer sin period_start/end ni updated_since, incluidos legados con updated_at=null, y después continuar cambios desde through_seq. Período opcional únicamente para resource=order con start+end+date_basis juntos; otros usos400. updated_since inclusivo es filtro auxiliar para filas con actualización fiable; si la captura contiene legados desconocidos devuelve409 salvo que se elimine el filtro, evitando pérdidas silenciosas. Recurso pendiente409. Ningún GET modifica negocio, llama cron ni genera eventos operativos. record_id permite resolver una referencia de evidencia puntual sin ampliar ámbito ni saltar filtros. No usar paginación para un record_id único. Perfil correctivos-v1 admite asset/order únicamente. Fuera del perfil409 resource_not_ready. Ante nuevas versiones de recursos/proyección, usar esta ruta para bootstrap completo de todos los recursos admitidos de la pareja, publicar solo al terminar y conservar baseline=through_seq(C).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/AreaId"
+          },
+          {
+            "$ref": "#/components/parameters/SnapshotId"
+          },
+          {
+            "$ref": "#/components/parameters/Resource"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/OptionalPeriodStart"
+          },
+          {
+            "$ref": "#/components/parameters/OptionalPeriodEnd"
+          },
+          {
+            "$ref": "#/components/parameters/DateBasis"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatedSince"
+          },
+          {
+            "$ref": "#/components/parameters/RecordId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordsResponse"
+                },
+                "examples": {
+                  "demo": {
+                    "summary": "Datos completamente ficticios; no representan producción ni metas aprobadas.",
+                    "value": {
+                      "meta": {
+                        "source_instance_id": "demo-mantenimiento-01",
+                        "contract_version": "1.0.0-rc.1",
+                        "snapshot_id": "demo-snapshot-20260917-01",
+                        "cutoff_at": "2026-09-17T18:00:00Z",
+                        "snapshot_published_at": "2026-09-17T18:00:05Z",
+                        "through_seq": "120",
+                        "source_updated_at": "2026-09-17T17:58:00Z",
+                        "time_zone": "America/El_Salvador",
+                        "scope": {
+                          "site_id": "2",
+                          "maintenance_area_id": "aires"
+                        },
+                        "period": null,
+                        "timestamp_semantics": "source_utc",
+                        "request_id": "demo-request-01",
+                        "source_system": "mantenimiento",
+                        "generated_at": "2026-09-17T18:00:06Z",
+                        "history_available_from": "2026-09-01T06:00:00Z",
+                        "active_profile": "correctivos-v1",
+                        "projection_version": "demo-correctivos-projection-1",
+                        "resource_set_version": "demo-correctivos-resources-1"
+                      },
+                      "pagination": {
+                        "limit": 100,
+                        "next_cursor": null,
+                        "has_more": false
+                      },
+                      "data": [
+                        {
+                          "resource": "order",
+                          "record": {
+                            "id": "51",
+                            "site_id": "2",
+                            "maintenance_area_id": "aires",
+                            "scope_origin": "explicit_order",
+                            "created_at": "2026-09-10T14:00:00Z",
+                            "updated_at": "2026-09-10T16:00:00Z",
+                            "asset_id": "7",
+                            "plan_id": null,
+                            "activity_id": null,
+                            "type": "correctivo",
+                            "status": "cerrada",
+                            "priority": "media",
+                            "assigned": true,
+                            "assigned_at": "2026-09-10T14:15:00Z",
+                            "started_at": "2026-09-10T14:30:00Z",
+                            "paused_at": null,
+                            "paused_minutes": 30,
+                            "due_at": "2026-09-11T14:00:00Z",
+                            "completed_at": "2026-09-10T16:00:00Z",
+                            "closed_at": "2026-09-10T16:00:00Z",
+                            "automatic_elapsed_hours": 1.0,
+                            "duration_kind": "workflow_elapsed_minus_recorded_wait",
+                            "due_basis": "legacy_unknown",
+                            "quality_flags": [
+                              "deadline_origin_unknown"
+                            ],
+                            "revision": "2",
+                            "location_id": "3",
+                            "due_date": null,
+                            "verified_at": null
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso todavía no implementado/publicado o snapshot incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/changes": {
+      "get": {
+        "operationId": "getIntegrationChanges",
+        "summary": "Sincronizar revisiones y retiradas por secuencia",
+        "description": "Feed incremental transaccional POR CONSTRUIR. Requiere scope/snapshot y versiones confirmadas del checkpoint; after_seq obligatorio inicialmente. Sin feed íntegro409; recursos del feed limitados a asset/order en correctivos-v1. updated_since es diagnóstico y no descarta eventos necesarios. Cancelación/reapertura/corrección=upsert, eliminación=remove, traslado=remove en origen más upsert destino autorizado. Identidad de evento/deduplicación: (source_instance_id,site_id,maintenance_area_id,seq). Clave de pertenencia/proyección: (source_instance_id,resource,id,site_id,maintenance_area_id), con última revision, último seq aplicado y tombstone por esa pertenencia. No deduplicar globalmente por entidad+revision. Un traslado A→B incrementa una vez la revisión de entidad y emite remove/scope_changed en A y upsert en B con ESA MISMA revisión; ambos son válidos y se aplican aunque el otro ya se haya recibido. El retiro toca solo A, jamás elimina B. Conservar high-water por pertenencia: seq atrasado/duplicado no se reaplica, y una revisión anterior nunca sobrescribe una posterior en ESA pertenencia. A→B→A con revisión nueva no se deshace por recibir tarde el primer retiro. En snapshot de bootstrap guardar baseline_seq=through_seq(C) por pareja/versiones y rechazar eventos <= baseline de esa generación; una ausencia en el snapshot no justifica aceptar retiradas antiguas. Secuencias solo comparables dentro de la misma pareja y versión compatible. Perfil inicial fijo correctivos-v1 con asset/order. Si cambia projection_version o resource_set_version, se habilita un recurso pending→ready, cambia el perfil o se introduce un recurso, el consumidor descarta la continuidad incremental de la versión vieja para esa pareja y comienza bootstrap COMPLETO de TODOS los recursos admitidos en un nuevo snapshot C, sin filtros de período/actualización. Preparar generación aislada; nunca publicar recursos parciales. Publicar generación y checkpoint through_seq(C), versiones y conjunto en una única transacción local solo después de completar páginas y reconciliación. Después leer cambios >through_seq(C) de esa misma pareja/versiones. Hasta completar el bootstrap el recurso nuevo figura no sincronizado y los KPI que dependan de él tienen value=null/data_status=insufficient_data/reason_code=resource_not_synchronized. No marcar la sincronización LOCAL del consumidor como ready ni avanzar checkpoint viejo al nuevo corte para saltar la carga inicial; readiness de la API indica que el recurso puede leerse para bootstrap, no que SGO ya lo cargó. La última generación completa puede conservarse únicamente como desactualizada y bajo permisos actuales. Desajuste de versiones en /changes:409 resync_required sin datos ni avance; historial/cursor fuera de retención:410. Cambios en negocio durante bootstrap se recuperan desde el corte C. No inventar filas históricas que no existan.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/AreaId"
+          },
+          {
+            "$ref": "#/components/parameters/SnapshotId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/AfterSeq"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatedSince"
+          },
+          {
+            "$ref": "#/components/parameters/ResourceSetVersion"
+          },
+          {
+            "$ref": "#/components/parameters/ProjectionVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesResponse"
+                },
+                "examples": {
+                  "demo": {
+                    "summary": "Datos completamente ficticios; no representan producción ni metas aprobadas.",
+                    "value": {
+                      "meta": {
+                        "source_instance_id": "demo-mantenimiento-01",
+                        "contract_version": "1.0.0-rc.1",
+                        "snapshot_id": "demo-snapshot-20260917-01",
+                        "cutoff_at": "2026-09-17T18:00:00Z",
+                        "snapshot_published_at": "2026-09-17T18:00:05Z",
+                        "through_seq": "120",
+                        "source_updated_at": "2026-09-17T17:58:00Z",
+                        "time_zone": "America/El_Salvador",
+                        "scope": {
+                          "site_id": "2",
+                          "maintenance_area_id": "aires"
+                        },
+                        "period": null,
+                        "timestamp_semantics": "source_utc",
+                        "request_id": "demo-request-01",
+                        "source_system": "mantenimiento",
+                        "generated_at": "2026-09-17T18:00:06Z",
+                        "history_available_from": "2026-09-01T06:00:00Z",
+                        "active_profile": "correctivos-v1",
+                        "projection_version": "demo-correctivos-projection-1",
+                        "resource_set_version": "demo-correctivos-resources-1"
+                      },
+                      "pagination": {
+                        "limit": 100,
+                        "next_cursor": null,
+                        "has_more": false
+                      },
+                      "after_seq": "118",
+                      "through_seq": "120",
+                      "next_after_seq": "120",
+                      "data": [
+                        {
+                          "seq": "119",
+                          "resource": "order",
+                          "id": "41",
+                          "changed_at": "2026-09-17T17:57:00Z",
+                          "operation": "remove",
+                          "reason": "deleted",
+                          "revision": "5"
+                        },
+                        {
+                          "seq": "120",
+                          "resource": "asset",
+                          "id": "8",
+                          "changed_at": "2026-09-17T17:58:00Z",
+                          "operation": "remove",
+                          "reason": "scope_changed",
+                          "revision": "4"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso/perfil aún no disponible, snapshot incompatible o projection_version/resource_set_version desfasados. Desajuste de versiones: error.code=resync_required; bootstrap completo por pareja, sin avanzar checkpoint ni devolver cambios de otra generación.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/kpis": {
+      "get": {
+        "operationId": "getIntegrationKpis",
+        "summary": "Consultar cálculo versionado y trazable",
+        "description": "Evaluar únicamente MNT-01/02/03/06/11 mediante SELECT y cálculo determinista en memoria sobre un snapshot materializado e inmutable. Período local obligatorio, alcance y corte explícitos. GET no escribe, publica cortes, hace backfill ni llama motores legacy. Si falta el snapshot, devolver indisponibilidad explícita; no generarlo desde GET. MNT-02 cuenta abierta; MNT-03 abierta/en_proceso/en_espera; MNT-11 tiempo transcurrido creación→finalización, no horas-persona ni MTTR. Un indicador conocido fuera del perfil retorna null/insufficient_data/outside_active_profile/not_evaluated sin cálculo, evidencia ni hash. Si todos están fuera de perfil calculation_id/calculated_at son null. La normalización, fórmulas y huellas se versionan; nuevas versiones requieren bootstrap completo en SGO.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/AreaId"
+          },
+          {
+            "$ref": "#/components/parameters/SnapshotId"
+          },
+          {
+            "$ref": "#/components/parameters/PeriodStart"
+          },
+          {
+            "$ref": "#/components/parameters/PeriodEnd"
+          },
+          {
+            "$ref": "#/components/parameters/MetricIds"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpisResponse"
+                },
+                "examples": {
+                  "demo": {
+                    "summary": "Datos completamente ficticios; no representan producción ni metas aprobadas.",
+                    "value": {
+                      "meta": {
+                        "source_instance_id": "demo-mantenimiento-01",
+                        "contract_version": "1.0.0-rc.1",
+                        "snapshot_id": "demo-snapshot-20260917-01",
+                        "cutoff_at": "2026-09-17T18:00:00Z",
+                        "snapshot_published_at": "2026-09-17T18:00:05Z",
+                        "through_seq": "120",
+                        "source_updated_at": "2026-09-17T17:58:00Z",
+                        "time_zone": "America/El_Salvador",
+                        "scope": {
+                          "site_id": "2",
+                          "maintenance_area_id": "aires"
+                        },
+                        "period": {
+                          "start": "2026-09-01",
+                          "end": "2026-10-01",
+                          "time_zone": "America/El_Salvador",
+                          "date_basis": "metric_definition",
+                          "start_at": "2026-09-01T06:00:00Z",
+                          "end_at": "2026-10-01T06:00:00Z",
+                          "effective_end_at": "2026-09-17T18:00:00Z",
+                          "is_complete": false
+                        },
+                        "timestamp_semantics": "source_utc",
+                        "request_id": "demo-request-01",
+                        "source_system": "mantenimiento",
+                        "generated_at": "2026-09-17T18:00:06Z",
+                        "history_available_from": "2026-09-01T06:00:00Z",
+                        "active_profile": "correctivos-v1",
+                        "projection_version": "demo-correctivos-projection-1",
+                        "resource_set_version": "demo-correctivos-resources-1"
+                      },
+                      "calculation_id": "eyJhbGciOiJIUzI1NiJ9.ZGF0b3MtZmljdGljaW9z.ZmlybWEtZmljdGljaWE",
+                      "calculated_at": "2026-09-17T18:00:05Z",
+                      "formula_catalog_version": "demo-correctivos-v1-1",
+                      "data": [
+                        {
+                          "metric_id": "MNT-16",
+                          "formula_version": "demo-proposed-1",
+                          "numerator": null,
+                          "denominator": null,
+                          "value": null,
+                          "unit": "hours",
+                          "capability": "pending",
+                          "data_status": "insufficient_data",
+                          "reason_codes": [
+                            "outside_active_profile"
+                          ],
+                          "coverage": {
+                            "complete": false,
+                            "eligible_records": 0,
+                            "included_records": 0,
+                            "excluded_records": 0,
+                            "records_missing_required_fields": 0,
+                            "exclusions": []
+                          },
+                          "source_updated_at": null,
+                          "evidence": null,
+                          "formula": "SUMA(duración real de reparación de intervenciones válidas completadas en el período) / NÚMERO de reparaciones válidas. Requiere evidencia real; no usar duración de OT.",
+                          "source_hash": null,
+                          "evaluation_status": "not_evaluated"
+                        },
+                        {
+                          "metric_id": "MNT-02",
+                          "formula_version": "demo-correctivos-v1-1",
+                          "numerator": 0,
+                          "denominator": null,
+                          "value": 0,
+                          "unit": "orders",
+                          "capability": "available",
+                          "data_status": "ok",
+                          "reason_codes": [
+                            "demo_source_universe_reconciled"
+                          ],
+                          "coverage": {
+                            "complete": true,
+                            "eligible_records": 0,
+                            "included_records": 0,
+                            "excluded_records": 0,
+                            "records_missing_required_fields": 0,
+                            "exclusions": []
+                          },
+                          "source_updated_at": "2026-09-17T17:58:00Z",
+                          "evidence": {
+                            "url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1/kpis/eyJhbGciOiJIUzI1NiJ9.ZGF0b3MtZmljdGljaW9z.ZmlybWEtZmljdGljaWE/evidence?site_id=2&maintenance_area_id=aires&snapshot_id=demo-snapshot-20260917-01",
+                            "source_ids_sample": [],
+                            "sample_is_exhaustive": true
+                          },
+                          "formula": "CONTAR DISTINCT orden.id donde tipo=correctivo y estado al corte=abierta, dentro del par sede/área autorizado.",
+                          "source_hash": "9431279d249a763b42327a98f40e02b6111421a3f7543250dcd98c1f844dabdd",
+                          "evaluation_status": "evaluated"
+                        },
+                        {
+                          "metric_id": "MNT-03",
+                          "formula_version": "demo-correctivos-v1-1",
+                          "numerator": 0,
+                          "denominator": null,
+                          "value": 0,
+                          "unit": "orders",
+                          "capability": "available",
+                          "data_status": "ok",
+                          "reason_codes": [
+                            "demo_source_universe_reconciled"
+                          ],
+                          "coverage": {
+                            "complete": true,
+                            "eligible_records": 0,
+                            "included_records": 0,
+                            "excluded_records": 0,
+                            "records_missing_required_fields": 0,
+                            "exclusions": []
+                          },
+                          "source_updated_at": "2026-09-17T17:58:00Z",
+                          "evidence": {
+                            "url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1/kpis/eyJhbGciOiJIUzI1NiJ9.ZGF0b3MtZmljdGljaW9z.ZmlybWEtZmljdGljaWE/evidence?site_id=2&maintenance_area_id=aires&snapshot_id=demo-snapshot-20260917-01",
+                            "source_ids_sample": [],
+                            "sample_is_exhaustive": true
+                          },
+                          "formula": "CONTAR DISTINCT orden.id donde tipo=correctivo y estado al corte pertenece a abierta,en_proceso,en_espera, dentro del par sede/área autorizado.",
+                          "source_hash": "497b550f173bb359c4df3c84ae2892c5d780910e48f5f563a48624b32c2e2ada",
+                          "evaluation_status": "evaluated"
+                        },
+                        {
+                          "metric_id": "MNT-11",
+                          "formula_version": "demo-correctivos-v1-1",
+                          "numerator": 6,
+                          "denominator": 2,
+                          "value": 3,
+                          "unit": "hours",
+                          "capability": "available",
+                          "data_status": "partial",
+                          "reason_codes": [
+                            "period_in_progress"
+                          ],
+                          "coverage": {
+                            "complete": true,
+                            "eligible_records": 2,
+                            "included_records": 2,
+                            "excluded_records": 0,
+                            "records_missing_required_fields": 0,
+                            "exclusions": []
+                          },
+                          "source_updated_at": "2026-09-17T17:58:00Z",
+                          "evidence": {
+                            "url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1/kpis/eyJhbGciOiJIUzI1NiJ9.ZGF0b3MtZmljdGljaW9z.ZmlybWEtZmljdGljaWE/evidence?site_id=2&maintenance_area_id=aires&snapshot_id=demo-snapshot-20260917-01",
+                            "source_ids_sample": [
+                              "51",
+                              "52"
+                            ],
+                            "sample_is_exhaustive": true
+                          },
+                          "formula": "SUMA((completed_at-created_at)/3600 segundos) / NÚMERO de órdenes correctivas elegibles finalizadas en el período local hasta el corte, con estado completada/verificada/cerrada y fechas válidas. Tiempo transcurrido: incluye esperas, no representa trabajo efectivo ni reparación real.",
+                          "source_hash": "2a0461862c8275ab34a9d7dc1434f60d8bfb99a38ba9c9a10dfd63898328cac0",
+                          "evaluation_status": "evaluated"
+                        }
+                      ],
+                      "supersedes_calculation_id": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso todavía no implementado/publicado o snapshot incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/kpis/{calculation_id}/evidence": {
+      "get": {
+        "operationId": "getIntegrationKpiEvidence",
+        "summary": "Consultar contribuciones de un cálculo",
+        "description": "Revalidar principal y coincidencia exacta cálculo/snapshot/par autorizado; ante ID ajeno404 uniforme. El período y fórmulas se heredan del cálculo, no se sustituyen desde el cliente. Evidencia paginada inmutable con hechos mínimos y referencias para recomputar numerador/denominador. No filtrar evidencia para producir un porcentaje distinto del cálculo. Sin textos libres, usuarios, tarifas, seriales, tracking tokens, adjuntos ni credenciales.",
+        "parameters": [
+          {
+            "name": "calculation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CalculationId"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/AreaId"
+          },
+          {
+            "$ref": "#/components/parameters/SnapshotId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proyección autorizada obtenida de captura publicada inmutable. Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store"
+                },
+                "description": "Impedir caché compartida de información operacional."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceResponse"
+                },
+                "examples": {
+                  "demo": {
+                    "summary": "Datos completamente ficticios; no representan producción ni metas aprobadas.",
+                    "value": {
+                      "meta": {
+                        "source_instance_id": "demo-mantenimiento-01",
+                        "contract_version": "1.0.0-rc.1",
+                        "snapshot_id": "demo-snapshot-20260917-01",
+                        "cutoff_at": "2026-09-17T18:00:00Z",
+                        "snapshot_published_at": "2026-09-17T18:00:05Z",
+                        "through_seq": "120",
+                        "source_updated_at": "2026-09-17T17:58:00Z",
+                        "time_zone": "America/El_Salvador",
+                        "scope": {
+                          "site_id": "2",
+                          "maintenance_area_id": "aires"
+                        },
+                        "period": {
+                          "start": "2026-09-01",
+                          "end": "2026-10-01",
+                          "time_zone": "America/El_Salvador",
+                          "date_basis": "metric_definition",
+                          "start_at": "2026-09-01T06:00:00Z",
+                          "end_at": "2026-10-01T06:00:00Z",
+                          "effective_end_at": "2026-09-17T18:00:00Z",
+                          "is_complete": false
+                        },
+                        "timestamp_semantics": "source_utc",
+                        "request_id": "demo-request-01",
+                        "source_system": "mantenimiento",
+                        "generated_at": "2026-09-17T18:00:06Z",
+                        "history_available_from": "2026-09-01T06:00:00Z",
+                        "active_profile": "correctivos-v1",
+                        "projection_version": "demo-correctivos-projection-1",
+                        "resource_set_version": "demo-correctivos-resources-1"
+                      },
+                      "calculation_id": "eyJhbGciOiJIUzI1NiJ9.ZGF0b3MtZmljdGljaW9z.ZmlybWEtZmljdGljaWE",
+                      "pagination": {
+                        "limit": 100,
+                        "next_cursor": null,
+                        "has_more": false
+                      },
+                      "data": [
+                        {
+                          "metric_id": "MNT-11",
+                          "formula_version": "demo-correctivos-v1-1",
+                          "source_refs": [
+                            {
+                              "resource": "order",
+                              "id": "51",
+                              "record_url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1/records?resource=order&site_id=2&maintenance_area_id=aires&snapshot_id=demo-snapshot-20260917-01&record_id=51",
+                              "revision": "2"
+                            }
+                          ],
+                          "included": true,
+                          "reason_code": null,
+                          "numerator_contribution": 2,
+                          "denominator_contribution": 1,
+                          "facts": {
+                            "order_type": "correctivo",
+                            "order_status": "cerrada",
+                            "created_at": "2026-09-10T14:00:00Z",
+                            "completed_at": "2026-09-10T16:00:00Z",
+                            "elapsed_hours": 2
+                          }
+                        },
+                        {
+                          "metric_id": "MNT-11",
+                          "formula_version": "demo-correctivos-v1-1",
+                          "source_refs": [
+                            {
+                              "resource": "order",
+                              "id": "52",
+                              "record_url": "https://mantenimiento.complejoavante.dev/api/integraciones/sgo/v1/records?resource=order&site_id=2&maintenance_area_id=aires&snapshot_id=demo-snapshot-20260917-01&record_id=52",
+                              "revision": "4"
+                            }
+                          ],
+                          "included": true,
+                          "reason_code": null,
+                          "numerator_contribution": 4,
+                          "denominator_contribution": 1,
+                          "facts": {
+                            "order_type": "correctivo",
+                            "order_status": "cerrada",
+                            "created_at": "2026-09-12T14:00:00Z",
+                            "completed_at": "2026-09-12T18:00:00Z",
+                            "elapsed_hours": 4
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros/cursor incoherentes, fechas inválidas o filtro no permitido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Identidad entre servidores ausente, caducada o no verificable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Principal válido sin permiso sobre el par solicitado o con permisos revocados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso o cálculo inexistente/no visible, sin revelar existencia ajena.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Recurso todavía no implementado/publicado o snapshot incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Cursor/snapshot o historial incremental fuera de retención: reiniciar bootstrap autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Límite de solicitudes excedido; respetar Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "503": {
+            "description": "Captura/materialización no disponible o servicio temporalmente indisponible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": "Segundos sugeridos antes del siguiente intento."
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AccessClientId": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "CF-Access-Client-Id",
+        "description": "Identificador del service token provisionado fuera del chat. Debe presentarse junto a AccessClientSecret (AND). Sin valor de ejemplo."
+      },
+      "AccessClientSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "CF-Access-Client-Secret",
+        "description": "Secreto del service token almacenado como secret en el Worker SGO. Nunca persistir en frontend, logs ni documentación. Debe presentarse junto a AccessClientId (AND). Sin valor de ejemplo."
+      }
+    },
+    "parameters": {
+      "SiteId": {
+        "name": "site_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/StableId"
+        },
+        "description": "Una sola sede por consulta; debe pertenecer al par permitido del principal. No comodines ni lista de sedes."
+      },
+      "AreaId": {
+        "name": "maintenance_area_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/MaintenanceAreaId"
+        },
+        "description": "Una sola área estable por consulta; validar el par sede/área, no dos allowlists independientes."
+      },
+      "SnapshotId": {
+        "name": "snapshot_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/SnapshotId"
+        }
+      },
+      "OptionalSnapshotId": {
+        "name": "snapshot_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/SnapshotId"
+        },
+        "description": "Si se omite, devuelve la última captura publicada autorizada; nunca genera una nueva."
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 100
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "description": "Cursor HMAC de principal+grantVersion+filtros+snapshot+pareja+projection_version+resource_set_version. No se reutiliza tras cambio de conjunto/proyección. Revalidar permisos en cada página."
+      },
+      "UpdatedSince": {
+        "name": "updated_since",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/UtcInstant"
+        },
+        "description": "Límite inferior inclusivo UTC. Complementa diagnóstico o reconciliación; no sustituye after_seq, no permite saltar eventos, y un updated_at legado desconocido no debe excluir silenciosamente un registro de bootstrap."
+      },
+      "PeriodStart": {
+        "name": "period_start",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "Fecha local inclusive en America/El_Salvador."
+      },
+      "PeriodEnd": {
+        "name": "period_end",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "Fecha local exclusiva mayor que period_start."
+      },
+      "OptionalPeriodStart": {
+        "name": "period_start",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "Solo resource=order. Requiere period_end y date_basis juntos; intervalo local [start,end). NO usar filtro período en bootstrap de sincronización."
+      },
+      "OptionalPeriodEnd": {
+        "name": "period_end",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "Solo resource=order; requiere period_start y date_basis."
+      },
+      "DateBasis": {
+        "name": "date_basis",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "created",
+            "completed",
+            "due"
+          ]
+        },
+        "description": "Obligatorio exactamente cuando se envía período en /records; solo order. Excluye fechas base null de ese filtro, pero no del bootstrap completo."
+      },
+      "Resource": {
+        "name": "resource",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Resource"
+        },
+        "description": "Un recurso de la reserva de contrato. Perfil correctivos-v1 solo admite asset/order; todos los demás devuelven409 resource_not_ready/outside_active_profile aunque existan tablas. Nunca lista vacía simulada."
+      },
+      "AfterSeq": {
+        "name": "after_seq",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Sequence"
+        },
+        "description": "OBLIGATORIO en primera página sin cursor: checkpoint exclusivo de la pareja y versiones indicadas. Después omitir o repetir original. El checkpoint se confirma solo con aplicación durable completa. No mezclar parejas/versiones; versión obsoleta409 resync_required; retención410; after_seq>through_seq400."
+      },
+      "MetricIds": {
+        "name": "metric_ids",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true
+        },
+        "description": "Selección opcional de IDs versionados del catálogo aprobado; desconocidos:400. Valores separados por coma; sin consulta arbitraria.",
+        "style": "form",
+        "explode": false
+      },
+      "RecordId": {
+        "name": "record_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/StableId"
+        },
+        "description": "Identificador PK estable dentro del recurso y source_instance_id. Consulta puntual bajo el MISMO snapshot, par y permisos. No visible/inexistente:404 uniforme; no revela existencia ajena. Los demás filtros se mantienen, nunca se omiten al especificar ID. Con coincidencia entrega como máximo un elemento y next_cursor=null."
+      },
+      "ResourceSetVersion": {
+        "name": "resource_set_version",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ResourceSetVersion"
+        },
+        "description": "Versión con la que se confirmó el checkpoint del consumidor. Debe coincidir con el snapshot y generación vigente del ámbito; versión distinta409 resync_required. Nunca sustituirla por la nueva sin completar bootstrap."
+      },
+      "ProjectionVersion": {
+        "name": "projection_version",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ProjectionVersion"
+        },
+        "description": "Versión con la que se confirmó el checkpoint del consumidor. Debe coincidir con el snapshot y generación vigente del ámbito; versión distinta409 resync_required. Nunca sustituirla por la nueva sin completar bootstrap."
+      }
+    },
+    "schemas": {
+      "StableId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Identificador inmutable dentro de source_instance_id y recurso. Las entidades actuales conservan su PK decimal como cadena. Nunca asociar por nombre o código visible ni reutilizar identidades eliminadas."
+      },
+      "Sequence": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "description": "Secuencia decimal monotónica EXCLUSIVA de un par (site_id,maintenance_area_id). after_seq/through_seq/checkpoints solo tienen significado dentro de ese par; nunca comparar entre ámbitos ni revelar watermark global. Cadena decimal para precisión; comparación numérica. Cambiar projection_version/resource_set_version no reinicia seq del feed de la pareja."
+      },
+      "UtcInstant": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "Z$",
+        "description": "Instante RFC3339 UTC terminado en Z. Normalizar los formatos SQLite heredados antes de publicar."
+      },
+      "NullableUtcInstant": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "null significa que no existe una fecha fuente fiable; nunca sustituir por fecha de lectura o creación."
+      },
+      "MaintenanceAreaId": {
+        "type": "string",
+        "enum": [
+          "aires",
+          "infraestructura",
+          "equipo_general",
+          "biomedico"
+        ]
+      },
+      "Resource": {
+        "type": "string",
+        "enum": [
+          "asset",
+          "order",
+          "plan",
+          "activity",
+          "order_event",
+          "preventive_occurrence",
+          "worklog",
+          "downtime"
+        ]
+      },
+      "SnapshotId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Snapshot materializado inmutable publicado por un proceso interno autorizado. La API GET no crea, recalcula ni modifica snapshots. Conserva cutoff_at y through_seq fijos para todas sus páginas."
+      },
+      "Scope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          }
+        },
+        "required": [
+          "site_id",
+          "maintenance_area_id"
+        ]
+      },
+      "Period": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date"
+          },
+          "end": {
+            "type": "string",
+            "format": "date"
+          },
+          "time_zone": {
+            "const": "America/El_Salvador"
+          },
+          "date_basis": {
+            "type": "string",
+            "enum": [
+              "created",
+              "completed",
+              "due",
+              "cutoff",
+              "metric_definition"
+            ]
+          },
+          "start_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "end_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "effective_end_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "is_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "time_zone",
+          "date_basis",
+          "start_at",
+          "end_at",
+          "effective_end_at",
+          "is_complete"
+        ],
+        "description": "Ventana civil [start,end) en America/El_Salvador con instantes UTC explícitos start_at/end_at derivados de medianoche local. effective_end_at=min(end_at,cutoff_at) en la porción observable. is_complete=false si cutoff_at<end_at. Un período futuro sin porción observable no debe aparentar resultados completos; responder indicador insuficiente/no aplicable según fórmula. Cierres futuros no se incluyen antes del corte. No son horas trabajadas ni intervalos de falla."
+      },
+      "Meta": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_instance_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "contract_version": {
+            "const": "1.0.0-rc.1"
+          },
+          "snapshot_id": {
+            "$ref": "#/components/schemas/SnapshotId"
+          },
+          "cutoff_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "snapshot_published_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "through_seq": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sequence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "time_zone": {
+            "const": "America/El_Salvador"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Period"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timestamp_semantics": {
+            "const": "source_utc"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "source_system": {
+            "const": "mantenimiento"
+          },
+          "generated_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "history_available_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UtcInstant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active_profile": {
+            "const": "correctivos-v1"
+          },
+          "projection_version": {
+            "$ref": "#/components/schemas/ProjectionVersion"
+          },
+          "resource_set_version": {
+            "$ref": "#/components/schemas/ResourceSetVersion"
+          }
+        },
+        "required": [
+          "source_instance_id",
+          "contract_version",
+          "snapshot_id",
+          "cutoff_at",
+          "snapshot_published_at",
+          "through_seq",
+          "source_updated_at",
+          "time_zone",
+          "scope",
+          "period",
+          "timestamp_semantics",
+          "request_id",
+          "source_system",
+          "generated_at",
+          "history_available_from",
+          "active_profile",
+          "projection_version",
+          "resource_set_version"
+        ],
+        "description": "Metadata de la lectura autorizada. generated_at es generación de la respuesta, no modificación fuente ni fecha del snapshot. source_updated_at/history_available_from se calculan SOLO sobre el ámbito o pares autorizados; null significa historia/actualización fuente no acreditada. history_available_from no autoriza reconstruir eventos anteriores. scope=null solo en /meta y /references; allí through_seq=null. En las demás rutas scope es un único par y through_seq no null es su secuencia exclusiva. Ningún watermark global se exporta. period=null si no hay filtro temporal. Todas las páginas mantienen snapshot/cutoff y secuencia del par fijos. projection_version/resource_set_version identifican la proyección y recursos del snapshot; no conceden permiso. correctivos-v1 admite exclusivamente asset/order y MNT-01/02/03/06/11. En /meta sin par seleccionado las versiones describen el catálogo publicado; scope_checkpoints detalla versiones por pareja. El consumidor no marca un par sincronizado bajo versiones nuevas hasta terminar su bootstrap completo.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "type": "null"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "through_seq": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "type": "object"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "through_seq": {
+                  "$ref": "#/components/schemas/Sequence"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "limit",
+          "next_cursor",
+          "has_more"
+        ],
+        "description": "Cursor opaco HMAC ligado a principal verificado, grantVersion, método/ruta, snapshot, scope, corte, TODOS los filtros, projection_version y resource_set_version. Revalidar autorización; no concede permiso ni revela otros ámbitos. Revocación403; manipulación/incompatibilidad de filtros400; cambio de proyección/conjunto en incremental409 resync_required; retención410. No retomar cursor de una generación antigua como si fuera la nueva."
+      },
+      "ResourceReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "partial",
+              "pending"
+            ]
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "supported_date_bases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "completed",
+                "due"
+              ]
+            }
+          }
+        },
+        "required": [
+          "resource",
+          "state",
+          "reason_code",
+          "supported_date_bases"
+        ],
+        "description": "La propuesta no crea estas capacidades. En producción, declarar ready únicamente después de implementar, probar y publicar una proyección válida. Un recurso pendiente responde 409, nunca una lista vacía simulada. En correctivos-v1 solo asset y order pueden anunciarse ready/partial. plan/activity/order_event/preventive_occurrence/worklog/downtime permanecen pending con reason_code=outside_active_profile. Ese estado describe disponibilidad en esta API/perfil, no niega que existan tablas operativas.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "resource": {
+                  "enum": [
+                    "plan",
+                    "activity",
+                    "order_event",
+                    "preventive_occurrence",
+                    "worklog",
+                    "downtime"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "pending"
+                },
+                "reason_code": {
+                  "const": "outside_active_profile"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SnapshotReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "partial"
+            ]
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceReadiness"
+            }
+          },
+          "incremental_ready": {
+            "type": "boolean"
+          },
+          "minimum_available_seq": {
+            "type": "null",
+            "description": "Siempre null en /meta (sin par seleccionado); mínimos por par en scope_checkpoints. No existe mínimo global público."
+          },
+          "snapshot_expires_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "scope_checkpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeCheckpoint"
+            },
+            "description": "Solo pares autorizados. Cada checkpoint es independiente; no exponer journal/watermark global ni ámbitos ajenos."
+          },
+          "active_profile": {
+            "const": "correctivos-v1"
+          },
+          "projection_version": {
+            "$ref": "#/components/schemas/ProjectionVersion"
+          },
+          "resource_set_version": {
+            "$ref": "#/components/schemas/ResourceSetVersion"
+          },
+          "admitted_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InitialResource"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+          },
+          "admitted_metric_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InitialMetricId"
+            },
+            "minItems": 5,
+            "maxItems": 5,
+            "uniqueItems": true
+          },
+          "bootstrap_policy": {
+            "const": "full_scope_on_projection_or_resource_set_change"
+          }
+        },
+        "required": [
+          "status",
+          "resources",
+          "incremental_ready",
+          "minimum_available_seq",
+          "snapshot_expires_at",
+          "scope_checkpoints",
+          "active_profile",
+          "projection_version",
+          "resource_set_version",
+          "admitted_resources",
+          "admitted_metric_ids",
+          "bootstrap_policy"
+        ],
+        "description": "Readiness visible al principal. En /meta scope=null y minimum_available_seq=null; checkpoints por pares autorizados. El publicador puede coordinar un corte coherente con journal global INTERNO, pero no lo serializa en esta API. Perfil inicial FIJO correctivos-v1: asset/order únicamente; indicadores MNT-01,02,03,06,11. Plan, activity y otros esquemas se reservan para fases posteriores: state=pending para esta API aunque existan sus entidades en la aplicación. /records de recurso fuera del perfil devuelve409 resource_not_ready. Cada cambio de conjunto o habilitación pending→ready cambia resource_set_version y obliga bootstrap completo por pareja, no solo captura de modificaciones nuevas."
+      },
+      "MetaResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/SnapshotReadiness"
+          },
+          "allowed_scope_pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          },
+          "metric_catalog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricCatalogEntry"
+            },
+            "description": "Opcional: catálogo versionado visible al principal. ID MNT estable, nombre legible, fórmula efectiva y capacidad. Publicar solo definiciones aprobadas o identificar explícitamente versión propuesta; no demuestra existencia de datos operativos."
+          }
+        },
+        "required": [
+          "meta",
+          "readiness",
+          "allowed_scope_pairs"
+        ],
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "type": "null"
+                  },
+                  "through_seq": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SiteReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "active",
+          "updated_at"
+        ]
+      },
+      "AreaReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "ReferencesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteReference"
+            }
+          },
+          "maintenance_areas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AreaReference"
+            }
+          },
+          "allowed_scope_pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          }
+        },
+        "required": [
+          "meta",
+          "sites",
+          "maintenance_areas",
+          "allowed_scope_pairs"
+        ],
+        "description": "Únicamente referencias visibles al principal. La correspondencia con IDs de SGO se administra en SGO por source_instance_id + resource + source_id, con aprobación explícita; no se genera por semejanza de nombres. No expone usuarios, ubicaciones textuales ni toda la base.",
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "type": "null"
+                  },
+                  "through_seq": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Asset": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "display_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "operativo",
+              "averiado",
+              "mantenimiento",
+              "baja"
+            ]
+          },
+          "criticality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "alta",
+              "media",
+              "baja",
+              null
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "display_code",
+          "location_id",
+          "status",
+          "criticality"
+        ],
+        "description": "Equipo físico actual. No incluye serie, nombres libres, clínica, documentos ni tarifas. La sede derivada de ubicación actual no demuestra ubicación histórica. scope_origin=unknown nunca autoriza pertenencia a una sede: un registro sin sede verificable se excluye y se informa como brecha de calidad autorizada. Clave de pertenencia en SGO incluye instancia/recurso/id/sede/rubro; revisión global de entidad no elimina hechos pendientes de otros ámbitos. Persistir high-water por pertenencia y baseline de generación."
+      },
+      "Order": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "asset_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activity_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "correctivo",
+              "preventivo",
+              "predictivo"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "abierta",
+              "en_proceso",
+              "en_espera",
+              "completada",
+              "verificada",
+              "cerrada",
+              "cancelada"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "baja",
+              "media",
+              "alta",
+              "urgente"
+            ]
+          },
+          "assigned": {
+            "type": "boolean"
+          },
+          "assigned_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "paused_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "paused_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "completed_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "closed_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "automatic_elapsed_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "duration_kind": {
+            "const": "workflow_elapsed_minus_recorded_wait"
+          },
+          "due_basis": {
+            "type": "string",
+            "enum": [
+              "legacy_unknown",
+              "manual",
+              "asset_sla",
+              "preventive_schedule"
+            ]
+          },
+          "quality_flags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "missing_started_at",
+                "missing_completion",
+                "reopened_legacy_timestamps",
+                "scope_current_only",
+                "unknown_updated_at",
+                "invalid_source_timestamp",
+                "deadline_origin_unknown"
+              ]
+            }
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_date": {
+            "$ref": "#/components/schemas/NullableLocalDate"
+          },
+          "verified_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "asset_id",
+          "plan_id",
+          "activity_id",
+          "type",
+          "status",
+          "priority",
+          "assigned",
+          "assigned_at",
+          "started_at",
+          "paused_at",
+          "paused_minutes",
+          "due_at",
+          "completed_at",
+          "closed_at",
+          "automatic_elapsed_hours",
+          "duration_kind",
+          "due_basis",
+          "quality_flags",
+          "location_id",
+          "due_date",
+          "verified_at"
+        ],
+        "description": "No contiene descripción, causa raíz, comentarios, nombres/IDs de personas, tracking token, salarios ni adjuntos. automatic_elapsed_hours procede de horas_trabajadas actual; NO es horas-persona, reparación real o downtime. Valores fuente incoherentes se devuelven null con quality_flags, sin inventarlos. due_basis=legacy_unknown salvo evidencia comprobable. Si la fuente solo conserva una fecha civil de vencimiento, due_date la conserva y due_at=null mientras no exista política aprobada que defina la hora límite. No inventar medianoche, 23:59 ni un instante observado. verified_at es verificación registrada, distinta de ejecución/cierre. location_id conserva la referencia estructurada, sin texto libre. Clave de pertenencia en SGO incluye instancia/recurso/id/sede/rubro; revisión global de entidad no elimina hechos pendientes de otros ámbitos. Persistir high-water por pertenencia y baseline de generación."
+      },
+      "Plan": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "asset_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "diaria",
+              "semanal",
+              "quincenal",
+              "mensual",
+              "bimestral",
+              "trimestral",
+              "semestral",
+              "anual"
+            ]
+          },
+          "next_planned_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "generation_grace_days": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_generated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "estimated_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "last_generated_date": {
+            "$ref": "#/components/schemas/NullableLocalDate"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "asset_id",
+          "active",
+          "frequency",
+          "next_planned_date",
+          "generation_grace_days",
+          "last_generated_at",
+          "estimated_hours",
+          "last_generated_date"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. Plan vigente. generation_grace_days corresponde al uso actual de alerta_dias_antes al calcular vencimiento, aunque el nombre fuente sugiera anticipación. next_planned_date mutable no representa historial de ocurrencias ni programa aprobado original. Si ultima_generacion solo contiene fecha civil: last_generated_date conserva la fecha y last_generated_at=null. No fabricar la hora."
+      },
+      "Activity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "diaria",
+              "semanal",
+              "quincenal",
+              "mensual",
+              "bimestral",
+              "trimestral",
+              "semestral",
+              "anual"
+            ]
+          },
+          "next_planned_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "last_generated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "last_executed_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "last_generated_date": {
+            "$ref": "#/components/schemas/NullableLocalDate"
+          },
+          "last_executed_date": {
+            "$ref": "#/components/schemas/NullableLocalDate"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "active",
+          "location_id",
+          "frequency",
+          "next_planned_date",
+          "last_generated_at",
+          "last_executed_at",
+          "last_generated_date",
+          "last_executed_date"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. Actividad recurrente por sede/ubicación. Sin título/descripción libre ni datos personales. Clasificación derivada de la actividad actual debe declararse como activity_current. Una fecha fuente sin hora se conserva en last_generated_date/last_executed_date y el correspondiente campo _at queda null. Nunca fabricar precisión temporal."
+      },
+      "OrderEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "order_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "created",
+              "status_changed",
+              "assignment_changed",
+              "due_changed",
+              "corrected",
+              "reopened",
+              "cancelled"
+            ]
+          },
+          "effective_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "recorded_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "previous_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "abierta",
+              "en_proceso",
+              "en_espera",
+              "completada",
+              "verificada",
+              "cerrada",
+              "cancelada",
+              null
+            ]
+          },
+          "next_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "abierta",
+              "en_proceso",
+              "en_espera",
+              "completada",
+              "verificada",
+              "cerrada",
+              "cancelada",
+              null
+            ]
+          },
+          "previous_due_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "next_due_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_quality": {
+            "type": "string",
+            "enum": [
+              "transactional_event",
+              "legacy_best_effort"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "order_id",
+          "event_type",
+          "effective_at",
+          "recorded_at",
+          "previous_status",
+          "next_status",
+          "previous_due_at",
+          "next_due_at",
+          "reason_code",
+          "source_quality"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. Proyección estructurada permitida; no publicar el audit_log completo ni su JSON libre. Reapertura conserva order_id, emite nueva revisión e invalida cálculos afectados. No deducir effective_at real desde recorded_at si se desconoce."
+      },
+      "PreventiveOccurrence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activity_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "original_due_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "effective_due_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "completed_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "generated",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "schedule_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "plan_id",
+          "activity_id",
+          "order_id",
+          "original_due_at",
+          "effective_due_at",
+          "completed_at",
+          "status",
+          "schedule_revision"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. RECURSO PROPUESTO PENDIENTE. Solo disponible tras registrar ocurrencias y revisiones. No fabricar ocurrencias históricas a partir del plan actual. Exclusiones de cancelación y fecha original/reprogramada requieren política aprobada."
+      },
+      "Worklog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "order_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "ended_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "person_hours": {
+            "type": "number",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "validated",
+              "void"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "order_id",
+          "started_at",
+          "ended_at",
+          "person_hours",
+          "status"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. RECURSO PROPUESTO PENDIENTE. Una contribución de intervención sin identidad de persona ni tarifa. Requiere captura/validación real y reglas de solapes. Nunca reconstruir person_hours desde duración de OT. Este DTO futuro es un borrador de proyección, no evidencia suficiente ni permiso para activar KPI reales. Antes de habilitar horas-persona, MTTR real o disponibilidad temporal se debe ampliar y aprobar el contrato de evidencias de intervenciones, intervalos, calendario de servicio y ámbito histórico; probar reconciliación/solapes y permisos. Hasta entonces recurso409 y KPI pending/value=null."
+      },
+      "Downtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "site_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "maintenance_area_id": {
+            "$ref": "#/components/schemas/MaintenanceAreaId"
+          },
+          "scope_origin": {
+            "type": "string",
+            "enum": [
+              "explicit_order",
+              "location_current",
+              "activity_current",
+              "unknown"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "asset_id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StableId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unavailable_from": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "restored_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "void"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "unplanned",
+              "planned",
+              "unknown"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "maintenance_area_id",
+          "scope_origin",
+          "created_at",
+          "updated_at",
+          "revision",
+          "asset_id",
+          "order_id",
+          "unavailable_from",
+          "restored_at",
+          "status",
+          "kind"
+        ],
+        "description": "FUERA DEL PERFIL correctivos-v1: esquema reservado, no filas disponibles por esta API; /records responde409 resource_not_ready. RECURSO PROPUESTO PENDIENTE. Intervalo real de indisponibilidad, no lapso de OT. Requiere evidencia de inicio/restablecimiento y calendario de servicio para disponibilidad; fin null significa aún abierto. Este DTO futuro es un borrador de proyección, no evidencia suficiente ni permiso para activar KPI reales. Antes de habilitar horas-persona, MTTR real o disponibilidad temporal se debe ampliar y aprobar el contrato de evidencias de intervenciones, intervalos, calendario de servicio y ámbito histórico; probar reconciliación/solapes y permisos. Hasta entonces recurso409 y KPI pending/value=null."
+      },
+      "SafeRecord": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "asset"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Asset"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "order"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Order"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "plan"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Plan"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "activity"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Activity"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "order_event"
+              },
+              "record": {
+                "$ref": "#/components/schemas/OrderEvent"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "preventive_occurrence"
+              },
+              "record": {
+                "$ref": "#/components/schemas/PreventiveOccurrence"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "worklog"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Worklog"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resource": {
+                "const": "downtime"
+              },
+              "record": {
+                "$ref": "#/components/schemas/Downtime"
+              }
+            },
+            "required": [
+              "resource",
+              "record"
+            ]
+          }
+        ],
+        "discriminator": {
+          "propertyName": "resource"
+        },
+        "description": "Lista blanca estricta. Cada tipo es una proyección explícita; nunca SELECT * ni serialización genérica de modelos de base de datos. En el perfil activo correctivos-v1 solo son válidos asset/order; los demás brazos permanecen reservados en el documento para etapas posteriores, sin autorización ni habilitación implícita.",
+        "allOf": [
+          {
+            "properties": {
+              "resource": {
+                "$ref": "#/components/schemas/InitialResource"
+              }
+            }
+          }
+        ]
+      },
+      "RecordsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SafeRecord"
+            }
+          }
+        },
+        "required": [
+          "meta",
+          "pagination",
+          "data"
+        ],
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "$ref": "#/components/schemas/Scope"
+                  },
+                  "through_seq": {
+                    "$ref": "#/components/schemas/Sequence"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "UpsertChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/InitialResource"
+          },
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "changed_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "operation": {
+            "const": "upsert"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/SafeRecord"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "seq",
+          "resource",
+          "id",
+          "changed_at",
+          "operation",
+          "payload",
+          "revision"
+        ],
+        "description": "Evento de alta/corrección en UNA pertenencia. seq es de la pareja del envelope; revision coincide con payload.record.revision, y recurso/ID coinciden. El payload pertenece exactamente al ámbito solicitado. Identidad de evento/deduplicación: (source_instance_id,site_id,maintenance_area_id,seq). Clave de pertenencia/proyección: (source_instance_id,resource,id,site_id,maintenance_area_id), con última revision, último seq aplicado y tombstone por esa pertenencia. No deduplicar globalmente por entidad+revision. Un traslado A→B incrementa una vez la revisión de entidad y emite remove/scope_changed en A y upsert en B con ESA MISMA revisión; ambos son válidos y se aplican aunque el otro ya se haya recibido. El retiro toca solo A, jamás elimina B. Conservar high-water por pertenencia: seq atrasado/duplicado no se reaplica, y una revisión anterior nunca sobrescribe una posterior en ESA pertenencia. A→B→A con revisión nueva no se deshace por recibir tarde el primer retiro. En snapshot de bootstrap guardar baseline_seq=through_seq(C) por pareja/versiones y rechazar eventos <= baseline de esa generación; una ausencia en el snapshot no justifica aceptar retiradas antiguas. Secuencias solo comparables dentro de la misma pareja y versión compatible."
+      },
+      "RemoveChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/InitialResource"
+          },
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "changed_at": {
+            "$ref": "#/components/schemas/UtcInstant"
+          },
+          "operation": {
+            "const": "remove"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "scope_changed"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "seq",
+          "resource",
+          "id",
+          "changed_at",
+          "operation",
+          "reason",
+          "revision"
+        ],
+        "description": "Tombstone de la pertenencia del ámbito solicitado, con revisión del cambio y seq de esa pareja. Sin payload ni datos/sede/rubro destino. scope_changed elimina solo la pertenencia antigua; la misma revisión también puede tener un upsert válido en otra pareja. deleted tampoco autoriza borrar una proyección de otro ámbito a ciegas. Mantener tombstone/high-water por pertenencia y baseline de bootstrap para impedir reaparición o rollback por entregas antiguas."
+      },
+      "Change": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/UpsertChange"
+          },
+          {
+            "$ref": "#/components/schemas/RemoveChange"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "operation"
+        }
+      },
+      "ChangesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "after_seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "through_seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "next_after_seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          }
+        },
+        "required": [
+          "meta",
+          "pagination",
+          "after_seq",
+          "through_seq",
+          "next_after_seq",
+          "data"
+        ],
+        "description": "Feed ascendente estricto por pareja: after_seq<seq<=through_seq. Identidad de evento/deduplicación: (source_instance_id,site_id,maintenance_area_id,seq). Clave de pertenencia/proyección: (source_instance_id,resource,id,site_id,maintenance_area_id), con última revision, último seq aplicado y tombstone por esa pertenencia. No deduplicar globalmente por entidad+revision. Un traslado A→B incrementa una vez la revisión de entidad y emite remove/scope_changed en A y upsert en B con ESA MISMA revisión; ambos son válidos y se aplican aunque el otro ya se haya recibido. El retiro toca solo A, jamás elimina B. Conservar high-water por pertenencia: seq atrasado/duplicado no se reaplica, y una revisión anterior nunca sobrescribe una posterior en ESA pertenencia. A→B→A con revisión nueva no se deshace por recibir tarde el primer retiro. En snapshot de bootstrap guardar baseline_seq=through_seq(C) por pareja/versiones y rechazar eventos <= baseline de esa generación; una ausencia en el snapshot no justifica aceptar retiradas antiguas. Secuencias solo comparables dentro de la misma pareja y versión compatible. Perfil inicial fijo correctivos-v1 con asset/order. Si cambia projection_version o resource_set_version, se habilita un recurso pending→ready, cambia el perfil o se introduce un recurso, el consumidor descarta la continuidad incremental de la versión vieja para esa pareja y comienza bootstrap COMPLETO de TODOS los recursos admitidos en un nuevo snapshot C, sin filtros de período/actualización. Preparar generación aislada; nunca publicar recursos parciales. Publicar generación y checkpoint through_seq(C), versiones y conjunto en una única transacción local solo después de completar páginas y reconciliación. Después leer cambios >through_seq(C) de esa misma pareja/versiones. Hasta completar el bootstrap el recurso nuevo figura no sincronizado y los KPI que dependan de él tienen value=null/data_status=insufficient_data/reason_code=resource_not_synchronized. No marcar la sincronización LOCAL del consumidor como ready ni avanzar checkpoint viejo al nuevo corte para saltar la carga inicial; readiness de la API indica que el recurso puede leerse para bootstrap, no que SGO ya lo cargó. La última generación completa puede conservarse únicamente como desactualizada y bajo permisos actuales. Desajuste de versiones en /changes:409 resync_required sin datos ni avance; historial/cursor fuera de retención:410. Cambios en negocio durante bootstrap se recuperan desde el corte C. No inventar filas históricas que no existan.",
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "$ref": "#/components/schemas/Scope"
+                  },
+                  "through_seq": {
+                    "$ref": "#/components/schemas/Sequence"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Coverage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "eligible_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "included_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "excluded_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "records_missing_required_fields": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "reason_code": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "reason_code",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "complete",
+          "eligible_records",
+          "included_records",
+          "excluded_records",
+          "records_missing_required_fields",
+          "exclusions"
+        ],
+        "description": "Cobertura del universo autorizado evaluado, no certificación de que todo el inventario hospitalario esté registrado. included+excluded=eligible; complete=true únicamente si la fuente y universo del KPI están conciliados. Sin registros en una captura no demuestra cobertura operativa."
+      },
+      "KpiEvidenceLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "source_ids_sample": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StableId"
+            },
+            "maxItems": 10
+          },
+          "sample_is_exhaustive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "url",
+          "source_ids_sample",
+          "sample_is_exhaustive"
+        ],
+        "description": "URL exige la misma autenticación y alcance. La muestra de IDs no sustituye evidencia paginada completa ni revela referencias no autorizadas."
+      },
+      "Kpi": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metric_id": {
+            "type": "string"
+          },
+          "formula_version": {
+            "type": "string"
+          },
+          "numerator": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "denominator": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "orders",
+              "occurrences",
+              "assets",
+              "days",
+              "hours",
+              "person_hours",
+              "percent"
+            ]
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "partial",
+              "pending"
+            ]
+          },
+          "data_status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "partial",
+              "insufficient_data",
+              "not_applicable"
+            ]
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "source_updated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KpiEvidenceLink"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "formula": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Definición legible de la fórmula efectivamente aplicada en esta versión; no meta, política supuesta ni interpretación clínica."
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 canónico de evidencia autorizada/corte/fórmula SOLO si fue evaluado; null si no se evaluó. No fabricar hash de datos ausentes. mapping_version pertenece a SGO."
+          },
+          "evaluation_status": {
+            "type": "string",
+            "enum": [
+              "evaluated",
+              "not_evaluated"
+            ]
+          }
+        },
+        "required": [
+          "metric_id",
+          "formula_version",
+          "numerator",
+          "denominator",
+          "value",
+          "unit",
+          "capability",
+          "data_status",
+          "reason_codes",
+          "coverage",
+          "source_updated_at",
+          "evidence",
+          "formula",
+          "source_hash",
+          "evaluation_status"
+        ],
+        "description": "Perfil correctivos-v1 evalúa únicamente MNT-01/02/03/06/11 si existen proyección y datos suficientes. Indicador conocido fuera del perfil: evaluation_status=not_evaluated, value/numerator/denominator/source_hash/evidence=null, data_status=insufficient_data, reason_codes incluye outside_active_profile; capability conserva el diagnóstico técnico (available/partial/pending), no se degrada por estar fuera de alcance. Ningún cálculo ni evidencia fingida para fuera de perfil. Recurso admitido pero aún no sincronizado: null/insufficient_data/resource_not_synchronized. MNT-02 cuenta SOLO estado abierta; MNT-03 cuenta abierta/en_proceso/en_espera al corte. MNT-11 es media del tiempo transcurrido creación→finalización, nunca MTTR ni horas-persona. Fórmula/version visibles, D=0 devuelve null, ok exige cobertura completa y pendientes técnicos value=null. Nuevas fórmulas de fases posteriores requieren versión/aprobación; fórmulas históricas permanecen fuera de este perfil, sin reescribirse. Consolidar N/D compatibles, nunca promediar porcentajes. mapping_version corresponde a SGO.",
+        "allOf": [
+          {
+            "if": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "capability": {
+                      "const": "pending"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "data_status": {
+                      "enum": [
+                        "insufficient_data",
+                        "not_applicable"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "denominator": {
+                      "const": 0
+                    }
+                  }
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "value": {
+                  "const": 0
+                },
+                "data_status": {
+                  "const": "ok"
+                },
+                "unit": {
+                  "enum": [
+                    "orders",
+                    "occurrences",
+                    "assets"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "coverage": {
+                  "properties": {
+                    "complete": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "data_status": {
+                  "const": "ok"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "coverage": {
+                  "properties": {
+                    "complete": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "evaluation_status": {
+                  "const": "not_evaluated"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "value": {
+                  "type": "null"
+                },
+                "numerator": {
+                  "type": "null"
+                },
+                "denominator": {
+                  "type": "null"
+                },
+                "source_hash": {
+                  "type": "null"
+                },
+                "evidence": {
+                  "type": "null"
+                },
+                "data_status": {
+                  "const": "insufficient_data"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "metric_id": {
+                  "not": {
+                    "enum": [
+                      "MNT-01",
+                      "MNT-02",
+                      "MNT-03",
+                      "MNT-06",
+                      "MNT-11"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "evaluation_status": {
+                  "const": "not_evaluated"
+                },
+                "reason_codes": {
+                  "contains": {
+                    "const": "outside_active_profile"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "evaluation_status": {
+                  "const": "evaluated"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "source_hash": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "evidence": {
+                  "$ref": "#/components/schemas/KpiEvidenceLink"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "KpisResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "calculation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalculationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calculated_at": {
+            "$ref": "#/components/schemas/NullableUtcInstant"
+          },
+          "formula_catalog_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Kpi"
+            }
+          },
+          "supersedes_calculation_id": {
+            "type": "null",
+            "description": "RC1 no persiste una cadena de cálculos en origen. SGO conserva generaciones anteriores y su relación de publicación; no se inventa una referencia de reemplazo."
+          }
+        },
+        "required": [
+          "meta",
+          "calculation_id",
+          "calculated_at",
+          "formula_catalog_version",
+          "data",
+          "supersedes_calculation_id"
+        ],
+        "description": "RC1: GET ejecuta exclusivamente SELECT sobre un snapshot materializado e inmutable y calcula la fórmula determinista en memoria. No escribe, publica, hace backfill ni ejecuta motores legacy. calculation_id firma el contexto y la huella; evidencia vuelve a verificar firma, autorización y huella. calculated_at es hora de consulta, distinta de cutoff_at y snapshot_published_at. SGO persiste el resultado y sus contribuciones en una generación atómica. Una corrección fuente crea un snapshot y calculation_id distintos. supersedes_calculation_id=null en esta fase; SGO mantiene las generaciones. Si todos los indicadores están fuera del perfil devuelve avisos not_evaluated sin cálculo, hash ni evidencia.",
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "$ref": "#/components/schemas/Scope"
+                  },
+                  "through_seq": {
+                    "$ref": "#/components/schemas/Sequence"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "data": {
+                  "items": {
+                    "properties": {
+                      "evaluation_status": {
+                        "const": "not_evaluated"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "calculation_id": {
+                  "type": "null"
+                },
+                "calculated_at": {
+                  "type": "null"
+                },
+                "supersedes_calculation_id": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SourceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "resource": {
+            "$ref": "#/components/schemas/InitialResource"
+          },
+          "id": {
+            "$ref": "#/components/schemas/StableId"
+          },
+          "record_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "resource",
+          "id",
+          "revision",
+          "record_url"
+        ],
+        "description": "Referencia segura consultable en el mismo snapshot/alcance; nunca enlaces públicos ni token de seguimiento. Un evento puede respaldar varias contribuciones sin duplicar el conteo de la OT."
+      },
+      "EvidenceContribution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metric_id": {
+            "$ref": "#/components/schemas/InitialMetricId"
+          },
+          "formula_version": {
+            "type": "string"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceReference"
+            },
+            "minItems": 1
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "numerator_contribution": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "denominator_contribution": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "order_type": {
+                "type": "string",
+                "enum": [
+                  "correctivo",
+                  "preventivo",
+                  "predictivo"
+                ]
+              },
+              "order_status": {
+                "type": "string",
+                "enum": [
+                  "abierta",
+                  "en_proceso",
+                  "en_espera",
+                  "completada",
+                  "verificada",
+                  "cerrada",
+                  "cancelada"
+                ]
+              },
+              "asset_status": {
+                "type": "string",
+                "enum": [
+                  "operativo",
+                  "averiado",
+                  "mantenimiento",
+                  "baja"
+                ]
+              },
+              "created_at": {
+                "$ref": "#/components/schemas/UtcInstant"
+              },
+              "completed_at": {
+                "$ref": "#/components/schemas/UtcInstant"
+              },
+              "due_at": {
+                "$ref": "#/components/schemas/UtcInstant"
+              },
+              "closed_at": {
+                "$ref": "#/components/schemas/UtcInstant"
+              },
+              "elapsed_hours": {
+                "type": "number",
+                "minimum": 0
+              },
+              "age_days": {
+                "type": "number",
+                "minimum": 0
+              },
+              "recorded_wait_minutes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "automatic_elapsed_hours": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "required": [
+          "metric_id",
+          "formula_version",
+          "source_refs",
+          "included",
+          "reason_code",
+          "numerator_contribution",
+          "denominator_contribution",
+          "facts"
+        ],
+        "description": "Únicamente hechos estructurados necesarios para recomputar N/D. Sin texto libre, identidades de usuarios, salarios, series, tokens, credenciales, firmas o adjuntos. Para KPI pendiente puede no haber contribuciones; el estado insuficiente se declara en el cálculo. El esquema actual de facts no cubre todavía evidencia completa de intervalos/calendarios. No habilitar KPI real de MTTR/disponibilidad/horas-persona hasta ampliar este contrato y probar su trazabilidad y ámbito. En correctivos-v1 solo hay contribuciones de los indicadores MNT-01/02/03/06/11 efectivamente evaluados. Un indicador conocido fuera del perfil nunca crea evidencia ni contribuciones de cero ficticias."
+      },
+      "EvidenceResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "calculation_id": {
+            "$ref": "#/components/schemas/CalculationId"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceContribution"
+            }
+          }
+        },
+        "required": [
+          "meta",
+          "calculation_id",
+          "pagination",
+          "data"
+        ],
+        "allOf": [
+          {
+            "properties": {
+              "meta": {
+                "properties": {
+                  "scope": {
+                    "$ref": "#/components/schemas/Scope"
+                  },
+                  "through_seq": {
+                    "$ref": "#/components/schemas/Sequence"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "invalid_request",
+                  "unauthenticated",
+                  "forbidden",
+                  "not_found",
+                  "resource_not_ready",
+                  "snapshot_mismatch",
+                  "cursor_expired",
+                  "snapshot_expired",
+                  "resync_required",
+                  "rate_limited",
+                  "temporarily_unavailable",
+                  "method_not_allowed"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "request_id",
+              "retryable"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "description": "Mensaje genérico sin SQL, rutas internas, nombres de recursos ajenos, scopes destino, stack trace ni credenciales. Verificar identidad/alcance antes de consultar existencia; 404 uniforme para identificadores no visibles."
+      },
+      "Revision": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "description": "Contador monotónico por source_instance_id+resource+id, independiente del feed. Un traslado tiene UNA revisión compartida por el retiro en origen y el alta en destino; no es clave global de deduplicación de eventos. Aplicación y high-water por pertenencia; seq se compara solo dentro de su pareja/versiones."
+      },
+      "ScopeCheckpoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "through_seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "minimum_available_seq": {
+            "$ref": "#/components/schemas/Sequence"
+          },
+          "active_profile": {
+            "const": "correctivos-v1"
+          },
+          "projection_version": {
+            "$ref": "#/components/schemas/ProjectionVersion"
+          },
+          "resource_set_version": {
+            "$ref": "#/components/schemas/ResourceSetVersion"
+          },
+          "admitted_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InitialResource"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "scope",
+          "through_seq",
+          "minimum_available_seq",
+          "active_profile",
+          "projection_version",
+          "resource_set_version",
+          "admitted_resources"
+        ],
+        "description": "Checkpoint publicado por pareja y versiones de proyección/conjunto. El consumidor guarda además su generación de caché completada. Los checkpoints de una versión NO sirven para otra. Mantener esta estructura limitada a pares autorizados; sin watermark global."
+      },
+      "NullableLocalDate": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date",
+        "description": "Fecha civil YYYY-MM-DD en America/El_Salvador sin hora fuente. null cuando no aplica/no consta. Nunca convertir a hora supuesta como si hubiera sido registrada."
+      },
+      "MetricCatalogEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metric_id": {
+            "type": "string",
+            "pattern": "^MNT-[0-9]{2}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "formula_version": {
+            "type": "string"
+          },
+          "formula": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "orders",
+              "occurrences",
+              "assets",
+              "days",
+              "hours",
+              "person_hours",
+              "percent"
+            ]
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "partial",
+              "pending"
+            ]
+          }
+        },
+        "required": [
+          "metric_id",
+          "name",
+          "formula_version",
+          "formula",
+          "unit",
+          "capability"
+        ],
+        "description": "Catálogo de definiciones y capacidad técnica. En el perfil activo solo MNT-01/02/03/06/11 pueden evaluarse; otros IDs pueden anunciarse como referencia, sin cálculo. La siguiente fase de preventivos debe aprobar versión institucional nueva: canceladas no aportan numerador de ejecución; no excluirlas automáticamente del denominador, conservar plazo original/revisado y aprobar excepciones/eje de evaluación antes de habilitar. Este contrato no altera motores históricos ni los declara aprobados."
+      },
+      "ResourceSetVersion": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Versión del conjunto de recursos admitidos por el perfil y ámbito del snapshot. Introducir/retirar un recurso, habilitar pending→ready o cambiar su garantía de bootstrap exige nueva versión y bootstrap COMPLETO de todos los recursos admitidos de la pareja. No heredar un checkpoint de versión anterior."
+      },
+      "ProjectionVersion": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Versión de semántica de la proyección fuente. Se incluye en snapshot, cursor y checkpoint. Un cambio incompatible requiere nuevo bootstrap completo por pareja; no reutilizar estado confirmado para otra versión."
+      },
+      "InitialResource": {
+        "type": "string",
+        "enum": [
+          "asset",
+          "order"
+        ]
+      },
+      "InitialMetricId": {
+        "type": "string",
+        "enum": [
+          "MNT-01",
+          "MNT-02",
+          "MNT-03",
+          "MNT-06",
+          "MNT-11"
+        ]
+      },
+      "CalculationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192,
+        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+        "description": "Identificador de cálculo compacto firmado HS256, ligado a snapshot, par, principal y grantVersion, período, catálogo de fórmulas, hash y versiones. No concede acceso: cada lectura exige JWT de servicio vigente y ámbito. No es un StableId de entidad. Máximo 8192 caracteres."
+      }
+    },
+    "responses": {
+      "MethodNotAllowed": {
+        "description": "Método no permitido. Esta API expone solo GET; no admite POST/PATCH/PUT/DELETE/HEAD/OPTIONS de negocio. Aplicar control de identidad según la capa Access sin filtrar existencia ajena.",
+        "headers": {
+          "Allow": {
+            "schema": {
+              "const": "GET"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-initial-profile": {
+    "id": "correctivos-v1",
+    "resources": [
+      "asset",
+      "order"
+    ],
+    "metric_ids": [
+      "MNT-01",
+      "MNT-02",
+      "MNT-03",
+      "MNT-06",
+      "MNT-11"
+    ],
+    "description": "Primer alcance propuesto. Reservar todos los demás DTOs/indicadores para fases posteriores. Fuera del perfil: no lectura de filas/no evaluación de KPI, sin alterar diseño ni permisos humanos."
+  },
+  "x-required-reference-tests": [
+    {
+      "id": "MOVE-01",
+      "scenario": "A→B revision r: procesar remove(A,r) antes de upsert(B,r), después en orden inverso.",
+      "expected": "A ausente y B presente en ambos casos; ambos eventos aceptados por su clave de ámbito+seq."
+    },
+    {
+      "id": "MOVE-02",
+      "scenario": "Repetir ambos eventos y entregarlos de nuevo tras confirmar el checkpoint.",
+      "expected": "Sin cambios extra ni doble contribución; deduplicación por instancia+pareja+seq."
+    },
+    {
+      "id": "MOVE-03",
+      "scenario": "A→B en r; retorno B→A en r+1; luego llega remove(A,r).",
+      "expected": "A conserva r+1; high-water por pertenencia evita rollback; el retiro de A jamás elimina B por clave global."
+    },
+    {
+      "id": "MOVE-04",
+      "scenario": "Caída entre aplicar evento y checkpoint, y reintento; actor solo autorizado en A.",
+      "expected": "Transacción/idempotencia conserva coherencia y no revela destino B."
+    },
+    {
+      "id": "BOOT-01",
+      "scenario": "Pareja en checkpoint120; nuevo recurso contiene registros creados antes de120 y pasa pending→ready con resource_set_version nueva.",
+      "expected": "409 para incremental de versión vieja y bootstrap completo desde snapshot C incluye registros anteriores sin filtro temporal."
+    },
+    {
+      "id": "BOOT-02",
+      "scenario": "Durante bootstrap del conjunto nuevo cambia/borran registros y falla una página.",
+      "expected": "No publicar generación parcial/no avanzar checkpoint viejo. Tras completar C, incremental >C recupera cambios sin pérdidas."
+    },
+    {
+      "id": "BOOT-03",
+      "scenario": "Snapshot inicial C, evento anterior a baseline C llega luego; fila no aparecía en snapshot.",
+      "expected": "Evento anterior ignorado también para pertenencias ausentes; no resucita un registro retirado."
+    },
+    {
+      "id": "BOOT-04",
+      "scenario": "Nuevo recurso pendiente o bootstrap incompleto; checkpoint de otra proyección; feed fuera de retención.",
+      "expected": "KPI dependiente null/insufficient_data;409 resync_required por versión;410 por retención; jamás cero por omisión."
+    }
+  ]
+}
