@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPair, exportJWK, createLocalJWKSet, SignJWT} from 'jose';
 import {createSgoApi, createSnapshotPublisher, safeRecord} from '../src/lib/sgo/api.mjs';
-import {PREFIX, instant} from '../src/lib/sgo/security.mjs';
+import {PREFIX, instant, authenticate} from '../src/lib/sgo/security.mjs';
 const now = Date.parse('2026-09-17T18:00:06Z'), from='2026-01-01T00:00:00Z', until='2027-01-01T00:00:00Z';
 const scope={site_id:'1',maintenance_area_id:'biomedico'};
 const key=await generateKeyPair('RS256'), jwk={...await exportJWK(key.publicKey),kid:'local-ephemeral'};
@@ -45,6 +45,44 @@ test('disabled flags/configuration never open a route and mutators are 405',asyn
   await read(await f.call('/meta',{}, {env:{...f.env,SGO_INTEGRATION_ENABLED:undefined}}),503);
   await read(await f.call('/meta',{}, {env:{...f.env,SGO_ACCESS_ISSUER:'https://attacker.invalid'}}),503);
   for(const method of ['POST','PUT','PATCH','DELETE','OPTIONS','HEAD']) assert.equal((await f.call('/meta',{}, {method})).status,405);
+});
+test('temporary auth diagnostics are server-gated, rejection-only and never disclose values',async()=>{
+  const f=await fixture(),logs=[],warn=console.warn,privateMarker='PRIVATE-MUST-NOT-APPEAR';
+  console.warn=(...args)=>logs.push(args);
+  try {
+    // Missing or false server flag stays silent, including an attempted request override.
+    for(const flag of [undefined,'false',true])await read(await f.call('/meta',{}, {env:{...f.env,SGO_AUTH_DIAGNOSTICS_ENABLED:flag},headers:{'CF-Access-Client-Secret':null,'SGO_AUTH_DIAGNOSTICS_ENABLED':'true'}}),401);
+    assert.equal(logs.length,0);
+    f.env.SGO_AUTH_DIAGNOSTICS_ENABLED='true';
+    await read(await f.call('/meta'));assert.equal(logs.length,0);
+    const logged=async(claims,expected,opts={})=>{
+      const jwt=await f.token(claims);
+      const result=await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':jwt,...opts.headers},env:opts.env??f.env}),expected);
+      assert.deepEqual(Object.keys(result.error).sort(),['code','message','request_id','retryable']);
+      const [prefix,json]=logs.at(-1);assert.equal(prefix,'[sgo-auth]');
+      assert.ok(!json.includes(jwt));return JSON.parse(json);
+    };
+    for(const header of ['Cf-Access-Jwt-Assertion','CF-Access-Client-Id','CF-Access-Client-Secret']) {
+      const d=await logged({},401,{headers:{[header]:null}});assert.equal(d.category,'credentials_rejected');
+      assert.equal(d[{'Cf-Access-Jwt-Assertion':'has_jwt','CF-Access-Client-Id':'has_client_id','CF-Access-Client-Secret':'has_client_secret'}[header]],false);
+    }
+    let d=await logged({aud:privateMarker},401);assert.equal(d.category,'jwt_rejected');assert.equal(d.jose_code,'ERR_JWT_CLAIM_VALIDATION_FAILED');assert.equal(d.jose_claim,'aud');assert.equal(d.verified_payload,false);
+    d=await logged({sub:privateMarker,email:privateMarker,identity_nonce:privateMarker},401);assert.equal(d.category,'service_profile_rejected');assert.equal(d.sub_present,true);assert.equal(d.sub_is_empty,false);assert.equal(d.has_email,true);assert.equal(d.has_identity_nonce,true);
+    d=await logged({type:privateMarker,common_name:privateMarker},401);assert.equal(d.token_type,'other');assert.equal(d.common_name_matches_header,false);
+    d=await logged({},403,{env:{...f.env,SGO_SERVICE_PRINCIPALS_JSON:JSON.stringify([{...f.principal,common_name:'other.access'}])}});assert.equal(d.category,'principal_rejected');assert.equal(d.principal_found,false);
+    d=await logged({},403,{env:{...f.env,SGO_SERVICE_PRINCIPALS_JSON:JSON.stringify([{...f.principal,valid_until:new Date(now).toISOString()}])}});assert.equal(d.principal_expired,true);
+    d=await logged({},403,{env:{...f.env,SGO_SERVICE_PRINCIPALS_JSON:JSON.stringify([{...f.principal,scopes:f.principal.scopes.map(s=>({...s,valid_until:new Date(now).toISOString()}))}])}});assert.equal(d.category,'scopes_rejected');assert.equal(d.has_active_scopes,false);
+    const request=new Request('https://maintenance.example.invalid',{headers:{'Cf-Access-Jwt-Assertion':await f.token(),'CF-Access-Client-Id':'demo.access','CF-Access-Client-Secret':privateMarker}});
+    await assert.rejects(()=>authenticate(request,f.env,{now,keyResolver:async()=>{throw Object.assign(new Error(privateMarker),{code:privateMarker,claim:privateMarker,payload:{secret:privateMarker}});}}),e=>e.status===401);
+    d=JSON.parse(logs.at(-1)[1]);assert.equal(d.jose_code,'other');assert.equal(d.jose_claim,'other');
+    const allowedText={category:['credentials_rejected','jwt_rejected','service_profile_rejected','principal_rejected','scopes_rejected'],token_type:['app','org','missing','other'],jose_code:['none','other','ERR_JWT_CLAIM_VALIDATION_FAILED'],jose_claim:['none','other','aud']};
+    const booleanFields=['has_jwt','has_client_id','has_client_secret','jwt_oversized','client_secret_oversized','verified_payload','sub_present','sub_is_empty','common_name_present','common_name_matches_header','has_email','has_identity_nonce','iat_in_future','principal_found','principal_not_yet_valid','principal_expired','has_active_scopes'];
+    for(const entry of logs){assert.equal(entry.length,2);const row=JSON.parse(entry[1]);assert.deepEqual(Object.keys(row).sort(),[...Object.keys(allowedText),...booleanFields].sort());for(const [k,v] of Object.entries(row))assert.ok(booleanFields.includes(k)?typeof v==='boolean':allowedText[k].includes(v));}
+    for(const value of [privateMarker,'demo.access','demo-principal','local-edge-already-verified',f.env.SGO_CURSOR_SECRET,f.env.SGO_PUBLISH_SECRET,f.env.SGO_ACCESS_AUD,f.env.SGO_ACCESS_ISSUER])assert.ok(!JSON.stringify(logs).includes(value));
+    const count=logs.length;await read(await f.call('/meta'));assert.equal(logs.length,count);
+    // A logging sink failure cannot replace the original authentication rejection.
+    console.warn=()=>{throw new Error('logging unavailable');};await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Secret':null}}),401);
+  } finally {console.warn=warn;}
 });
 test('tuple allowlist, validity and metadata do not leak another pair',async()=>{
   const f=await fixture();
