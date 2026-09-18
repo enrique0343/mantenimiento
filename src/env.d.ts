@@ -14,6 +14,7 @@ interface Env {
   APP_NAME: string;
   // Private SGO connector; absent/false keeps the entire integration disabled.
   SGO_INTEGRATION_ENABLED?: string;
+  SGO_AUTH_DIAGNOSTICS_ENABLED?: string;
   SGO_ACCESS_ISSUER?: string;
   SGO_ACCESS_AUD?: string;
   SGO_API_ORIGIN?: string;

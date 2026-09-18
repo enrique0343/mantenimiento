@@ -71,6 +71,34 @@ export function readConfig(env, now) {
   }
   return { issuer: domain.origin, audience: configString(env, 'SGO_ACCESS_AUD', 256), origin: origin.origin, secret: encoder.encode(secret), principals, now };
 }
+const diagnosticJoseCodes = new Set(['ERR_JWT_EXPIRED', 'ERR_JWT_CLAIM_VALIDATION_FAILED', 'ERR_JOSE_ALG_NOT_ALLOWED', 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED', 'ERR_JWS_INVALID', 'ERR_JWT_INVALID', 'ERR_JWK_INVALID', 'ERR_JWKS_INVALID', 'ERR_JWKS_NO_MATCHING_KEY', 'ERR_JWKS_MULTIPLE_MATCHING_KEYS', 'ERR_JWKS_TIMEOUT', 'ERR_JOSE_NOT_SUPPORTED']);
+const diagnosticClaims = new Set(['aud', 'iss', 'exp', 'iat', 'nbf', 'sub']);
+// Temporary, server-only diagnostics. Never log request/config values or errors:
+// all fields below are explicit booleans or closed-set categories.
+function authDiagnostic(env, category, token, clientId, clientSecret, payload, error, principal, now) {
+  if (env?.SGO_AUTH_DIAGNOSTICS_ENABLED !== 'true') return;
+  try {
+    console.warn('[sgo-auth]', JSON.stringify({
+      category,
+      has_jwt: !!token, has_client_id: !!clientId, has_client_secret: !!clientSecret,
+      jwt_oversized: !!token && token.length > 16384,
+      client_secret_oversized: !!clientSecret && clientSecret.length > 4096,
+      verified_payload: !!payload,
+      token_type: payload?.type === 'app' ? 'app' : payload?.type === 'org' ? 'org' : payload?.type === undefined ? 'missing' : 'other',
+      sub_present: !!payload && Object.hasOwn(payload, 'sub'), sub_is_empty: payload?.sub === '',
+      common_name_present: typeof payload?.common_name === 'string',
+      common_name_matches_header: typeof payload?.common_name === 'string' && payload.common_name === clientId,
+      has_email: payload?.email !== undefined, has_identity_nonce: payload?.identity_nonce !== undefined,
+      iat_in_future: !!payload && payload.iat > Math.floor(now / 1000),
+      principal_found: !!principal,
+      principal_not_yet_valid: !!principal && Date.parse(principal.valid_from) > now,
+      principal_expired: !!principal && Date.parse(principal.valid_until) <= now,
+      has_active_scopes: !!principal && principal.scopes.some(s => Date.parse(s.valid_from) <= now && Date.parse(s.valid_until) > now),
+      jose_code: error ? diagnosticJoseCodes.has(error.code) ? error.code : 'other' : 'none',
+      jose_claim: error ? diagnosticClaims.has(error.claim) ? error.claim : 'other' : 'none'
+    }));
+  } catch { /* Logging must never affect the authentication response. */ }
+}
 // A test may provide a jose key resolver through function construction. No request/env
 // value can replace signature verification or select an arbitrary JWKS URL.
 export async function authenticate(request, env, { now = Date.now(), keyResolver } = {}) {
@@ -78,19 +106,36 @@ export async function authenticate(request, env, { now = Date.now(), keyResolver
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
   const clientId = request.headers.get('CF-Access-Client-Id');
   const clientSecret = request.headers.get('CF-Access-Client-Secret');
-  if (!token || token.length > 16384 || !clientId || !clientSecret || clientSecret.length > 4096) fail(401, 'unauthenticated');
+  if (!token || token.length > 16384 || (clientSecret !== null && clientSecret.length > 4096)) {
+    authDiagnostic(env, 'credentials_rejected', token, clientId, clientSecret);
+    fail(401, 'unauthenticated');
+  }
   let payload;
   try {
     const key = keyResolver ?? createRemoteJWKSet(new URL(config.issuer + '/cdn-cgi/access/certs'), { timeoutDuration: 5000 });
     ({ payload } = await jwtVerify(token, key, { issuer: config.issuer, audience: config.audience, algorithms: ['RS256'], currentDate: new Date(now), requiredClaims: ['exp', 'iat', 'iss', 'aud', 'sub'], clockTolerance: 0 }));
-  } catch { fail(401, 'unauthenticated'); }
-  // Cloudflare service tokens have common_name=client ID and empty sub. Human
-  // app JWTs (including email/identity_nonce) never become integration principals.
-  if (payload.type !== 'app' || payload.sub !== '' || typeof payload.common_name !== 'string' || payload.common_name !== clientId || payload.email !== undefined || payload.identity_nonce !== undefined || payload.iat > Math.floor(now / 1000)) fail(401, 'unauthenticated');
+  } catch (error) {
+    authDiagnostic(env, 'jwt_rejected', token, clientId, clientSecret, undefined, error);
+    fail(401, 'unauthenticated');
+  }
+  // Client ID/secret authenticate at the Access edge and may be removed before
+  // the origin. Only the verified JWT identifies the service principal here.
+  // If an ID is forwarded, it must agree; it never substitutes for the JWT.
+  // Human app JWTs (including email/identity_nonce) remain forbidden.
+  if (payload.type !== 'app' || payload.sub !== '' || typeof payload.common_name !== 'string' || (clientId !== null && payload.common_name !== clientId) || payload.email !== undefined || payload.identity_nonce !== undefined || payload.iat > Math.floor(now / 1000)) {
+    authDiagnostic(env, 'service_profile_rejected', token, clientId, clientSecret, payload, undefined, undefined, now);
+    fail(401, 'unauthenticated');
+  }
   const p = config.principals.find(x => x.common_name === payload.common_name);
-  if (!p || Date.parse(p.valid_from) > now || Date.parse(p.valid_until) <= now) fail(403, 'forbidden');
+  if (!p || Date.parse(p.valid_from) > now || Date.parse(p.valid_until) <= now) {
+    authDiagnostic(env, 'principal_rejected', token, clientId, clientSecret, payload, undefined, p, now);
+    fail(403, 'forbidden');
+  }
   const scopes = p.scopes.filter(s => Date.parse(s.valid_from) <= now && Date.parse(s.valid_until) > now);
-  if (!scopes.length) fail(403, 'forbidden');
+  if (!scopes.length) {
+    authDiagnostic(env, 'scopes_rejected', token, clientId, clientSecret, payload, undefined, p, now);
+    fail(403, 'forbidden');
+  }
   return { config, principal: { id: p.principal_id, grantVersion: p.grant_version, expires: Date.parse(p.valid_until), scopes } };
 }
 export function authorize(principal, scope, now = Date.now()) {
