@@ -58,7 +58,11 @@ async function publishSgoSnapshot(env: Env): Promise<void> {
     await Promise.race([deadline, (async () => {
       const response = await fetch(new URL("/api/cron/sgo-snapshot", origin), {
         method: "POST",
-        headers: { "X-SGO-Publish-Secret": secret },
+        headers: {
+          "X-SGO-Publish-Secret": secret,
+          "Content-Type": "application/json",
+          "Origin": origin.origin,
+        },
         redirect: "manual",
         signal: controller.signal,
       });
