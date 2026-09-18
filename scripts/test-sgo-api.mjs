@@ -24,7 +24,8 @@ async function fixture(options={}) {
   const token=async(claims={},privateKey=key.privateKey)=>new SignJWT({type:'app',common_name:'demo.access',sub:'',iss:env.SGO_ACCESS_ISSUER,aud:env.SGO_ACCESS_AUD,iat:Math.floor(now/1000)-1,exp:Math.floor(now/1000)+3600,...claims}).setProtectedHeader({alg:'RS256',kid:jwk.kid}).sign(privateKey);
   const auth=await token();
   const call=async(path,query={},opts={})=>{
-    const headers={'Cf-Access-Jwt-Assertion':auth,'CF-Access-Client-Id':'demo.access','CF-Access-Client-Secret':'local-edge-already-verified',...opts.headers};
+    // Access forwards a signed JWT and can strip both edge credential headers.
+    const headers={'Cf-Access-Jwt-Assertion':auth,...opts.headers};
     for(const k of Object.keys(headers))if(headers[k]===null)delete headers[k];
     return api(new Request('https://maintenance.example.invalid'+PREFIX+path+'?'+new URLSearchParams(query),{method:opts.method??'GET',headers}),opts.env??env);
   };
@@ -35,10 +36,16 @@ const read=async(response,status=200)=>{const body=await response.json();assert.
 
 test('service JWT signature, issuer/audience/time and human-token isolation',async()=>{
   const f=await fixture(); await read(await f.call('/meta'));
-  for(const claims of [{aud:'wrong'},{iss:'https://wrong.cloudflareaccess.com'},{exp:Math.floor(now/1000)},{iat:Math.floor(now/1000)+60},{sub:'human'},{email:'human@example.invalid'},{identity_nonce:'human'},{common_name:'another.access'},{type:'org'}]) await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':await f.token(claims)}}),401);
+  for(const claims of [{aud:'wrong'},{iss:'https://wrong.cloudflareaccess.com'},{exp:Math.floor(now/1000)},{iat:Math.floor(now/1000)+60},{sub:'human'},{email:'human@example.invalid'},{identity_nonce:'human'},{type:'org'}]) await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':await f.token(claims)}}),401);
+  await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':await f.token({common_name:'another.access'})}}),403);
   const other=await generateKeyPair('RS256'); await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':await f.token({},other.privateKey)}}),401);
   await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':null,Cookie:'auth_session=human'}}),401);
-  await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Secret':null}}),401);
+  await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Id':'demo.access'}}));
+  await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Id':'demo.access','CF-Access-Client-Secret':'local-edge-already-verified'}}));
+  for(const id of ['another.access',''])await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Id':id}}),401);
+  await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Secret':'x'.repeat(4097)}}),401);
+  await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':'x'.repeat(16385)}}),401);
+  await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':null,'CF-Access-Client-Id':'demo.access','CF-Access-Client-Secret':'local-edge-already-verified'}}),401);
 });
 test('disabled flags/configuration never open a route and mutators are 405',async()=>{
   const f=await fixture();
@@ -51,7 +58,7 @@ test('temporary auth diagnostics are server-gated, rejection-only and never disc
   console.warn=(...args)=>logs.push(args);
   try {
     // Missing or false server flag stays silent, including an attempted request override.
-    for(const flag of [undefined,'false',true])await read(await f.call('/meta',{}, {env:{...f.env,SGO_AUTH_DIAGNOSTICS_ENABLED:flag},headers:{'CF-Access-Client-Secret':null,'SGO_AUTH_DIAGNOSTICS_ENABLED':'true'}}),401);
+    for(const flag of [undefined,'false',true])await read(await f.call('/meta',{}, {env:{...f.env,SGO_AUTH_DIAGNOSTICS_ENABLED:flag},headers:{'Cf-Access-Jwt-Assertion':null,'SGO_AUTH_DIAGNOSTICS_ENABLED':'true'}}),401);
     assert.equal(logs.length,0);
     f.env.SGO_AUTH_DIAGNOSTICS_ENABLED='true';
     await read(await f.call('/meta'));assert.equal(logs.length,0);
@@ -62,10 +69,8 @@ test('temporary auth diagnostics are server-gated, rejection-only and never disc
       const [prefix,json]=logs.at(-1);assert.equal(prefix,'[sgo-auth]');
       assert.ok(!json.includes(jwt));return JSON.parse(json);
     };
-    for(const header of ['Cf-Access-Jwt-Assertion','CF-Access-Client-Id','CF-Access-Client-Secret']) {
-      const d=await logged({},401,{headers:{[header]:null}});assert.equal(d.category,'credentials_rejected');
-      assert.equal(d[{'Cf-Access-Jwt-Assertion':'has_jwt','CF-Access-Client-Id':'has_client_id','CF-Access-Client-Secret':'has_client_secret'}[header]],false);
-    }
+    const missing=await logged({},401,{headers:{'Cf-Access-Jwt-Assertion':null}});assert.equal(missing.category,'credentials_rejected');
+    for(const field of ['has_jwt','has_client_id','has_client_secret'])assert.equal(missing[field],false);
     let d=await logged({aud:privateMarker},401);assert.equal(d.category,'jwt_rejected');assert.equal(d.jose_code,'ERR_JWT_CLAIM_VALIDATION_FAILED');assert.equal(d.jose_claim,'aud');assert.equal(d.verified_payload,false);
     d=await logged({sub:privateMarker,email:privateMarker,identity_nonce:privateMarker},401);assert.equal(d.category,'service_profile_rejected');assert.equal(d.sub_present,true);assert.equal(d.sub_is_empty,false);assert.equal(d.has_email,true);assert.equal(d.has_identity_nonce,true);
     d=await logged({type:privateMarker,common_name:privateMarker},401);assert.equal(d.token_type,'other');assert.equal(d.common_name_matches_header,false);
@@ -81,7 +86,7 @@ test('temporary auth diagnostics are server-gated, rejection-only and never disc
     for(const value of [privateMarker,'demo.access','demo-principal','local-edge-already-verified',f.env.SGO_CURSOR_SECRET,f.env.SGO_PUBLISH_SECRET,f.env.SGO_ACCESS_AUD,f.env.SGO_ACCESS_ISSUER])assert.ok(!JSON.stringify(logs).includes(value));
     const count=logs.length;await read(await f.call('/meta'));assert.equal(logs.length,count);
     // A logging sink failure cannot replace the original authentication rejection.
-    console.warn=()=>{throw new Error('logging unavailable');};await read(await f.call('/meta',{}, {headers:{'CF-Access-Client-Secret':null}}),401);
+    console.warn=()=>{throw new Error('logging unavailable');};await read(await f.call('/meta',{}, {headers:{'Cf-Access-Jwt-Assertion':null}}),401);
   } finally {console.warn=warn;}
 });
 test('tuple allowlist, validity and metadata do not leak another pair',async()=>{

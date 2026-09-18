@@ -16,6 +16,10 @@ No hay secretos ni grants productivos preconfigurados. API: `SGO_INTEGRATION_ENA
 
 La lista de principales es un array de objetos con `principal_id`, `common_name` del service token, `grant_version`, `valid_from`, `valid_until` y `scopes` con `site_id`, `maintenance_area_id`, `valid_from`, `valid_until`. Cada fecha es UTC. La API comprueba JWT RS256 del issuer/audiencia configurados, identidad de servicio y vigencias en cada solicitud; una cookie humana nunca autoriza la integración. Configurar secretos exclusivamente en el gestor del entorno. Proteger y probar los dominios alternativos antes de habilitar.
 
+Las cabeceras `CF-Access-Client-Id` y `CF-Access-Client-Secret` son credenciales para el borde de Cloudflare Access. En la comprobación real de la conexión se observó Access autorizado y el JWT presente en origen, con ambas cabeceras de credenciales retiradas. Por ello, el origen autentica exclusivamente el JWT firmado de `Cf-Access-Jwt-Assertion` y resuelve `common_name` contra los principales y ámbitos permitidos. Si llega una cabecera Client ID, debe coincidir con el JWT; nunca lo sustituye. Se conservan los límites de tamaño y el rechazo de tokens humanos, firma/issuer/audiencia incorrectos, vigencias vencidas y servicios no autorizados.
+
+`SGO_AUTH_DIAGNOSTICS_ENABLED='true'` habilita temporalmente registros de rechazos con categorías cerradas y booleanos; no registra tokens, credenciales, identidades ni valores de cabeceras. Está desactivado por defecto y debe retirarse o fijarse en `false` al concluir el diagnóstico.
+
 RC1 calcula de forma determinista en memoria sobre un corte inmutable. `calculation_id` firmado está separado del ID de entidad; `calculated_at` es hora de consulta. Los GET solo hacen SELECT y no invocan motores legacy. SGO conserva las generaciones; `supersedes_calculation_id` es nulo en origen.
 
 ## Calidad y límites

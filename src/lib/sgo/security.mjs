@@ -106,7 +106,7 @@ export async function authenticate(request, env, { now = Date.now(), keyResolver
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
   const clientId = request.headers.get('CF-Access-Client-Id');
   const clientSecret = request.headers.get('CF-Access-Client-Secret');
-  if (!token || token.length > 16384 || !clientId || !clientSecret || clientSecret.length > 4096) {
+  if (!token || token.length > 16384 || (clientSecret !== null && clientSecret.length > 4096)) {
     authDiagnostic(env, 'credentials_rejected', token, clientId, clientSecret);
     fail(401, 'unauthenticated');
   }
@@ -118,9 +118,11 @@ export async function authenticate(request, env, { now = Date.now(), keyResolver
     authDiagnostic(env, 'jwt_rejected', token, clientId, clientSecret, undefined, error);
     fail(401, 'unauthenticated');
   }
-  // Cloudflare service tokens have common_name=client ID and empty sub. Human
-  // app JWTs (including email/identity_nonce) never become integration principals.
-  if (payload.type !== 'app' || payload.sub !== '' || typeof payload.common_name !== 'string' || payload.common_name !== clientId || payload.email !== undefined || payload.identity_nonce !== undefined || payload.iat > Math.floor(now / 1000)) {
+  // Client ID/secret authenticate at the Access edge and may be removed before
+  // the origin. Only the verified JWT identifies the service principal here.
+  // If an ID is forwarded, it must agree; it never substitutes for the JWT.
+  // Human app JWTs (including email/identity_nonce) remain forbidden.
+  if (payload.type !== 'app' || payload.sub !== '' || typeof payload.common_name !== 'string' || (clientId !== null && payload.common_name !== clientId) || payload.email !== undefined || payload.identity_nonce !== undefined || payload.iat > Math.floor(now / 1000)) {
     authDiagnostic(env, 'service_profile_rejected', token, clientId, clientSecret, payload, undefined, undefined, now);
     fail(401, 'unauthenticated');
   }
