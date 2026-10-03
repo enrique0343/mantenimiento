@@ -28,26 +28,26 @@ const abiertas = await db
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(areaCondition, inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"])))
+  .where(and(areaCondition, inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera", "completada", "verificada"])))
   .orderBy(asc(ordenes.vencimiento));
 
-// Completadas esta semana (throughput).
+// Cierres verificados esta semana; ejecución pendiente no equivale a cierre.
 const completadasSemana = await db
   .select({ o: ordenes, a: activos, u: usuarios })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(areaCondition, isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicio), lt(ordenes.completadaEn, fin)))
+  .where(and(areaCondition, eq(ordenes.estado, "cerrada"), isNotNull(ordenes.verificadoEn), isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicio), lt(ordenes.completadaEn, fin)))
   .orderBy(desc(ordenes.completadaEn));
 
 // ── Datos para la reunión semanal ──
 // Cumplimiento preventivo: preventivos con vencimiento esta semana.
 const prevSemana = await db
-  .select({ completadaEn: ordenes.completadaEn, vencimiento: ordenes.vencimiento })
+  .select({ completadaEn: ordenes.completadaEn, vencimiento: ordenes.vencimiento, estado: ordenes.estado, verificadoEn: ordenes.verificadoEn })
   .from(ordenes)
   .where(and(areaCondition, eq(ordenes.tipo, "preventivo"), isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, inicio), lt(ordenes.vencimiento, fin)));
 const prevProg = prevSemana.length;
-const prevATiempo = prevSemana.filter((p) => p.completadaEn && p.vencimiento && p.completadaEn <= p.vencimiento).length;
+const prevATiempo = prevSemana.filter((p) => p.estado === "cerrada" && p.verificadoEn && p.completadaEn && p.vencimiento && p.completadaEn <= p.vencimiento).length;
 const cumplimiento = prevProg > 0 ? Math.round((prevATiempo / prevProg) * 100) : null;
 
 // Correctivos creados esta semana.
@@ -67,7 +67,8 @@ const columnas = [
   { estado: "abierta", titulo: "📥 Abiertas", items: abiertas.filter((r) => r.o.estado === "abierta"), color: "border-blue-300" },
   { estado: "en_proceso", titulo: "🔧 En proceso", items: abiertas.filter((r) => r.o.estado === "en_proceso"), color: "border-amber-300" },
   { estado: "en_espera", titulo: "⏸ En espera", items: abiertas.filter((r) => r.o.estado === "en_espera"), color: "border-purple-300" },
-  { estado: "completada", titulo: "✅ Completadas (semana)", items: completadasSemana, color: "border-emerald-300" },
+  { estado: "pendiente_verificacion", titulo: "🔎 Pendientes de verificación", items: abiertas.filter((r) => ["completada", "verificada"].includes(r.o.estado)), color: "border-teal-300" },
+  { estado: "completada", titulo: "✅ Cierres verificados (semana)", items: completadasSemana, color: "border-emerald-300" },
 ];
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
@@ -88,7 +89,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
 
   <!-- ── Tablero kanban ── -->
   <div id="panel-tablero" class="lean-panel mt-4">
-    <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
       {columnas.map((col) => (
         <div class={`card border-t-4 ${col.color} p-3`}>
           <h2 class="mb-2 text-sm font-semibold text-slate-700">{col.titulo} <span class="text-slate-400">({col.items.length})</span></h2>

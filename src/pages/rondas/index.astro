@@ -1,0 +1,12 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import RondasApp from "@/components/RondasApp";
+export const prerender = false;
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) {
+  return new Response("No tienes acceso a las rondas de mantenimiento", { status: 403 });
+}
+---
+<Layout title="Rondas de mantenimiento">
+  <RondasApp client:load user={{ id: user.id, nombre: user.nombre, rol: user.rol }} />
+</Layout>

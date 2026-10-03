@@ -327,10 +327,8 @@ try {
   // The first writer establishes the order's immutable physical identity after
   // the losing PATCH has checked for an existing set relationship.
   const raceOrder = ok(await call(app.orders.POST, '/api/ordenes', { method: 'POST', data: { titulo: 'Orden con asignación concurrente', rubro: 'biomedico', sucursalId: 1 } }), 201).orden.id;
-  faults.beforeStatement = {
-    matches: (sql) => /^update\s+["`]?ordenes["`]?\s/i.test(sql),
-    run: async () => ok(await call(app.order.PATCH, `/api/ordenes/${raceOrder}`, { method: 'PATCH', id: raceOrder, data: { activoId: 5 } })),
-  };
+  // OT mutations now claim their version and write evidence in one D1 batch.
+  faults.beforeBatch = async () => ok(await call(app.order.PATCH, `/api/ordenes/${raceOrder}`, { method: 'PATCH', id: raceOrder, data: { activoId: 5 } }));
   fail(await call(app.order.PATCH, `/api/ordenes/${raceOrder}`, { method: 'PATCH', id: raceOrder, data: { activoId: 2 } }), 409);
   assert.equal(one('SELECT activo_id FROM ordenes WHERE id=?', raceOrder).activo_id, 5);
   assert.equal(one('SELECT activo_id FROM orden_conjuntos WHERE orden_id=?', raceOrder).activo_id, 5);

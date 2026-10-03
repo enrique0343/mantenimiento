@@ -4,7 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import {
   ordenes, adjuntos, planesMantenimiento, actividades,
-  tickets, movimientosInventario, extintorEventos,
+  tickets, movimientosInventario, extintorEventos, ordenVerificacionEventos,
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
@@ -32,6 +32,9 @@ export const POST: APIRoute = async (ctx) => {
   if (await ordenesTienenConjunto(ctx, ids)) {
     return Response.json({ error: "La selección contiene una orden que debe conservarse. " + MENSAJE_ORDEN_TRAZADA }, { status: 409 });
   }
+
+  const historial = await db.select({ id: ordenVerificacionEventos.id }).from(ordenVerificacionEventos).where(inArray(ordenVerificacionEventos.ordenId, ids)).limit(1);
+  if (historial.length) return Response.json({ error: "La selección contiene una orden con historial inmutable de ejecución o verificación." }, { status: 409 });
 
   const ots = await db.select().from(ordenes).where(inArray(ordenes.id, ids));
   if (!ots.length) return Response.json({ ok: true, borradas: 0 });

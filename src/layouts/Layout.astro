@@ -76,6 +76,7 @@ const isActive = (href: string) =>
             <div class="app-nav-label">Áreas de mantenimiento</div>
             {AREA_KEYS.map(key => <a href={`/areas/${key}`} class:list={["app-nav-link", {active:area === key}]} aria-current={area === key ? "page" : undefined}><AppIcon name={AREAS[key].icon}/><span>{AREAS[key].label}</span></a>)}
             <div class="app-nav-label">Gestión compartida</div>
+            {(isOperativo || user.rol === "visualizador") && <a href="/rondas" class:list={["app-nav-link", {active:isActive("/rondas")}]} aria-current={isActive("/rondas") ? "page" : undefined}><AppIcon name="report"/><span>Rondas de mantenimiento</span></a>}
             <a href="/recursos" class:list={["app-nav-link", {active:path === "/recursos"}]}><AppIcon name="box"/><span>Recursos</span></a>
             {isAdminOrJefe && <a href="/indicadores" class:list={["app-nav-link", {active:path === "/indicadores"}]}><AppIcon name="report"/><span>Indicadores y reportes</span></a>}
             {isAdminOrJefe && <a href="/administracion" class:list={["app-nav-link", {active:path === "/administracion"}]}><AppIcon name="settings"/><span>Administración</span></a>}

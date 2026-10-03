@@ -4,6 +4,7 @@
 export interface Env {
   APP_URL: string;
   CRON_SECRET: string;
+  RONDAS_SCHEDULER_ENABLED?: string;
   SGO_INTEGRATION_ENABLED?: string;
   SGO_API_ORIGIN?: string;
   SGO_PUBLISH_SECRET?: string;
@@ -14,6 +15,7 @@ export default {
     const dailyPreventives = event.cron === "0 12 * * *";
     const hourlySnapshot = event.cron === "5 * * * *";
     if (dailyPreventives) ctx.waitUntil(runCron(env));
+    if ((dailyPreventives || hourlySnapshot) && env.RONDAS_SCHEDULER_ENABLED === "true") ctx.waitUntil(runRounds(env));
     if ((dailyPreventives || hourlySnapshot) && env.SGO_INTEGRATION_ENABLED === "true") {
       ctx.waitUntil(publishSgoSnapshot(env));
     }
@@ -128,4 +130,16 @@ async function runCron(env: Env): Promise<unknown> {
   } catch {
     return { status: res.status, body: text };
   }
+}
+
+// Independent opt-in scheduler; does not change the existing preventive schedule.
+async function runRounds(env: Env): Promise<void> {
+  const origin = new URL(env.APP_URL);
+  if (origin.protocol !== 'https:' || origin.username || origin.password) throw new Error('Invalid rounds origin');
+  const response = await fetch(new URL('/api/cron/rondas', origin), {
+    method: 'POST', headers: {'x-cron-secret':env.CRON_SECRET},
+    redirect: 'manual', signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Rounds scheduler HTTP ${response.status}`);
+  console.log('[rounds] scheduler completed');
 }
