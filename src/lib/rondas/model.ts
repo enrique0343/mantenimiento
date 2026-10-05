@@ -4,12 +4,16 @@ export const events = ['asignada','vencida','pendiente_validacion','devuelta','v
 export const daySchema=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>!Number.isNaN(Date.parse(v))&&new Date(v).toISOString().slice(0,10)===v,'Fecha inválida');
 const id=z.number().int().positive();
 export const configSchema=z.object({
- effectiveFrom:daySchema.default(()=>new Date().toISOString().slice(0,10)),name:z.string().trim().min(1).max(160),siteId:id,locationId:id,shift:z.string().trim().min(1).max(50),
+ effectiveFrom:daySchema.default(()=>new Date().toISOString().slice(0,10)),name:z.string().trim().min(1).max(160),siteId:id,locationId:id.nullable().optional(),
+ zoneId:id.nullable().optional(),zoneName:z.string().max(160).optional(),zoneVersion:z.number().int().positive().optional(),
+ locations:z.array(z.object({id,nombre:z.string().max(300)})).max(100).optional(),shift:z.string().trim().min(1).max(50),
  timezoneOffset:z.string().regex(/^[+-](0\d|1[0-4]):[0-5]\d$/), time:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),windowMinutes:z.number().int().min(0).max(1440),
  ownerId:id,backupId:id.nullable().optional(),reviewerId:id,reviewerBackupId:id.nullable().optional(),reason:z.string().trim().min(3).max(2000),
- points:z.array(z.object({code:z.string().trim().min(1).max(80),group:z.string().trim().min(1).max(80),label:z.string().trim().min(1).max(300),criterion:z.string().trim().max(2000),active:z.boolean(),exclusionReason:z.string().max(2000).optional().default(''),mandatory:z.boolean().optional().default(false),frequency:z.enum(frequencies),firstDate:daySchema,evidencePolicy:z.enum(['none','findings','always']),assetId:id.nullable().optional(),measurementType:z.enum(['none','pressure']).default('none'),measurementUnit:z.string().trim().max(30).default(''),photoRequired:z.boolean().default(false),minValue:z.number().finite().nullable().optional(),maxValue:z.number().finite().nullable().optional(),limitSource:z.string().trim().max(1000).default('')})).min(1).max(150),
+ points:z.array(z.object({code:z.string().trim().min(1).max(80),group:z.string().trim().min(1).max(80),label:z.string().trim().min(1).max(300),criterion:z.string().trim().max(2000),active:z.boolean(),exclusionReason:z.string().max(2000).optional().default(''),mandatory:z.boolean().optional().default(false),frequency:z.enum(frequencies),firstDate:daySchema,evidencePolicy:z.enum(['none','findings','always']),assetId:id.nullable().optional(),locationId:id.nullable().optional(),measurementType:z.enum(['none','pressure']).default('none'),measurementUnit:z.string().trim().max(30).default(''),photoRequired:z.boolean().default(false),minValue:z.number().finite().nullable().optional(),maxValue:z.number().finite().nullable().optional(),limitSource:z.string().trim().max(1000).default('')})).min(1).max(150),
  notifications:z.object({recipientIds:z.array(id).max(30),events:z.array(z.enum(events)).max(7)}).default({recipientIds:[],events:[]}),
 }).superRefine((v,c)=>{
+ if(!v.zoneId&&!v.locationId)c.addIssue({code:'custom',message:'Seleccione una zona de ronda o una ubicación'});
+ if(v.zoneId&&v.points.some(p=>p.active&&p.assetId&&!p.locationId))c.addIssue({code:'custom',message:'Seleccione la ubicación concreta de cada control vinculado a un equipo'});
  if(new Set(v.points.map(p=>p.code)).size!==v.points.length)c.addIssue({code:'custom',message:'Códigos de punto duplicados'});
  const executors=[v.ownerId,v.backupId].filter(Boolean);
  if([v.reviewerId,v.reviewerBackupId].some(i=>i&&executors.includes(i)))c.addIssue({code:'custom',message:'El verificador y su suplente deben ser distintos de los ejecutores'});

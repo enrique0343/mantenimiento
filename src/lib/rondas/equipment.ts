@@ -223,15 +223,23 @@ function execution(row: OrderRow, attachments: AttachmentRow[], nowMs: number): 
   };
 }
 
-async function getContext(DB: D1Database, id: number, byLocation: boolean, now?: string): Promise<AssetMaintenance[]> {
-  validateId(id);
+async function getContext(DB: D1Database, id: number | number[], byLocation: boolean, now?: string): Promise<AssetMaintenance[]> {
+  if (Array.isArray(id)) {
+    if (!id.length || id.length > 100) throw new RangeError("Seleccione entre 1 y 100 ubicaciones");
+    id.forEach(validateId);
+  } else validateId(id);
   const nowMs = timestamp(now ?? new Date().toISOString());
   if (nowMs === null) throw new RangeError("Fecha de consulta no válida");
   const capturedAt = new Date(nowMs).toISOString();
   const today = capturedAt.slice(0, 10);
   // UNION (not UNION ALL) makes malformed cyclic location trees finite. Keep
   // descendants in the root's branch even if legacy data has cross-branch links.
-  const scope = byLocation ? `WITH RECURSIVE selected_locations(id,sucursal_id) AS (
+  // Operational zones contain explicit locations. One JSON parameter avoids
+  // D1's per-statement binding limit and IN keeps duplicate IDs from repeating assets.
+  const scopeParameter = Array.isArray(id) ? JSON.stringify([...new Set(id)]) : id;
+  const scope = Array.isArray(id) ? `WITH selected_assets AS (
+    SELECT a.* FROM activos a WHERE a.ubicacion_id IN (SELECT value FROM json_each(?))
+  )` : byLocation ? `WITH RECURSIVE selected_locations(id,sucursal_id) AS (
     SELECT id,sucursal_id FROM ubicaciones WHERE id=?
     UNION
     SELECT u.id,u.sucursal_id FROM ubicaciones u JOIN selected_locations parent ON u.padre_id=parent.id
@@ -243,11 +251,11 @@ async function getContext(DB: D1Database, id: number, byLocation: boolean, now?:
     DB.prepare(`${scope}
       SELECT a.id,a.codigo,a.nombre,a.tipo,a.rubro,a.estado,a.ubicacion_id AS ubicacionId,
         u.nombre AS ubicacionNombre FROM selected_assets a LEFT JOIN ubicaciones u ON u.id=a.ubicacion_id
-      ORDER BY a.nombre COLLATE NOCASE,a.id`).bind(id),
+      ORDER BY a.nombre COLLATE NOCASE,a.id`).bind(scopeParameter),
     DB.prepare(`${scope}
       SELECT p.id,p.activo_id AS activoId,p.titulo,p.frecuencia,p.proxima_fecha AS proximaFecha,
         p.activo,p.asignado_a AS asignadoA FROM planes_mantenimiento p JOIN selected_assets a ON a.id=p.activo_id
-      ORDER BY p.proxima_fecha,p.id`).bind(id),
+      ORDER BY p.proxima_fecha,p.id`).bind(scopeParameter),
     DB.prepare(`${scope}
       SELECT o.id,o.activo_id AS activoId,o.titulo,o.plan_id AS planId,o.estado,
         o.completada_en AS completadaEn,o.verificado_en AS verificadoEn,o.verificado_por AS verificadoPor,
@@ -258,13 +266,13 @@ async function getContext(DB: D1Database, id: number, byLocation: boolean, now?:
       FROM ordenes o JOIN selected_assets a ON a.id=o.activo_id
       LEFT JOIN usuarios v ON v.id=o.verificado_por LEFT JOIN usuarios e ON e.id=o.asignado_a
       LEFT JOIN orden_verificacion ov ON ov.orden_id=o.id
-      WHERE o.tipo='preventivo' ORDER BY o.id`).bind(id),
+      WHERE o.tipo='preventivo' ORDER BY o.id`).bind(scopeParameter),
     DB.prepare(`${scope}
       SELECT f.id,f.orden_id AS ordenId,f.nombre,f.content_type AS contentType,f.tamano,f.categoria,
         f.created_at AS createdAt,CASE WHEN length(trim(f.r2_key))>0 THEN 1 ELSE 0 END AS hasStorageKey
       FROM adjuntos f JOIN ordenes o ON o.id=f.orden_id JOIN selected_assets a ON a.id=o.activo_id
       WHERE o.tipo='preventivo'
-      ORDER BY f.id`).bind(id),
+      ORDER BY f.id`).bind(scopeParameter),
   ]);
   const assets = results[0].results as unknown as AssetRow[];
   const plans = results[1].results as unknown as PlanRow[];
@@ -358,6 +366,11 @@ async function getContext(DB: D1Database, id: number, byLocation: boolean, now?:
 /** Include equipment in the selected location and its same-branch descendants. */
 export async function getEquipmentContext(DB: D1Database, ubicacionId: number, now?: string): Promise<AssetMaintenance[]> {
   return getContext(DB, ubicacionId, true, now);
+}
+
+/** Include equipment only in the explicit zone locations, without descendants. */
+export async function getEquipmentContextForLocations(DB: D1Database, ubicacionIds: number[], now?: string): Promise<AssetMaintenance[]> {
+  return getContext(DB, ubicacionIds, true, now);
 }
 
 /** Equipment detail, including plans/history even when no location is assigned. */
