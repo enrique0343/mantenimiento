@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -535,7 +536,8 @@ const tecnicosJson = JSON.stringify(tecnicos);
   </div>
 </Layout>
 
-<script define:vars={{ proyectoId: id, esAdmin, puedeEditar, provsJson, tecnicosJson }}>
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ proyectoId: id, esAdmin, puedeEditar, provsJson, tecnicosJson }) }}>
+  const { proyectoId, esAdmin, puedeEditar, provsJson, tecnicosJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const provs = JSON.parse(provsJson);
   const tecnicos = JSON.parse(tecnicosJson);
 

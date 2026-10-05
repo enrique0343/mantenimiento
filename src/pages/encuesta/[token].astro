@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { encuestasSatisfaccion, ordenes } from "@/lib/schema";
@@ -95,7 +96,8 @@ const valida = enc && !enc.e.respondidaEn;
     )}
   </div>
 
-  <script define:vars={{ token }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ token }) }}>
+    const { token } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     document.getElementById("form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const msg = document.getElementById("msg");

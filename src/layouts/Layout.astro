@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import "@/styles/globals.css";
 import AppIcon from "@/components/AppIcon.astro";
 import { AREA_KEYS, AREAS, parseArea, areaHref } from "@/lib/areas";
@@ -185,7 +186,8 @@ const isActive = (href: string) =>
     <div id="toastContainer" class="fixed bottom-5 right-5 z-[200] flex flex-col gap-2 pointer-events-none max-w-xs" aria-live="polite"></div>
 
 
-    {area && <script is:inline define:vars={{currentArea:area}}>
+    {area && <script is:inline define:vars={{ __encodedScriptVars: encodeInlineScriptVars({currentArea:area}) }}>
+      const { currentArea } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       (() => {
         const paths = ["/activos", "/conjuntos", "/tickets", "/ordenes", "/planes", "/actividades", "/cronograma", "/planificador", "/gantt", "/plan-mantenimiento"];
         document.querySelectorAll("a[href]").forEach(link => {

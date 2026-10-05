@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -167,7 +168,8 @@ const sugerenciaCompra = bajoMinimo && it.stockMaximo > 0 ? Math.max(0, it.stock
     </table>
   </div>
 
-  <script define:vars={{ id }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id }) }}>
+    const { id } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     document.getElementById("m_save")?.addEventListener("click", async () => {
       const msg = document.getElementById("m_msg");
       msg.classList.add("hidden");

@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
 import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
@@ -388,7 +389,8 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   )}
 
   {canEdit && (
-    <script define:vars={{ activoId: a.id }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: a.id }) }}>
+      const { activoId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       (function () {
         const modal = document.getElementById("acepModal");
         if (!modal) return;
@@ -874,7 +876,8 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     )}
   </div>
 
-  <script define:vars={{ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null }) }}>
+    const { activoId, activoCodigo, activoNombre, ubicacionNombre } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
     // Cache de plantillas para repoblar el textarea de checklist
     let plantillasCache = [];

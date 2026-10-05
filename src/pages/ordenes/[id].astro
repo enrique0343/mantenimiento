@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
@@ -244,7 +245,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       </div>
     </div>
 
-    <script define:vars={{ otId: o.id }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
+      const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const ACCION_ICON = {
         create: "➕", update: "✏️", estado: "🔄", asignacion: "👤", delete: "🗑",
       };
@@ -1153,7 +1155,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <script define:vars={{
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({
     id,
     area,
     estadoActual,
@@ -1164,7 +1166,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     sucursalActualId: row.sucursal?.id ?? null,
     ubicacionActualId: row.ubicacion?.id ?? null,
     activoActualId: row.activo?.id ?? null,
-  }}>
+  }) }}>
+    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
     // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
     // toda la página (botones incluidos). Ante error, se trata como vacío.
@@ -1673,7 +1676,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   </script>
 
   <!-- Firmas + PDF -->
-  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }) }}>
+    const { id, ordenData, activoData, asignadoData, repuestos, totalRepuestos, checklistItems, adjs } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (s) => document.getElementById(s);
     const modal = $("firmaModal");
     const canvas = $("firmaCanvas");

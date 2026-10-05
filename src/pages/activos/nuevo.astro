@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
@@ -271,7 +272,8 @@ const ubJson = JSON.stringify(ubRows);
   </form>
   <UppercaseFields />
 
-  <script define:vars={{ ubJson, categoriasPorArea: CATEGORIAS_POR_AREA, areas: AREAS, critDescJson: CRITICIDAD_DESC }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubJson, categoriasPorArea: CATEGORIAS_POR_AREA, areas: AREAS, critDescJson: CRITICIDAD_DESC }) }}>
+    const { ubJson, categoriasPorArea, areas, critDescJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const allUbs = JSON.parse(ubJson);
 
     // Descripción de criticidad operacional

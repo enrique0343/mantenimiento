@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion, metricasKpi } from "@/lib/schema";
@@ -514,7 +515,8 @@ const KPIS_DEF = [
     </div>
   </div>
 
-  <script define:vars={{ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }) }}>
+    const { metricasJson, periodos, scopeLabels, scopes } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     // Tabs de alcance
     document.querySelectorAll(".scope-tab").forEach((tab) => {
       tab.addEventListener("click", () => {

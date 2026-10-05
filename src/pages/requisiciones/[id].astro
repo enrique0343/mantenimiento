@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { requisiciones, requisicionItems, items as itemsTable, proveedores, usuarios } from "@/lib/schema";
@@ -173,7 +174,8 @@ const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") &&
     </div>
   )}
 
-  <script define:vars={{ id }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id }) }}>
+    const { id } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     // Transiciones de estado
     document.querySelectorAll("[data-trans]").forEach((btn) => {
       btn.addEventListener("click", async () => {

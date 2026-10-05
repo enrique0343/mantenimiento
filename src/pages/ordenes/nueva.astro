@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
@@ -173,7 +174,8 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
     </div>
   </form>
 
-  <script define:vars={{ ubicacionesJson, activosJson, area, activoPreseleccionado }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubicacionesJson, activosJson, area, activoPreseleccionado }) }}>
+    const { ubicacionesJson, activosJson, area, activoPreseleccionado } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     document.getElementById("rubro")?.addEventListener("change", (event) => {
       const selected = event.target.value;
       if (selected) location.href = `/ordenes/nueva?area=${encodeURIComponent(selected)}`;
