@@ -239,3 +239,9 @@ La disponibilidad refleja los puestos esenciales y el estado actual de sus compo
 La migración aditiva `0048_conjuntos_trazabilidad.sql` conserva los datos y usuarios existentes. Los eventos y vínculos históricos no se pueden reescribir ni borrar. Los equipos y órdenes relacionados quedan protegidos frente a la eliminación; se pueden dar de baja o cancelar según corresponda. Solo se archivan conjuntos vacíos, y sus posiciones e historial permanecen consultables.
 
 Las escrituras de composición usan transacciones y versiones para rechazar cambios simultáneos desactualizados. La suite `scripts/test-conjuntos.mjs` aplica las migraciones reales y comprueba autenticación, permisos, reemplazos, composición histórica, instantáneas, concurrencia, fallos transaccionales y protección de adjuntos.
+
+## Rondas y verificación independiente
+
+El módulo `/rondas` agrega inspecciones por sede/zona, historial preventivo de equipos en solo lectura, solicitudes con aprobación del jefe, fotografías de presión configurables y validación independiente de rondas y OTs. Las notificaciones están en simulación y el programador nuevo es optativo.
+
+Consultar [configuración, pruebas y puesta en marcha segura](docs/RONDAS.md). Las migraciones `0051` y `0052` son aditivas; revisar y probar en ensayo antes de autorizar producción.

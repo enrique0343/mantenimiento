@@ -1,8 +1,9 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra, planesMantenimiento } from "@/lib/schema";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR,
@@ -10,6 +11,7 @@ import {
   parseChecklist, progresoChecklist,
   type EstadoOT,
 } from "@/lib/ordenes";
+import { leerVerificacionOrden, leerOrigenesRondaOrden, puedeVerificarOrden, esRevisorOrden } from "@/lib/orden-verificacion";
 import { fmtCantidad } from "@/lib/inventario";
 import { parseArea, areaHref, AREAS, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
@@ -146,7 +148,17 @@ const puedeSolicitarCompra = (estadoActual === "en_proceso" || estadoActual === 
   ["admin", "jefe", "tecnico"].includes(user.rol);
 const verComprasSection = ["admin", "jefe", "tecnico"].includes(user.rol);
 
-const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado);
+const seguimiento = await leerVerificacionOrden(db, id);
+const roundsOrigins = await leerOrigenesRondaOrden(db, id);
+const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
+const esRevisor = esRevisorOrden(user, seguimiento.control);
+const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
+const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado)
+  .filter((s) => !["verificada", "cerrada"].includes(s));
+if (["completada", "verificada"].includes(estadoActual) && puedeVerificar) proximas.push("verificada");
+if (["completada", "verificada", "cerrada"].includes(estadoActual) && esRevisor && !proximas.includes("en_proceso")) proximas.push("en_proceso");
+const revisores = ["admin", "jefe"].includes(user.rol)
+  ? await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["admin", "jefe", "tecnico"]))).orderBy(asc(usuarios.nombre)) : [];
 const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
 
 // Las fotos "antes" SÍ se pueden subir desde el estado "abierta" (no requiere
@@ -181,6 +193,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <p class="mt-1 text-xs text-slate-500">Esta referencia se conserva aunque el componente sea reemplazado.</p>
   </section>}
 
+  {(roundsOrigins.length > 0 || scheduledPM) && <section class="card mt-4 border-l-4 border-teal-500 p-4 text-sm" aria-label="Origen y trazabilidad de la orden">
+    <h2 class="font-semibold">Origen y trazabilidad de la orden</h2>
+    {scheduledPM && <div class="mt-3 rounded bg-slate-50 p-3">
+      <a class="font-medium text-brand-700 underline" href={areaHref(`/activos/${scheduledPM.activoId}#plan-${scheduledPM.id}`, area)}>PM programado #{scheduledPM.id} · {scheduledPM.titulo}</a>
+      <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {scheduledPM.proximaFecha}</p>
+    </div>}
+    {roundsOrigins.map(origin => <div class="mt-3 rounded bg-teal-50 p-3">
+      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda #{origin.executionId} · {origin.roundName} · {origin.scheduledDate} · {origin.shift}</a>
+      <p class="mt-1">Solicitud #{origin.proposalId} · Punto {origin.pointId}: {origin.pointLabel}</p>
+      <p class="mt-1 text-slate-600">{origin.siteName || `Sede #${origin.siteId}`} · Zona: {origin.zoneName || `#${origin.locationId}`} · Versión original {origin.templateVersion}</p>
+      {origin.reason && <p class="mt-1 whitespace-pre-wrap"><strong>Motivo de la acción:</strong> {origin.reason}</p>}
+      {origin.executorType === "provider" && <p class="mt-1"><strong>Proveedor:</strong> {origin.providerName || `#${origin.providerId}`} · <strong>Coordinador interno:</strong> {origin.coordinatorName || `#${origin.coordinatorId}`}</p>}
+      <p class="mt-1 text-xs text-slate-500">La ejecución y el cierre de esta OT actualizan el seguimiento. La inspección original conserva su propio historial.</p>
+    </div>)}
+  </section>}
+
   <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
       <div class="flex flex-wrap items-center gap-2">
@@ -196,31 +224,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {user.rol === "admin" && (
         <button id="historialBtn" type="button" class="btn-secondary text-sm">📜 Historial</button>
       )}
-      {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
-        <button id="cierreAdminBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
-      )}
       {user.rol === "admin" && !conjuntoOrigen && (
         <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
       )}
     </div>
 
-    {user.rol === "admin" && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
-      <div id="cierreAdminModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
-        <div class="card w-full max-w-lg p-5">
-          <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo</h3>
-          <p class="mt-1 text-sm text-slate-600">Esta acción <strong>cierra la OT igual que si la cerrara un técnico</strong> (estado <em>cerrada</em>, marca completada/cerrada con la hora actual, dispara la encuesta de satisfacción y el cálculo automático de horas). Úsalo para OTs cuyo trabajo se ejecutó fuera de la plataforma.</p>
-          <div class="mt-3">
-            <label class="label text-xs">Motivo (queda como comentario en la OT)</label>
-            <textarea id="cierreAdminMotivo" class="input w-full" rows="3" placeholder="Ej. Trabajo realizado en sitio el 12/05, sin seguimiento en plataforma. Cierre para no perder el registro."></textarea>
-          </div>
-          <p id="cierreAdminMsg" class="hidden mt-2 text-sm"></p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button id="cierreAdminCancel" type="button" class="btn-secondary">Cancelar</button>
-            <button id="cierreAdminConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar la OT</button>
-          </div>
-        </div>
-      </div>
-    )}
+
   </div>
 
   {user.rol === "admin" && (
@@ -236,7 +245,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       </div>
     </div>
 
-    <script define:vars={{ otId: o.id }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
+      const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const ACCION_ICON = {
         create: "➕", update: "✏️", estado: "🔄", asignacion: "👤", delete: "🗑",
       };
@@ -361,6 +371,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   )}
 
+  <section class="card mt-4 p-4" aria-label="Verificación independiente">
+    <h2 class="font-semibold">Ejecución y verificación independiente</h2>
+    <p class="mt-1 text-sm text-slate-600">Completar el trabajo lo deja pendiente de revisión. Una persona autorizada distinta del ejecutor comprueba la evidencia antes de cerrar.</p>
+    {estadoActual === "completada" && <p class="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-800">Pendiente de verificación. La programación preventiva aún no avanza.</p>}
+    {estadoActual === "cerrada" && !seguimiento.control?.ejecutadoPor && <p class="mt-2 text-sm text-amber-800">Registro histórico: no se atribuye una verificación independiente que no esté documentada.</p>}
+    {seguimiento.control?.ultimoMotivo && <p class="mt-2 text-sm"><strong>Último motivo:</strong> {seguimiento.control.ultimoMotivo}</p>}
+    {["admin", "jefe"].includes(user.rol) && <div class="mt-3 flex flex-wrap items-end gap-2">
+      <label class="text-xs">Revisor designado<select id="revisorId" class="input mt-1"><option value="">Jefatura independiente</option>{revisores.map(r => <option value={r.id} selected={r.id === seguimiento.control?.revisorId}>{r.nombre}</option>)}</select></label>
+      <label class="text-xs">Suplente<select id="revisorSuplenteId" class="input mt-1"><option value="">Sin suplente</option>{revisores.map(r => <option value={r.id} selected={r.id === seguimiento.control?.revisorSuplenteId}>{r.nombre}</option>)}</select></label>
+      <button id="guardarRevisor" type="button" class="btn-secondary">Guardar revisores</button>
+    </div>}
+    {seguimiento.eventos.length > 0 && <details class="mt-3"><summary class="cursor-pointer text-sm font-medium">Historial de ejecución, revisión y devoluciones ({seguimiento.eventos.length})</summary>
+      <ol class="mt-2 space-y-2 text-sm">{seguimiento.eventos.map(e => <li class="rounded border border-slate-200 p-2"><strong>{e.accion.replaceAll("_", " ")}</strong> · {e.actorNombre} · {fmt(e.ocurridoEn)}<p>{ESTADO_LABEL[e.estadoAntes as EstadoOT]} → {ESTADO_LABEL[e.estadoDespues as EstadoOT]} · Ciclo {e.ciclo}</p>{e.motivo && <p class="whitespace-pre-wrap">{e.motivo}</p>}</li>)}</ol>
+    </details>}
+  </section>
+
   <!-- Wizard de estados -->
   {estadoActual !== "cancelada" && (
     <div class="card mt-4 p-4">
@@ -393,9 +419,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               ]}
             >
               {s === "abierta" ? "↺ Reabrir" :
-               s === "en_proceso" ? (estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
+               s === "en_proceso" ? (estadoActual === "cerrada" ? "↺ Reabrir con motivo" : ["completada", "verificada"].includes(estadoActual) ? "↩ Devolver con motivo" : estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
                s === "en_espera" ? "⏸ Poner en espera" :
-               s === "completada" ? "✓ Completar y cerrar" :
+               s === "completada" ? "✓ Enviar a verificación" :
                s === "verificada" ? "✓✓ Verificar y cerrar" :
                s === "cerrada" ? "🔒 Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
@@ -1120,8 +1146,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
     <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
       <h3 class="font-semibold text-slate-900">Verificar y cerrar orden</h3>
-      <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. La OT pasará a <strong>cerrada</strong> y se enviará la encuesta de satisfacción al solicitante. Puedes agregar observaciones.</p>
-      <textarea id="verifNotas" class="input mt-3" rows="3" placeholder="Notas de verificación (opcional)"></textarea>
+      <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. La OT pasará a <strong>cerrada</strong> y se enviará la encuesta de satisfacción al solicitante. Debes registrar qué evidencia comprobaste y el resultado. No puedes verificar tu propia ejecución.</p>
+      <textarea id="verifNotas" class="input mt-3" rows="3" minlength="10" required placeholder="Evidencia revisada, pruebas realizadas y resultado (obligatorio)"></textarea>
       <div class="mt-3 flex justify-end gap-2">
         <button id="verifCancel" class="btn-secondary">Cancelar</button>
         <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Verificar y cerrar</button>
@@ -1129,9 +1155,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <script define:vars={{
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({
     id,
     area,
+    estadoActual,
     checklistJson: o.checklistEjecucion ?? null,
     itemsRepJson,
     ubicacionesData: ubicacionesLista,
@@ -1139,7 +1166,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     sucursalActualId: row.sucursal?.id ?? null,
     ubicacionActualId: row.ubicacion?.id ?? null,
     activoActualId: row.activo?.id ?? null,
-  }}>
+  }) }}>
+    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
     // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
     // toda la página (botones incluidos). Ante error, se trata como vacío.
@@ -1256,67 +1284,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         if (estado === "cancelada" && !confirm("¿Cancelar esta orden?")) return;
         if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
-        // Antes de completar, fuerza el guardado del checklist (el autoguardado
-        // es diferido ~1s): así el servidor valida el estado real y no rechaza
-        // por "pendientes" que en pantalla ya están marcados.
-        if (estado === "completada" && Array.isArray(checklist) && checklist.length > 0) {
+        // Submit notes and checklist with completion in one atomic request.
+        let evidencia = {};
+        if (estado === "completada") {
           if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
-          await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
+          if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+          evidencia = { ...leerEjecPayload(), checklistEjecucion: JSON.stringify(checklist ?? []) };
         }
-        const r = await patchOrden({ estado });
+        let motivo;
+        if (estado === "en_espera" || (estado === "en_proceso" && ["completada", "verificada", "cerrada"].includes(estadoActual))) {
+          motivo = prompt(estado === "en_espera" ? "Motivo del bloqueo o espera:" : "Motivo de devolución o reapertura (mínimo 10 caracteres):");
+          if (!motivo?.trim()) return;
+        }
+        const r = await patchOrden({ estado, ...evidencia, ...(motivo ? { motivo } : {}) });
         if (r) location.reload();
       });
     });
-
-    // Cierre administrativo (solo admin): abre modal, deja un comentario con el
-    // motivo y luego hace PATCH estado="completada" — la API ya auto-promueve
-    // a "cerrada" y dispara las mismas side-effects que el cierre del técnico.
-    const cierreAdminBtn = $("cierreAdminBtn");
-    if (cierreAdminBtn) {
-      const modal = $("cierreAdminModal");
-      const motivoInp = $("cierreAdminMotivo");
-      const msgEl = $("cierreAdminMsg");
-      const confirmBtn = $("cierreAdminConfirm");
-      const closeModal = () => {
-        modal.classList.add("hidden");
-        modal.classList.remove("flex");
-      };
-      cierreAdminBtn.addEventListener("click", () => {
-        motivoInp.value = "";
-        msgEl.classList.add("hidden"); msgEl.textContent = "";
-        modal.classList.remove("hidden");
-        modal.classList.add("flex");
-        motivoInp.focus();
-      });
-      $("cierreAdminCancel")?.addEventListener("click", closeModal);
-      modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
-      confirmBtn?.addEventListener("click", async () => {
-        const motivo = (motivoInp.value || "").trim();
-        confirmBtn.disabled = true;
-        msgEl.classList.add("hidden");
-        const texto = motivo
-          ? `🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.\n\nMotivo: ${motivo}`
-          : "🔒 Cierre administrativo. La OT se ejecutó fuera del sistema; se cierra para preservar el registro.";
-        const cr = await fetch(`/api/ordenes/${id}/comentarios`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ texto }),
-        });
-        if (!cr.ok) {
-          confirmBtn.disabled = false;
-          msgEl.textContent = "No se pudo registrar el motivo. Intenta de nuevo.";
-          msgEl.className = "mt-2 text-sm text-red-600";
-          msgEl.classList.remove("hidden");
-          return;
-        }
-        const r = await patchOrden({ estado: "completada" });
-        if (r) { location.reload(); return; }
-        confirmBtn.disabled = false;
-        msgEl.textContent = "No se pudo cerrar la OT. Revisa la consola.";
-        msgEl.className = "mt-2 text-sm text-red-600";
-        msgEl.classList.remove("hidden");
-      });
-    }
 
     // Verificacion modal
     $("verifCancel")?.addEventListener("click", () => {
@@ -1325,7 +1308,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     });
     $("verifConfirm")?.addEventListener("click", async () => {
       const notas = $("verifNotas").value.trim();
-      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas || null });
+      if (notas.length < 10) { alert("Describe la evidencia revisada y el resultado (mínimo 10 caracteres)."); return; }
+      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas });
+      if (r) location.reload();
+    });
+
+    $("guardarRevisor")?.addEventListener("click", async () => {
+      const r = await patchOrden({ revisorId: Number($("revisorId").value) || null, revisorSuplenteId: Number($("revisorSuplenteId").value) || null });
       if (r) location.reload();
     });
 
@@ -1687,7 +1676,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   </script>
 
   <!-- Firmas + PDF -->
-  <script define:vars={{ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }) }}>
+    const { id, ordenData, activoData, asignadoData, repuestos, totalRepuestos, checklistItems, adjs } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (s) => document.getElementById(s);
     const modal = $("firmaModal");
     const canvas = $("firmaCanvas");

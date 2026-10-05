@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos } from "@/lib/schema";
@@ -94,7 +95,8 @@ if (t.proyectoId) {
   )}
 
   {esAdmin && (
-    <script define:vars={{ ticketId: t.id, area }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ticketId: t.id, area }) }}>
+      const { ticketId, area } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       document.getElementById("deleteTicketBtn")?.addEventListener("click", async () => {
         const ok = await (window.confirmAction
           ? window.confirmAction("Eliminar ticket", "¿Eliminar este ticket? Esta acción NO se puede deshacer. Se borrarán también sus comentarios.")
@@ -310,7 +312,8 @@ if (t.proyectoId) {
     </div>
   </div>
 
-  <script define:vars={{ id, area }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, area }) }}>
+    const { id, area } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     document.getElementById("saveBtn")?.addEventListener("click", async () => {
       const msg = document.getElementById("saveMsg");
       msg.classList.add("hidden");

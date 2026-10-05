@@ -1258,3 +1258,5 @@ export const ordenConjuntos = sqliteTable("orden_conjuntos", {
   activoNombre: text("activo_nombre").notNull(),
   activoSerial: text("activo_serial"),
 });
+
+export { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';

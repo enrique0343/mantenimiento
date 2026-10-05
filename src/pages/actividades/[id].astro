@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { actividades, actividadCategorias, sucursales, ubicaciones, usuarios, proveedores, ordenes } from "@/lib/schema";
@@ -151,7 +152,8 @@ const dias = diasParaFecha(a.proximaFecha);
     </div>
   </div>
 
-  <script define:vars={{ id, proxFecha: a.proximaFecha, area }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, proxFecha: a.proximaFecha, area }) }}>
+    const { id, proxFecha, area } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const showMsg = (txt, ok) => {
       const m = document.getElementById("actMsg");
       m.textContent = txt;

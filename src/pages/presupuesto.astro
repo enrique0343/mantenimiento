@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { presupuestoMantenimiento, gastosMantenimiento, sucursales, usuarios } from "@/lib/schema";
@@ -242,7 +243,8 @@ const fmtFecha = (f: string) => {
     </div>
   </div>
 
-  <script define:vars={{ anio }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ anio }) }}>
+    const { anio } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (i) => document.getElementById(i);
     const show = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };
     const hide = (m) => { m.classList.add("hidden"); m.classList.remove("flex"); };

@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { proveedores, usuarios, activos, sucursales, ubicaciones } from "@/lib/schema";
@@ -159,7 +160,8 @@ const sucursalesJson = JSON.stringify(sucs);
     </div>
   </form>
 
-  <script define:vars={{ equiposJson, sucursalesJson }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ equiposJson, sucursalesJson }) }}>
+    const { equiposJson, sucursalesJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const ALL = JSON.parse(equiposJson);
     const seleccionados = new Set();
     const listaEl = document.getElementById("equiposLista");

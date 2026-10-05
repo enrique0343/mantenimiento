@@ -24,7 +24,7 @@ export const ESTADO_LABEL: Record<EstadoOT, string> = {
   abierta: "Abierta",
   en_proceso: "En proceso",
   en_espera: "En espera",
-  completada: "Completada",
+  completada: "Pendiente de verificación",
   verificada: "Verificada",
   cerrada: "Cerrada",
   cancelada: "Cancelada",
@@ -60,7 +60,7 @@ const TRANSICIONES: Record<EstadoOT, EstadoOT[]> = {
   en_espera: ["en_proceso", "cancelada"],
   completada: ["verificada", "en_proceso", "cancelada"],
   verificada: ["cerrada", "completada"],
-  cerrada: [],
+  cerrada: ["en_proceso"],
   cancelada: ["abierta"],
 };
 
@@ -73,7 +73,7 @@ function puedeTransicionar(from: EstadoOT, to: EstadoOT, rol: Rol, esAsignado: b
   // Visualizador y proveedor no transicionan
   if (rol === "visualizador" || rol === "proveedor") return false;
 
-  // Admin y jefe pueden todo
+  // Admin y jefe siguen el mismo grafo; la API exige revisión independiente
   if (rol === "admin" || rol === "jefe") return true;
 
   // Cancelar / cerrar: solo admin o jefe
@@ -84,7 +84,7 @@ function puedeTransicionar(from: EstadoOT, to: EstadoOT, rol: Rol, esAsignado: b
 
   // Tecnico/solicitante asignado: tomar (abierta→en_proceso) y completar
   if (rol === "tecnico" && (esAsignado || from === "abierta")) {
-    return to === "en_proceso" || to === "completada";
+    return to === "en_proceso" || to === "en_espera" || to === "completada";
   }
 
   // Solicitante: solo crear (no transiciones)
@@ -97,10 +97,10 @@ export function puedeAsignarse(rol: Rol): boolean {
 }
 
 export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: EstadoOT): boolean {
-  if (estado === "abierta" || estado === "cancelada" || estado === "cerrada") return false;
+  if (!["en_proceso", "en_espera"].includes(estado)) return false;
   if (rol === "admin" || rol === "jefe") return true;
   if (rol === "tecnico" && esAsignado) {
-    return estado === "en_proceso" || estado === "en_espera" || estado === "completada" || estado === "verificada";
+    return estado === "en_proceso" || estado === "en_espera";
   }
   return false;
 }

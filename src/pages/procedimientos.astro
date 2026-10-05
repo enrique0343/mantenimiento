@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
@@ -103,7 +104,8 @@ const totalMin = itemsRows.reduce((s, it) => s + (it.minutosEstimados ?? 0), 0);
   </div>
 </Layout>
 
-<script define:vars={{ plantillasJson }}>
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ plantillasJson }) }}>
+  const { plantillasJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const plantillas = JSON.parse(plantillasJson);
   const $ = (id) => document.getElementById(id);
   const form = $("form");

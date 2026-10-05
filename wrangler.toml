@@ -1,6 +1,6 @@
 name = "mantenimiento"
 compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = [ "nodejs_compat" ]
 pages_build_output_dir = "./dist"
 
 [[d1_databases]]
@@ -15,3 +15,24 @@ bucket_name = "mantenimiento-adjuntos"
 
 [vars]
 APP_NAME = "Mantenimiento"
+RONDAS_SCHEDULER_ENABLED = "false"
+
+[env.production.vars]
+APP_NAME = "Mantenimiento"
+APP_URL = "https://mantenimiento.complejoavante.dev"
+SGO_ACCESS_AUD = "9c1ff96ecc2a87cc01aa2b6a82a710bd9b1782bd315bd26afb939e5428c427e2"
+SGO_ACCESS_ISSUER = "https://avantescp.cloudflareaccess.com"
+SGO_API_ORIGIN = "https://mantenimiento.complejoavante.dev"
+SGO_AUTH_DIAGNOSTICS_ENABLED = "false"
+SGO_INTEGRATION_ENABLED = "true"
+RONDAS_SCHEDULER_ENABLED = "false"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "mantenimiento-db"
+database_id = "a4a8b34e-6b56-42b5-a393-ca5a43fcb38a"
+migrations_dir = "./migrations"
+
+[[env.production.r2_buckets]]
+binding = "R2"
+bucket_name = "mantenimiento-adjuntos"

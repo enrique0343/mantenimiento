@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, variablesPredictivas, mediciones } from "@/lib/schema";
@@ -143,7 +144,8 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
     })}
   </div>
 
-  <script define:vars={{ activoId: id, area }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: id, area }) }}>
+    const { activoId, area } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
 
     $("newVarBtn")?.addEventListener("click", () => $("newVarForm").classList.remove("hidden"));

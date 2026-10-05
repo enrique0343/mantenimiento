@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs && npm run test:sgo",
+    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs && npm run test:sgo && npm run test:rondas && npm run test:inline-script-vars",
     "preview": "wrangler pages dev ./dist --d1=DB --r2=R2 --compatibility-date=2025-01-01",
     "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true --commit-message=deploy",
     "db:generate": "drizzle-kit generate",
@@ -15,7 +15,11 @@
     "db:seed:local": "wrangler d1 execute mantenimiento-db --local --file=./scripts/seed.sql",
     "db:seed:remote": "wrangler d1 execute mantenimiento-db --remote --file=./scripts/seed.sql",
     "typecheck": "astro check",
-    "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs"
+    "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs",
+    "test:rondas": "node scripts/test-rondas.mjs && node scripts/test-rondas-atomic.mjs && node scripts/test-rondas-equipment.mjs && node scripts/test-orden-verificacion.mjs && node scripts/test-rondas-scheduler.mjs && node scripts/test-rondas-evidence.mjs && node scripts/test-rondas-notifications.mjs",
+    "typecheck:rondas": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck --types @cloudflare/workers-types,astro/client --jsx react-jsx src/env.d.ts src/lib/rondas/*.ts src/components/RondasApp.tsx",
+    "test:rondas:ui": "node scripts/test-rondas-ui.mjs",
+    "test:inline-script-vars": "node scripts/test-inline-script-vars.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.2.1",
