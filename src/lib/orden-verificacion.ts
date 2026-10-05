@@ -151,10 +151,24 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   Object.assign(stateData, { version: state.version + 1, operacionId: operationId, ultimaAccion: eventAction, ultimoActorId: user.id, actualizadoEn: now, ultimoMotivo: motivo?.trim() ?? null });
   const guard = sql`exists (select 1 from orden_verificacion where orden_id = ${order.id} and operacion_id = ${operationId})`;
   const currentAttachments = await db.select({ id: adjuntos.id, categoria: adjuntos.categoria, nombre: adjuntos.nombre }).from(adjuntos).where(eq(adjuntos.ordenId, order.id));
+  // Attachment routes do not advance the OT version. Validate the captured
+  // evidence inside the batch so a concurrent removal cannot publish a dangling
+  // snapshot. Once the event commits, its retention trigger protects DB and R2.
+  const attachmentsUnchanged = sql`
+    (select count(*) from adjuntos where orden_id = ${order.id}) = ${currentAttachments.length}
+    and not exists (
+      select 1 from json_each(${JSON.stringify(currentAttachments)}) captured
+      where not exists (
+        select 1 from adjuntos a where a.orden_id = ${order.id}
+          and a.id = json_extract(captured.value, '$.id')
+          and a.categoria = json_extract(captured.value, '$.categoria')
+          and a.nombre = json_extract(captured.value, '$.nombre')
+      )
+    )`;
   const snapshot = JSON.stringify({ antes: order, despues: { ...order, ...data }, adjuntos: currentAttachments, ejecutores: JSON.parse(stateData.executoresJson ?? state.executoresJson), revisorId: stateData.revisorId ?? state.revisorId, revisorSuplenteId: stateData.revisorSuplenteId ?? state.revisorSuplenteId, historicoSinControl: !saved });
   const batch: any[] = [
     db.insert(ordenVerificacion).values(initial).onConflictDoNothing(),
-    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), sql`exists (select 1 from ordenes where id = ${order.id} and estado = ${order.estado})`)).returning({ ordenId: ordenVerificacion.ordenId }),
+    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), sql`exists (select 1 from ordenes where id = ${order.id} and estado = ${order.estado})`, attachmentsUnchanged)).returning({ ordenId: ordenVerificacion.ordenId }),
   ];
   if (Object.keys(data).length) batch.push(db.update(ordenes).set(data).where(and(eq(ordenes.id, order.id), guard)));
   batch.push(db.insert(ordenVerificacionEventos).select(db.select({

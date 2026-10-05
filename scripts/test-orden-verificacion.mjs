@@ -104,6 +104,46 @@ try {
   assert.throws(()=>sqlite.exec('DELETE FROM adjuntos WHERE id=1'),/inmutable/);
   assert.equal(fixture.effects.r2Deletes,0);
 
+  // A deletion between the evidence read and the completion batch must not
+  // publish a snapshot pointing to an attachment that has already left R2.
+  seed(14,{trabajos:'Evidencia concurrente al envío para verificación',planId:1});
+  sqlite.exec("INSERT INTO adjuntos(id,orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria) VALUES(2,14,3,'Concurrente.pdf','application/pdf',10,'isolated-before-completion','documento')");
+  const beforeConcurrentCompletion=JSON.stringify([order(14),history(14),pm()]);
+  const beforeConcurrentPM=JSON.stringify(pm());
+  let deletedBeforeCompletion=0;
+  faults.beforeBatch=async()=>{
+    const deletionContext=fixture.ctx('/api/adjuntos/2',{method:'DELETE',id:2,rol:'tecnico'});
+    deletionContext.locals.runtime.env.R2.delete=async()=>{deletedBeforeCompletion++;};
+    const response=await app.attachment.DELETE(deletionContext);
+    assert.equal(response.status,200,await response.text());
+  };
+  await expect(patch(14,{estado:'completada'},'tecnico'),409);
+  assert.equal(deletedBeforeCompletion,1);
+  assert.equal(one('SELECT id FROM adjuntos WHERE id=2'),undefined);
+  assert.equal(JSON.stringify([order(14),history(14),pm()]),beforeConcurrentCompletion);
+  assert.equal(one('SELECT ejecutado_por FROM orden_verificacion WHERE orden_id=14').ejecutado_por,null);
+  await expect(patch(14,{estado:'completada'},'tecnico'));
+  assert.deepEqual(JSON.parse(history(14).at(-1).evidencia_json).adjuntos,[]);
+
+  // The opposite ordering preserves both the published evidence and its blob:
+  // a stale DELETE precheck cannot remove an attachment after completion wins.
+  seed(15,{trabajos:'Evidencia conservada cuando la finalización gana',planId:1});
+  sqlite.exec("INSERT INTO adjuntos(id,orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria) VALUES(3,15,3,'Conservada.pdf','application/pdf',10,'isolated-after-completion','documento')");
+  faults.beforeStatement={matches:sql=>/^delete from "adjuntos"/i.test(sql),run:async()=>{
+    await expect(patch(15,{estado:'completada'},'tecnico'));
+  }};
+  let deletedAfterCompletion=0;
+  const staleDeletionContext=fixture.ctx('/api/adjuntos/3',{method:'DELETE',id:3,rol:'tecnico'});
+  staleDeletionContext.locals.runtime.env.R2.delete=async()=>{deletedAfterCompletion++;};
+  const staleDeletionResponse=await app.attachment.DELETE(staleDeletionContext);
+  assert.equal(staleDeletionResponse.status,409,await staleDeletionResponse.text());
+  assert.equal(deletedAfterCompletion,0);
+  assert.equal(one('SELECT id FROM adjuntos WHERE id=3').id,3);
+  assert.deepEqual(JSON.parse(history(15).at(-1).evidencia_json).adjuntos.map(a=>a.id),[3]);
+  assert.equal(order(15).estado,'completada');
+  assert.equal(one('SELECT ejecutado_por FROM orden_verificacion WHERE orden_id=15').ejecutado_por,3);
+  assert.equal(JSON.stringify(pm()),beforeConcurrentPM);
+
   seed(9,{trabajos:'Trabajo con espera y reprogramación'});
   await expect(patch(9,{estado:'en_espera'},'jefe'),400);
   await expect(patch(9,{estado:'en_espera',motivo:'Pendiente de repuesto aprobado'},'jefe'));
