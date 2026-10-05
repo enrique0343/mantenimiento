@@ -6,7 +6,13 @@ const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) {
   return new Response("No tienes acceso a las rondas de mantenimiento", { status: 403 });
 }
+const canConfigure = ["admin", "jefe"].includes(user.rol);
+const requestedView = Astro.url.searchParams.get("view");
+const initialView = requestedView === "actions" ? "actions" : canConfigure && requestedView === "zones" ? "zones" : canConfigure && requestedView === "templates" ? "templates" : "rounds";
+const allowedStatuses = ["pendiente", "asignada", "en_curso", "pendiente_validacion", "validada", "devuelta", "omitida", "vencida", "en_ventana", "ejecutada_tarde"];
+const requestedStatus = Astro.url.searchParams.get("status") || "";
+const initialStatus = allowedStatuses.includes(requestedStatus) ? requestedStatus : "";
 ---
 <Layout title="Rondas de mantenimiento">
-  <RondasApp client:load user={{ id: user.id, nombre: user.nombre, rol: user.rol }} />
+  <RondasApp client:load user={{ id: user.id, nombre: user.nombre, rol: user.rol }} initialView={initialView} initialStatus={initialStatus} />
 </Layout>

@@ -1,22 +1,42 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import AppIcon from "@/components/AppIcon.astro";
+import RondasOverview from "@/components/RondasOverview.astro";
 import { AREA_KEYS, AREAS, activoAreaExpression } from "@/lib/areas";
-import { getDb } from "@/lib/db";
+import { getDb, getEnv } from "@/lib/db";
+import { getRoundsOverview, type RoundsOverview } from "@/lib/rondas/overview";
 import { activos, ordenes } from "@/lib/schema";
 import { sql, eq, and, inArray } from "drizzle-orm";
 export const prerender = false;
 const db = getDb(Astro);
 const user = Astro.locals.user!;
+const now = new Date();
 const isTech = user.rol === "tecnico";
+const canReadRounds = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol);
 const assetCounts = await db.select({area:activoAreaExpression,n:sql<number>`count(*)`}).from(activos).groupBy(activoAreaExpression);
 const orderCounts = await db.select({area:ordenes.rubro,n:sql<number>`count(*)`}).from(ordenes).where(and(inArray(ordenes.estado,["abierta","en_proceso","en_espera","completada"]),isTech?eq(ordenes.asignadoA,user.id):undefined)).groupBy(ordenes.rubro);
 const count = (rows: {area:string|null,n:number}[], area:string) => Number(rows.find(r=>r.area===area)?.n??0);
+let roundsOverview: RoundsOverview | null = null;
+let roundsUnavailable = false;
+if (canReadRounds) {
+  try {
+    roundsOverview = await getRoundsOverview(getEnv(Astro).DB, user, now.toISOString());
+  } catch {
+    roundsUnavailable = true;
+    console.error("rounds_overview_unavailable");
+  }
+}
 ---
-<Layout title="Áreas de mantenimiento">
-  <div class="workspace-heading"><div><span class="area-eyebrow">Operación</span><h1>Áreas de mantenimiento</h1><p>Elige el área en la que vas a trabajar.</p></div><span class="workspace-date">{new Date().toLocaleDateString("es-SV",{day:"numeric",month:"long",timeZone:"America/El_Salvador"})}</span></div>
+<Layout title="Panorama general">
+  <div class="workspace-heading"><div><span class="area-eyebrow">Operación</span><h1>Panorama general</h1><p>{canReadRounds ? "Revisa las rondas y continúa el trabajo de cada área de mantenimiento." : "Elige el área en la que vas a trabajar."}</p></div><span class="workspace-date">{now.toLocaleDateString("es-SV",{day:"numeric",month:"long",timeZone:"America/El_Salvador"})}</span></div>
+  {roundsOverview && <RondasOverview overview={roundsOverview} role={user.rol} />}
+  {roundsUnavailable && <section class="card mb-6 p-5" aria-labelledby="rounds-unavailable"><h2 id="rounds-unavailable" class="font-semibold">Rondas de mantenimiento</h2><p class="mt-2 text-sm text-slate-600">No se pudo cargar el resumen de rondas. Recarga la página o consulta el módulo.</p><a class="mt-3 inline-block text-sm font-semibold text-emerald-800 underline" href="/rondas">Abrir rondas</a></section>}
+  <h2 class="mb-4 text-lg font-semibold">Áreas de mantenimiento</h2>
   <div class="workspace-grid">
-    {AREA_KEYS.map(key=><a href={`/areas/${key}`} class="workspace-card"><span class="area-symbol"><AppIcon name={AREAS[key].icon} size={24}/></span><h2>{AREAS[key].label}</h2><p>{AREAS[key].description}</p><div class="workspace-counts"><span>{count(assetCounts,key)} {AREAS[key].inventoryLabel.toLowerCase()}</span><span>{count(orderCounts,key)} órdenes abiertas</span></div><span class="workspace-enter">Entrar al área <AppIcon name="arrow" size={18}/></span></a>)}
+    {AREA_KEYS.map(key=><a href={`/areas/${key}`} class="workspace-card"><span class="area-symbol"><AppIcon name={AREAS[key].icon} size={24}/></span><h3>{AREAS[key].label}</h3><p>{AREAS[key].description}</p><div class="workspace-counts"><span>{count(assetCounts,key)} {AREAS[key].inventoryLabel.toLowerCase()}</span><span>{count(orderCounts,key)} órdenes abiertas</span></div><span class="workspace-enter">Entrar al área <AppIcon name="arrow" size={18}/></span></a>)}
   </div>
   <div class="workspace-footer"><span>Usuarios, ubicaciones y recursos compartidos.</span><a href="/mi-panel">Ver mi trabajo →</a></div>
 </Layout>
+<style>
+  .workspace-card h3 { font-size:21px; letter-spacing:-.4px; font-weight:500; }
+</style>

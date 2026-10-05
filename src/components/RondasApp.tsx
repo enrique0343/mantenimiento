@@ -52,7 +52,7 @@ function EvidenceView({ value }: { value?: string }) {
   return !value ? <span>Sin evidencia adjunta</span> : safeEvidence(value) ? <a className="text-emerald-800 underline break-all" href={value} target="_blank" rel="noreferrer">Ver evidencia</a> : <span className="whitespace-pre-wrap break-words">{value}</span>;
 }
 
-export default function RondasApp({ user }: { user: User }) {
+export default function RondasApp({ user, initialView = "rounds", initialStatus = "" }: { user: User; initialView?: "rounds" | "zones" | "templates" | "actions"; initialStatus?: string }) {
   const admin = ["admin", "jefe"].includes(user.rol);
   const [catalog, setCatalog] = useState<Catalog>(emptyCatalog);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -68,10 +68,10 @@ export default function RondasApp({ user }: { user: User }) {
   const [busy, setBusy] = useState("");
   const busyRef = useRef(false);
   const fetchSequence = useRef(0);
-  const [panel, setPanel] = useState<"rounds" | "templates" | "actions" | "zones">("rounds");
+  const [panel, setPanel] = useState<"rounds" | "templates" | "actions" | "zones">(["zones", "templates"].includes(initialView) && !admin ? "rounds" : initialView);
   const [managedOrders, setManagedOrders] = useState<ManagedOrder[]>([]);
   const [actionFilter, setActionFilter] = useState("open");
-  const [filter, setFilter] = useState({ site: "", zone: "", zoneId: "", status: "", mine: !admin });
+  const [filter, setFilter] = useState({ site: "", zone: "", zoneId: "", status: initialStatus, mine: user.rol === "tecnico" });
   const [onlyPending, setOnlyPending] = useState(false);
   const [pointGroup, setPointGroup] = useState("");
   const [pointLocation, setPointLocation] = useState("");
@@ -207,7 +207,7 @@ export default function RondasApp({ user }: { user: User }) {
   const zoneNameOf = (scope: { zoneName?: string; zone_name?: string }) => scope.zoneName || scope.zone_name;
   const scopeDescription = (scope: { zoneName?: string; zone_name?: string; locations?: ScopeLocation[]; locationId?: number | null; location_id?: number }) => zoneNameOf(scope) ? `${zoneNameOf(scope)} · ${locationsOf(scope).length} ubicaciones` : locationsOf(scope).map(item => item.nombre).join(", ") || "Sin ubicación";
   const filtered = executions.filter(row => (!filter.site || String(row.site_id) === filter.site) && (!filter.zone || locationsOf(row).some(item => String(item.id) === filter.zone)) && (!filter.zoneId || String(row.zoneId || row.zone_id) === filter.zoneId) && (!filter.status || row.status === filter.status || row.temporalStatus === filter.status) && (!filter.mine || [row.owner_id, row.backup_id, row.reviewer_id, row.reviewer_backup_id].includes(user.id)));
-  const statusOptions = [...new Set([...executions.map(row => row.status), ...executions.map(row => row.temporalStatus).filter(Boolean)])] as string[];
+  const statusOptions = [...new Set([...(initialStatus ? [initialStatus] : []), ...executions.map(row => row.status), ...executions.map(row => row.temporalStatus).filter(Boolean)])] as string[];
   const groups = useMemo(() => detail ? [...new Set(detail.points.map(point => point.group || "General"))] : [], [detail]);
   const pointLocations = useMemo(() => detail ? [...new Map(detail.points.filter(point => point.locationId).map(point => [point.locationId!, { id: point.locationId!, nombre: point.locationName || nameOf(catalog.locations, point.locationId) }])).values()] : [], [detail, catalog.locations]);
   const pointLocationOrder = new Map(detail ? locationsOf(detail.execution).map((item, index) => [item.id, index]) : []);

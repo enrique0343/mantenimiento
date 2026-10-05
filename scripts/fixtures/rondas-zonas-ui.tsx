@@ -21,6 +21,7 @@ const basePoints = catalog.groups.flatMap(group => group.points.map(point => ({ 
 const config = { name: 'Plantilla histórica local', effectiveFrom: '2026-10-05', siteId: 1, locationId: 1, zoneId: 1, zoneName: 'Zona guardada anterior', zoneVersion: 1, locations: members, shift: 'Diurno', timezoneOffset: '-06:00', time: '08:00', windowMinutes: 60, ownerId: 1, backupId: null, reviewerId: 2, reviewerBackupId: null, reason: 'Motivo local original', points: basePoints, notifications: { recipientIds: [], events: [] } };
 let templates = [{ id: 1, name: config.name, version: 1, config }];
 const execution = { id: 1, template_id: 1, template_version: 1, name: 'Ronda local por salas', site_id: 1, location_id: 1, zoneId: 1, zoneName: 'Zona guardada anterior', locations: members, scheduled_date: '2026-10-05', shift: 'Diurno', due_at: '2026-10-05T15:00:00Z', original_due_at: '2026-10-05T15:00:00Z', status: 'pendiente', owner_id: 1, backup_id: null, reviewer_id: 2, reviewer_backup_id: null, executed_by: null, executed_at: null, reviewed_by: null, reviewed_at: null, revision: 0 };
+const reviewExecution = { ...execution, id: 2, name: 'Ronda local para validar', status: 'pendiente_validacion', owner_id: 90, reviewer_id: 91 };
 const points = members.flatMap(member => basePoints.map(point => ({ ...point, id: `${point.code}@${member.id}`, locationId: member.id, locationName: member.nombre, result: 'pendiente', notes: '', evidence: '', observed_by: null, observed_at: null })));
 const calls = [];
 window.fetch = async (url, options = {}) => {
@@ -28,7 +29,7 @@ window.fetch = async (url, options = {}) => {
   if (body) calls.push({ url, body });
   await new Promise(resolve => setTimeout(resolve, 30));
   let data = {};
-  if (url === '/api/rondas') data = { templates, executions: mode === 'rounds' ? [execution] : [] };
+  if (url === '/api/rondas') data = { templates, executions: mode === 'rounds' ? [execution] : mode === 'deeplinks' ? [execution, reviewExecution] : [] };
   else if (url === '/api/rondas/catalog') data = { ...catalog, zones };
   else if (url === '/api/rondas/actions') data = { orders: [] };
   else if (url === '/api/rondas/zones' && !body) data = { zones };
@@ -54,7 +55,9 @@ window.fetch = async (url, options = {}) => {
   return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
 };
 window.confirm = () => true;
-createRoot(document.getElementById('root')).render(<RondasApp user={user}/>);
+const root = createRoot(document.getElementById('root'));
+const render = (role = 'admin', initialView = 'rounds', initialStatus = '') => root.render(<RondasApp key={`${role}:${initialView}:${initialStatus}`} user={{ ...user, rol: role }} initialView={initialView} initialStatus={initialStatus}/>);
+render();
 const wait = (ms = 130) => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
 const assert = (condition, message) => { if (!condition) throw new Error(message); results.push(message); };
@@ -150,9 +153,24 @@ async function roundsMode() {
   fill(document.querySelector('[aria-label="Grupo de puntos"]'), ''); fill(roomFilter(), ''); await wait();
   assert(cards().length === 4 && document.querySelectorAll('input[type=radio]:checked').length === 1, 'All controls retain their individual answers after filtering');
 }
+async function deepLinksMode() {
+  render('admin', 'zones'); await wait(250);
+  assert(!!button('Nueva zona') && document.body.textContent.includes('Zonas de ronda'), 'Admin initial zones view opens zone management');
+  render('jefe', 'templates'); await wait(250);
+  assert(!!button('Nueva plantilla') && document.body.textContent.includes('Plantillas versionadas'), 'Chief initial templates view opens programming');
+  render('admin', 'actions'); await wait(250);
+  assert(!!field('Filtrar órdenes'), 'Initial actions view opens order follow-up');
+  render('admin', 'rounds', 'pendiente_validacion'); await wait(250);
+  assert(field('Estado').value === 'pendiente_validacion' && document.body.textContent.includes('Ronda local para validar') && !document.body.textContent.includes('Ronda local por salas'), 'Pending-validation deep link selects the correct status and rounds');
+  render('tecnico', 'zones'); await wait(250);
+  assert(!button('Nueva zona') && !button('Plantillas y programación') && !!field('Estado'), 'Technician management deep link safely falls back to rounds');
+  assert(document.body.textContent.includes('Ronda local por salas') && !document.body.textContent.includes('Ronda local para validar'), 'Technician default scope includes only assigned inspections');
+  render('visualizador', 'templates'); await wait(250);
+  assert(!button('Nueva plantilla') && document.body.textContent.includes('Ronda local por salas') && document.body.textContent.includes('Ronda local para validar'), 'Viewer management deep link falls back to the global permitted round list');
+}
 async function run() {
   await wait(250);
-  if (mode === 'zones') await zonesMode(); else if (mode === 'template') await templateMode(); else await roundsMode();
+  if (mode === 'zones') await zonesMode(); else if (mode === 'template') await templateMode(); else if (mode === 'deeplinks') await deepLinksMode(); else await roundsMode();
   const output = document.createElement('pre'); output.id = 'qa-result'; output.textContent = `PASS ${results.length}: ${results.join(' | ')}`; document.body.prepend(output);
 }
 if (location.search.includes('run')) run().catch(error => {
