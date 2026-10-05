@@ -11,6 +11,7 @@ async function fixture(points){
  const DB={prepare:sql=>statement(sql),async batch(qs){if(beforeBatch)await beforeBatch(qs);sqlite.exec('BEGIN');try{const r=[];for(const q of qs)r.push(await q.all());sqlite.exec('COMMIT');return r}catch(e){sqlite.exec('ROLLBACK');throw e}}};
  async function call(path,{userId=1,rol='admin',data,method=data?'POST':'GET'}={}){const c=ctx(`/api/rondas${path}`,{method,data});c.testUser={id:userId,nombre:`User ${userId}`,rol};c.locals.runtime.env.DB=DB;const response=await api.rounds[method](c);return {status:response.status,...await response.json()};}
  sqlite.exec(await fs.readFile(base+'/migrations/0051_rondas.sql','utf8'));
+ sqlite.exec(await fs.readFile(base+'/migrations/0053_rondas_zonas.sql','utf8'));
  sqlite.exec(`INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(2,'Inspector','i@example.invalid','x','tecnico'),(3,'Reviewer','r@example.invalid','x','jefe'); INSERT INTO sucursales(id,nombre) VALUES(1,'Sede'); INSERT INTO ubicaciones(id,nombre,sucursal_id) VALUES(1,'Sala',1); INSERT INTO activos(id,codigo,nombre,ubicacion_id,rubro) VALUES(1,'AC-01','Aire',1,'aires'); INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,asignado_a) VALUES(1,1,'Servicio AC','mensual','2026-09-01',2); INSERT INTO ordenes(id,titulo,tipo,estado,activo_id,plan_id,asignado_a,creado_por,completada_en,verificado_por,verificado_en,trabajos_realizados,verificacion_notas,created_at) VALUES(1,'Último servicio','preventivo','cerrada',1,1,2,1,'2026-08-01T12:00:00Z',3,'2026-08-02T12:00:00Z','Limpieza y prueba','Prueba revisada','2026-08-01T00:00:00Z');`);
  const point=code=>({code,group:'hvac',label:code,criterion:'Sin fuga ni alarma observada',active:true,frequency:'diaria',firstDate:'2026-10-01',evidencePolicy:'none',assetId:1});
  const config={effectiveFrom:'2026-10-01',name:'Mañana',siteId:1,locationId:1,shift:'mañana',timezoneOffset:'-06:00',time:'08:00',windowMinutes:60,ownerId:2,reviewerId:3,reason:'Piloto aprobado',points:(points??['ac']).map(point),notifications:{recipientIds:[],events:[]}};
@@ -31,13 +32,16 @@ async function expectedStorageFailure(fn){const log=console.error;console.error=
   eq(r.status,500,'proposal failure reaches the caller');eq(execution.status,'pendiente');eq(execution.revision,0);eq(JSON.parse(execution.data_json)[0].result,'pendiente');eq(execution.equipment_snapshot_json,null);eq(tableCounts(f.sqlite),before,'no inspection, proposal, link, audit or notification is partly committed');
   f.sqlite.exec('DROP TRIGGER fail_proposal');
   r=await f.save('ac',0,'hallazgo');eq(r.status,200);eq(f.sqlite.prepare('SELECT COUNT(*) n FROM rondas_proposals').get().n,2,'retry atomically creates PM and condition actions');
+  // A changed PM rule requires a new request at submission. Reused requests
+  // are no longer redundantly reinserted, so inject failure on this new cycle.
+  f.sqlite.exec("UPDATE planes_mantenimiento SET frecuencia='bimestral' WHERE id=1");
   const beforeSubmit=tableCounts(f.sqlite);
   f.sqlite.exec(`CREATE TRIGGER fail_proposal BEFORE INSERT ON rondas_proposals BEGIN SELECT RAISE(ABORT,'injected proposal failure'); END;`);
   r=await expectedStorageFailure(()=>f.call(`/executions/${f.id}/action`,{userId:2,rol:'tecnico',data:{action:'submit',expectedRevision:1}}));
   execution=f.sqlite.prepare('SELECT * FROM rondas_executions').get();
   eq(r.status,500);eq(execution.status,'en_curso');eq(execution.revision,1);eq(execution.executed_at,null);eq(tableCounts(f.sqlite),beforeSubmit,'failed submit rolls back status and every dependent write');
   f.sqlite.exec('DROP TRIGGER fail_proposal');
-  r=await f.call(`/executions/${f.id}/action`,{userId:2,rol:'tecnico',data:{action:'submit',expectedRevision:1}});eq(r.status,200);eq(r.execution.status,'pendiente_validacion');eq(f.sqlite.prepare('SELECT COUNT(*) n FROM rondas_proposals').get().n,2,'submit reuses required requests');
+  r=await f.call(`/executions/${f.id}/action`,{userId:2,rol:'tecnico',data:{action:'submit',expectedRevision:1}});eq(r.status,200);eq(r.execution.status,'pendiente_validacion');eq(f.sqlite.prepare('SELECT COUNT(*) n FROM rondas_proposals').get().n,3,'submit preserves prior requests and adds the changed PM cycle');
  }finally{await f.close()}
 }
 {

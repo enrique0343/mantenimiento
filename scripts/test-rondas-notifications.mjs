@@ -40,6 +40,7 @@ async function fixture(t) {
     },
   };
   sqlite.exec(await fs.readFile(path.join(root, 'migrations/0051_rondas.sql'), 'utf8'));
+  sqlite.exec(await fs.readFile(path.join(root, 'migrations/0053_rondas_zonas.sql'), 'utf8'));
   sqlite.exec(`
     INSERT INTO usuarios(id,nombre,email,password_hash,rol,activo) VALUES
       (2,'Active reviewer','reviewer@example.invalid','fixture-only','jefe',1),

@@ -5,6 +5,7 @@ const DB={prepare:sql=>statement(sql),async batch(qs){sqlite.exec('BEGIN');try{c
 async function call(route,path,data,env={},headers={}){const c=ctx(path,{method:'POST',data,headers,env:{DB,...env}});const r=await route(c);return{status:r.status,...await r.json()}}
 try{
  sqlite.exec(await fs.readFile('migrations/0051_rondas.sql','utf8'));
+ sqlite.exec(await fs.readFile('migrations/0053_rondas_zonas.sql','utf8'));
  sqlite.exec(`INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(2,'Inspector','i@example.invalid','x','tecnico'),(3,'Reviewer','r@example.invalid','x','jefe');INSERT INTO sucursales(id,nombre) VALUES(1,'Local');INSERT INTO ubicaciones(id,nombre,sucursal_id) VALUES(1,'Local',1)`);
  const start=new Date(Date.now()-35*86400000).toISOString().slice(0,10);
  const config={effectiveFrom:start,name:'Daily audit',siteId:1,locationId:1,shift:'AM',timezoneOffset:'+00:00',time:'06:00',windowMinutes:30,ownerId:2,reviewerId:3,reason:'Explicit local test schedule',points:[{code:'visual',group:'puertas',label:'Observe',criterion:'Condition observed',active:true,frequency:'diaria',firstDate:start,evidencePolicy:'none'}],notifications:{recipientIds:[],events:[]}};

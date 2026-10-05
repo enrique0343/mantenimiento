@@ -25,6 +25,7 @@ const row=()=>sqlite.prepare('SELECT * FROM rondas_executions WHERE id=?').get(i
 const save=(data,actor={userId:2,rol:'tecnico'})=>call(`/executions/${id}/action`,{...actor,data:{action:'save',pointId:'p1',expectedRevision:row().revision,result:'conforme',...data}});
 try{
  sqlite.exec(await fs.readFile(root+'/migrations/0051_rondas.sql','utf8'));
+ sqlite.exec(await fs.readFile(root+'/migrations/0053_rondas_zonas.sql','utf8'));
  sqlite.exec(`INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(2,'Inspector','i@example.invalid','x','tecnico'),(3,'Verifier','v@example.invalid','x','tecnico'),(4,'Other inspector','o@example.invalid','x','tecnico'); INSERT INTO sucursales(id,nombre) VALUES(1,'Sede'); INSERT INTO ubicaciones(id,nombre,sucursal_id) VALUES(1,'Sala',1);`);
  const point=code=>({code,group:'pressure',label:code,criterion:'Lectura dentro del rango técnico aprobado',active:true,frequency:'diaria',firstDate:'2026-10-01',evidencePolicy:'always',assetId:null,measurementType:'pressure',measurementUnit:'bar',photoRequired:true,minValue:1,maxValue:5,limitSource:'Manual técnico del equipo'});
  const config={effectiveFrom:'2026-10-01',name:'Presiones',siteId:1,locationId:1,shift:'diurno',timezoneOffset:'-06:00',time:'08:00',windowMinutes:60,ownerId:2,reviewerId:3,reason:'Control local aprobado',points:[point('p1'),point('p2')],notifications:{recipientIds:[],events:[]}};
