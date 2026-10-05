@@ -32,6 +32,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Test Panorama rendered page
+        run: npm run test:panorama:ssr
+
       - name: Check deployment credentials
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         id: credentials

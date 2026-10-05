@@ -1,0 +1,113 @@
+---
+import AppIcon from "@/components/AppIcon.astro";
+import type { RoundsOverview } from "@/lib/rondas/overview";
+interface Props { overview: RoundsOverview | null; role: string; }
+const { overview, role } = Astro.props;
+const canConfigure = ["admin", "jefe"].includes(role);
+const isTechnician = role === "tecnico";
+const needsConfiguration = canConfigure && overview?.configuration?.templates === 0;
+const statusLabel: Record<string, string> = { pendiente: "Por ejecutar", asignada: "Asignada", en_curso: "En curso", pendiente_validacion: "Pendiente de validar", devuelta: "Devuelta para corregir", validada: "Validada", omitida: "Omitida" };
+const timestamp = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Sin límite registrado" : parsed.toLocaleString("es-SV", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "America/El_Salvador" });
+};
+const dayLabel = overview?.today ? new Date(`${overview.today}T12:00:00Z`).toLocaleDateString("es-SV", { day: "numeric", month: "long", timeZone: "America/El_Salvador" }) : "";
+const metrics = overview ? [
+  { label: "Rondas de hoy", value: overview.scheduledToday, hint: "Programadas hoy, en todos sus estados", href: null, warning: false },
+  { label: "Por ejecutar", value: overview.pendingExecution, hint: "Pendientes, en curso o devueltas; hasta hoy", href: null, warning: false },
+  { label: "Vencidas", value: overview.overdue, hint: "Por ejecutar con su límite actual vencido", href: null, warning: overview.overdue > 0 },
+  { label: "Pendientes de validar", value: overview.pendingValidation, hint: "Inspecciones enviadas a revisión independiente", href: "/rondas?status=pendiente_validacion", warning: false },
+] : [];
+---
+{overview && <section class="rounds-overview" aria-labelledby="rounds-overview-title">
+  <header class="rounds-heading">
+    <div class="rounds-title"><span class="rounds-symbol"><AppIcon name="report" size={23}/></span><div><span class="rounds-eyebrow">Inspección en sitio</span><h2 id="rounds-overview-title">Rondas de mantenimiento</h2><p>{isTechnician ? "Tus rondas asignadas y su seguimiento." : "Recorridos por zonas, inspección y revisión independiente."}</p></div></div>
+    <a class="rounds-main-link" href="/rondas">Ver rondas <AppIcon name="arrow" size={18}/></a>
+  </header>
+  <div class="rounds-day"><span>{dayLabel}</span><span>Horas de El Salvador</span></div>
+  <div class="rounds-metrics">
+    {metrics.map(metric => metric.href ? <a class:list={["rounds-metric", { "rounds-warning": metric.warning }]} href={metric.href}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.hint}</small></a> : <div class:list={["rounds-metric", { "rounds-warning": metric.warning }]}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.hint}</small></div>)}
+  </div>
+  {overview.configuration && <div class="rounds-configuration" aria-label="Configuración de rondas">
+    {canConfigure ? <><a href="/rondas?view=zones"><strong>{overview.configuration.zones}</strong> zonas de ronda</a><a href="/rondas?view=templates"><strong>{overview.configuration.templates}</strong> plantillas</a></> : <><span><strong>{overview.configuration.zones}</strong> zonas de ronda</span><span><strong>{overview.configuration.templates}</strong> plantillas</span></>}
+  </div>}
+  <div class="rounds-bottom">
+    <section class="rounds-attention" aria-labelledby="rounds-attention-title">
+      <div class="rounds-section-heading"><h3 id="rounds-attention-title">Requieren atención</h3><span>Hasta 5 rondas</span></div>
+      {overview.attention.length ? <ol class="rounds-list">{overview.attention.slice(0, 5).map(round => <li><a href={`/rondas?execution=${round.id}`} class="rounds-item">
+        <div class="rounds-item-heading"><strong>{round.name}</strong><div class="rounds-badges"><span class:list={["rounds-badge", { "rounds-badge-review": round.status === "pendiente_validacion" }]}>{statusLabel[round.status] || round.status.replace(/_/g, " ")}</span>{round.isOverdue && <span class="rounds-badge rounds-badge-late">Vencida</span>}</div></div>
+        <p class="rounds-scope">{[round.siteName, round.zoneName || round.locationName].filter(Boolean).join(" · ") || "Ubicación sin registrar"}</p>
+        <div class="rounds-item-meta"><span>{round.status === "pendiente_validacion" ? `Validador: ${round.reviewerName || "Sin asignar"}` : `Responsable: ${round.ownerName || "Sin asignar"}`}</span><span>Límite: {timestamp(round.dueAt)}</span><span>{round.scheduledDate} · {round.shift}</span></div>
+      </a></li>)}</ol> : <div class="rounds-empty"><h4>{isTechnician ? "Sin rondas que requieran tu atención" : needsConfiguration ? "Configura tu primera plantilla" : "Sin rondas pendientes de atención"}</h4><p>{isTechnician ? "Cuando tengas una ronda por ejecutar o validar, podrás abrirla desde aquí." : needsConfiguration ? "Configura los puntos y responsables antes de generar las fechas de inspección." : canConfigure ? "Ya tienes plantillas configuradas. Puedes consultar las rondas existentes o generar un nuevo intervalo desde programación." : "Aquí aparecerán las rondas por ejecutar o pendientes de revisión."}</p>{needsConfiguration && <ol class="rounds-setup"><li><a href="/rondas?view=zones">{overview.configuration?.zones ? "Revisa la zona y sus ubicaciones" : "Define las zonas y sus ubicaciones"}</a></li><li><a href="/rondas?view=templates">Configura la plantilla y responsables</a></li><li><a href="/rondas?view=templates">Genera las fechas del recorrido</a></li></ol>}{canConfigure && !needsConfiguration && <a class="rounds-empty-link" href="/rondas?view=templates">Abrir programación →</a>}</div>}
+    </section>
+    <section class="rounds-followup" aria-labelledby="rounds-followup-title">
+      <h3 id="rounds-followup-title">Acciones de las rondas</h3><p class="rounds-followup-intro">El seguimiento de trabajo continúa aunque la inspección se valide.</p>
+      <dl>
+        {canConfigure && overview.pendingProposals !== null && <div><dt>Solicitudes por aprobar</dt><dd>{overview.pendingProposals}</dd></div>}
+        <div><dt>OT de rondas abiertas</dt><dd>{overview.linkedOpenOrders}</dd></div>
+        <div><dt>OT pendientes de verificación</dt><dd>{overview.linkedPendingVerification}</dd></div>
+      </dl>
+      {canConfigure && <p class="rounds-followup-note">Las solicitudes se revisan dentro de cada ronda.</p>}
+      <a class="rounds-secondary-link" href="/rondas?view=actions">Ver acciones y OT <AppIcon name="arrow" size={16}/></a>
+    </section>
+  </div>
+</section>}
+<style>
+  .rounds-overview{margin-top:26px;margin-bottom:28px;border:1px solid #d6e5dc;border-radius:17px;background:#fff;overflow:hidden;color:#193c2d}
+  .rounds-heading{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:18px;padding:24px 25px 19px;background:#f3f8f5}
+  .rounds-title{display:flex;gap:13px;align-items:flex-start;min-width:0}
+  .rounds-symbol{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:45px;height:45px;border-radius:13px;background:#e1eee6;color:#176747}
+  .rounds-eyebrow{display:block;font-size:10px;letter-spacing:1.1px;text-transform:uppercase;color:#3c765b;margin-bottom:4px}
+  .rounds-heading h2{font-size:22px;font-weight:500;letter-spacing:-.5px;line-height:1.3}
+  .rounds-heading p{margin-top:6px;font-size:12px;line-height:1.6;color:#63756c}
+  .rounds-main-link{display:flex;align-items:center;justify-content:space-between;gap:15px;min-height:43px;padding:9px 14px;border:1px solid #bad4c4;border-radius:9px;color:#146447;font-size:12px;white-space:nowrap;background:white}
+  .rounds-main-link:hover,.rounds-secondary-link:hover{background:#e9f3ed}
+  .rounds-day{display:flex;justify-content:space-between;gap:12px;padding:13px 25px 0;color:#63756c;font-size:11px}
+  .rounds-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:14px 25px 20px}
+  .rounds-metric{display:flex;flex-direction:column;gap:7px;min-width:0;border:1px solid #e0e8e2;border-radius:11px;padding:16px 15px;color:inherit;background:#fff}
+  .rounds-metric span{font-size:11px;color:#526e5e}
+  .rounds-metric strong{font-size:31px;line-height:1.1;font-weight:500;letter-spacing:-.8px}
+  .rounds-metric small{font-size:10px;line-height:1.5;color:#718176}
+  a.rounds-metric:hover{border-color:#8cbaa1}
+  .rounds-warning{border-color:#ecd6a7;background:#fffbf2}
+  .rounds-warning strong{color:#976123}
+  .rounds-configuration{display:flex;flex-wrap:wrap;gap:9px;padding:0 25px 20px;font-size:11px;color:#63756c}
+  .rounds-configuration a,.rounds-configuration span{padding:7px 10px;border-radius:7px;background:#f3f6f4}
+  .rounds-configuration a:hover{background:#e9f3ed}
+  .rounds-configuration strong{font-weight:600;color:#215c42}
+  .rounds-bottom{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(220px,1fr);gap:0;border-top:1px solid #e3ebe6}
+  .rounds-attention{padding:21px 25px 25px;min-width:0}
+  .rounds-section-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:13px}
+  .rounds-section-heading h3,.rounds-followup h3{font-size:13px;font-weight:600}
+  .rounds-section-heading span{font-size:10px;color:#718176}
+  .rounds-list{list-style:none;padding:0;margin:0}
+  .rounds-list li+li{border-top:1px solid #edf1ee}
+  .rounds-item{display:block;padding:13px 0;color:inherit}
+  .rounds-item:hover .rounds-item-heading strong{color:#146447;text-decoration:underline;text-underline-offset:3px}
+  .rounds-item-heading{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:9px}
+  .rounds-item-heading strong{font-size:12px;font-weight:600;overflow-wrap:anywhere}
+  .rounds-badges{display:flex;flex-wrap:wrap;gap:5px}
+  .rounds-badge{display:inline-flex;align-items:center;border-radius:20px;padding:3px 8px;background:#eef3ef;color:#526e5e;font-size:9px;white-space:nowrap}
+  .rounds-badge-review{background:#eaf1fc;color:#486482}
+  .rounds-badge-late{background:#fff1dc;color:#986025}
+  .rounds-scope{font-size:11px;color:#63756c;margin-top:6px;line-height:1.6;overflow-wrap:anywhere}
+  .rounds-item-meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;color:#718176;font-size:10px;line-height:1.6}
+  .rounds-empty{padding:17px 0 4px}
+  .rounds-empty h4{font-size:13px;font-weight:500}
+  .rounds-empty p{font-size:11px;line-height:1.7;color:#63756c;margin-top:6px}
+  .rounds-setup{margin:13px 0 0;padding-left:18px;font-size:11px;line-height:2;color:#146447}
+  .rounds-setup a:hover{text-decoration:underline;text-underline-offset:3px}
+  .rounds-empty-link{display:inline-block;font-size:11px;color:#146447;margin-top:13px;padding:6px 0}
+  .rounds-empty-link:hover{text-decoration:underline;text-underline-offset:3px}
+  .rounds-followup{padding:22px 25px;background:#fafcfb;border-left:1px solid #e3ebe6;min-width:0}
+  .rounds-followup-intro{font-size:11px;line-height:1.6;color:#63756c;margin-top:7px}
+  .rounds-followup dl{margin-top:15px;display:grid;gap:12px}
+  .rounds-followup dl div{display:flex;justify-content:space-between;align-items:flex-start;gap:15px}
+  .rounds-followup dt{font-size:11px;line-height:1.5;color:#63756c}
+  .rounds-followup dd{font-size:17px;font-weight:500;line-height:1.1;color:#215c42}
+  .rounds-followup-note{font-size:10px;line-height:1.6;color:#718176;margin-top:13px}
+  .rounds-secondary-link{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #d6e5dc;border-radius:8px;padding:10px 12px;min-height:42px;font-size:11px;color:#146447;margin-top:18px}
+  .rounds-overview a:focus-visible{outline:2px solid #27805a;outline-offset:3px}
+  @media(max-width:1050px){.rounds-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.rounds-bottom{grid-template-columns:minmax(0,1.5fr) minmax(200px,1fr)}}
+  @media(max-width:650px){.rounds-overview{margin-top:20px}.rounds-heading{padding:20px 18px 16px;gap:13px}.rounds-heading h2{font-size:20px}.rounds-main-link{width:100%}.rounds-day{padding:13px 18px 0}.rounds-metrics{padding:13px 18px 18px;gap:9px}.rounds-metric{padding:13px 12px}.rounds-metric strong{font-size:28px}.rounds-configuration{padding:0 18px 18px}.rounds-bottom{grid-template-columns:1fr}.rounds-attention{padding:19px 18px 21px}.rounds-followup{border-left:0;border-top:1px solid #e3ebe6;padding:20px 18px}.rounds-item-heading{display:block}.rounds-badges{margin-top:7px}.rounds-item{padding:14px 0}}
+</style>

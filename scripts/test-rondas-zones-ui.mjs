@@ -13,7 +13,7 @@ try { module = await import(specified ? isAbsolute(specified) ? pathToFileURL(sp
 catch { console.error('Zone UI DOM tests need jsdom. Use the setup documented in scripts/test-rondas-ui.mjs.'); process.exit(1); }
 const { JSDOM, VirtualConsole } = module;
 const { outputFiles } = await build({ entryPoints: [resolve(root, 'scripts/fixtures/rondas-zonas-ui.tsx')], absWorkingDir: root, bundle: true, format: 'iife', write: false, jsx: 'automatic' });
-for (const mode of ['zones', 'template', 'rounds']) {
+for (const mode of ['zones', 'template', 'rounds', 'deeplinks']) {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', error => console.error('DOM error:', error.message));
   virtualConsole.on('error', (...args) => console.error(...args));
