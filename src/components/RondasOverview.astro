@@ -29,7 +29,7 @@ const metrics = overview ? [
     {metrics.map(metric => metric.href ? <a class:list={["rounds-metric", { "rounds-warning": metric.warning }]} href={metric.href}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.hint}</small></a> : <div class:list={["rounds-metric", { "rounds-warning": metric.warning }]}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.hint}</small></div>)}
   </div>
   {overview.configuration && <div class="rounds-configuration" aria-label="Configuración de rondas">
-    {canConfigure ? <><a href="/rondas?view=zones"><strong>{overview.configuration.zones}</strong> zonas de ronda</a><a href="/rondas?view=templates"><strong>{overview.configuration.templates}</strong> plantillas</a></> : <><span><strong>{overview.configuration.zones}</strong> zonas de ronda</span><span><strong>{overview.configuration.templates}</strong> plantillas</span></>}
+    {canConfigure ? <><a href="/rondas?view=zones"><strong>{overview.configuration.zones}</strong> {overview.configuration.zones === 1 ? "zona de ronda" : "zonas de ronda"}</a><a href="/rondas?view=templates"><strong>{overview.configuration.templates}</strong> {overview.configuration.templates === 1 ? "plantilla" : "plantillas"}</a></> : <><span><strong>{overview.configuration.zones}</strong> {overview.configuration.zones === 1 ? "zona de ronda" : "zonas de ronda"}</span><span><strong>{overview.configuration.templates}</strong> {overview.configuration.templates === 1 ? "plantilla" : "plantillas"}</span></>}
   </div>}
   <div class="rounds-bottom">
     <section class="rounds-attention" aria-labelledby="rounds-attention-title">
