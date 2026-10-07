@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ROUND_GROUPS } from './catalog';
-import { configSchema, daySchema, pointDue, dueAt, temporalStatus, ensure, RoundError, type RoundConfig } from './model';
+import { configSchema, formatConfigIssues, daySchema, pointDue, dueAt, temporalStatus, ensure, RoundError, type RoundConfig } from './model';
 import { getEquipmentContext, getEquipmentContextForLocations, getAssetMaintenance } from './equipment';
 import { listZones } from './zones';
 type User={id:number;nombre:string;rol:string};
@@ -76,7 +76,9 @@ export async function catalog(db:D1Database,u:User){
  return {groups:ROUND_GROUPS,zones:(await listZones(db,u)).zones,sites:await all(db,'SELECT id,nombre FROM sucursales WHERE activa=1'),locations:await all(db,'SELECT id,nombre,sucursal_id AS sucursalId,padre_id AS padreId FROM ubicaciones WHERE activa=1'),users:await all(db,'SELECT id,nombre,rol FROM usuarios WHERE activo=1'),assets:await all(db,'SELECT id,codigo,nombre,ubicacion_id AS ubicacionId FROM activos WHERE estado<>?', 'baja'),providers:await all(db,'SELECT id,nombre FROM proveedores WHERE activo=1')};
 }
 export async function saveTemplate(db:D1Database,u:User,body:any,id?:number){
- admin(u);const parsed=configSchema.safeParse(body);if(!parsed.success)throw new RoundError(400,parsed.error.issues.map(i=>i.message).join('; '));const c=parsed.data;
+ admin(u);const parsed=configSchema.safeParse(body);
+ if(!parsed.success){const issues=formatConfigIssues(parsed.error.issues,body);throw new RoundError(400,issues.map(issue=>issue.message).join('; '),{issues});}
+ const c=parsed.data;
  if(c.zoneId){
   const zone=(await listZones(db,u)).zones.find(zone=>zone.id===c.zoneId);ensure(zone,400,'Seleccione una zona existente');
   ensure(zone.locations.length,400,'La zona no tiene ubicaciones. Edite la zona antes de usarla en una plantilla.');
