@@ -16,9 +16,9 @@
     "db:seed:remote": "wrangler d1 execute mantenimiento-db --remote --file=./scripts/seed.sql",
     "typecheck": "astro check",
     "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs",
-    "test:rondas": "node scripts/test-rondas.mjs && node scripts/test-rondas-atomic.mjs && node scripts/test-rondas-equipment.mjs && node scripts/test-orden-verificacion.mjs && node scripts/test-rondas-scheduler.mjs && node scripts/test-rondas-evidence.mjs && node scripts/test-rondas-notifications.mjs && node scripts/test-rondas-zones.mjs",
+    "test:rondas": "node scripts/test-rondas.mjs && node scripts/test-rondas-atomic.mjs && node scripts/test-rondas-equipment.mjs && node scripts/test-orden-verificacion.mjs && node scripts/test-rondas-scheduler.mjs && node scripts/test-rondas-evidence.mjs && node scripts/test-rondas-notifications.mjs && node scripts/test-rondas-zones.mjs && node scripts/test-rondas-template-validation.mjs",
     "typecheck:rondas": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck --types @cloudflare/workers-types,astro/client --jsx react-jsx src/env.d.ts src/lib/rondas/*.ts src/components/RondasApp.tsx",
-    "test:rondas:ui": "node scripts/test-rondas-ui.mjs && node scripts/test-rondas-zones-ui.mjs",
+    "test:rondas:ui": "node scripts/test-rondas-ui.mjs && node scripts/test-rondas-zones-ui.mjs && node scripts/test-rondas-template-validation-ui.mjs",
     "test:inline-script-vars": "node scripts/test-inline-script-vars.mjs",
     "test:panorama": "node scripts/test-rondas-overview.mjs",
     "test:panorama:ssr": "node scripts/test-panorama-render.mjs"
