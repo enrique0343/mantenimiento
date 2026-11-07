@@ -1,0 +1,361 @@
+---
+// Cobertura documental · ¿qué parte de la operación todavía no está gobernada?
+//
+// El volumen GO-GUI-011-2026 no se mide por documentos escritos sino por
+// equipos cubiertos. Esta página es el espejo de eso: cada equipo vivo, el
+// sistema con el que el resolver lo resuelve, y si ese sistema tiene SCP, SOP,
+// AOP y EOP. El número que importa no es «cuántos documentos llevamos», es
+// «cuántos equipos críticos fallarían hoy sin un EOP que decir».
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, procedimientos } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { cobertura, SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
+import { TIPO_PROC, sistemaInfo, type TipoProc } from "@/lib/procedimientos";
+import { CRITICIDAD_LABEL, CRITICIDAD_COLOR, type CriticidadOperacional } from "@/lib/inventario-jci";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+const fSistema = url.searchParams.get("sistema");
+const fCriticidad = url.searchParams.get("criticidad");
+const fBrecha = url.searchParams.get("brecha"); // sin_doc | critico_sin_eop | inferido
+
+const base = await cobertura(db);
+
+// Qué tipos de documento existen hoy por sistema. La cobertura se resuelve por
+// sistema: un EOP escrito para «Energía» gobierna a todos sus equipos.
+const procs = await db
+  .select({ sistema: procedimientos.sistema, tipo: procedimientos.tipo })
+  .from(procedimientos)
+  .where(eq(procedimientos.activo, true));
+const tiposPorSistema = new Map<string, Set<string>>();
+for (const p of procs) {
+  const s = tiposPorSistema.get(p.sistema) ?? new Set<string>();
+  s.add(p.tipo);
+  tiposPorSistema.set(p.sistema, s);
+}
+
+// cobertura() resuelve el sistema por declaración del equipo o por su nombre.
+// La herencia del activo padre («el componente hereda del sistema padre»,
+// cap. 02-03) es el paso intermedio que aplica la ficha del equipo; se añade
+// aquí con la misma profundidad para que el tablero y la ficha nunca digan
+// cosas distintas del mismo equipo.
+const jerarquia: Array<{ id: number; sistema: string | null; padreId: number | null }> = await db
+  .select({ id: activos.id, sistema: activos.sistema, padreId: activos.padreId })
+  .from(activos);
+const porId = new Map(jerarquia.map((r) => [r.id, r]));
+function sistemaHeredado(id: number): Sistema | null {
+  let padreId = porId.get(id)?.padreId ?? null;
+  for (let i = 0; i < 3 && padreId; i++) {
+    const p = porId.get(padreId);
+    if (!p) break;
+    if (p.sistema) return p.sistema as Sistema;
+    padreId = p.padreId;
+  }
+  return null;
+}
+
+type Origen = "declarado" | "heredado" | "inferido";
+const ORIGEN: Record<Origen, { label: string; color: string; ayuda: string }> = {
+  declarado: { label: "Declarado", color: "bg-emerald-100 text-emerald-700", ayuda: "Fijado en la ficha del equipo: es un dato." },
+  heredado: { label: "Heredado", color: "bg-sky-100 text-sky-700", ayuda: "Tomado del activo padre que contiene este componente." },
+  inferido: { label: "Inferido", color: "bg-amber-100 text-amber-700", ayuda: "Nadie lo declaró: se deduce del nombre y la categoría del equipo." },
+};
+
+const todos = base.map((e: any) => {
+  let sistemaResuelto = e.sistemaResuelto as Sistema;
+  let origen: Origen = e.declarado ? "declarado" : "inferido";
+  if (!e.declarado) {
+    const h = sistemaHeredado(e.id);
+    if (h) {
+      sistemaResuelto = h;
+      origen = "heredado";
+    }
+  }
+  const tipos = tiposPorSistema.get(sistemaResuelto) ?? new Set<string>();
+  return {
+    ...e,
+    sistemaResuelto,
+    origen,
+    criticidad: (e.criticidad ?? "media") as CriticidadOperacional,
+    tieneScp: tipos.has("scp"),
+    tieneSop: tipos.has("sop"),
+    tieneAop: tipos.has("aop"),
+    tieneEop: tipos.has("eop"),
+    cubierto: tipos.size > 0,
+  };
+});
+
+// ─── Los tres números del tablero, sobre el total y no sobre el filtro ──────
+const nEquipos = todos.length;
+const sinNingunDoc = todos.filter((e) => !e.cubierto);
+const criticosSinEop = todos.filter((e) => e.criticidad === "alta" && !e.tieneEop);
+const soloInferido = todos.filter((e) => e.origen === "inferido");
+const pctCubierto = nEquipos === 0 ? 0 : Math.round(((nEquipos - sinNingunDoc.length) / nEquipos) * 100);
+
+const filas = todos.filter((e) => {
+  if (fSistema && e.sistemaResuelto !== fSistema) return false;
+  if (fCriticidad && e.criticidad !== fCriticidad) return false;
+  if (fBrecha === "sin_doc" && e.cubierto) return false;
+  if (fBrecha === "critico_sin_eop" && !(e.criticidad === "alta" && !e.tieneEop)) return false;
+  if (fBrecha === "inferido" && e.origen !== "inferido") return false;
+  return true;
+});
+
+// Agrupado por el sistema resuelto, que es la unidad en la que se escriben los
+// documentos del volumen.
+const ORDEN_SISTEMAS: Sistema[] = ["electrico", "hvac", "gases", "agua", "incendios", "ascensores", "otro"];
+const TIPOS_COL: TipoProc[] = ["scp", "sop", "aop", "eop"];
+const grupos = ORDEN_SISTEMAS.map((sis) => {
+  const tipos = tiposPorSistema.get(sis) ?? new Set<string>();
+  const delSistema = todos.filter((e) => e.sistemaResuelto === sis);
+  return {
+    sistema: sis,
+    equipos: filas.filter((e) => e.sistemaResuelto === sis),
+    total: delSistema.length,
+    tiene: { scp: tipos.has("scp"), sop: tipos.has("sop"), aop: tipos.has("aop"), eop: tipos.has("eop") } as Record<TipoProc, boolean>,
+    criticosSinEop: delSistema.filter((e) => e.criticidad === "alta" && !e.tieneEop).length,
+  };
+}).filter((g) => g.equipos.length > 0);
+
+function qs(cambios: Record<string, string | null>) {
+  const p = new URLSearchParams(url.search);
+  for (const [k, v] of Object.entries(cambios)) {
+    if (v === null || v === "") p.delete(k);
+    else p.set(k, v);
+  }
+  const s = p.toString();
+  return s ? `/cobertura?${s}` : "/cobertura";
+}
+
+const hayFiltro = !!(fSistema || fCriticidad || fBrecha);
+---
+
+<Layout title="Cobertura documental">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">🛡 Cobertura documental</h1>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">
+        Qué parte de la operación todavía <strong>no está gobernada</strong>. Cada equipo se cruza con el
+        sistema crítico que lo resuelve y con los documentos de ese sistema: <strong>SCP</strong> cómo está
+        configurado, <strong>SOP</strong> cómo se opera, <strong>AOP</strong> qué hacer al desviarse,
+        <strong>EOP</strong> qué hacer cuando ya falló.
+      </p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a href="/procedimientos" class="btn-secondary btn-sm">📋 Biblioteca</a>
+      <a href="/eop" class="btn-secondary btn-sm">🚨 EOP</a>
+    </div>
+  </div>
+
+  <!-- ══ Los contadores de la brecha ══ -->
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <a href="/cobertura"
+       class:list={["card p-4 transition hover:border-slate-400", !hayFiltro && "ring-2 ring-brand-500"]}>
+      <div class="text-[11px] uppercase tracking-wide text-slate-500">Equipos vivos</div>
+      <div class="mt-0.5 text-3xl font-bold text-slate-700">{nEquipos}</div>
+      <div class="text-[11px] text-slate-400">{pctCubierto}% con algún documento</div>
+    </a>
+
+    <a href={qs({ brecha: fBrecha === "critico_sin_eop" ? null : "critico_sin_eop" })}
+       class:list={[
+         "card border-2 p-4 transition",
+         criticosSinEop.length > 0 ? "border-red-300 bg-red-50 hover:border-red-500" : "border-emerald-200 bg-emerald-50",
+         fBrecha === "critico_sin_eop" && "ring-2 ring-red-500",
+       ]}>
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-red-700">Críticos sin EOP</div>
+      <div class="mt-0.5 text-3xl font-bold text-red-700">{criticosSinEop.length}</div>
+      <div class="text-[11px] text-red-600">
+        {criticosSinEop.length > 0
+          ? "Si fallan hoy, el sistema no tiene qué decir. Este es el número que importa."
+          : "Todo equipo crítico tiene un EOP que lo gobierna."}
+      </div>
+    </a>
+
+    <a href={qs({ brecha: fBrecha === "sin_doc" ? null : "sin_doc" })}
+       class:list={[
+         "card p-4 transition hover:border-slate-400",
+         sinNingunDoc.length > 0 && "border-amber-300 bg-amber-50",
+         fBrecha === "sin_doc" && "ring-2 ring-brand-500",
+       ]}>
+      <div class="text-[11px] uppercase tracking-wide text-slate-500">Sin ningún documento</div>
+      <div class="mt-0.5 text-3xl font-bold text-amber-700">{sinNingunDoc.length}</div>
+      <div class="text-[11px] text-slate-500">Su sistema no tiene SCP, SOP, AOP ni EOP.</div>
+    </a>
+
+    <a href={qs({ brecha: fBrecha === "inferido" ? null : "inferido" })}
+       class:list={[
+         "card p-4 transition hover:border-slate-400",
+         fBrecha === "inferido" && "ring-2 ring-brand-500",
+       ]}>
+      <div class="text-[11px] uppercase tracking-wide text-slate-500">Sistema solo inferido</div>
+      <div class="mt-0.5 text-3xl font-bold text-slate-700">{soloInferido.length}</div>
+      <div class="text-[11px] text-slate-500">Nadie lo declaró ni lo hereda: se deduce del nombre.</div>
+    </a>
+  </div>
+
+  <!-- ══ Filtros ══ -->
+  <div class="card mt-4 p-4">
+    <div class="flex flex-wrap items-end gap-3">
+      <div class="min-w-[11rem]">
+        <label class="label text-xs" for="fSistema">Sistema</label>
+        <select id="fSistema" class="input">
+          <option value="">Todos los sistemas</option>
+          {ORDEN_SISTEMAS.map((s) => (
+            <option value={s} selected={fSistema === s}>
+              {sistemaInfo(s).icono} {SISTEMA_LABEL[s]} ({todos.filter((e) => e.sistemaResuelto === s).length})
+            </option>
+          ))}
+        </select>
+      </div>
+      <div class="min-w-[10rem]">
+        <label class="label text-xs" for="fCriticidad">Criticidad</label>
+        <select id="fCriticidad" class="input">
+          <option value="">Toda criticidad</option>
+          {(["alta", "media", "baja"] as CriticidadOperacional[]).map((c) => (
+            <option value={c} selected={fCriticidad === c}>{CRITICIDAD_LABEL[c]}</option>
+          ))}
+        </select>
+      </div>
+      <div class="min-w-[12rem]">
+        <label class="label text-xs" for="fBrecha">Brecha</label>
+        <select id="fBrecha" class="input">
+          <option value="">Toda la operación</option>
+          <option value="critico_sin_eop" selected={fBrecha === "critico_sin_eop"}>Críticos sin EOP</option>
+          <option value="sin_doc" selected={fBrecha === "sin_doc"}>Sin ningún documento</option>
+          <option value="inferido" selected={fBrecha === "inferido"}>Sistema solo inferido</option>
+        </select>
+      </div>
+      {hayFiltro && <a href="/cobertura" class="btn-secondary btn-sm">Limpiar filtros</a>}
+      <div class="ml-auto text-xs text-slate-500">{filas.length} de {nEquipos} equipos</div>
+    </div>
+  </div>
+
+  <!-- ══ Tabla por sistema resuelto ══ -->
+  {grupos.length === 0 ? (
+    <div class="card mt-4 p-8 text-center text-sm text-slate-500">
+      {nEquipos === 0
+        ? "No hay equipos registrados todavía."
+        : "Ningún equipo cumple el filtro. Prueba limpiando los filtros."}
+    </div>
+  ) : (
+    <div class="mt-4 space-y-4">
+      {grupos.map((g) => (
+        <div class="card overflow-hidden">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="font-semibold text-slate-900">
+                {sistemaInfo(g.sistema).icono} {SISTEMA_LABEL[g.sistema]}
+              </h2>
+              <span class="badge bg-slate-100 text-slate-600">{g.equipos.length} de {g.total} equipos</span>
+              {g.criticosSinEop > 0 && (
+                <span class="badge bg-red-100 text-red-700">🔴 {g.criticosSinEop} crítico(s) sin EOP</span>
+              )}
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              {TIPOS_COL.map((t) => (
+                <span
+                  class:list={[
+                    "badge font-mono text-[11px]",
+                    g.tiene[t] ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700",
+                  ]}
+                  title={`${TIPO_PROC[t].nombre} — ${g.tiene[t] ? "existe un documento para este sistema" : "no hay ningún documento de este tipo"}`}
+                >
+                  {g.tiene[t] ? "✓" : "✕"} {TIPO_PROC[t].label}
+                </span>
+              ))}
+              <a href={`/procedimientos?sistema=${g.sistema}`} class="btn-secondary btn-sm ml-1">Ver documentos</a>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="bg-white text-[11px] uppercase tracking-wide text-slate-500">
+                <tr class="border-b border-slate-200">
+                  <th class="px-4 py-2 text-left">Equipo</th>
+                  <th class="px-4 py-2 text-left">Criticidad</th>
+                  <th class="px-4 py-2 text-left">Sistema</th>
+                  {TIPOS_COL.map((t) => (
+                    <th class="px-2 py-2 text-center" title={TIPO_PROC[t].pregunta}>{TIPO_PROC[t].label}</th>
+                  ))}
+                  <th class="px-4 py-2 text-left">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {g.equipos.map((e) => (
+                  <tr class:list={[
+                    "border-b border-slate-100 last:border-0 hover:bg-slate-50",
+                    e.criticidad === "alta" && !e.tieneEop && "bg-red-50/60",
+                  ]}>
+                    <td class="px-4 py-2">
+                      <a href={`/activos/${e.id}#rige`} class="text-brand-600 hover:underline">
+                        <span class="font-mono text-xs">{e.codigo}</span>
+                        <span class="ml-1 font-medium text-slate-800">{e.nombre}</span>
+                      </a>
+                    </td>
+                    <td class="px-4 py-2">
+                      <span class={`badge text-[11px] ${CRITICIDAD_COLOR[e.criticidad]}`}>⚑ {CRITICIDAD_LABEL[e.criticidad]}</span>
+                    </td>
+                    <td class="px-4 py-2">
+                      <span class={`badge text-[11px] ${ORIGEN[e.origen].color}`} title={ORIGEN[e.origen].ayuda}>
+                        {ORIGEN[e.origen].label}
+                      </span>
+                    </td>
+                    {TIPOS_COL.map((t) => {
+                      const tiene = t === "scp" ? e.tieneScp : t === "sop" ? e.tieneSop : t === "aop" ? e.tieneAop : e.tieneEop;
+                      return (
+                        <td class="px-2 py-2 text-center">
+                          <span
+                            class:list={[
+                              "inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold",
+                              tiene ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700",
+                            ]}
+                            title={tiene ? `${TIPO_PROC[t].nombre}: cubierto` : `${TIPO_PROC[t].nombre}: sin documento`}
+                          >
+                            {tiene ? "✓" : "✕"}
+                          </span>
+                        </td>
+                      );
+                    })}
+                    <td class="px-4 py-2">
+                      <span class="text-xs capitalize text-slate-600">{e.estado}</span>
+                      {(e.estado === "averiado" || e.estado === "mantenimiento") && !e.tieneEop && (
+                        <span class="ml-1 text-xs font-semibold text-red-600" title="Fuera de servicio y sin EOP que gobierne la respuesta">
+                          · sin EOP
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+
+  <p class="mt-4 text-xs text-slate-500">
+    La cobertura se resuelve por sistema: un documento escrito para «Energía» gobierna a todos los equipos
+    que resuelven a ese sistema. Por eso declarar el sistema de un equipo no es un dato administrativo —
+    es lo que decide qué procedimiento le aplica cuando falla.
+  </p>
+
+  <script>
+    const sel = (id: string) => document.getElementById(id) as HTMLSelectElement | null;
+    const aplicar = () => {
+      const p = new URLSearchParams();
+      const s = sel("fSistema")?.value, c = sel("fCriticidad")?.value, b = sel("fBrecha")?.value;
+      if (s) p.set("sistema", s);
+      if (c) p.set("criticidad", c);
+      if (b) p.set("brecha", b);
+      const q = p.toString();
+      location.href = q ? `/cobertura?${q}` : "/cobertura";
+    };
+    ["fSistema", "fCriticidad", "fBrecha"].forEach((id) => sel(id)?.addEventListener("change", aplicar));
+  </script>
+</Layout>

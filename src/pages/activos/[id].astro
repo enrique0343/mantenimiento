@@ -19,6 +19,8 @@ import {
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { queRigeEsteActivo, queSigue, SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
+import { TIPO_PROC, SISTEMAS, estadoInfo, type TipoProc } from "@/lib/procedimientos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -250,6 +252,50 @@ const ubicacionesOpciones = canEdit
       .from(ubicaciones).leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
       .where(eq(ubicaciones.activa, true)).orderBy(asc(ubicaciones.nombre))
   : [];
+
+// ─── Fase 48 · Qué rige este equipo (resolver) ───────────────────────────────
+// GO-GUI-011-2026: nadie debería buscar un documento. El resolver contesta aquí
+// y ahora qué sistema gobierna este equipo, con qué procedimientos, y —si el
+// equipo está fuera de servicio— qué EOP manda y cuáles son sus tres primeras
+// acciones. «Si un equipo falla, el sistema sabe que sigue bajo tal documento».
+const rige = await queRigeEsteActivo(db, id, sucursalInfo?.id ?? null);
+// Ya falló: la respuesta no se busca, se muestra.
+const sigueFalla = fueraDeServicio ? await queSigue(db, id, "falla", sucursalInfo?.id ?? null) : null;
+
+const ORIGEN_SISTEMA: Record<"declarado" | "heredado" | "inferido", { label: string; detalle: string; color: string }> = {
+  declarado: {
+    label: "Declarado por el equipo",
+    detalle: "Alguien lo fijó en la ficha: es un dato, no una deducción.",
+    color: "bg-emerald-100 text-emerald-700",
+  },
+  heredado: {
+    label: "Heredado del sistema padre",
+    detalle: "El componente toma el sistema del activo padre que lo contiene (cap. 02-03).",
+    color: "bg-sky-100 text-sky-700",
+  },
+  inferido: {
+    label: "Inferido por el nombre",
+    detalle:
+      "Nadie lo declaró: se deduce del nombre y la categoría. Una suposición no debería decidir qué " +
+      "procedimiento aplica cuando este equipo falle.",
+    color: "bg-amber-100 text-amber-700",
+  },
+};
+
+// Los documentos en el orden de la cadena del cap. 01: SCP cómo está
+// configurado → SOP cómo se opera → AOP se desvió → EOP ya falló → MOP se
+// interviene.
+const gruposRige: Array<{ tipo: TipoProc; docs: any[] }> = rige
+  ? [
+      { tipo: "scp", docs: rige.scp ? [rige.scp] : [] },
+      { tipo: "sop", docs: rige.sop },
+      { tipo: "aop", docs: rige.aop },
+      { tipo: "eop", docs: rige.eop },
+      { tipo: "mop", docs: rige.mop },
+    ]
+  : [];
+const nDocsRige = gruposRige.reduce((n, g) => n + g.docs.length, 0);
+const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
 ---
 
 <Layout title={a.nombre}>
@@ -296,6 +342,203 @@ const ubicacionesOpciones = canEdit
       </div>
     )}
   </div>
+
+  <!-- ══ Fase 48 · Qué sigue AHORA: el equipo ya está fuera de servicio ══════ -->
+  {sigueFalla && (
+    <div class="mt-4 rounded-lg border-2 border-red-400 bg-red-50 p-5" id="que-sigue">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-red-700">
+        🚨 Este equipo está {a.estado} · qué sigue ahora
+      </div>
+      <h2 class="mt-0.5 text-xl font-bold text-red-800">{sigueFalla.encabezado}</h2>
+
+      {sigueFalla.documento ? (
+        <Fragment>
+          <div class="mt-1 flex flex-wrap items-center gap-2">
+            <a href={`/procedimientos/${sigueFalla.documento.id}`} class="font-mono text-sm font-bold text-red-700 underline">
+              {sigueFalla.documento.codigoCorto}
+            </a>
+            <span class="badge bg-white text-slate-600">v{sigueFalla.documento.version}</span>
+            <span class={`badge ${estadoInfo(sigueFalla.documento.estado).color}`}>
+              {estadoInfo(sigueFalla.documento.estado).icono} {estadoInfo(sigueFalla.documento.estado).label}
+            </span>
+          </div>
+
+          {sigueFalla.aviso && (
+            <p class="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-sm font-medium text-amber-800">
+              ⚠ {sigueFalla.aviso}
+            </p>
+          )}
+
+          {sigueFalla.primerasAcciones.length > 0 ? (
+            <Fragment>
+              <h3 class="mt-4 text-sm font-semibold text-red-800">Las tres primeras acciones · se saben de memoria</h3>
+              <ol class="mt-2 space-y-2">
+                {sigueFalla.primerasAcciones.map((acc, i) => (
+                  <li class="flex gap-3 rounded-lg border-2 border-red-300 bg-white p-3">
+                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-600 text-lg font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <span class="self-center text-base font-semibold leading-snug text-slate-900">{acc}</span>
+                  </li>
+                ))}
+              </ol>
+            </Fragment>
+          ) : (
+            <p class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+              ⚠ El {sigueFalla.documento.codigoCorto} no tiene redactadas sus primeras acciones. Un EOP sin
+              primeras acciones no se puede ejecutar de memoria: complétalo en la ficha del documento.
+            </p>
+          )}
+
+          <div class="mt-4 flex flex-wrap gap-2">
+            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia&procedimiento=${sigueFalla.documento.id}`} class="btn-primary">
+              🚨 Abrir orden de emergencia
+            </a>
+            <a href={`/procedimientos/${sigueFalla.documento.id}`} class="btn-secondary">
+              Ver el {sigueFalla.documento.codigoCorto} completo
+            </a>
+            <a href="/eop" class="btn-secondary">🖨 Hoja imprimible</a>
+          </div>
+        </Fragment>
+      ) : (
+        <Fragment>
+          <p class="mt-2 text-sm font-medium text-red-800">{sigueFalla.aviso}</p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia`} class="btn-primary">🚨 Abrir orden de emergencia</a>
+            {canJefe && sistemaResuelto && (
+              <a href={`/procedimientos?sistema=${sistemaResuelto}&tipo=eop`} class="btn-secondary">
+                📋 Registrar el EOP que falta
+              </a>
+            )}
+          </div>
+        </Fragment>
+      )}
+    </div>
+  )}
+
+  <!-- ══ Qué rige este equipo · el resolver del volumen GO-GUI-011-2026 ══════ -->
+  {rige && (
+    <div class="card mt-4 border-slate-300 p-5" id="rige">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="font-semibold text-slate-900">🧭 Qué rige este equipo</h2>
+          <p class="text-xs text-slate-500">
+            Nadie tiene que buscar el documento: el sistema resuelve qué procedimientos gobiernan este equipo
+            y en qué estado están.
+          </p>
+        </div>
+        <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">🛡 Cobertura del sistema</a>
+      </div>
+
+      <!-- El sistema resuelto y de dónde salió -->
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <span class="badge bg-slate-100 text-slate-700">
+          Sistema: <strong class="ml-1">{SISTEMA_LABEL[rige.sistema]}</strong>
+        </span>
+        <span class={`badge ${ORIGEN_SISTEMA[rige.origenSistema].color}`}>
+          {ORIGEN_SISTEMA[rige.origenSistema].label}
+        </span>
+      </div>
+      <p class="mt-1 text-xs text-slate-500">{ORIGEN_SISTEMA[rige.origenSistema].detalle}</p>
+
+      {rige.origenSistema === "inferido" && (
+        <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3">
+          <div class="text-sm font-semibold text-amber-800">Una inferencia no es una declaración</div>
+          <p class="mt-0.5 text-xs text-amber-700">
+            Mientras nadie lo declare, los documentos de abajo son una deducción del nombre del equipo.
+            Déjalo en firme para que la respuesta a una falla no dependa de una suposición.
+          </p>
+          {canEdit ? (
+            <Fragment>
+              <div class="mt-2 flex flex-wrap items-end gap-2">
+                <div class="min-w-[13rem]">
+                  <label class="label text-xs" for="sisSel">Sistema crítico</label>
+                  <select id="sisSel" class="input">
+                    {SISTEMAS.map((s) => (
+                      <option value={s.value} selected={s.value === rige.sistema}>{s.icono} {s.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button id="sisSave" class="btn-primary btn-sm">Declarar en firme</button>
+              </div>
+              <p id="sisErr" class="mt-2 hidden text-xs font-medium text-red-600"></p>
+            </Fragment>
+          ) : (
+            <p class="mt-1 text-xs text-amber-700">Pídele a Mantenimiento o Jefatura que lo declare.</p>
+          )}
+        </div>
+      )}
+
+      <!-- Los documentos que lo gobiernan, por tipo -->
+      {rige.sinCobertura || nDocsRige === 0 ? (
+        <div class="mt-4 rounded-md border-2 border-red-300 bg-red-50 p-4">
+          <div class="text-sm font-bold text-red-800">Este equipo no tiene ningún documento que lo gobierne.</div>
+          <p class="mt-1 text-xs text-red-700">
+            No hay SCP, SOP, AOP, EOP ni MOP para {SISTEMA_LABEL[rige.sistema]}. Si este equipo falla, nadie
+            sabrá qué sigue más que de memoria.
+          </p>
+          {canJefe && (
+            <a href={`/procedimientos?sistema=${rige.sistema}`} class="btn-secondary btn-sm mt-2 inline-block">
+              📋 Registrarlo en la biblioteca
+            </a>
+          )}
+        </div>
+      ) : (
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {gruposRige.map((g) => (
+            <div class:list={["rounded-md border p-3", g.docs.length > 0 ? TIPO_PROC[g.tipo].borde : "border-dashed border-slate-200"]}>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class={`badge ${TIPO_PROC[g.tipo].color}`}>{TIPO_PROC[g.tipo].icono} {TIPO_PROC[g.tipo].label}</span>
+                <span class="text-[11px] text-slate-500">{TIPO_PROC[g.tipo].nombre}</span>
+              </div>
+              {g.docs.length === 0 ? (
+                <p class="mt-2 text-xs text-slate-400">Sin documento — {TIPO_PROC[g.tipo].pregunta}</p>
+              ) : (
+                <ul class="mt-2 space-y-2">
+                  {g.docs.map((d) => (
+                    <li class:list={[
+                      "rounded border-l-4 bg-white px-2 py-1.5",
+                      d.estado === "vigente" ? "border-emerald-500" : "border-amber-400",
+                    ]}>
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <a href={`/procedimientos/${d.id}`} class="font-mono text-sm font-semibold text-brand-600 hover:underline">
+                          {d.codigoCorto}
+                        </a>
+                        <span class="text-[11px] text-slate-500">v{d.version}</span>
+                        <span class:list={[
+                          "badge text-[10px]",
+                          d.estado === "vigente" ? "bg-emerald-100 text-emerald-700" : estadoInfo(d.estado).color,
+                        ]}>
+                          {estadoInfo(d.estado).icono} {estadoInfo(d.estado).label}
+                        </span>
+                      </div>
+                      <div class="mt-0.5 text-xs text-slate-700">{d.titulo}</div>
+                      {d.estado !== "vigente" && (
+                        <div class="mt-0.5 text-[11px] font-medium text-amber-700">
+                          ⚠ Todavía no aprobado: no se opera con esto.
+                        </div>
+                      )}
+                      {d.codigoInstitucional && (
+                        <div class="text-[10px] font-mono text-slate-400">{d.codigoInstitucional}</div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!fueraDeServicio && rige.eop.length > 0 && (
+        <p class="mt-3 text-xs text-slate-500">
+          Si este equipo falla, el sistema abrirá la respuesta con
+          <strong class="mx-1">{rige.eop.find((p) => p.estado === "vigente")?.codigoCorto ?? rige.eop[0].codigoCorto}</strong>
+          sin que nadie tenga que buscarlo.
+        </p>
+      )}
+    </div>
+  )}
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">
@@ -1623,6 +1866,39 @@ const ubicacionesOpciones = canEdit
         else window.showToast?.("Error al quitar", "error");
       });
     });
+
+
+    // ─── Fase 48 · Declarar en firme el sistema crítico del equipo ──────────
+    // El resolver sabe inferir el sistema por el nombre, pero una inferencia no
+    // debería decidir qué EOP aplica en una emergencia. Esto la vuelve un dato.
+    const btnSisSave = $("sisSave");
+    if (btnSisSave) {
+      btnSisSave.addEventListener("click", async () => {
+        const selSis = $("sisSel");
+        const errSis = $("sisErr");
+        if (!selSis) return;
+        errSis?.classList.add("hidden");
+        btnSisSave.disabled = true;
+        const fallo = (msg) => {
+          if (errSis) { errSis.textContent = msg; errSis.classList.remove("hidden"); }
+          else window.showToast?.(msg, "error");
+          btnSisSave.disabled = false;
+        };
+        try {
+          const res = await fetch(`/api/activos/${activoId}/sistema`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sistema: selSis.value }),
+          });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) return fallo(typeof j.error === "string" ? j.error : "No se pudo declarar el sistema.");
+          window.showToast?.("Sistema declarado en firme", "success");
+          location.reload();
+        } catch {
+          fallo("Error de red al declarar el sistema.");
+        }
+      });
+    }
 
     // Eliminar equipo (solo admin)
     document.getElementById("deleteBtn")?.addEventListener("click", async () => {

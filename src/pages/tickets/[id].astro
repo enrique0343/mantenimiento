@@ -7,6 +7,8 @@ import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket 
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { proyectos } from "@/lib/schema";
+import { queSigue, type QueSigue } from "@/lib/resolver";
+import { TIPO_PROC, estadoInfo, puedeVerProcedimientos } from "@/lib/procedimientos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -55,6 +57,25 @@ if (t.proyectoId) {
     .from(proyectos).where(eq(proyectos.id, t.proyectoId)).limit(1);
   proyectoVinc = p ?? null;
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// Qué rige esta falla (GO-GUI-011-2026, cap. 02)
+// Nadie debe buscar el documento: si el reporte trae equipo, el sistema
+// resuelve solo cuál lo gobierna cuando ya falló (EOP) y deja a la vista sus
+// tres primeras acciones. En try/catch porque un entorno sin la migración
+// 0047 debe seguir abriendo el ticket.
+// ══════════════════════════════════════════════════════════════════════════
+const puedeVerProcs = puedeVerProcedimientos(user.rol);
+let rigeFalla: QueSigue | null = null;
+let rigeError: string | null = null;
+if (t.activoId) {
+  try {
+    rigeFalla = await queSigue(db, t.activoId, "falla", t.sucursalId);
+  } catch (e: any) {
+    rigeError = String(e?.message ?? e);
+  }
+}
+const docFalla = rigeFalla?.documento ?? null;
 ---
 
 <Layout title={`Ticket #${t.id}`}>
@@ -165,6 +186,71 @@ if (t.proyectoId) {
       <a href={`/proyectos/${proyectoVinc.id}`} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
+
+  <!-- ══ QUÉ RIGE ESTA FALLA · el documento no se busca, el sistema lo dice ══ -->
+  {rigeFalla && (
+    <div class:list={["card mt-4 p-5 border-l-4", docFalla ? "border-red-500" : "border-amber-500"]}>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="font-semibold text-slate-900">🚨 Qué rige esta falla</h2>
+        {docFalla && (
+          <span class="flex flex-wrap items-center gap-2">
+            <span class={`badge ${TIPO_PROC.eop.color}`}>{TIPO_PROC.eop.icono} {TIPO_PROC.eop.label}</span>
+            <span class={`badge ${estadoInfo(docFalla.estado).color}`}>{estadoInfo(docFalla.estado).label}</span>
+          </span>
+        )}
+      </div>
+
+      {docFalla ? (
+        <Fragment>
+          <p class="mt-2 text-sm text-slate-900"><strong>{rigeFalla.encabezado}</strong></p>
+          <p class="mt-0.5 font-mono text-xs text-slate-500">
+            {docFalla.codigoCorto} · v{docFalla.version}{docFalla.codigoInstitucional ? ` · ${docFalla.codigoInstitucional}` : ""}
+          </p>
+
+          {rigeFalla.primerasAcciones.length > 0 ? (
+            <Fragment>
+              <p class="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">Las tres primeras acciones</p>
+              <ol class="mt-1.5 space-y-2">
+                {rigeFalla.primerasAcciones.map((acc, i) => (
+                  <li class="flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900">
+                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white">{i + 1}</span>
+                    <span>{acc}</span>
+                  </li>
+                ))}
+              </ol>
+            </Fragment>
+          ) : (
+            <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              {docFalla.codigoCorto} todavía no tiene escritas sus tres primeras acciones. Complétalas en su ficha: son las que se hacen de memoria, sin abrir una pantalla.
+            </p>
+          )}
+
+          {rigeFalla.aviso && (
+            <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">⚠ {rigeFalla.aviso}</p>
+          )}
+
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            {puedeVerProcs && (
+              <a href={`/procedimientos/${docFalla.id}`} class="btn-secondary btn-sm">Ver {docFalla.codigoCorto} →</a>
+            )}
+            <span class="text-[11px] text-slate-400">Se responde con la hoja impresa del EOP; esto es la referencia y el registro.</span>
+          </div>
+        </Fragment>
+      ) : (
+        <div class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          <strong>Esta falla no tiene todavía un documento que la gobierne.</strong>
+          <p class="mt-1 text-xs">{rigeFalla.aviso}</p>
+          {puedeVerProcs && <a href="/procedimientos" class="btn-secondary btn-sm mt-2">📋 Ir a Procedimientos</a>}
+        </div>
+      )}
+    </div>
+  )}
+  {rigeError && (
+    <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
+      <strong>⚠ No se pudo resolver qué procedimiento rige esta falla.</strong> El ticket sigue operativo.
+      <pre class="mt-1 whitespace-pre-wrap text-xs">{rigeError}</pre>
+    </div>
+  )}
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">

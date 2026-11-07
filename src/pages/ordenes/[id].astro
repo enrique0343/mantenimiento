@@ -17,6 +17,8 @@ import {
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
 } from "@/lib/ordenes";
 import { fmtCantidad } from "@/lib/inventario";
+import { queSigue, type QueSigue, type Situacion } from "@/lib/resolver";
+import { TIPO_PROC, estadoInfo, puedeVerProcedimientos, type TipoProc } from "@/lib/procedimientos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -142,7 +144,8 @@ const esEop = o.tipo === "emergencia";
 
 let prerrequisitos: any[] = [];
 let liberaciones: any[] = [];
-let procedimientoRef: { codigoCorto: string; titulo: string; version: string | null; tipo: string } | null = null;
+let procedimientoRef: { id: number; codigoCorto: string; titulo: string; version: string | null; tipo: string; estado: string } | null = null;
+let accionesVinculadas: string[] = [];
 let etiquetaMit = etiquetaMitigacion(null);
 let fase47Error: string | null = null;
 try {
@@ -164,7 +167,7 @@ try {
 
   if (o.procedimientoId) {
     const [pd] = await db
-      .select({ codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo, version: procedimientos.version, tipo: procedimientos.tipo })
+      .select({ id: procedimientos.id, codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo, version: procedimientos.version, tipo: procedimientos.tipo, estado: procedimientos.estado })
       .from(procedimientos)
       .where(eq(procedimientos.id, o.procedimientoId))
       .limit(1);
@@ -172,15 +175,59 @@ try {
     // La hora intermedia cambia de nombre según el EOP (energía de emergencia,
     // reserva en servicio…): la ficha del procedimiento la fija.
     const [fi] = await db
-      .select({ etiqueta: eopFicha.etiquetaHoraMitigacion })
+      .select({
+        etiqueta: eopFicha.etiquetaHoraMitigacion,
+        accion1: eopFicha.accion1,
+        accion2: eopFicha.accion2,
+        accion3: eopFicha.accion3,
+      })
       .from(eopFicha)
       .where(eq(eopFicha.procedimientoId, o.procedimientoId))
       .limit(1);
     etiquetaMit = etiquetaMitigacion(fi?.etiqueta ?? null);
+    // Las tres primeras acciones del EOP ya vinculado, para no obligar a nadie
+    // a abrir otra pantalla cuando la orden es una emergencia.
+    if (fi) accionesVinculadas = [fi.accion1, fi.accion2, fi.accion3].filter(Boolean) as string[];
   }
 } catch (e: any) {
   fase47Error = String(e?.message ?? e);
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// Qué procedimiento rige esta orden (GO-GUI-011-2026, cap. 02)
+// Si la orden no trae documento vinculado, el sistema resuelve cuál le toca
+// según su tipo: el SOP opera la rutina, el AOP la desviación, el EOP la falla
+// y el MOP la intervención. Es una referencia visible y el registro de bajo qué
+// documento se trabajó — NO un asistente que reemplace la hoja impresa.
+// ══════════════════════════════════════════════════════════════════════════
+const SITUACION_DE_TIPO: Record<string, Situacion> = {
+  preventivo: "preventivo",
+  predictivo: "desviacion",
+  correctivo: "falla",
+  intervencion: "intervencion",
+  emergencia: "falla",
+};
+const puedeVerProcs = puedeVerProcedimientos(user.rol);
+const sucursalDeOrden = (o as any).sucursalId ?? row.sucursal?.id ?? null;
+let rige: QueSigue | null = null;
+let rigeError: string | null = null;
+if (o.activoId) {
+  try {
+    rige = await queSigue(db, o.activoId, SITUACION_DE_TIPO[o.tipo] ?? "falla", sucursalDeOrden);
+  } catch (e: any) {
+    rigeError = String(e?.message ?? e);
+  }
+}
+// El documento que manda: el vinculado si lo hay; si no, el que resuelve el
+// sistema y que se puede vincular con un clic.
+const docRige = procedimientoRef ?? rige?.documento ?? null;
+const docEsVinculado = !!procedimientoRef;
+const docSugerido = !procedimientoRef ? rige?.documento ?? null : null;
+const tipoDocRige = (docRige?.tipo ?? "eop") as TipoProc;
+// Las tres primeras acciones salen de la ficha del documento que rige.
+const accionesRige = docEsVinculado
+  ? (procedimientoRef!.tipo === "eop" ? accionesVinculadas : [])
+  : rige?.documento?.tipo === "eop" ? rige.primerasAcciones : [];
 
 const criticidadActivo = (row.activo as any)?.criticidadOperacional ?? null;
 const reqCausa = requiereCausaRaiz(o.tipo, criticidadActivo);
@@ -504,6 +551,102 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <h2 class="font-semibold text-slate-900">Descripción</h2>
         <p class="mt-2 whitespace-pre-wrap text-sm text-slate-700">{o.descripcion || "Sin descripción."}</p>
       </div>
+
+      <!-- ══ PROCEDIMIENTO QUE RIGE · referencia y registro, no un asistente ══ -->
+      {(docRige || rige || rigeError || esMop || esEop) && (
+        <div class:list={["card p-5 border-l-4", docRige ? "border-brand-500" : "border-amber-500"]}>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="font-semibold text-slate-900">📋 Procedimiento que rige</h2>
+            <span class="flex flex-wrap items-center gap-2">
+              {docRige && <span class={`badge ${TIPO_PROC[tipoDocRige].color}`}>{TIPO_PROC[tipoDocRige].icono} {TIPO_PROC[tipoDocRige].label}</span>}
+              {docRige && <span class={`badge ${estadoInfo(docRige.estado).color}`}>{estadoInfo(docRige.estado).label}</span>}
+              <span id="rigeMsg" class="text-xs text-slate-400"></span>
+            </span>
+          </div>
+
+          {docRige ? (
+            <Fragment>
+              <p class="mt-2 text-sm text-slate-900">
+                <strong>Se rige por {docRige.codigoCorto} · {docRige.titulo}</strong>
+              </p>
+              <p class="mt-0.5 text-xs text-slate-500">
+                <span class="font-mono">{docRige.codigoCorto}</span> v{docRige.version} ·
+                {docEsVinculado
+                  ? " vinculado a esta orden: es el documento bajo el que queda el registro."
+                  : ` resuelto por el sistema para una orden tipo ${TIPO_LABEL[o.tipo]}. Todavía no está vinculado.`}
+              </p>
+
+              {esEop && accionesRige.length > 0 && (
+                <Fragment>
+                  <p class="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">Las tres primeras acciones</p>
+                  <ol class="mt-1.5 space-y-2">
+                    {accionesRige.map((acc, i) => (
+                      <li class="flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900">
+                        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white">{i + 1}</span>
+                        <span>{acc}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </Fragment>
+              )}
+              {esEop && tipoDocRige === "eop" && accionesRige.length === 0 && (
+                <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                  {docRige.codigoCorto} todavía no tiene escritas sus tres primeras acciones. Complétalas en su ficha: son las que se hacen de memoria.
+                </p>
+              )}
+
+              {!docEsVinculado && rige?.aviso && (
+                <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">⚠ {rige.aviso}</p>
+              )}
+
+              {/* Lo que este documento exige ya vive en las tarjetas de abajo:
+                  aquí solo se dice que existen, no se repiten. */}
+              {esMop && (
+                <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                  Por ser una intervención, no inicia sin sus <strong>{prerrequisitos.length} prerrequisito{prerrequisitos.length === 1 ? "" : "s"}</strong> ({prerreqCumplidos} cumplido{prerreqCumplidos === 1 ? "" : "s"}) ni cierra sin sus <strong>{liberaciones.length} lectura{liberaciones.length === 1 ? "" : "s"} de liberación</strong> ({liberacionesConLectura} medida{liberacionesConLectura === 1 ? "" : "s"}). Se registran más abajo, en esta misma ficha.
+                </p>
+              )}
+              {esEop && (
+                <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                  Por ser una emergencia, los <strong>tres tiempos</strong> y la <strong>causa raíz</strong> se registran más abajo: de ahí salen los indicadores 5 y 7.
+                </p>
+              )}
+
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                {puedeVerProcs && (
+                  <a href={`/procedimientos/${docRige.id}`} class="btn-secondary btn-sm">Ver {docRige.codigoCorto} →</a>
+                )}
+                {docSugerido && puedeConfigurarMop && (
+                  <button id="rigeVincular" type="button" class="btn-primary btn-sm" data-proc={docSugerido.id}>
+                    🔗 Vincular {docSugerido.codigoCorto} a esta orden
+                  </button>
+                )}
+              </div>
+              <p class="mt-2 text-[11px] text-slate-400">
+                Esto es la referencia visible y el registro. {esEop ? "En una emergencia se actúa con la hoja impresa del EOP de la pared, no con esta pantalla." : "El procedimiento se ejecuta con su hoja; aquí solo queda constancia de cuál rige."}
+              </p>
+            </Fragment>
+          ) : (
+            <div class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              <strong>Esta orden no tiene todavía un documento que la gobierne.</strong>
+              <p class="mt-1 text-xs">
+                {o.activoId
+                  ? rigeError
+                    ? "El sistema no pudo resolverlo en este momento."
+                    : rige?.aviso ?? "Regístralo en Procedimientos para que el sistema pueda decir qué rige."
+                  : "La orden no está sobre un equipo registrado, así que el sistema no puede resolver qué documento la rige. Asígnale el equipo y se resolverá solo."}
+              </p>
+              {puedeVerProcs && <a href="/procedimientos" class="btn-secondary btn-sm mt-2">📋 Ir a Procedimientos</a>}
+            </div>
+          )}
+
+          {rigeError && (
+            <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              ⚠ No se pudo resolver qué procedimiento rige esta orden. La ficha sigue operativa. {rigeError}
+            </p>
+          )}
+        </div>
+      )}
 
       <!-- ══ Clasificación del procedimiento (MOP/EOP, clase P1–P4, riesgo) ══ -->
       {puedeConfigurarMop && (
@@ -2695,6 +2838,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!v) return null;
       return `${v}:00-06:00`;
     }
+
+    // ── Vincular a la orden el procedimiento que resolvió el sistema ────────
+    g("rigeVincular")?.addEventListener("click", async () => {
+      const btn = g("rigeVincular");
+      const procId = Number(btn.dataset.proc);
+      if (!procId) return;
+      btn.disabled = true;
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", { procedimientoId: procId });
+      btn.disabled = false;
+      if (r.ok) {
+        window.showToast?.("Procedimiento vinculado a la orden.", "success");
+        location.reload();
+      } else {
+        aviso(g("rigeMsg"), "No se vinculó", false);
+      }
+    });
 
     // ── Clasificación: tipo (MOP/EOP), clase P1–P4, nivel de riesgo ─────────
     g("clasifSave")?.addEventListener("click", async () => {

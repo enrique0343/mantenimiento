@@ -137,6 +137,8 @@ export const activos = sqliteTable("activos", {
   // "Cada sistema critico se registra como activo padre con sus componentes como hijos"
   padreId: integer("padre_id"),
   nivelJerarquia: text("nivel_jerarquia", { enum: ["sistema", "subsistema", "componente"] }).notNull().default("componente"),
+  // A que sistema critico pertenece: la llave para resolver que documento lo rige
+  sistema: text("sistema", { enum: ["electrico", "hvac", "gases", "agua", "incendios", "ascensores", "otro"] }),
   scpProcedimientoId: integer("scp_procedimiento_id"),
   scpVersionRef: text("scp_version_ref"),
 });
