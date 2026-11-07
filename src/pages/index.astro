@@ -29,7 +29,10 @@ try {
   ahoraNoDisponible = true;
   console.error("ahora_unavailable");
 }
-const resumenAhora = bloquesAhora.length ? tituloAhora(bloquesAhora) : null;
+// El visualizador solo consulta la ronda: su resumen no puede hablar de desviaciones ni de emergencias.
+const resumenAhora = !bloquesAhora.length ? null
+  : user.rol === "visualizador" ? { texto: bloquesAhora[0].detalle, tono: bloquesAhora[0].tono }
+  : tituloAhora(bloquesAhora);
 ---
 <Layout title="Panorama general">
   <div class="workspace-heading"><div><span class="area-eyebrow">Operación</span><h1>Panorama general</h1><p>Elige el área en la que vas a trabajar.</p></div><span class="workspace-date">{now.toLocaleDateString("es-SV",{day:"numeric",month:"long",timeZone:"America/El_Salvador"})}</span></div>

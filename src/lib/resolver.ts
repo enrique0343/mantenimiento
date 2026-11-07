@@ -56,7 +56,7 @@ const POR_RUBRO: Record<string, Sistema> = {
 };
 
 /** Áreas donde el aire es de climatización crítica: manejadoras con filtro HEPA, presión y renovaciones. */
-const AREA_CRITICA = /quir[oó]fano|\buci\b|\bucin\b|intensiv|aislamiento|est[eé]ril|ceye|cirug[ií]a|neonat|perioperator|\brecuperaci/i;
+const AREA_CRITICA = /quir[oó]fano|quir[uú]rg|sala de operaciones|\bu\.?c\.?i\.?(?![a-z])|\buci[a-z]\b|\buti\b|intensiv|cuidados? cr[ií]tico|aislamiento|est[eé]ril|ceye|cirug[ií]a|neonat|perioperator|\brecuperaci/i;
 
 /**
  * Infiere el sistema por el nombre y la categoria del equipo. Un minisplit no

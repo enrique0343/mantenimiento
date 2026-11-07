@@ -358,6 +358,10 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
   if (desvSinNota.length > 0) {
     return { ok: false, error: `No puedes completar: hay ${desvSinNota.length} desviación${desvSinNota.length === 1 ? "" : "es"} sin describir. Cada desviación necesita una nota de al menos 10 caracteres.` };
   }
+  const criticosSinMotivo = items.filter((i) => i.bloqueante && i.estado === "na" && (!i.notas || i.notas.trim().length < 10));
+  if (criticosSinMotivo.length > 0) {
+    return { ok: false, error: `No puedes completar: hay ${criticosSinMotivo.length} punto${criticosSinMotivo.length === 1 ? "" : "s"} crítico${criticosSinMotivo.length === 1 ? "" : "s"} marcado${criticosSinMotivo.length === 1 ? "" : "s"} «No aplica» sin motivo. Escribe por qué no aplica (al menos 10 letras).` };
+  }
   const bloqueantes = items.filter((i) => i.bloqueante && i.estado === "desviacion");
   if (bloqueantes.length > 0) {
     return { ok: false, error: `No puedes completar: hay ${bloqueantes.length} punto${bloqueantes.length === 1 ? "" : "s"} crítico${bloqueantes.length === 1 ? "" : "s"} en desviación. El equipo no puede volver a servicio: resuelve el punto (márcalo OK) o escala a un correctivo.` };

@@ -29,7 +29,7 @@ const editarSchema = z.object({
 const sedeSchema = z.object({
   sucursalId: z.number().int().positive(),
   activa: z.boolean().optional(),
-  turnos: z.array(z.string().regex(/^\d{2}:\d{2}$/)).min(1).max(6).optional(),
+  turnos: z.array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida: usa HH:MM")).min(1).max(6).optional(),
 });
 
 const crearSchema = z.object({

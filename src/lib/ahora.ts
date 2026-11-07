@@ -106,7 +106,8 @@ export function tituloAhora(bloques: BloqueAhora[]): { texto: string; tono: Tono
       tono: "atencion",
     };
   }
-  return { texto: "Todo en orden: ronda hecha, sin desviaciones ni emergencias abiertas.", tono: "ok" };
+  const sinRonda = bloques.some((b) => b.doc === "SOP" && b.tono === "vacio");
+  return { texto: sinRonda ? "Sin desviaciones ni emergencias abiertas. Ninguna sede tiene ronda configurada." : "Todo en orden: ronda hecha, sin desviaciones ni emergencias abiertas.", tono: "ok" };
 }
 
 // ── SOP · la ronda del turno ────────────────────────────────────────────────

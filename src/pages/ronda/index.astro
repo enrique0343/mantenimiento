@@ -9,7 +9,7 @@
 //   ¿se hizo la ronda de este turno, en qué sede no, y qué salió fuera de rango?
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { and, desc, eq, gte, inArray, like } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import {
   ESTADO_RONDA,
   puedeEjecutarRonda,
@@ -19,6 +19,7 @@ import {
   tableroRondas,
   turnosDeTablero,
   etiquetaTurno,
+  ahoraSV,
   turnoActual,
   type FilaTablero,
 } from "@/lib/ronda-turno";
@@ -69,10 +70,10 @@ const historial = await db
 // Lo que el servidor no aceptó en los últimos 14 días. Nada de lo capturado se pierde.
 const desde = new Date(Date.now() - 14 * 86_400_000).toISOString();
 const rechazos = await db
-  .select({ opId: campoOperaciones.opId, tipo: campoOperaciones.tipo, capturadoEn: campoOperaciones.capturadoEn, recibidoEn: campoOperaciones.recibidoEn, detalle: campoOperaciones.detalle, quien: usuarios.nombre })
+  .select({ opId: campoOperaciones.opId, tipo: campoOperaciones.tipo, capturadoEn: campoOperaciones.capturadoEn, recibidoEn: campoOperaciones.recibidoEn, detalle: campoOperaciones.detalle, payload: campoOperaciones.payload, quien: usuarios.nombre })
   .from(campoOperaciones)
   .leftJoin(usuarios, eq(usuarios.id, campoOperaciones.usuarioId))
-  .where(and(eq(campoOperaciones.resultado, "rechazada"), gte(campoOperaciones.recibidoEn, desde), like(campoOperaciones.tipo, "ronda.%")))
+  .where(and(eq(campoOperaciones.resultado, "rechazada"), gte(campoOperaciones.recibidoEn, desde)))
   .orderBy(desc(campoOperaciones.recibidoEn))
   .limit(10);
 ---
@@ -119,7 +120,7 @@ const rechazos = await db
             resumen.enCurso > 0 && `${resumen.enCurso} en curso`,
             resumen.fuera > 0 && `${resumen.fuera} fuera de rango`,
             resumen.sinVerificar > 0 && `${resumen.sinVerificar} sin verificar`,
-          ].filter(Boolean).join(" · ") || (resumen.todoListo ? "Todo verificado y sin desviaciones." : "")}
+          ].filter(Boolean).join(" · ") || (resumen.todoListo ? "Ronda de este turno verificada, sin novedades." : "")}
         </div>
         <p class="mt-1 text-[11px] text-slate-400">Un celular sin señal envía su ronda cuando vuelve la señal: lo que hoy se ve «sin iniciar» puede estar hecho. La cifra definitiva es la de la revisión semanal.</p>
       </div>
@@ -167,7 +168,7 @@ const rechazos = await db
       <h2 class="font-semibold text-slate-800">Registros del celular sin aceptar</h2>
       <p class="mb-3 text-xs text-slate-400">Últimos 14 días. Lo capturado se conserva; hay que revisarlo con quien lo envió.</p>
       <ul class="space-y-1.5 text-xs">
-        {rechazos.map((r) => <li class="rounded-lg bg-slate-50 px-3 py-2"><span class="font-semibold text-slate-700">{r.quien ?? "—"}</span> · {r.tipo} · capturado {r.capturadoEn.slice(0, 16).replace("T", " ")} UTC · <span class="text-red-700">{r.detalle}</span></li>)}
+        {rechazos.map((r) => <li class="rounded-lg bg-slate-50 px-3 py-2"><span class="font-semibold text-slate-700">{r.quien ?? "—"}</span> · {r.tipo} · capturado {fmtFechaSoloCompacta(ahoraSV(new Date(r.capturadoEn)).fecha)} {fmtHora(r.capturadoEn)} · <span class="text-red-700">{r.detalle}</span>{r.payload && <details class="mt-1"><summary class="cursor-pointer text-slate-500">Ver lo capturado</summary><code class="block break-all text-[11px] text-slate-500">{r.payload}</code></details>}</li>)}
       </ul>
     </div>
   )}

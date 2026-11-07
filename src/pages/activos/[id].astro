@@ -1710,6 +1710,10 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           bloqueante: !!it.bloqueante,
           minutos: it.minutosEstimados ?? null,
           materiales: it.materiales ?? null,
+          requiereValor: !!it.requiereValor,
+          unidad: it.unidad ?? null,
+          esperadoMin: it.valorEsperadoMin ?? null,
+          esperadoMax: it.valorEsperadoMax ?? null,
         };
       }
       const crit = p.items.filter((it) => it.criterioAceptacion).length;

@@ -49,7 +49,9 @@ const mapaEventos = new Map(eventos.map((e) => [e.id, e]));
 const anotados = lecturas.length;
 const fuera = lecturas.filter((l) => l.resultado === "fuera").length;
 const sinVerificar = lecturas.filter((l) => l.resultado === "no_verificado").length;
-const TEXTO = { ok: "En rango", fuera: "Fuera de rango", no_verificado: "No verificado" } as const;
+// Una parada con lectura está en rango o fuera; una de verificación, conforme o no.
+const textoResultado = (resultado: string, numerica: boolean) =>
+  resultado === "no_verificado" ? "No verificado" : resultado === "ok" ? (numerica ? "En rango" : "Conforme") : (numerica ? "Fuera de rango" : "No conforme");
 const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 text-orange-700", no_verificado: "bg-slate-100 text-slate-600" } as const;
 ---
 <Layout title={`Ronda ${ejec.turno} · ${fila.sede ?? ""}`}>
@@ -79,7 +81,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
               <p class="mt-0.5 text-xs text-slate-500">Normal: {rangoNormal(p)}{p.fuente ? ` · ${p.fuente}` : ""}</p>
             </div>
             <div class="shrink-0 text-right">
-              {l ? <span class={`badge ${COLOR[l.resultado as keyof typeof COLOR]}`}>{TEXTO[l.resultado as keyof typeof TEXTO]}</span> : <span class="badge bg-red-100 text-red-700">Sin anotar</span>}
+              {l ? <span class={`badge ${COLOR[l.resultado as keyof typeof COLOR]}`}>{textoResultado(l.resultado, !!p.requiereValor)}</span> : <span class="badge bg-red-100 text-red-700">Sin anotar</span>}
               {l?.valor != null && <div class="mt-1 text-sm font-semibold text-slate-700">{l.valor}{p.unidad ? ` ${p.unidad}` : ""}</div>}
             </div>
           </div>
@@ -89,7 +91,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
             <ul class="mt-2 space-y-0.5 text-[11px] text-slate-500">
               {historia.map(({ m, quien }) => (
                 <li>
-                  {fmtHora(m.ocurridoEn)} · {quien ?? "—"} · {TEXTO[m.resultado as keyof typeof TEXTO]}{m.valor != null ? ` ${m.valor}` : ""}
+                  {fmtHora(m.ocurridoEn)} · {quien ?? "—"} · {textoResultado(m.resultado, !!p.requiereValor)}{m.valor != null ? ` ${m.valor}` : ""}
                   {m.sinSenal ? ` · capturada sin señal, llegó a las ${fmtHora(m.recibidoEn)}` : ""}{m.ajustado ? " · hora ajustada por el servidor" : ""}
                   {cerrada && ejec.recibidaEn && m.recibidoEn > ejec.recibidaEn ? " · llegó después de la firma" : ""}
                   {m.aopEventoId && <a class="ml-1 font-semibold text-orange-700 underline" href={`/aop/${m.aopEventoId}`}>{mapaEventos.get(m.aopEventoId)?.codigo ?? "AOP"}</a>}

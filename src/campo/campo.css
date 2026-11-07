@@ -153,5 +153,9 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .b1{min-height:58px}
   .b2{min-height:48px}
   .lect-caja input{min-height:60px;font-size:36px}
+  .solo-alto{display:none}
+  .final{gap:6px}
+  .final h1{font-size:24px}
+  .dato{padding:5px 0}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}

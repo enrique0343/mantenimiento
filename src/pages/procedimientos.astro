@@ -141,7 +141,7 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
        class:list={["card p-3 transition hover:border-slate-400", !fEstado && "ring-2 ring-brand-500"]}>
       <div class="text-[11px] uppercase tracking-wide text-slate-500">Documentos</div>
       <div class="mt-0.5 text-2xl font-bold text-slate-700">{filasTodas.length}</div>
-      <div class="text-[11px] text-slate-400">de 25 del volumen</div>
+      <div class="text-[11px] text-slate-400">{filasTodas.filter((f) => CODIGOS_VOLUMEN.includes(f.p.codigoCorto)).length} de {CODIGOS_VOLUMEN.length} del volumen</div>
     </a>
     {ESTADOS_PROC.map((e) => (
       <a href={qs({ estado: fEstado === e ? null : e })}

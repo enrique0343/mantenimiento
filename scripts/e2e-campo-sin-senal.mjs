@@ -64,7 +64,7 @@ try {
   enLinea = false; w.dispatchEvent(new w.Event('offline'));
   await clic('ronda');
   ok(/Parada 1 de/.test(texto()), texto().slice(0, 100));
-  ok(/Sin entrega registrada/.test(texto()) || /Dejó/.test(texto()), 'La línea 1 muestra la entrega anterior');
+  ok(/llegan cuando vuelva/.test(texto()), 'Sin señal, la línea 1 no afirma que no hay entrega ni desviaciones');
   let vistas = 0, tempEn = 0;
   while (/Parada \d+ de/.test(texto()) && vistas < 40) {
     vistas++;

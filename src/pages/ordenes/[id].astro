@@ -1,4 +1,5 @@
 ---
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
@@ -345,7 +346,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {scheduledPM.proximaFecha}</p>
     </div>}
     {roundsOrigins.map(origin => <div class="mt-3 rounded bg-teal-50 p-3">
-      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda #{origin.ejecucionId} · {origin.sede} · {origin.fecha} · {origin.turno}</a>
+      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de las {origin.turno} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
       <p class="mt-1">{origin.etiqueta}{origin.valor != null ? ` · leído ${origin.valor}` : ""}</p>
       {origin.nota && <p class="mt-1 whitespace-pre-wrap">{origin.nota}</p>}
       <p class="mt-1 text-xs text-slate-500">{origin.registradoPor} · la ronda conserva su propio registro.</p>

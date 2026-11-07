@@ -2,6 +2,9 @@
 // bajo las mismas reglas de la ficha completa. Rutas reales, migraciones reales.
 import assert from 'node:assert/strict';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
+
+fijarReloj();
 
 // La siembra de los documentos necesita un administrador, como en producción.
 const beforeMigration = (db, nombre) => {
@@ -250,6 +253,13 @@ try {
   igual((await call(app.equipo.GET, '/api/campo/equipo/4', { method: 'GET', id: 4, rol: 'tecnico' })).body.falla?.codigo, 'EOP-MSP-01');
   const { inferirSistema } = app.resolver;
   for (const [nombre, categoria, rubro, lugar, esperado] of [
+    ['AC-20', 'Mini split', 'aires', 'Bloque Quirúrgico', 'hvac'],
+    ['AC-21', 'Mini split', 'aires', 'Sala de Operaciones 2', 'hvac'],
+    ['AC-22', 'Mini split', 'aires', 'U.C.I. Adultos', 'hvac'],
+    ['AC-23', 'Mini split', 'aires', 'UCIP', 'hvac'],
+    ['AC-24', 'Mini split', 'aires', 'Cuidados Críticos', 'hvac'],
+    ['AC-25', 'Mini split', 'aires', 'Consultorio de ducto', 'minisplit'],
+    ['AC-26', 'Mini split', 'aires', 'CENTRO DE ESTERILIZACIÓN', 'hvac'],
     ['Minisplit habitación', null, 'aires', 'Habitación 307', 'minisplit'],
     ['Minisplit quirófano', null, 'aires', 'QUIROFANO SUNSHINE', 'hvac'],
     ['AC-12', 'Cassette', 'aires', 'UCI Adultos', 'hvac'],

@@ -96,7 +96,7 @@ FROM procedimientos p WHERE p.codigo_corto='SOP-MG-06'
   AND NOT EXISTS (SELECT 1 FROM checklist_plantillas t WHERE t.procedimiento_id=p.id);
 
 INSERT INTO checklist_plantilla_items (plantilla_id, texto, criterio_aceptacion, bloqueante, minutos_estimados, orden)
-SELECT t.id, 'Apagar la unidad y bloquear su breaker', 'Breaker bloqueado y etiquetado; sin voltaje en la unidad.', 1, 2, 1
+SELECT t.id, 'Apagar la unidad y bloquear su breaker', 'Breaker bloqueado y etiquetado; 0 V en la unidad. Antes de tocar tarjeta o bornes, espera el tiempo del fabricante (inverter: mínimo 10 min) y confirma 0 V DC.', 1, 2, 1
 FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
 WHERE p.codigo_corto='SOP-MG-06' AND NOT EXISTS (SELECT 1 FROM checklist_plantilla_items x WHERE x.plantilla_id=t.id AND x.orden=1);
 INSERT INTO checklist_plantilla_items (plantilla_id, texto, criterio_aceptacion, bloqueante, minutos_estimados, orden)
@@ -166,7 +166,7 @@ SELECT p.id,
  'Quien lo detecte, avisando a Mantenimiento y a la supervisión del área.',
  'El técnico de turno de Mantenimiento General.',
  'El técnico de guardia; hasta que llegue, la supervisión de Enfermería.',
- 'CORTAR: apagar la unidad desde su breaker y ponerle etiqueta. Si hay humo o fuego, pasar a EOP-INC-01.',
+ 'CORTAR: apagar la unidad desde su breaker y ponerle etiqueta. Si hay agua en el tablero, no lo toques: corta desde el tablero anterior, en seco, o llama al electricista. Si hay humo o fuego, pasar a EOP-INC-01.',
  'PROTEGER: retirar personas y equipos del agua o del olor, secar y señalizar el piso, y avisar a Enfermería.',
  'REGISTRAR: abrir la orden de emergencia con la hora de alarma y avisar a la jefatura.',
  'Mover al paciente a otra habitación si no se puede mantener la temperatura, o llevar un ventilador portátil si Enfermería lo autoriza. La unidad queda sin energía y etiquetada.',
@@ -337,13 +337,21 @@ SELECT t.id, 'ICRA firmada por Control de Infecciones si el trabajo es en un ár
 FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
 WHERE p.codigo_corto='MOP-MSP-01' AND NOT EXISTS (SELECT 1 FROM plantilla_prerrequisitos x WHERE x.plantilla_id=t.id AND x.orden=2);
 INSERT INTO plantilla_prerrequisitos (plantilla_id, texto, tipo, obligatorio, cargo_responsable, orden)
-SELECT t.id, 'Bloqueo y etiquetado del breaker de la unidad, con candado y número registrado.', 'loto', 1, 'Técnico de turno', 3
+SELECT t.id, 'Bloqueo y etiquetado del breaker de la unidad, con candado y número registrado. Antes de abrir la tarjeta, espera el tiempo del fabricante (inverter: mínimo 10 min) y confirma 0 V DC.', 'loto', 1, 'Técnico de turno', 3
 FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
 WHERE p.codigo_corto='MOP-MSP-01' AND NOT EXISTS (SELECT 1 FROM plantilla_prerrequisitos x WHERE x.plantilla_id=t.id AND x.orden=3);
 INSERT INTO plantilla_prerrequisitos (plantilla_id, texto, tipo, obligatorio, cargo_responsable, orden)
-SELECT t.id, 'Máquina de recuperación, cilindro, nitrógeno, bomba de vacío y vacuómetro listos y con calibración vigente.', 'instrumento', 1, 'Técnico autorizado', 4
+SELECT t.id, 'Máquina de recuperación, cilindro, nitrógeno, bomba de vacío, vacuómetro, balanza y detector de fugas listos y con calibración vigente.', 'instrumento', 1, 'Técnico autorizado', 4
 FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
 WHERE p.codigo_corto='MOP-MSP-01' AND NOT EXISTS (SELECT 1 FROM plantilla_prerrequisitos x WHERE x.plantilla_id=t.id AND x.orden=4);
+INSERT INTO plantilla_prerrequisitos (plantilla_id, texto, tipo, obligatorio, cargo_responsable, orden)
+SELECT t.id, 'Técnico certificado en refrigerantes, con su número de certificación anotado.', 'otro', 1, 'Técnico autorizado', 5
+FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
+WHERE p.codigo_corto='MOP-MSP-01' AND NOT EXISTS (SELECT 1 FROM plantilla_prerrequisitos x WHERE x.plantilla_id=t.id AND x.orden=5);
+INSERT INTO plantilla_prerrequisitos (plantilla_id, texto, tipo, obligatorio, cargo_responsable, orden)
+SELECT t.id, 'Refrigerante confirmado en la placa. Si es R-32 (inflamable): ventilar, detector apto para A2L antes y durante, sin fuentes de ignición cerca, extintor a mano y barrido con nitrógeno al soldar.', 'otro', 1, 'Técnico autorizado', 6
+FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id
+WHERE p.codigo_corto='MOP-MSP-01' AND NOT EXISTS (SELECT 1 FROM plantilla_prerrequisitos x WHERE x.plantilla_id=t.id AND x.orden=6);
 
 INSERT INTO plantilla_liberaciones (plantilla_id, etiqueta, unidad, valor_esperado, obligatoria, orden)
 SELECT t.id, 'Prueba de hermeticidad con nitrógeno a la presión del fabricante', NULL, 'Sin caída de presión', 1, 0

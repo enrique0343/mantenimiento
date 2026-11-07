@@ -57,6 +57,10 @@ const createSchema = z.object({
     bloqueante: z.boolean().optional(),
     minutos: z.number().nullable().optional(),
     materiales: z.string().nullable().optional(),
+    requiereValor: z.boolean().optional(),
+    unidad: z.string().nullable().optional(),
+    esperadoMin: z.number().nullable().optional(),
+    esperadoMax: z.number().nullable().optional(),
   })).optional(),
   asignadoA: z.number().int().positive().nullable().optional(),
 });

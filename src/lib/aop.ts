@@ -295,10 +295,14 @@ export async function abrirEvento(
     const cond = [inArray(aopEventos.estado, ESTADOS_AOP_ABIERTOS)];
     if (variableId != null) cond.push(eq(aopEventos.variableId, variableId));
     else cond.push(eq(aopEventos.procedimientoId, procedimientoId!));
-    if (ubicacionId != null) cond.push(eq(aopEventos.ubicacionId, ubicacionId));
-    else if (activoId != null) cond.push(eq(aopEventos.activoId, activoId));
+    // El equipo manda sobre la ubicación: dos unidades en la misma sala son dos desviaciones.
+    if (activoId != null) cond.push(eq(aopEventos.activoId, activoId));
+    else if (ubicacionId != null) cond.push(eq(aopEventos.ubicacionId, ubicacionId));
     else if (input.sucursalId != null) cond.push(eq(aopEventos.sucursalId, input.sucursalId));
-    if (input.rondaPuntoId != null) cond.push(eq(aopEventos.rondaPuntoId, input.rondaPuntoId));
+    if (input.rondaPuntoId != null) {
+      cond.push(eq(aopEventos.rondaPuntoId, input.rondaPuntoId));
+      if (input.sucursalId != null) cond.push(eq(aopEventos.sucursalId, input.sucursalId));
+    }
     const [abierto] = await db
       .select()
       .from(aopEventos)

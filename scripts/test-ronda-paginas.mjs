@@ -4,6 +4,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { experimental_AstroContainer } from 'astro/container';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
+
+fijarReloj();
 const beforeMigration = (db, n) => { if (n.startsWith('0049_fase49')) db.exec("INSERT OR IGNORE INTO usuarios(id,nombre,email,password_hash,rol) VALUES(1000,'Administración','siembra@example.invalid','x','admin')"); };
 const f = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync' } });
 const { app, sqlite, call, DB } = f;
@@ -36,10 +39,14 @@ try {
     const d = await render('ronda/_id_.astro.mjs', `/ronda/${id}`, rol, uid, { id: String(id) });
     ok(d.status === 200 && /Firmada/.test(d.html) && /Queda abierta la temperatura/.test(d.html), `${rol} ve la ronda firmada y la entrega`);
     ok(/capturada sin señal/.test(d.html), `${rol} ve que se capturó sin señal`);
-    ok(!/<button/.test(d.html.split('<main')[1] ?? '') || !/Conforme/.test(d.html), `${rol}: el detalle es de solo lectura`);
+    ok(!/Guardar|Anotar|Firmar y cerrar|Cerrar la ronda/.test(d.html.split('<main')[1] ?? ''), `${rol}: el detalle es de solo lectura`);
+    const antes = await render('ronda/semana.astro.mjs', '/ronda/semana', rol, uid);
+    ok(antes.status === 200 && !/Firmar la revisión/.test(antes.html) && /nada que firmar/.test(antes.html), `${rol}: antes de exigir la ronda no hay semana que firmar`);
+    sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
     const s = await render('ronda/semana.astro.mjs', '/ronda/semana', rol, uid);
     ok(s.status === 200 && /Revisión de la semana/.test(s.html), `${rol} ve la semana`);
     ok(/Firmar la revisión/.test(s.html) === (rol !== 'visualizador'), `${rol}: firmar solo jefatura`);
+    sqlite.exec("UPDATE rondas SET vigente_desde=date('now','-6 hours')");
   }
   for (const rel of ['ronda.astro.mjs', 'ronda/semana.astro.mjs']) {
     const t = await render(rel, '/ronda', 'tecnico', 3);

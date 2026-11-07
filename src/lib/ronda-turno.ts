@@ -214,14 +214,16 @@ export async function registrarLectura(
   let eventoId: number | null = null;
   let eventoNuevo = false;
   if (resultado === "fuera" && punto.aopProcedimientoId) {
-    const [u] = await db
+    // Un umbral de una sala de otra sede no le presta su ubicación a esta parada; solo sus plazos.
+    const umbrales = await db
       .select()
       .from(aopUmbrales)
-      .where(and(eq(aopUmbrales.procedimientoId, punto.aopProcedimientoId), eq(aopUmbrales.activo, true)))
-      .limit(1);
+      .where(and(eq(aopUmbrales.procedimientoId, punto.aopProcedimientoId), eq(aopUmbrales.activo, true)));
+    const generico = umbrales.find((x) => x.ubicacionId == null && x.activoId == null && x.variableId == null);
+    const u = generico ?? umbrales[0];
     const { evento, yaExistia } = await abrirEvento(db, {
       procedimientoId: punto.aopProcedimientoId,
-      umbralId: u?.id ?? null,
+      umbralId: generico?.id ?? null,
       variableId: punto.variableId ?? null,
       activoId: punto.activoId ?? null,
       ubicacionId: punto.ubicacionId ?? null,
@@ -313,6 +315,7 @@ export async function cerrarEjecucion(
 ): Promise<ResultadoCierre> {
   if (ejec.estado === "completada") return { ok: true };
   const puntos = await paradasDeEjecucion(db, ejec);
+  if (!puntos.length) return { ok: false, error: "Este recorrido no tiene paradas: no hay nada que firmar." };
   const lecturas = await db.select({ puntoId: rondaLecturas.puntoId, resultado: rondaLecturas.resultado }).from(rondaLecturas).where(eq(rondaLecturas.ejecucionId, ejec.id));
   const anotados = new Set(lecturas.map((l) => l.puntoId));
   const faltantes = puntos.filter((p) => !anotados.has(p.id)).map((p) => p.etiqueta);
@@ -529,6 +532,7 @@ export type ResultadoRevision = { ok: true; id: number } | { ok: false; status: 
 export async function firmarRevision(db: Db, usuario: { id: number; nombre: string }, sucursalId: number, lunes: string, observaciones: string | null): Promise<ResultadoRevision> {
   const r = await resumenSemana(db, sucursalId, lunes);
   if (!r.terminada) return { ok: false, status: 409, error: "La semana todavía no termina." };
+  if (r.esperadas === 0) return { ok: false, status: 409, error: "Esa semana no se exigían rondas en esta sede." };
   if (r.excepciones && (observaciones?.length ?? 0) < 3) return { ok: false, status: 400, error: "Hubo excepciones: escribe qué revisaste y qué se hizo." };
   const [propia] = await db
     .select({ id: rondaMarcas.id })

@@ -153,15 +153,22 @@ function aplicarLocal(p: Any, op: Op) {
       break;
   }
 }
-const esDeEstaRonda = (p: Any, op: Any) => !!p.ronda && op.fecha === p.ronda.fecha && op.turno === p.ronda.turno;
-/** Sin señal al cambiar de turno: la misma lista, una ronda nueva. A media ronda se termina con su turno. */
+const esDeEstaRonda = (p: Any, op: Any) => !!p.ronda && op.fecha === p.ronda.fecha && op.turno === p.ronda.turno && Number(op.sucursalId) === Number(p.ronda.sucursalId);
+/** Sin señal al cambiar de turno: la misma lista, una ronda nueva. A media ronda se termina con su turno, pero no para siempre. */
 function rodarTurno(): boolean {
-  if (E.flujo?.tipo === "ronda") return false;
   const r = E.base?.ronda;
   if (!r?.turnos?.length) return false;
+  if (E.flujo?.tipo === "ronda") {
+    if (Date.now() - Date.parse(`${r.fecha}T${r.turno}:00-06:00`) < 16 * 3_600_000) return false;
+    soltarPantalla();
+    E.flujo = null;
+    aviso("Esa ronda ya venció. Lo que anotaste quedó guardado.");
+    ir("#hoy", true);
+  }
   const t = turnoActual(r.turnos);
   if (t.fecha === r.fecha && t.turno === r.turno) return false;
   E.base.ronda = { ...r, fecha: t.fecha, turno: t.turno, etiqueta: t.etiqueta, estado: "sin_iniciar", ejecucionId: null, iniciadaEn: null, lecturas: {}, entregaAnterior: null };
+  void cola.guardar(`hoy:${UID}`, E.base); // Si el sistema recarga la página, sigue en el turno nuevo.
   rebase();
   return true;
 }
@@ -228,7 +235,8 @@ async function drenar() {
   let huboCambios = false;
   let huboRechazo = false;
   let fallo = false;
-  const quitarOp = async (op: Op) => { E.pend = E.pend.filter((x) => x.seq !== op.seq); await cola.quitar(op.seq); };
+  // Lo que el servidor ya aceptó de la ronda queda en la copia base: a media ronda, tras un cambio de turno, el paquete nuevo no lo trae.
+  const quitarOp = async (op: Op) => { E.pend = E.pend.filter((x) => x.seq !== op.seq); if (E.base && String(op.tipo).startsWith("ronda.")) aplicarLocal(E.base, op); await cola.quitar(op.seq); };
   const rechazar = (op: Op, error?: string) => {
     huboRechazo = true;
     E.rechazos.push({ que: describirOp(op), error: error ?? "No se pudo guardar.", at: op.at });
@@ -293,6 +301,8 @@ async function refrescarHoy() {
     // A media ronda el paquete no le cambia el turno bajo los pies al técnico.
     const enCursoAqui = E.flujo?.tipo === "ronda" ? E.base?.ronda : null;
     if (enCursoAqui && (j.ronda?.fecha !== enCursoAqui.fecha || j.ronda?.turno !== enCursoAqui.turno)) j.ronda = enCursoAqui;
+    // El servidor no pudo leer la ronda: se conserva la que ya había; no es que no haya ronda.
+    if (j.rondaError && !j.ronda && E.base?.ronda && Number(E.base.ronda.sucursalId) === Number(j.sedeId)) j.ronda = E.base.ronda;
     E.base = j;
     E.sesionVencida = false;
     E.enLinea = true;
@@ -499,6 +509,7 @@ function lecturaHtml(p: Any, previo: unknown) {
 /** La línea 1 del SOP: lo que dejó el turno anterior y lo que sigue abierto en esta sede. */
 function bitacoraHtml(r: Any) {
   const e = r.entregaAnterior;
+  if (!E.enLinea && !e) return `<p class="ayuda">Sin señal: la entrega del turno anterior y las desviaciones llegan cuando vuelva.</p>`;
   const abiertas = E.p?.desviaciones?.length ?? 0;
   const dejo = e ? `Dejó ${esc(e.firma ?? "el turno anterior")} a las ${hora(e.en)}: ${esc(String(e.notas ?? "sin novedades").slice(0, 200))}` : "Sin entrega registrada.";
   return `<p class="ayuda">${dejo} ${abiertas ? `${abiertas} desviación${abiertas === 1 ? "" : "es"} abierta${abiertas === 1 ? "" : "s"} en esta sede.` : "Sin desviaciones abiertas en esta sede."}</p>`;
@@ -526,14 +537,14 @@ function vPaso() {
   let pie: string;
   if (!esRonda) {
     pie = (p.pideValor ? `<button class="b1" id="btn-lect" data-a="lectura">Guardar lectura</button>` : `<button class="b1" data-a="hecho">${ico.check}Hecho</button>`)
-      + `<div class="dos"><button class="b2" data-a="na">No aplica</button><button class="b2" data-a="problema">Hay un problema</button></div>`;
+      + (p.critico ? `<button class="b2" data-a="problema">Hay un problema</button>` : `<div class="dos"><button class="b2" data-a="na">No aplica</button><button class="b2" data-a="problema">Hay un problema</button></div>`);
   } else {
     pie = p.pideValor
       ? `<button class="b1" id="btn-lect" data-a="lectura">Guardar lectura</button><div class="dos"><button class="b2" data-a="noconf">Hay una alarma</button><button class="b2" data-a="noverif">No pude verificar</button></div>`
       : `<button class="b1" data-a="conforme">${ico.check}Conforme</button><div class="dos"><button class="b2" data-a="noconf">No conforme</button><button class="b2" data-a="noverif">No pude verificar</button></div>`;
   }
   const titulo = esRonda ? `Ronda de las ${r.turno}` : o.activo?.codigo ?? tituloOrden(o);
-  const sub = esRonda ? SISTEMAS[p.sistema] ?? r.nombre : o.activo ? o.activo.nombre : o.lugar?.ubicacion ?? "";
+  const sub = esRonda ? (p.sistema === "otro" ? "" : SISTEMAS[p.sistema] ?? r.nombre) : o.activo ? o.activo.nombre : o.lugar?.ubicacion ?? "";
   const pausa = esRonda ? "" : `<button class="ic" data-a="pausar" aria-label="Pausar el trabajo">${ico.pausa}</button>`;
   return `<div class="paso"><div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button>`
     + `<div class="paso-tit"><strong>${esc(titulo)}</strong><span>${esc(sub)}</span></div>${pausa}`
@@ -662,10 +673,11 @@ function vFinRonda() {
   const nombres = (l: Any[]) => l.map((x: Any) => String(x.pt.texto).split(" · ")[0]).join(", ");
   const sugerida = [fuera.length ? `Quedan abiertas: ${nombres(fuera)}.` : "", nov.length ? `Sin verificar: ${nombres(nov)}.` : ""].filter(Boolean).join(" ");
   const entrega = E.notas[clave] ?? sugerida;
+  const conReloj = fuera.filter((x: Any) => x.pt.aop).length;
   return `<div class="final"><span class="etq">Ronda de las ${esc(r.turno)}</span><h1>${lect.length - nov.length} de ${r.puntos.length} paradas verificadas</h1>`
-    + `<div class="dato"><span class="etq">Desviaciones abiertas</span><b>${fuera.length ? `${fuera.length} con su reloj corriendo. ${E.enLinea ? "Tu jefatura ya las ve." : "Tu jefatura las ve cuando vuelva la señal."}` : "Ninguna"}</b></div>`
+    + `<div class="dato"><span class="etq">Desviaciones abiertas</span><b>${fuera.length ? `${conReloj ? `${conReloj} con su reloj corriendo. ` : `${fuera.length} sin reloj. `}${E.enLinea ? "Tu jefatura ya las ve." : "Tu jefatura las ve cuando vuelva la señal."}` : "Ninguna"}</b></div>`
     + (nov.length ? `<div class="dato"><span class="etq">Sin verificar</span><b>${nov.length}, con su razón escrita.</b></div>` : "")
-    + (lecturas.length ? `<div class="dato"><span class="etq">Lecturas</span><b>${esc(lecturas.slice(0, 4).join(" · "))}${lecturas.length > 4 ? ` y ${lecturas.length - 4} más` : ""}</b></div>` : "")
+    + (lecturas.length ? `<div class="dato solo-alto"><span class="etq">Lecturas</span><b>${esc(lecturas.slice(0, 4).join(" · "))}${lecturas.length > 4 ? ` y ${lecturas.length - 4} más` : ""}</b></div>` : "")
     + `<div class="dato"><span class="etq">Quién y cuándo</span><b>${esc(primerNombre(NOMBRE))} · ${r.iniciadaEn ? `${hora(r.iniciadaEn)} a ` : ""}${hora(Date.now())}</b></div>`
     + `<label class="etq" for="entrega">Novedades para quien entra</label><textarea id="entrega" data-nota="${esc(clave)}" placeholder="Si no hay, déjalo en blanco.">${esc(entrega)}</textarea><p class="err" id="err-entrega" hidden>Hay novedades abiertas: escribe qué le dejas a quien entra.</p>`
     + `<div class="empuja"><button class="b1" data-a="cerrarRonda">Firmar y cerrar la ronda</button><button class="link" data-a="anterior" style="justify-content:center">Volver a la última parada</button></div></div>`;
@@ -892,7 +904,7 @@ function vHoja() {
         + `<label class="oculto" for="nota-problema">Describe lo que encontraste</label><textarea id="nota-problema" placeholder="Usa el micrófono del teclado para dictarlo."></textarea>`
         + `<p class="err" id="err-problema" hidden>Describe en pocas palabras qué encontraste (al menos 10 letras).</p>`
         + fotoCampo("foto-problema", "Tomar foto", "general")
-        + `<button class="b1" data-a="problemaSeguir">Anotar y seguir</button>`
+        + (p?.critico ? `<button class="b1" data-a="problemaDetener">Anotar y dejar en espera</button>` : `<button class="b1" data-a="problemaSeguir">Anotar y seguir</button>`)
         + `<button class="b2" data-a="problemaCorrectivo">El equipo no vuelve a servicio: abrir correctivo</button>`
         + `<button class="link" data-a="cerrarHoja">Cancelar</button></div>`;
     }
@@ -901,7 +913,7 @@ function vHoja() {
       return `<div class="hoja-caja"><span class="etq">${esc(h.valorTxt || "Fuera de lo normal")}</span><h2>Se rige por <span class="codigo">${esc(d.codigo)}</span></h2><p class="ayuda">${esc(d.titulo)}</p>${d.aviso ? `<p class="ayuda">${esc(d.aviso)}</p>` : ""}`
         + `<div class="relojes"><div><span class="etq">Actuar antes de</span><b>${limite(h.at, d.actuarMin)}</b></div><div><span class="etq">Escalar antes de</span><b>${limite(h.at, d.escalarMin)}</b></div></div>`
         + (d.acciones?.length ? `<ol class="acc">${d.acciones.map((a: string) => `<li><span>${esc(a)}</span></li>`).join("")}</ol>` : "")
-        + (h.seguir ? `<p class="ayuda">${E.enLinea ? "La desviación ya quedó abierta y tu jefatura la ve con su reloj." : "Su reloj ya corre desde esta hora. Tu jefatura la ve cuando vuelva la señal."}</p>` : "")
+        + (h.seguir ? `<p class="ayuda solo-alto">${E.enLinea ? "La desviación ya quedó abierta y tu jefatura la ve con su reloj." : "Su reloj ya corre desde esta hora. Tu jefatura la ve cuando vuelva la señal."}</p>` : "")
         + (h.seguir
           ? `<button class="b1" data-a="aopSeguir">Seguir con la ronda</button>`
           : `<label class="etq" for="valor-desv">Valor medido (opcional)</label><div class="lect-caja mini"><input id="valor-desv" inputmode="decimal" autocomplete="off"></div><label class="oculto" for="nota-desv">Qué viste</label><textarea id="nota-desv" placeholder="Qué viste"></textarea><button class="b1" data-a="abrirDesviacion">Abrir la desviación</button>`)
@@ -1087,6 +1099,7 @@ function ruta() {
   pintar();
 }
 function abrirRonda() {
+  rodarTurno(); // Sin señal y con la página recién recargada: nunca abrir el turno que ya pasó.
   const r = E.p?.ronda;
   if (!r) { E.vista = "hoy"; pintar(); return; }
   if (r.estado === "sin_iniciar") void despachar({ tipo: "ronda.iniciar", rondaId: r.rondaId, sucursalId: r.sucursalId, fecha: r.fecha, turno: r.turno });
@@ -1125,7 +1138,22 @@ function abrirFalla(tipo: "emergencia.abrir" | "correctivo.abrir", datos: Record
   void despachar({ tipo, titulo, ...datos });
   zumbar();
   E.hoja = null;
-  aviso(tipo === "emergencia.abrir" ? `Orden de emergencia abierta a las ${hora(Date.now())}.` : "Correctivo abierto. Tu jefatura ya lo ve.");
+  aviso(`${tipo === "emergencia.abrir" ? `Emergencia anotada a las ${hora(Date.now())}.` : "Correctivo anotado."} ${queVeLaJefatura()}`);
+}
+/** Nunca decir que la jefatura ya lo ve si no hay señal. */
+const queVeLaJefatura = () => (E.enLinea ? "Tu jefatura ya lo ve." : "Tu jefatura no lo ve hasta que vuelva la señal; si es urgente, avísale por radio.");
+/** Un punto crítico con novedad, o un equipo que no vuelve a servicio, detienen la secuencia: los pasos que siguen ya no aplican. */
+function detenerOrden(o: Any, nota: string, valor: unknown) {
+  const f = E.flujo as Flujo;
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor ? { valor } : {}) });
+  void despachar({ tipo: "orden.pausar", ordenId: o.id, motivo: `Detenida: ${nota}`.slice(0, 300) });
+  zumbar();
+  soltarPantalla();
+  E.flujo = null;
+  E.hoja = null;
+  soltarHistorialDeHoja();
+  aviso(`Orden en espera. ${queVeLaJefatura()}`);
+  ir("#hoy", true);
 }
 
 // ── Acciones ────────────────────────────────────────────────────────────────
@@ -1144,6 +1172,8 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     E.b.ubicaciones = null;
     E.hoja = null;
     soltarHistorialDeHoja();
+    // La ronda de otra sede no se ofrece con el nombre de esta.
+    if (E.base?.ronda && Number(E.base.ronda.sucursalId) !== E.sede) { E.base.ronda = null; rebase(); }
     if (E.vista === "buscar" || E.vista === "reportarLugar") void cargarUbicaciones();
     if (!navigator.onLine) aviso("Sin señal: la ronda y la lista de esa sede cargan cuando vuelva.");
     pintar();
@@ -1206,7 +1236,15 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (!final) { const e = $("#err-problema"); if (e) e.hidden = false; t?.focus(); return; }
     const o = ordenDe(E.flujo?.ordenId as number);
     abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, nota: final }, `Correctivo: ${tituloOrden(o)}`);
-    marcarPaso("desviacion", { nota: final, ...(h.valor ? { valor: h.valor } : {}) });
+    detenerOrden(o, final, h.valor);
+  },
+  problemaDetener() {
+    const t = $<HTMLTextAreaElement>("#nota-problema");
+    const h = E.hoja;
+    const nota = t?.value.trim() ?? "";
+    const final = nota.length >= 10 ? nota : h.valorTxt ? (nota ? `${h.valorTxt}. ${nota}` : h.valorTxt) : "";
+    if (!final) { const e = $("#err-problema"); if (e) e.hidden = false; t?.focus(); return; }
+    detenerOrden(ordenDe(E.flujo?.ordenId as number), final, h.valor);
   },
   abrirCorrectivoDesdeFin() {
     const o = ordenDe(E.flujo?.ordenId as number);
@@ -1391,12 +1429,16 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
 };
 
 const movil = $("#movil") as HTMLElement;
+let ultimoToque = -1000;
 movil.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
   const b = t.closest<HTMLElement>("[data-a]");
   if (b) {
     if (b.hasAttribute("disabled")) return;
     ev.preventDefault();
+    // Un doble toque no debe caer en lo que se pintó debajo: un «Conforme» en una parada que nadie vio.
+    if (ev.isTrusted && ev.timeStamp - ultimoToque < 400) return;
+    if (ev.isTrusted) ultimoToque = ev.timeStamp;
     A[b.dataset.a as string]?.(b.dataset, b);
     return;
   }

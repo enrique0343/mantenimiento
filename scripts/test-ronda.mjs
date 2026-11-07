@@ -1,6 +1,9 @@
 // La ronda de turno: rutas reales, migraciones reales, SQLite en memoria. Sin red.
 import assert from 'node:assert/strict';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
+
+fijarReloj();
 const beforeMigration = (db, nombre) => { if (nombre.startsWith('0049_fase49')) db.exec("INSERT OR IGNORE INTO usuarios(id,nombre,email,password_hash,rol) VALUES(1000,'Administración','siembra@example.invalid','x','admin')"); };
 const f = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', rt: 'lib/ronda-turno', ahora: 'lib/ahora', database: 'lib/db', revision: 'pages/api/ronda-turno/revision', puntos: 'pages/api/ronda-turno/puntos' } });
 const { app, sqlite, call, queries, faults, ctx } = f;

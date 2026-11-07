@@ -245,6 +245,9 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
   const sedes = new Map(sedesFilas.map((s) => [s.id, s.nombre]));
   const [yo] = await db.select({ sucursalId: usuarios.sucursalId }).from(usuarios).where(eq(usuarios.id, user.id)).limit(1);
   const sedeId = sedePedida && sedes.has(sedePedida) ? sedePedida : yo?.sucursalId && sedes.has(yo.sucursalId) ? yo.sucursalId : null;
+  // Lo primero del turno se lee primero. Si falla, el celular conserva la que ya tenía: no es que no haya ronda.
+  let rondaError = false;
+  const ronda = sedeId ? await rondaParaSede(db, sedeId).catch((e) => { console.error("campo_ronda", e); rondaError = true; return null; }) : null;
 
   const ubisFilas = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId }).from(ubicaciones);
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
@@ -295,9 +298,20 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     else devueltas.set(ev.ordenId, ev.motivo);
   }
 
+  // Las últimas lecturas de cada plan, en una sola consulta: D1 corta a 50 por solicitud.
+  const planesConLectura = [...new Set([...mias, ...libres].filter((f) => f.o.planId && parseChecklist(f.o.checklistEjecucion).some((p) => p.requiereValor)).map((f) => f.o.planId as number))].slice(0, 90);
+  const previas = planesConLectura.length
+    ? await db.select({ planId: ordenes.planId, checklist: ordenes.checklistEjecucion }).from(ordenes).where(and(inArray(ordenes.planId, planesConLectura), inArray(ordenes.estado, ["completada", "verificada", "cerrada"]))).orderBy(desc(ordenes.completadaEn)).limit(300)
+    : [];
+  const ultimasPorPlan = new Map<number, Record<string, string>>();
+  for (const fila of previas) {
+    if (fila.planId == null || ultimasPorPlan.has(fila.planId)) continue;
+    const valores: Record<string, string> = {};
+    for (const p of parseChecklist(fila.checklist)) if (p.requiereValor && p.valorMedido) valores[p.texto] = p.valorMedido;
+    ultimasPorPlan.set(fila.planId, valores);
+  }
   const armar = async (f: FilaOrden) => {
-    const conLectura = parseChecklist(f.o.checklistEjecucion).some((p) => p.requiereValor);
-    const ultimas = conLectura && f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
+    const ultimas = (f.o.planId && ultimasPorPlan.get(f.o.planId)) || {};
     return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas });
   };
   const ordenesVista = [];
@@ -357,8 +371,8 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     usuario: { id: user.id, nombre: user.nombre, rol: user.rol, sucursalId: yo?.sucursalId ?? null },
     sedes: sedesFilas,
     sedeId,
-    // Un fallo de la ronda no debe tumbar el paquete del día.
-    ronda: sedeId ? await rondaParaSede(db, sedeId).catch((e) => { console.error("campo_ronda", e); return null; }) : null,
+    ronda,
+    ...(rondaError ? { rondaError: true } : {}),
     ordenes: ordenesVista,
     libres: libresVista,
     tickets: misTickets,
@@ -809,7 +823,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const ejecucion = await buscarEjecucion(db, clave);
       if (!ejecucion) throw new RechazoCampo("Esa ronda no se había iniciado.");
       const m = momentoCapturado(op.at, ejecucion.iniciadaEn);
-      if (ejecucion.estado === "completada") return { datos: { ejecucionId: ejecucion.id, yaCerrada: true }, m };
+      if (ejecucion.estado === "completada") {
+        // Otro técnico ya firmó. Lo firmado no se toca, pero esta entrega no se pierde: queda en el registro y le llega a la jefatura.
+        const notasTardias = typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) : "";
+        if (notasTardias && notasTardias !== (ejecucion.notas ?? "")) await avisarJefatura(ctx, db, "Entrega de turno que llegó después de la firma", `${user.nombre}: ${notasTardias.slice(0, 200)}`, `/ronda/${ejecucion.id}`);
+        return { datos: { ejecucionId: ejecucion.id, yaCerrada: true, ...(notasTardias ? { notasTardias } : {}) }, m };
+      }
       if (op.firma !== true) throw new RechazoCampo("La ronda no se cierra sin firma.");
       const r = await cerrarEjecucion(db, ejecucion, user, typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) || null : null, m);
       if (!r.ok) throw new RechazoCampo(r.error ?? "No se pudo cerrar la ronda.");
