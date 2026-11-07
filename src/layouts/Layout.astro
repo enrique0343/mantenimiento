@@ -44,6 +44,7 @@ const allLinks: NavItem[] = [
   { href: homeHref,         label: homeLabel,       icon: "🏠" },
   { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
   { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
+  { href: "/aop",           label: "Desviaciones (AOP)", icon: "⏱", show: isOperativo },
   { href: "/taller",        label: "Taller (Lean)", icon: "🗂", show: isOperativo },
   { sep: true },
   // 2. Planificación
@@ -76,6 +77,7 @@ const allLinks: NavItem[] = [
   { sep: true },
   // 6. Gobernanza y administración
   { href: "/procedimientos", label: "Procedimientos", icon: "📋", show: isAdminOrJefe },
+  { href: "/eop",           label: "Emergencias (EOP)", icon: "🚨", show: isOperativo },
   { href: "/contingencia",  label: "Contingencia",  icon: "🚨", show: isAdminOrJefe },
   { href: "/usuarios",      label: "Usuarios",      icon: "👤", show: isAdmin },
   { href: "/configuracion", label: "Configuración", icon: "⚙️", show: isAdmin },
