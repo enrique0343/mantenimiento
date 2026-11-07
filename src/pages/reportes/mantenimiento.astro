@@ -79,7 +79,7 @@ const difTotal = resumen.estimadoMin ? resumen.realContraEstimadoMin - resumen.e
       {filas.length === 0 ? <p class="doc-texto">No hay órdenes ejecutadas en este periodo.</p> : (
         <div class="overflow-x-auto">
           <table class="doc-tabla">
-            <thead><tr><th>Registro</th><th style="min-width:180px">Equipo</th><th style="min-width:130px">Ubicación</th><th>Técnico</th><th>Tipo</th><th class="c">Inicio</th><th class="c">Fin</th><th class="n">Trabajo</th><th class="n">Pausa</th><th class="n">Estimado</th><th class="n">Novedades</th><th>Estado</th></tr></thead>
+            <thead><tr><th>Orden</th><th style="min-width:180px">Equipo</th><th style="min-width:130px">Ubicación</th><th>Técnico</th><th>Tipo</th><th class="c">Inicio</th><th class="c">Fin</th><th class="n">Trabajo</th><th class="n">Pausa</th><th class="n">Estimado</th><th class="n">Novedades</th><th>Estado</th></tr></thead>
             <tbody>
               {filas.map((x) => (
                 <tr>

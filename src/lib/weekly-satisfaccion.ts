@@ -6,6 +6,7 @@ import { and, eq, gte, isNotNull, inArray, desc } from "drizzle-orm";
 import { getDb } from "./db";
 import { encuestasSatisfaccion, ordenes, usuarios, emailLog } from "./schema";
 import { sendMail, emailLayout } from "./email";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 function escapeHtml(s: string | null | undefined): string {
   if (!s) return "";
@@ -110,7 +111,7 @@ export async function enviarResumenSemanalSatisfaccion(
       <div style="border-left:3px solid #C03435;background:#F2F4F7;padding:10px 12px;margin:8px 0;border-radius:2px">
         <div style="font-size:12px;color:#4A4A4A">
           <strong>${r.e.calificacion}★</strong> · ${escapeHtml(r.e.destinatarioNombre)}
-          ${r.o ? ` · OT #${r.o.id} ${escapeHtml(r.o.titulo)}` : ""}
+          ${r.o ? ` · ${etiquetaOT(r.o)} ${escapeHtml(r.o.titulo)}` : ""}
           ${r.tec ? ` · Técnico: ${escapeHtml(r.tec.nombre)}` : ""}
         </div>
         <p style="margin:6px 0 0 0;white-space:pre-wrap;font-size:13px;color:#1A1A1A">${escapeHtml(r.e.comentario)}</p>

@@ -17,7 +17,7 @@ export const GET: APIRoute = async (ctx) => {
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
 
-  // D1 corta el resultado a 100 columnas: ordenes(61) + activos(45) se pasa.
+  // D1 corta el resultado a 100 columnas: ordenes(62) + activos(45) se pasa.
   const [row] = await db
     .select({ orden: ordenes, activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre }, asignado: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(ordenes)

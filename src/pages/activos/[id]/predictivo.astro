@@ -261,7 +261,8 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
         if (!res.ok) { alert("Error al registrar"); return; }
         const j = await res.json();
         if (j.ordenAutomatica) {
-          if (confirm(`Medición crítica detectada. Se generó OT #${j.ordenAutomatica.id}. ¿Abrirla?`)) {
+          const etiqueta = j.ordenAutomatica.codigo || `OT #${j.ordenAutomatica.id}`;
+          if (confirm(`Medición crítica detectada. Se generó ${etiqueta}. ¿Abrirla?`)) {
             location.href = `/ordenes/${j.ordenAutomatica.id}?area=${area}`;
             return;
           }

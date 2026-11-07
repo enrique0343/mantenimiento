@@ -313,11 +313,11 @@ const isActive = (href: string) =>
 
         function renderResultados(R) {
           var groups = [
-            { key: "ordenes",       label: "Órdenes", link: function (r) { return "/ordenes/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.titulo); },        meta: function (r) { return r.tipo + " · " + r.estado; } },
+            { key: "ordenes",       label: "Órdenes", link: function (r) { return "/ordenes/" + r.id; },        title: function (r) { return esc(r.codigo || ("OT #" + r.id)) + " · " + esc(r.titulo); },        meta: function (r) { return r.tipo + " · " + r.estado; } },
             { key: "equipos",       label: "Equipos",  link: function (r) { return "/activos/" + r.id; },        title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.tipo + " · " + r.estado; } },
             { key: "tickets",       label: "Tickets", link: function (r) { return "/tickets/" + r.id; },        title: function (r) { return "#" + r.id + " · " + esc(r.asunto); },        meta: function (r) { return r.estado; } },
             { key: "items",         label: "Inventario", link: function (r) { return "/inventario/" + r.id; },     title: function (r) { return esc(r.codigo) + " · " + esc(r.nombre); },     meta: function (r) { return r.unidad; } },
-            { key: "comentarios",   label: "Comentarios", link: function (r) { return "/ordenes/" + r.ordenId; },   title: function (r) { return "OT #" + r.ordenId + " · " + esc(r.ordenTitulo); }, meta: function (r) { return new Date(r.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" }); } },
+            { key: "comentarios",   label: "Comentarios", link: function (r) { return "/ordenes/" + r.ordenId; },   title: function (r) { return esc(r.ordenCodigo || ("OT #" + r.ordenId)) + " · " + esc(r.ordenTitulo); }, meta: function (r) { return new Date(r.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" }); } },
             { key: "requisiciones", label: "Requisiciones", link: function (r) { return "/requisiciones/" + r.id; }, title: function (r) { return esc(r.numero); },                            meta: function (r) { return r.estado; } },
           ];
           var html = "";

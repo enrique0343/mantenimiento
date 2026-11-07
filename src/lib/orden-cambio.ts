@@ -6,6 +6,7 @@ import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento,
 
 import { requireUser } from "@/lib/auth";
 import { vencimientoCausaRaiz, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { actualizarOrdenConVerificacion, leerVerificacionOrden, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
@@ -307,11 +308,11 @@ export async function aplicarCambioOrden(
           ctx.locals.runtime.ctx.waitUntil(
             sendMail(ctx, {
               to: u.email,
-              subject: `[OT #${row.id}] Reasignación: ahora la atiendes tú — ${row.titulo}`,
+              subject: `[${etiquetaOT(row)}] Reasignación: ahora la atiendes tú — ${row.titulo}`,
               html: emailLayout(
                 "Esta orden pasa a tus manos",
                 `<p>Hola <strong>${primerNombre}</strong>,</p>
-                 <p>Te estamos transfiriendo la <strong>OT #${row.id} — ${row.titulo}</strong>${nombreAnterior ? `, que hasta hoy estaba asignada a <strong>${nombreAnterior}</strong>` : ""}.</p>
+                 <p>Te estamos transfiriendo la <strong>${etiquetaOT(row)} — ${row.titulo}</strong>${nombreAnterior ? `, que hasta hoy estaba asignada a <strong>${nombreAnterior}</strong>` : ""}.</p>
                  <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Datos de la orden</h3>
                  <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                    <li><strong>Tipo:</strong> ${row.tipo}</li>
@@ -339,12 +340,12 @@ export async function aplicarCambioOrden(
           ctx.locals.runtime.ctx.waitUntil(
             sendMail(ctx, {
               to: u.email,
-              subject: `[OT #${row.id}] Te asignamos: ${row.titulo}${subjectVence}`,
+              subject: `[${etiquetaOT(row)}] Te asignamos: ${row.titulo}${subjectVence}`,
               html: emailLayout(
                 "Nueva orden para ti",
                 `<p>Hola <strong>${primerNombre}</strong>,</p>
                  <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
-                 <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
+                 <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(row)} — ${row.titulo}</h3>
                  <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                    <li><strong>Tipo:</strong> ${row.tipo}</li>
                    <li><strong>Prioridad:</strong> ${row.prioridad}</li>
@@ -366,14 +367,14 @@ export async function aplicarCambioOrden(
       if (u?.telegramChatId) {
         ctx.locals.runtime.ctx.waitUntil(
           sendTelegram(env, u.telegramChatId,
-            `<b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
+            `<b>Nueva OT asignada</b>\n${etiquetaOT(row)} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
             { linkUrl: otUrl, linkLabel: "Abrir orden" }
           )
         );
       }
       await crearNotificacion(ctx, {
         usuarioId: parsed.data.asignadoA, tipo: "ot_asignada",
-        titulo: `Te asignaron OT #${row.id}: ${row.titulo}`,
+        titulo: `Te asignaron ${etiquetaOT(row)}: ${row.titulo}`,
         mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${fmtFechaLarga(row.vencimiento)}` : ""}`,
         link: `/ordenes/${row.id}`,
       });

@@ -6,6 +6,7 @@ import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
 import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos, procedimientos, activoUbicacionesServidas, variablesPredictivas } from "@/lib/schema";
 import { eq, asc, desc, and, inArray, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -1609,7 +1610,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {ordsRel.map((o) => (
           <li class="flex items-center justify-between py-2">
-            <a href={areaHref(`/ordenes/${o.id}`, area)} class="text-brand-700 hover:underline">#{o.id} - {o.titulo}</a>
+            <a href={areaHref(`/ordenes/${o.id}`, area)} class="text-brand-700 hover:underline">{etiquetaOT(o)} - {o.titulo}</a>
             <span class="text-xs text-slate-500 capitalize">{o.tipo} · {o.estado.replace("_"," ")}</span>
           </li>
         ))}

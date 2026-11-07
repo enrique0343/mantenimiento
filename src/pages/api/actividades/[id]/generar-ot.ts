@@ -8,6 +8,7 @@ import { siguienteFecha } from "@/lib/frecuencias";
 
 import { parseArea } from "@/lib/areas";
 import { areaDeActividad } from "@/lib/actividades";
+import { conCodigo } from "@/lib/ordenes";
 export const prerender = false;
 
 // Genera una OT inmediatamente para la actividad y avanza proximaFecha al siguiente ciclo.
@@ -63,5 +64,5 @@ export const POST: APIRoute = async (ctx) => {
   const proxima = siguienteFecha(a.proximaFecha, a.frecuencia as any);
   await db.update(actividades).set({ proximaFecha: proxima, ultimaGeneracion: now }).where(eq(actividades.id, id));
 
-  return Response.json({ orden, proximaFecha: proxima }, { status: 201 });
+  return Response.json({ orden: await conCodigo(db, orden), proximaFecha: proxima }, { status: 201 });
 };

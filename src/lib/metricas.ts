@@ -356,6 +356,7 @@ const prom = (xs: number[]): number | null =>
 
 export interface DiferidoRow {
   id: number;
+  codigo: string | null;
   titulo: string;
   tipo: string;
   estado: string;
@@ -385,6 +386,7 @@ export async function mantenimientoDiferido(
   const rows = await db
     .select({
       id: ordenes.id,
+      codigo: ordenes.codigo,
       titulo: ordenes.titulo,
       tipo: ordenes.tipo,
       estado: ordenes.estado,
@@ -421,6 +423,7 @@ export async function mantenimientoDiferido(
       const dominio = r.activoId != null ? rubroDeActivo(r.activoRubro, r.activoTipo) : null;
       return {
         id: r.id,
+        codigo: r.codigo,
         titulo: r.titulo,
         tipo: r.tipo,
         estado: r.estado,
@@ -447,6 +450,7 @@ export async function mantenimientoDiferido(
 // del indicador pero siguen trazadas (evidencia del escape documentado).
 export interface RiesgoAceptadoRow {
   id: number;
+  codigo: string | null;
   titulo: string;
   estado: string;
   vencimiento: string | null;
@@ -466,6 +470,7 @@ export async function riesgosAceptados(
   const rows = await db
     .select({
       id: ordenes.id,
+      codigo: ordenes.codigo,
       titulo: ordenes.titulo,
       estado: ordenes.estado,
       vencimiento: ordenes.vencimiento,

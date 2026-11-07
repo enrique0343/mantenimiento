@@ -10,7 +10,8 @@ import { logAudit } from "@/lib/audit";
 import { crearNotificacion } from "@/lib/notif-app";
 import { fmtFechaLarga } from "@/lib/datetime";
 
-import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { conCodigo, validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -127,7 +128,7 @@ export const PATCH: APIRoute = async (ctx) => {
   if (debeCrearOT) {
     try {
       const desc = `${actual.descripcion}\n\n— Ticket #${actual.id} de ${actual.solicitanteNombre} <${actual.solicitanteEmail}>`;
-      const [orden] = await db
+      const [fila] = await db
         .insert(ordenes)
         .values({
           titulo: actual.asunto,
@@ -146,8 +147,9 @@ export const PATCH: APIRoute = async (ctx) => {
           vencimiento: (data.vencimientoSla as string | undefined) ?? actual.vencimientoSla,
         })
         .returning();
-      nuevaOtId = orden.id;
-      data.otId = orden.id;
+      nuevaOtId = fila.id;
+      data.otId = fila.id;
+      const orden = await conCodigo(db, fila);
 
       // Copiar fotos del ticket como adjuntos "antes" de la OT
       try {
@@ -211,12 +213,12 @@ export const PATCH: APIRoute = async (ctx) => {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: tec.email,
-            subject: `[OT #${orden.id}] Te asignamos: ${orden.titulo}${subjectVence}`,
+            subject: `[${etiquetaOT(orden)}] Te asignamos: ${orden.titulo}${subjectVence}`,
             html: emailLayout(
               "Nueva orden para ti",
               `<p>Hola <strong>${primerNombre}</strong>,</p>
                <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
-               <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+               <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(orden)} — ${orden.titulo}</h3>
                <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                  <li><strong>Tipo:</strong> ${orden.tipo}</li>
                  <li><strong>Prioridad:</strong> ${orden.prioridad}</li>
@@ -237,7 +239,7 @@ export const PATCH: APIRoute = async (ctx) => {
         // Notificación in-app
         await crearNotificacion(ctx, {
           usuarioId: parsed.data.asignadoA!, tipo: "ot_asignada",
-          titulo: `Nueva OT #${orden.id}: ${orden.titulo}`,
+          titulo: `Nueva ${etiquetaOT(orden)}: ${orden.titulo}`,
           mensaje: `Prioridad: ${orden.prioridad}${venceFormateado ? ` · Vence ${venceFormateado}` : ""}`,
           link: `/ordenes/${orden.id}`,
         });

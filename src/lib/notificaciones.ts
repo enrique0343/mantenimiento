@@ -9,6 +9,7 @@ import { sendMail, emailLayout } from "./email";
 import { sendTelegram } from "./telegram";
 import { crearNotificacion } from "./notif-app";
 import { fmtFechaLarga } from "./datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 // URL base del despliegue. Se puede sobrescribir por env APP_URL.
 function appUrl(ctx: APIContext): string {
@@ -18,6 +19,7 @@ function appUrl(ctx: APIContext): string {
 
 interface OrdenLite {
   id: number;
+  codigo?: string | null;
   titulo: string;
   descripcion?: string | null;
   tipo: string;
@@ -106,12 +108,12 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
 
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Tu orden ya está en proceso — ${orden.titulo}`,
+    subject: `[${etiquetaOT(orden)}] Tu orden ya está en proceso — ${orden.titulo}`,
     html: emailLayout(
       "Estamos trabajando en tu solicitud",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>Buenas noticias. Tu orden ya está en marcha.</p>
-       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(orden)} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico asignado:</strong> ${asg.nombre}</li>` : ""}
          <li><strong>Inicio del trabajo:</strong> ${fechaInicio}</li>
@@ -128,14 +130,14 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
 
   if (sol.telegramChatId) {
     await sendTelegram(env, sol.telegramChatId,
-      `<b>Iniciado:</b> OT #${orden.id} - ${orden.titulo}\n${asg ? `Técnico: ${asg.nombre}` : ""}`,
+      `<b>Iniciado:</b> ${etiquetaOT(orden)} - ${orden.titulo}\n${asg ? `Técnico: ${asg.nombre}` : ""}`,
       { linkUrl: url, linkLabel: "Ver orden" }
     );
   }
   if (sol.usuarioId) {
     await crearNotificacion(ctx, {
       usuarioId: sol.usuarioId, tipo: "ot_iniciada",
-      titulo: `OT #${orden.id} en proceso`,
+      titulo: `${etiquetaOT(orden)} en proceso`,
       mensaje: `${orden.titulo}${asg ? ` · Técnico: ${asg.nombre}` : ""}`,
       link: `/ordenes/${orden.id}`,
     });
@@ -166,12 +168,12 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
 
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Trabajo ejecutado; pendiente de verificación — ${orden.titulo}`,
+    subject: `[${etiquetaOT(orden)}] Trabajo ejecutado; pendiente de verificación — ${orden.titulo}`,
     html: emailLayout(
       "Trabajo ejecutado; pendiente de verificación",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>El técnico registró la ejecución. Una persona autorizada distinta del ejecutor debe comprobar el trabajo antes del cierre.</p>
-       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(orden)} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico responsable:</strong> ${asg.nombre}</li>` : ""}
          <li><strong>Fecha de ejecución:</strong> ${fechaCierre}</li>
@@ -193,14 +195,14 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
 
   if (sol.telegramChatId) {
     await sendTelegram(env, sol.telegramChatId,
-      `<b>Pendiente de verificación:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
+      `<b>Pendiente de verificación:</b> ${etiquetaOT(orden)} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
       { linkUrl: url, linkLabel: "Ver orden" }
     );
   }
   if (sol.usuarioId) {
     await crearNotificacion(ctx, {
       usuarioId: sol.usuarioId, tipo: "ot_completada",
-      titulo: `OT #${orden.id} pendiente de verificación`,
+      titulo: `${etiquetaOT(orden)} pendiente de verificación`,
       mensaje: orden.titulo,
       link: `/ordenes/${orden.id}`,
     });
@@ -259,12 +261,12 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
   // CORREO COMBINADO: cierre + encuesta en un solo mensaje
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Tu solicitud quedó resuelta — cuéntanos cómo nos fue`,
+    subject: `[${etiquetaOT(orden)}] Tu solicitud quedó resuelta — cuéntanos cómo nos fue`,
     html: emailLayout(
       "Tu solicitud quedó resuelta",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>Te confirmamos que tu orden ya fue atendida.</p>
-       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(orden)} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          <li><strong>Técnico responsable:</strong> ${nombreTec}</li>
          <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
@@ -337,11 +339,11 @@ export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) 
     const primerNombre = (jefe.nombre ?? "").split(" ")[0] || jefe.nombre;
     await sendMail(ctx, {
       to: jefe.email,
-      subject: `[OT #${orden.id}] Trabajo finalizado por ${nombreTec}`,
+      subject: `[${etiquetaOT(orden)}] Trabajo finalizado por ${nombreTec}`,
       html: emailLayout(
         "Trabajo finalizado en tu radar",
         `<p>Hola <strong>${primerNombre}</strong>,</p>
-         <p>Te avisamos que <strong>${nombreTec}</strong> acaba de cerrar la <strong>OT #${orden.id} — ${orden.titulo}</strong>.</p>
+         <p>Te avisamos que <strong>${nombreTec}</strong> acaba de cerrar la <strong>${etiquetaOT(orden)} — ${orden.titulo}</strong>.</p>
 
          <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:15px">Datos del cierre</h3>
          <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7;font-size:14px">
@@ -368,7 +370,7 @@ export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) 
     // Notificación in-app
     await crearNotificacion(ctx, {
       usuarioId: jefe.id, tipo: "ot_cerrada_jefe",
-      titulo: `OT #${orden.id} cerrada por ${nombreTec}`,
+      titulo: `${etiquetaOT(orden)} cerrada por ${nombreTec}`,
       mensaje: orden.titulo,
       link: `/ordenes/${orden.id}`,
     });

@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { disparadorProyecto } from "@/lib/notificaciones";
 
-import { validarAreaTrabajo } from "@/lib/ordenes";
+import { conCodigo, validarAreaTrabajo } from "@/lib/ordenes";
 import { parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 
@@ -88,5 +88,5 @@ export const POST: APIRoute = async (ctx) => {
     resumen: `OT generada desde proyecto ${p.codigo}`,
   });
 
-  return Response.json({ orden }, { status: 201 });
+  return Response.json({ orden: await conCodigo(db, orden) }, { status: 201 });
 };

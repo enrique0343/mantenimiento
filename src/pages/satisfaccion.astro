@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { encuestasSatisfaccion, ordenes, usuarios } from "@/lib/schema";
 import { eq, and, isNotNull, isNull, desc, asc, sql } from "drizzle-orm";
 import { fmtFechaLarga, fmtFechaSimple } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -234,7 +235,7 @@ const rankingList = Array.from(ranking.values())
             <tr class:list={["hover:bg-slate-50", esBaja && !e.leidaEn ? "bg-red-50/40" : ""]}>
               <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{fmtFechaSimple(e.respondidaEn)}</td>
               <td class="px-4 py-2">
-                {o ? <a href={`/ordenes/${o.id}`} class="text-brand-600 hover:underline">#{o.id} — {o.titulo}</a> : <span class="text-slate-400">—</span>}
+                {o ? <a href={`/ordenes/${o.id}`} class="text-brand-600 hover:underline"><span class="whitespace-nowrap">{etiquetaOT(o)}</span> — {o.titulo}</a> : <span class="text-slate-400">—</span>}
               </td>
               <td class="px-4 py-2 text-slate-700">{tec?.nombre ?? <span class="text-slate-400">—</span>}</td>
               <td class="px-4 py-2">
@@ -288,7 +289,7 @@ const rankingList = Array.from(ranking.values())
               <span class="text-xs text-slate-400">{fmtFechaSimple(e.respondidaEn)}</span>
             </div>
             <div class="mt-2 text-sm">
-              {o ? <a href={`/ordenes/${o.id}`} class="font-medium text-brand-600">#{o.id} — {o.titulo}</a> : <span class="text-slate-400">—</span>}
+              {o ? <a href={`/ordenes/${o.id}`} class="font-medium text-brand-600">{etiquetaOT(o)} — {o.titulo}</a> : <span class="text-slate-400">—</span>}
             </div>
             <div class="mt-1 text-xs text-slate-500">
               Técnico: <span class="font-medium text-slate-700">{tec?.nombre ?? "—"}</span> · Evaluó: <span class="font-medium text-slate-700">{e.destinatarioNombre ?? "—"}</span>

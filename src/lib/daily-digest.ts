@@ -15,6 +15,7 @@ import {
 import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga, fmtFechaSimple } from "./datetime";
 import { procesarContratosVencimiento } from "./contratos-alertas";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
@@ -317,13 +318,13 @@ export async function enviarDigestDiario(
       html += `<p style="margin:0 0 6px 0"><strong>OTs cerradas (${otsCerradasAyerRaw.length}):</strong></p>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">
         <thead><tr style="background:#F2F4F7;color:#4A4A4A;font-size:11px;text-align:left">
-          <th style="padding:6px 8px">#</th><th style="padding:6px 8px">Título</th>
+          <th style="padding:6px 8px">OT</th><th style="padding:6px 8px">Título</th>
           <th style="padding:6px 8px">Equipo</th><th style="padding:6px 8px">Técnico</th>
           <th style="padding:6px 8px;text-align:right">Horas</th>
         </tr></thead><tbody>`;
       for (const r of otsCerradasAyerRaw) {
         html += `<tr style="border-bottom:1px solid #F2F4F7">
-          <td style="padding:6px 8px;color:#6B7280">#${r.o.id}</td>
+          <td style="padding:6px 8px;color:#6B7280;white-space:nowrap">${etiquetaOT(r.o)}</td>
           <td style="padding:6px 8px"><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#23417D;text-decoration:none">${r.o.titulo}</a></td>
           <td style="padding:6px 8px;color:#6B7280">${r.a ? r.a.codigo : "—"}</td>
           <td style="padding:6px 8px">${r.u?.nombre ?? "—"}</td>
@@ -353,7 +354,7 @@ export async function enviarDigestDiario(
       for (const r of otsEnProceso.slice(0, 15)) {
         const estado = ESTADO_OT_LABEL[r.o.estado] ?? r.o.estado;
         const desde = r.o.iniciadaEn ? `desde ${fmtFechaSimple(r.o.iniciadaEn)}` : "sin iniciar";
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#23417D;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · ${r.u?.nombre ?? "Sin asignar"} · <em>${estado}</em> · ${desde}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#23417D;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · ${r.u?.nombre ?? "Sin asignar"} · <em>${estado}</em> · ${desde}</li>`;
       }
       if (otsEnProceso.length > 15) html += `<li style="color:#6B7280">... y ${otsEnProceso.length - 15} más</li>`;
       html += `</ul>`;
@@ -378,7 +379,7 @@ export async function enviarDigestDiario(
       html += `<p style="margin:0 0 6px 0"><strong>OTs vencidas y aún abiertas (${otsAtrasadasRaw.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of otsAtrasadasRaw.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · vence ${fmtFechaSimple(r.o.vencimiento!)} · ${r.u?.nombre ?? "Sin asignar"}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · vence ${fmtFechaSimple(r.o.vencimiento!)} · ${r.u?.nombre ?? "Sin asignar"}</li>`;
       }
       if (otsAtrasadasRaw.length > 10) html += `<li style="color:#6B7280">... y ${otsAtrasadasRaw.length - 10} más</li>`;
       html += `</ul>`;
@@ -387,7 +388,7 @@ export async function enviarDigestDiario(
       html += `<p style="margin:0 0 6px 0"><strong>OTs creadas sin técnico (${otsAbiertasSinAsignarRaw.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of otsAbiertasSinAsignarRaw.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · ${r.a ? r.a.codigo : "Sin equipo"}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · ${r.a ? r.a.codigo : "Sin equipo"}</li>`;
       }
       html += `</ul>`;
     }

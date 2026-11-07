@@ -8,6 +8,7 @@ import {
   comprasDestinatarios,
 } from "@/lib/schema";
 import { eq } from "drizzle-orm";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -70,7 +71,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
 <Layout title={`${sol.codigo} — Solicitud de Compra`}>
   <div class="flex items-center gap-2 flex-wrap mb-4">
     <a href="/solicitudes-compra" class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
-    {ot && <a href={`/ordenes/${ot.id}`} class="text-sm text-brand-600 hover:underline">Ver OT #{ot.id} →</a>}
+    {ot && <a href={`/ordenes/${ot.id}`} class="text-sm text-brand-600 hover:underline">Ver {etiquetaOT(ot)} →</a>}
   </div>
 
   <!-- Cabecera -->
@@ -84,7 +85,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
           </span>
           {ot && (
             <span class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-              OT #{ot.id}: {ot.titulo}
+              {etiquetaOT(ot)}: {ot.titulo}
             </span>
           )}
         </div>

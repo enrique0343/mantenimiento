@@ -1,10 +1,19 @@
 import type { Rol } from "./schema";
 import { eq } from "drizzle-orm";
 import type { getDb } from "./db";
-import { activos, ubicaciones, sucursales } from "./schema";
+import { activos, ordenes, ubicaciones, sucursales } from "./schema";
 import { parseArea, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
 
+
+/**
+ * RETURNING no ve el código que el trigger le pone a una orden nueva. Cuando la
+ * orden recién creada se va a mostrar o a enviar en un correo, se lee aparte.
+ */
+export async function conCodigo<T extends { id: number }>(db: ReturnType<typeof getDb>, orden: T): Promise<T & { codigo: string | null }> {
+  const [fila] = await db.select({ codigo: ordenes.codigo }).from(ordenes).where(eq(ordenes.id, orden.id)).limit(1);
+  return { ...orden, codigo: fila?.codigo ?? null };
+}
 
 // Tipos de OT. "intervencion" es el MOP (método de procedimiento: cambia el
 // estado de un sistema crítico con permiso, pasos y lecturas de liberación) y

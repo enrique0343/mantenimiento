@@ -5,6 +5,7 @@ import * as cola from "./cola";
 import type { Op } from "./cola";
 import { comprimir, peso } from "./foto";
 import { turnoActual } from "../lib/turnos";
+import { etiquetaOT } from "../lib/orden-codigo";
 
 const TZ = "America/El_Salvador";
 const cuerpo = document.body.dataset;
@@ -128,7 +129,7 @@ function aplicarLocal(p: Any, op: Op) {
     case "orden.terminar":
       if (o) {
         p.ordenes = p.ordenes.filter((x: Any) => x.id !== o.id);
-        p.hechasHoy = [{ id: o.id, titulo: o.titulo, estado: "completada", completadaEn: op.at }, ...(p.hechasHoy ?? []).filter((x: Any) => x.id !== o.id)];
+        p.hechasHoy = [{ id: o.id, codigo: o.codigo, titulo: o.titulo, estado: "completada", completadaEn: op.at }, ...(p.hechasHoy ?? []).filter((x: Any) => x.id !== o.id)];
       }
       break;
     case "foto":
@@ -183,8 +184,15 @@ async function despachar(parcial: Partial<Op> & { tipo: string }, at?: string) {
   return op;
 }
 
+// Un rechazo puede llegar cuando la orden ya salió de la lista de trabajo (al terminarla, por
+// ejemplo): por eso se busca también en lo terminado y en la última copia del servidor.
+const ordenParaNombrar = (id: number) => [E.p, E.base]
+  .flatMap((p: Any) => [p?.ordenes, p?.libres, p?.hechasHoy, p?.porVerificar])
+  .flatMap((lista: Any) => lista ?? [])
+  .find((o: Any) => o.id === id);
+
 const describirOp = (op: Any) => {
-  if (op.tipo?.startsWith("orden.") || op.tipo === "foto") return op.ordenId ? `Orden #${op.ordenId}` : "Orden";
+  if (op.tipo?.startsWith("orden.") || op.tipo === "foto") return op.ordenId ? etiquetaOT(ordenParaNombrar(op.ordenId) ?? { id: op.ordenId }) : "Orden";
   if (op.tipo?.startsWith("ronda.")) return "Ronda";
   if (op.tipo === "emergencia.abrir") return "Emergencia";
   if (op.tipo === "correctivo.abrir") return "Correctivo";
@@ -406,7 +414,7 @@ function vHoy() {
   }
   if (p.tickets?.length) filas += grupoHtml("tickets", "Reportes asignados", `${p.tickets.length} por atender`, p.tickets.map((t: Any) => `<a class="fila sub" href="/tickets/${t.id}" data-fuera><span class="txt"><strong>${esc(t.asunto)}</strong><small>${esc([t.solicitante, t.sede].filter(Boolean).join(" · "))}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.libres?.length) filas += grupoHtml("libres", "Sin asignar en esta sede", `${p.libres.length} para tomar`, p.libres.map(filaOrden).join(""), abierto);
-  if (p.porVerificar?.length) filas += grupoHtml("verificar", "Por verificar", `${p.porVerificar.length} te tocan`, p.porVerificar.map((o: Any) => `<a class="fila sub" href="/ordenes/${o.id}?completa=1" data-fuera><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>Orden #${o.id}</small></span>${ico.flecha}</a>`).join(""), abierto);
+  if (p.porVerificar?.length) filas += grupoHtml("verificar", "Por verificar", `${p.porVerificar.length} te tocan`, p.porVerificar.map((o: Any) => `<a class="fila sub" href="/ordenes/${o.id}?completa=1" data-fuera><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>${esc(etiquetaOT(o))}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.hechasHoy?.length) filas += grupoHtml("hechas", "Terminadas hoy", String(p.hechasHoy.length), p.hechasHoy.map((o: Any) => `<div class="fila sub"><span class="marca si">${ico.check}</span><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>${o.completadaEn ? hora(o.completadaEn) : ""}</small></span></div>`).join(""), abierto);
 
   const nombreSede = p.sedes?.find((s: Any) => s.id === E.sede)?.nombre;

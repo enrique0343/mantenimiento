@@ -180,6 +180,8 @@ export const activos = sqliteTable("activos", {
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // OT-MG0001 u OT-MB0001. Lo asigna un trigger al insertar (migración 0057): RETURNING no lo ve.
+  codigo: text("codigo"),
   rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),

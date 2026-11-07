@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { eq, and, inArray, gte, lt, isNotNull, asc, desc, sql } from "drizzle-orm";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref } from "@/lib/areas";
 export const prerender = false;
 
@@ -102,7 +103,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
               return (
                 <a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class:list={["block rounded-md border p-2 text-sm hover:shadow-sm transition", vencida ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"]}>
                   <div class="flex items-center justify-between gap-1">
-                    <span class="font-medium text-slate-800">#{r.o.id}</span>
+                    <span class="whitespace-nowrap font-medium text-slate-800">{etiquetaOT(r.o)}</span>
                     <span class={`badge text-[10px] ${PRIO_COLOR[r.o.prioridad] ?? ""}`}>{r.o.prioridad}</span>
                   </div>
                   <div class="mt-0.5 line-clamp-2 text-xs text-slate-700">{r.o.titulo}</div>
@@ -159,7 +160,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
           <tbody class="divide-y divide-slate-100">
             {vencidas.map((r) => (
               <tr class="hover:bg-slate-50">
-                <td class="px-4 py-2"><a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class="text-brand-700 hover:underline">#{r.o.id} {r.o.titulo}</a></td>
+                <td class="px-4 py-2"><a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class="text-brand-700 hover:underline"><span class="whitespace-nowrap">{etiquetaOT(r.o)}</span> {r.o.titulo}</a></td>
                 <td class="px-4 py-2 font-mono text-xs text-slate-600">{r.a?.codigo ?? "—"}</td>
                 <td class="px-4 py-2 text-xs">{r.u?.nombre ?? "Sin asignar"}</td>
                 <td class="px-4 py-2 font-mono text-xs text-red-600">{fmt(r.o.vencimiento)}</td>

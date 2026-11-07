@@ -4,10 +4,11 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { asc, eq, inArray } from "drizzle-orm";
-import { paradasDeEjecucion, puedeVerRondas, rangoNormal, etiquetaTurno, type RondaLectura } from "@/lib/ronda-turno";
+import { paradasDeEjecucion, puedeVerRondas, rangoNormal, etiquetaTurno } from "@/lib/ronda-turno";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
-import { aopEventos, procedimientos, rondaEjecuciones, rondaLecturas, rondaMarcas, sucursales, usuarios } from "@/lib/schema";
+import { aopEventos, ordenes, procedimientos, rondaEjecuciones, rondaLecturas, rondaMarcas, sucursales, usuarios } from "@/lib/schema";
 import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -27,7 +28,12 @@ if (!fila) return Astro.redirect("/ronda");
 const ejec = fila.e;
 const cerrada = ejec.estado === "completada";
 const puntos = await paradasDeEjecucion(db, ejec);
-const lecturas: RondaLectura[] = await db.select().from(rondaLecturas).where(eq(rondaLecturas.ejecucionId, id));
+const filasLecturas = await db
+  .select({ l: rondaLecturas, codigoOrden: ordenes.codigo })
+  .from(rondaLecturas)
+  .leftJoin(ordenes, eq(ordenes.id, rondaLecturas.ordenId))
+  .where(eq(rondaLecturas.ejecucionId, id));
+const lecturas = filasLecturas.map((f) => ({ ...f.l, codigoOrden: f.codigoOrden }));
 const porPunto = new Map(lecturas.map((l) => [l.puntoId, l]));
 const marcas = await db
   .select({ m: rondaMarcas, quien: usuarios.nombre })
@@ -78,7 +84,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
             </div>
           </div>
           {l?.nota && <p class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{l.nota}</p>}
-          {l?.ordenId && <a class="mt-1 inline-block text-xs font-semibold text-brand-700 underline" href={`/ordenes/${l.ordenId}`}>Orden #{l.ordenId}</a>}
+          {l?.ordenId && <a class="mt-1 inline-block text-xs font-semibold text-brand-700 underline" href={`/ordenes/${l.ordenId}`}>{etiquetaOT({ id: l.ordenId, codigo: l.codigoOrden })}</a>}
           {historia.length > 0 && (
             <ul class="mt-2 space-y-0.5 text-[11px] text-slate-500">
               {historia.map(({ m, quien }) => (

@@ -18,6 +18,7 @@ import {
   puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ,
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
 } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { leerVerificacionOrden, leerOrigenesRondaOrden, puedeVerificarOrden, esRevisorOrden } from "@/lib/orden-verificacion";
 import { fmtCantidad } from "@/lib/inventario";
 import { queSigue, type QueSigue, type Situacion } from "@/lib/resolver";
@@ -31,7 +32,7 @@ if (!Number.isFinite(id)) return Astro.redirect("/ordenes");
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 
-// D1 corta el resultado a 100 columnas y ordenes(61) + activos(45) ya se pasa:
+// D1 corta el resultado a 100 columnas y ordenes(62) + activos(45) ya se pasa:
 // la consulta fallaba entera y la ficha de la orden quedaba en error. Se piden
 // solo las columnas que esta pantalla usa.
 const [row] = await db
@@ -327,7 +328,7 @@ const adjsDocumento = adjs.filter((a) => a.categoria === "documento");
 const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 ---
 
-<Layout title={`Orden #${o.id}`}>
+<Layout title={etiquetaOT(o)}>
   <a href={user.rol === "tecnico" ? "/campo" : areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
   {conjuntoOrigen && <section class="card mt-4 border-l-4 border-brand-500 p-4 text-sm">
@@ -370,7 +371,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
       </div>
       <p class="mt-1 text-sm text-slate-500">
-        Orden #{o.id} - creada {fmt(o.createdAt)}
+        {etiquetaOT(o)} - creada {fmt(o.createdAt)}
         {procedimientoRef && (
           <span> · procedimiento <strong class="font-mono">{procedimientoRef.codigoCorto}</strong> v{procedimientoRef.version} — {procedimientoRef.titulo}</span>
         )}
@@ -392,7 +393,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <div id="historialModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div class="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between">
-          <h2 class="font-bold text-lg">Historial de la OT #{o.id}</h2>
+          <h2 class="font-bold text-lg">Historial de la <span class="whitespace-nowrap">{etiquetaOT(o)}</span></h2>
           <button id="closeHistorial" class="text-slate-400 hover:text-slate-600 text-xl">×</button>
         </div>
         <div id="historialContent" class="p-5">
@@ -952,7 +953,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <div>
               <label class="label text-xs" for="reversaNotas">Qué se revirtió y cómo quedó el sistema</label>
               <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeRegistrarMop}
-                        placeholder="Mínimo 10 caracteres. Ej. Retransferencia en manual con dos técnicos; planta sostenida hasta confirmar red estable; se abrió la OT correctiva #...">{o.reversaNotas ?? ""}</textarea>
+                        placeholder="Mínimo 10 caracteres. Ej. Retransferencia en manual con dos técnicos; planta sostenida hasta confirmar red estable; se abrió la orden correctiva OT-MG...">{o.reversaNotas ?? ""}</textarea>
             </div>
             {puedeRegistrarMop && (
               <div class="flex justify-end">

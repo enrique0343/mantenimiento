@@ -9,6 +9,7 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { devolverOrdenDesdeTicket, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -125,11 +126,11 @@ export const POST: APIRoute = async (ctx) => {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: tec.email,
-            subject: `[OT #${ot.id}] Necesitamos una segunda visita — ${ot.titulo}`,
+            subject: `[${etiquetaOT(ot)}] Necesitamos una segunda visita — ${ot.titulo}`,
             html: emailLayout(
               "Volvamos al sitio para terminar bien",
               `<p>Hola <strong>${primerNombreTec}</strong>,</p>
-               <p>El solicitante de la <strong>OT #${ot.id} — ${ot.titulo}</strong> nos compartió que el problema no quedó completamente resuelto después de tu intervención. La orden volvió a estado <strong>en proceso</strong> para que puedas completarla.</p>
+               <p>El solicitante de la <strong>${etiquetaOT(ot)} — ${ot.titulo}</strong> nos compartió que el problema no quedó completamente resuelto después de tu intervención. La orden volvió a estado <strong>en proceso</strong> para que puedas completarla.</p>
 
                <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Lo que el solicitante observó al verificar:</h3>
                <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #C03435;border-radius:2px;margin:0 0 18px 0">${motivo}</p>
@@ -153,14 +154,14 @@ export const POST: APIRoute = async (ctx) => {
       if (tec?.telegramChatId) {
         ctx.locals.runtime.ctx.waitUntil(
           sendTelegram(env, tec.telegramChatId,
-            `<b>OT #${ot.id} reabierta por inconformidad</b>\n${ot.titulo}\n<i>${motivo.slice(0, 200)}</i>`,
+            `<b>${etiquetaOT(ot)} reabierta por inconformidad</b>\n${ot.titulo}\n<i>${motivo.slice(0, 200)}</i>`,
             { linkUrl: otUrl, linkLabel: "Abrir orden" }
           )
         );
       }
       await crearNotificacion(ctx, {
         usuarioId: ot.asignadoA, tipo: "ot_reabierta",
-        titulo: `OT #${ot.id} reabierta por inconformidad`,
+        titulo: `${etiquetaOT(ot)} reabierta por inconformidad`,
         mensaje: motivo,
         link: `/ordenes/${ot.id}`,
       });
@@ -183,12 +184,12 @@ export const POST: APIRoute = async (ctx) => {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: jefe.email,
-            subject: `[OT #${ot.id}] Reabrimiento de OT — Aviso para tu monitoreo`,
+            subject: `[${etiquetaOT(ot)}] Reabrimiento de OT — Aviso para tu monitoreo`,
             html: emailLayout(
               "Aviso de gobierno",
               `<p>Hola <strong>${primerNombreJefe}</strong>,</p>
                <p>Te enviamos este aviso para tu monitoreo, no para que intervengas.</p>
-               <p>La <strong>OT #${ot.id} — ${ot.titulo}</strong>, que cerró <strong>${nombreTecnico}</strong>, fue reabierta por inconformidad del solicitante.</p>
+               <p>La <strong>${etiquetaOT(ot)} — ${ot.titulo}</strong>, que cerró <strong>${nombreTecnico}</strong>, fue reabierta por inconformidad del solicitante.</p>
 
                <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:15px">Datos clave</h3>
                <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
@@ -214,7 +215,7 @@ export const POST: APIRoute = async (ctx) => {
       }
       await crearNotificacion(ctx, {
         usuarioId: jefe.id, tipo: "ot_reabierta",
-        titulo: `Inconformidad en OT #${ot.id}`,
+        titulo: `Inconformidad en ${etiquetaOT(ot)}`,
         mensaje: `${t.solicitanteNombre}: ${motivo.slice(0, 100)}`,
         link: `/ordenes/${ot.id}`,
       });

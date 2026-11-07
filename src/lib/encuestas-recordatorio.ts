@@ -7,6 +7,7 @@ import { getDb } from "./db";
 import { encuestasSatisfaccion, ordenes, usuarios } from "./schema";
 import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga } from "./datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 // Horas tras las cuales se envía el recordatorio (si no hay respuesta)
 const HORAS_RECORDATORIO = 48;
@@ -49,8 +50,9 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
     const primerNombreSol = (enc.destinatarioNombre ?? "").split(" ")[0] || enc.destinatarioNombre || "";
     const tecCompleto = tec?.nombre ?? "el equipo de Mantenimiento";
     const tecCorto = tec?.nombre ? (tec.nombre.split(" ")[0] || tec.nombre) : "el técnico";
-    const otId = ot?.id ?? "";
-    const otTitulo = ot?.titulo ?? "tu solicitud";
+    // Sin orden ligada no hay código que citar: el correo habla de «tu solicitud».
+    const otEtiqueta = ot ? etiquetaOT(ot) : null;
+    const otReferencia = ot ? `tu ${otEtiqueta} — ${ot.titulo}` : "tu solicitud";
 
     const stars = [1, 2, 3, 4, 5].map((n) => {
       const emoji = String(n);
@@ -60,11 +62,11 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
     try {
       await sendMail(ctx, {
         to: enc.destinatarioEmail,
-        subject: `[OT #${otId}] Antes de cerrar definitivamente — necesitamos 10 segundos de ${primerNombreSol}`,
+        subject: `${otEtiqueta ? `[${otEtiqueta}] ` : ""}Antes de cerrar definitivamente — necesitamos 10 segundos de ${primerNombreSol}`,
         html: emailLayout(
           `Tu voz cierra el ciclo`,
           `<p>Hola <strong>${primerNombreSol}</strong>,</p>
-           <p>Hace 48 horas <strong>${tecCompleto}</strong> trabajó en tu orden <strong>#${otId} — ${otTitulo}</strong>. El trabajo quedó terminado. Lo que falta para cerrar el ciclo eres tú.</p>
+           <p>Hace 48 horas <strong>${tecCompleto}</strong> trabajó en <strong>${otReferencia}</strong>. El trabajo quedó terminado. Lo que falta para cerrar el ciclo eres tú.</p>
            <p>Sabemos que estás ocupado. También sabemos que el silencio es la respuesta más fácil. Pero te pedimos un momento de honestidad institucional: ese silencio le cuesta algo a Avante.</p>
            <p>Cuando un solicitante no califica, perdemos tres cosas: no sabemos si ${tecCorto} hizo un buen trabajo o uno mediocre, no podemos detectar a tiempo un patrón si algo está fallando en el equipo o el área, y no tenemos cómo reconocer al técnico cuando lo merece ni cómo corregirlo cuando hace falta.</p>
            <p><strong>Tu clic, aunque sea uno solo, resuelve las tres cosas.</strong></p>
@@ -72,7 +74,7 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
            <p style="text-align:center;font-weight:600;color:#23417D;margin:8px 0 18px 0">Diez segundos. Un solo toque.</p>
            <p>Si ${tecCorto} hizo bien su trabajo, díselo con un <strong>4 o un 5</strong>. Lo lee él, lo ve su jefatura, queda en su evaluación. Si algo no quedó bien, díselo con un <strong>1, 2 o 3</strong>. Llega a Mantenimiento esta misma semana, no en el reporte mensual.</p>
            <p><em>Lo que no podemos hacer es mejorar lo que no se nos cuenta.</em></p>
-           <p style="font-size:13px;color:#4A4A4A;background:#F2F4F7;padding:12px;border-left:3px solid #8A6420;border-radius:2px;margin:18px 0">Este es el último correo que recibirás sobre la OT #${otId}. Si no respondes en las próximas <strong>24 horas</strong>, archivamos el caso sin calificación y no te volveremos a escribir. Pero la próxima vez que algo falle en tu área, vamos a llegar con un poco menos de información sobre cómo atenderte mejor.</p>
+           <p style="font-size:13px;color:#4A4A4A;background:#F2F4F7;padding:12px;border-left:3px solid #8A6420;border-radius:2px;margin:18px 0">Este es el último correo que recibirás sobre ${otEtiqueta ? `la ${otEtiqueta}` : "tu solicitud"}. Si no respondes en las próximas <strong>24 horas</strong>, archivamos el caso sin calificación y no te volveremos a escribir. Pero la próxima vez que algo falle en tu área, vamos a llegar con un poco menos de información sobre cómo atenderte mejor.</p>
            <p style="margin:18px 0;text-align:center"><a href="${encuestaUrl}" style="display:inline-block;padding:12px 28px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:15px">Calificar ahora →</a></p>
            <p style="margin-top:18px"><em>Gracias por construir Avante con nosotros, hasta en los detalles pequeños.</em></p>`
         ),

@@ -17,6 +17,7 @@ import {
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
 import { MIN_CAUSA_RAIZ, minutosEstimadosChecklist, parseChecklist, requiereCausaRaiz, validarAreaTrabajo, vencimientoCausaRaiz } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { queSigue } from "@/lib/resolver";
@@ -87,6 +88,7 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
   const pasos = parseChecklist(o.checklistEjecucion);
   return {
     id: o.id,
+    codigo: o.codigo ?? null,
     titulo: o.titulo,
     tipo: o.tipo,
     estado: o.estado,
@@ -326,7 +328,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
 
   // Si jefatura le pidió verificar a este técnico, también le toca verlo aquí.
   const porVerificar = await db
-    .select({ id: ordenes.id, titulo: ordenes.titulo, completadaEn: ordenes.completadaEn })
+    .select({ id: ordenes.id, codigo: ordenes.codigo, titulo: ordenes.titulo, completadaEn: ordenes.completadaEn })
     .from(ordenVerificacion)
     .innerJoin(ordenes, eq(ordenes.id, ordenVerificacion.ordenId))
     .where(and(or(eq(ordenVerificacion.revisorId, user.id), eq(ordenVerificacion.revisorSuplenteId, user.id)), eq(ordenes.estado, "completada")))
@@ -336,7 +338,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
   const hoySV = new Date(Date.now() - 6 * 3_600_000).toISOString().slice(0, 10);
   const inicioHoy = new Date(`${hoySV}T06:00:00.000Z`).toISOString();
   const hechasHoy = await db
-    .select({ id: ordenes.id, titulo: ordenes.titulo, estado: ordenes.estado, completadaEn: ordenes.completadaEn })
+    .select({ id: ordenes.id, codigo: ordenes.codigo, titulo: ordenes.titulo, estado: ordenes.estado, completadaEn: ordenes.completadaEn })
     .from(ordenes)
     .where(and(eq(ordenes.asignadoA, user.id), inArray(ordenes.estado, ["completada", "verificada", "cerrada"]), gte(ordenes.completadaEn, inicioHoy)))
     .orderBy(desc(ordenes.completadaEn))
@@ -419,7 +421,7 @@ export async function fichaEquipo(db: Db, activoId: number, user: Usuario) {
   if (!a) return null;
   const planes = await db.select().from(planesMantenimiento).where(and(eq(planesMantenimiento.activoId, activoId), eq(planesMantenimiento.activo, true))).orderBy(asc(planesMantenimiento.proximaFecha));
   const abiertas = await db
-    .select({ id: ordenes.id, titulo: ordenes.titulo, estado: ordenes.estado, tipo: ordenes.tipo, asignadoA: ordenes.asignadoA, asignado: usuarios.nombre, planId: ordenes.planId })
+    .select({ id: ordenes.id, codigo: ordenes.codigo, titulo: ordenes.titulo, estado: ordenes.estado, tipo: ordenes.tipo, asignadoA: ordenes.asignadoA, asignado: usuarios.nombre, planId: ordenes.planId })
     .from(ordenes)
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
     .where(and(eq(ordenes.activoId, activoId), inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"])))
@@ -515,8 +517,8 @@ export async function crearOrdenEnCampo(
       if (yaAbierta.asignadoA && yaAbierta.asignadoA !== user.id) throw new RechazoCampo("Este plan ya tiene una orden abierta asignada a otra persona.", 409);
       return { ordenId: yaAbierta.id, yaExistia: true };
     }
-    const [enRevision] = await db.select({ id: ordenes.id }).from(ordenes).where(and(eq(ordenes.planId, plan.id), inArray(ordenes.estado, ["completada", "verificada"]))).limit(1);
-    if (enRevision) throw new RechazoCampo(`Este plan ya tiene la orden #${enRevision.id} esperando verificación.`, 409);
+    const [enRevision] = await db.select({ id: ordenes.id, codigo: ordenes.codigo }).from(ordenes).where(and(eq(ordenes.planId, plan.id), inArray(ordenes.estado, ["completada", "verificada"]))).limit(1);
+    if (enRevision) throw new RechazoCampo(`Este plan ya tiene la ${etiquetaOT(enRevision)} esperando verificación.`, 409);
   }
 
   const tipo = plan ? "preventivo" : input.tipo ?? "preventivo";

@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos } from "@/lib/schema";
 import { eq, and, inArray } from "drizzle-orm";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -13,7 +14,7 @@ const db = getDb(Astro);
 // OT en proceso vinculable (precarga si viene ?ordenId=X)
 const ordenIdParam = Number(Astro.url.searchParams.get("ordenId") ?? 0) || null;
 const otsEnProceso = await db
-  .select({ id: ordenes.id, titulo: ordenes.titulo, estado: ordenes.estado })
+  .select({ id: ordenes.id, codigo: ordenes.codigo, titulo: ordenes.titulo, estado: ordenes.estado })
   .from(ordenes)
   .where(inArray(ordenes.estado, ["en_proceso", "en_espera"]))
   .orderBy(ordenes.id);
@@ -39,7 +40,7 @@ const otsEnProceso = await db
         <select class="input" id="ordenId">
           <option value="">— Sin vincular —</option>
           {otsEnProceso.map((o) => (
-            <option value={o.id} selected={o.id === ordenIdParam}>#{o.id} — {o.titulo} [{o.estado}]</option>
+            <option value={o.id} selected={o.id === ordenIdParam}>{etiquetaOT(o)} — {o.titulo} [{o.estado}]</option>
           ))}
         </select>
         <p class="mt-1 text-xs text-slate-400">Solo OTs en proceso o en espera pueden vincularse.</p>

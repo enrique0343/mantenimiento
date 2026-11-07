@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -30,6 +31,7 @@ export const POST: APIRoute = async (ctx) => {
   const [orden] = await db
     .select({
       id: ordenes.id,
+      codigo: ordenes.codigo,
       titulo: ordenes.titulo,
       estado: ordenes.estado,
       clasePrioridad: ordenes.clasePrioridad,
@@ -79,6 +81,6 @@ export const POST: APIRoute = async (ctx) => {
     ordenId,
     aceptadoEn: ahora,
     aceptadoPor: user.nombre,
-    mensaje: `Riesgo aceptado por escrito en la OT #${ordenId}. Sale del indicador de mantenimiento diferido y queda trazada.`,
+    mensaje: `Riesgo aceptado por escrito en la ${etiquetaOT(orden)}. Sale del indicador de mantenimiento diferido y queda trazada.`,
   });
 };

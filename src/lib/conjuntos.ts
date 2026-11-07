@@ -112,7 +112,7 @@ export async function getConjuntoDetalle(ctx: Context, id: number, fecha?: strin
     antes: e.antes ? JSON.parse(e.antes) : null, despues: JSON.parse(e.despues) }));
   const ordenRows = await db.select({ o: ordenes, v: ordenConjuntos }).from(ordenConjuntos).innerJoin(ordenes, eq(ordenes.id, ordenConjuntos.ordenId))
     .where(and(eq(ordenConjuntos.conjuntoId, id), tecnicoId ? eq(ordenes.asignadoA, tecnicoId) : undefined)).orderBy(desc(ordenConjuntos.fecha), desc(ordenConjuntos.ordenId));
-  const ordenesLista = ordenRows.map(({ o, v }) => ({ id: o.id, titulo: o.titulo, tipo: o.tipo, estado: o.estado, createdAt: o.createdAt,
+  const ordenesLista = ordenRows.map(({ o, v }) => ({ id: o.id, codigo: o.codigo, titulo: o.titulo, tipo: o.tipo, estado: o.estado, createdAt: o.createdAt,
     activoId: v.activoId, activoCodigo: v.activoCodigo, activoNombre: v.activoNombre, funcion: v.funcion, rubro: o.rubro, vinculadaEn: v.fecha }));
   const miembroIds = puestos.flatMap(p => p.componente ? [p.componente.activoId] : []);
   const planes = !fechaConsulta && miembroIds.length ? await db.select({ id: planesMantenimiento.id, titulo: planesMantenimiento.titulo,

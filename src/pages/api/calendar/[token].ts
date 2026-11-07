@@ -2,6 +2,7 @@ import type { APIRoute } from "astro";
 import { eq, and } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { usuarios, ordenes, planesMantenimiento, actividades, activos } from "@/lib/schema";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -107,7 +108,7 @@ export const GET: APIRoute = async (ctx) => {
     const eq = r.a ? `${r.a.codigo} - ${r.a.nombre}` : "";
     addEvent(
       `ot-${r.o.id}`,
-      `OT #${r.o.id}: ${r.o.titulo} [${r.o.prioridad}]`,
+      `${etiquetaOT(r.o)}: ${r.o.titulo} [${r.o.prioridad}]`,
       target,
       false,
       `${eq}${r.o.descripcion ? "\n" + r.o.descripcion : ""}`,

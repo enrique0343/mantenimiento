@@ -341,7 +341,7 @@ try {
   // ── El reporte sale de lo capturado ──────────────────────────────────────
   const db = app.database.getDb(fixture.ctx('/x'));
   const rep = await app.reporte.reporteDeOrden(db, 1);
-  igual(rep.codigo, 'OT-000001');
+  igual(rep.codigo, 'OT-MG0001');
   igual(rep.version, 1);
   igual(rep.tiempos.inicio, hace(120));
   igual(rep.tiempos.fin, hace(40));
@@ -376,7 +376,35 @@ try {
   const csv = await app.csv.GET(fixture.ctx('/api/reportes/mantenimiento?desde=2026-01-01', { rol: 'admin' }).request ? Object.assign(fixture.ctx('/api/reportes/mantenimiento?desde=2026-01-01', { rol: 'admin' }), { params: { tipo: 'mantenimiento' } }) : null);
   igual(csv.status, 200);
   const textoCsv = await csv.text();
-  ok(textoCsv.includes('Minutos de trabajo') && textoCsv.includes('OT-000001'), textoCsv.slice(0, 200));
+  ok(textoCsv.includes('Minutos de trabajo') && textoCsv.includes('OT-MG0001'), textoCsv.slice(0, 200));
+
+  // ── El código de la orden viaja al celular ───────────────────────────────
+  const codigoDe = (id) => one('SELECT codigo c FROM ordenes WHERE id=?', id).c;
+  const enLista = (lista, id) => lista.find((x) => x.id === id)?.codigo;
+  seed(9001);
+  seed(9002, { asignado: null });
+  seed(9003, { estado: 'completada' });
+  seed(9004, { estado: 'completada', asignado: 20 });
+  sqlite.prepare('UPDATE ordenes SET completada_en=? WHERE id IN (9003,9004)').run(new Date().toISOString());
+  sqlite.prepare('INSERT INTO orden_verificacion(orden_id, revisor_id) VALUES(9004, 3)').run();
+  const paquete = (await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body;
+  ok(/^OT-MG\d{4}$/.test(codigoDe(9001)), codigoDe(9001));
+  igual(enLista(paquete.ordenes, 9001), codigoDe(9001), 'Lista de trabajo');
+  igual(enLista(paquete.libres, 9002), codigoDe(9002), 'Sin asignar');
+  igual(enLista(paquete.hechasHoy, 9003), codigoDe(9003), 'Terminadas hoy');
+  igual(enLista(paquete.porVerificar, 9004), codigoDe(9004), 'Por verificar');
+  igual(paquete.ordenes.find((x) => x.id === 9001).activo.codigo, 'AC-01', 'El código del equipo sigue siendo del equipo');
+  const fichaConOrden = (await call(app.equipo.GET, '/api/campo/equipo/1', { method: 'GET', id: 1, rol: 'tecnico' })).body;
+  igual(enLista(fichaConOrden.abiertas, 9001), codigoDe(9001), 'Ficha del equipo');
+  c = await crear({ activoId: 1, tipo: 'preventivo', descripcion: 'Revisión de ruido' });
+  igual(c.status, 201, JSON.stringify(c.body));
+  igual(c.body.orden.codigo, codigoDe(c.body.ordenId), 'La orden recién creada ya trae su código');
+  sqlite.prepare("INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha) VALUES(90,2,'Semestral','semestral','2026-01-15')").run();
+  seed(9100, { plan: 90, activo: 2, estado: 'completada' });
+  c = await crear({ activoId: 2, planId: 90 });
+  igual(c.status, 409);
+  igual(c.body.error, `Este plan ya tiene la ${codigoDe(9100)} esperando verificación.`);
+
   console.log(`PASS test-campo: ${verificaciones} verificaciones; rutas y migraciones reales, sin red.`);
 } finally {
   await close();

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, planesMantenimiento, tickets, sucursales } from "@/lib/schema";
 import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -163,7 +164,7 @@ if (!esMotorista) {
               {misActivas.map((r: any) => (
                 <a href={`/ordenes/${r.o.id}`} class="card block p-4 hover:bg-slate-50 active:bg-slate-100">
                   <div class="flex items-start justify-between gap-2">
-                    <div class="font-mono text-xs text-slate-400">#{r.o.id}</div>
+                    <div class="whitespace-nowrap font-mono text-xs text-slate-400">{etiquetaOT(r.o)}</div>
                     <span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize text-[10px]`}>{r.o.prioridad}</span>
                   </div>
                   <div class="mt-1 text-base font-semibold text-brand-700">{r.o.titulo}</div>
@@ -183,7 +184,7 @@ if (!esMotorista) {
               <table class="w-full text-left text-sm">
                 <thead class="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
-                    <th class="px-4 py-2">#</th>
+                    <th class="px-4 py-2">OT</th>
                     <th class="px-4 py-2">Título</th>
                     <th class="px-4 py-2">Equipo</th>
                     <th class="px-4 py-2">Tipo</th>
@@ -195,7 +196,7 @@ if (!esMotorista) {
                 <tbody class="divide-y divide-slate-100">
                   {misActivas.map((r: any) => (
                     <tr class="hover:bg-slate-50">
-                      <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
+                      <td class="whitespace-nowrap px-4 py-2 font-mono text-xs">{etiquetaOT(r.o)}</td>
                       <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
                       <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
                       <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span></td>

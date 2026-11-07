@@ -6,11 +6,10 @@ import {
   planesMantenimiento, sucursales, ubicaciones, usuarios,
 } from "./schema";
 import { evaluarValorChecklist, minutosEstimadosChecklist, parseChecklist } from "./ordenes";
+import { etiquetaOT } from "./orden-codigo";
 import type { getDb } from "./db";
 
 type Db = ReturnType<typeof getDb>;
-
-export const codigoRegistro = (id: number) => `OT-${String(id).padStart(6, "0")}`;
 
 export const TIPO_ORDEN: Record<string, string> = {
   preventivo: "Preventivo", correctivo: "Correctivo", predictivo: "Predictivo", intervencion: "Intervención planificada", emergencia: "Emergencia",
@@ -133,7 +132,7 @@ export async function reporteDeOrden(db: Db, id: number) {
 
   return {
     orden: o,
-    codigo: codigoRegistro(id),
+    codigo: etiquetaOT(o),
     version: control?.ciclo ?? 1,
     activo: fila.a?.id ? fila.a : null,
     ubicacion: fila.ubicacion ?? o.ubicacionDetalle ?? null,
@@ -193,7 +192,7 @@ export async function consolidadoMantenimiento(db: Db, f: FiltrosConsolidado) {
   if (f.tipo) conds.push(eq(ordenes.tipo, f.tipo as any));
   const filas = await db
     .select({
-      id: ordenes.id, titulo: ordenes.titulo, tipo: ordenes.tipo, estado: ordenes.estado, rubro: ordenes.rubro,
+      id: ordenes.id, codigoOrden: ordenes.codigo, titulo: ordenes.titulo, tipo: ordenes.tipo, estado: ordenes.estado, rubro: ordenes.rubro,
       iniciadaEn: ordenes.iniciadaEn, completadaEn: ordenes.completadaEn, pausaMin: ordenes.tiempoPausadoMin, checklist: ordenes.checklistEjecucion,
       sucursalOrden: ordenes.sucursalId, codigo: activos.codigo, equipo: activos.nombre, ubicacion: ubicaciones.nombre, sedeUb: ubicaciones.sucursalId, tecnico: usuarios.nombre,
     })
@@ -214,7 +213,7 @@ export async function consolidadoMantenimiento(db: Db, f: FiltrosConsolidado) {
       const estimadoMin = minutosEstimadosChecklist(pasos) || null;
       return {
         id: x.id,
-        registro: codigoRegistro(x.id),
+        registro: etiquetaOT({ id: x.id, codigo: x.codigoOrden }),
         titulo: x.titulo,
         tipo: x.tipo,
         tipoLabel: TIPO_ORDEN[x.tipo] ?? x.tipo,

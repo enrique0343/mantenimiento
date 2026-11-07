@@ -13,6 +13,7 @@ import {
 // El indicador 8 lo calcula el motor AOP, dueño de aop_eventos: no se duplica.
 import { horasFueraRangoPorSala } from "@/lib/aop";
 import { fmtFechaSolo, fmtFechaSoloCompacta, fmtFechaCompacta } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -363,7 +364,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
             {diferidas.map((d) => (
               <tr>
                 <td class="px-3 py-2 align-top">
-                  <a href={`/ordenes/${d.id}`} class="font-semibold text-brand-700 hover:underline">#{d.id}</a>
+                  <a href={`/ordenes/${d.id}`} class="whitespace-nowrap font-semibold text-brand-700 hover:underline">{etiquetaOT(d)}</a>
                   <div class="max-w-[15rem] truncate text-[11px] text-slate-500" title={d.titulo}>{d.titulo}</div>
                 </td>
                 <td class="px-3 py-2 align-top">
@@ -386,7 +387,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
                 {puedeAceptarRiesgo && (
                   <td class="px-3 py-2 align-top text-right">
                     <button type="button" class="riesgo-btn btn-secondary btn-sm whitespace-nowrap"
-                      data-id={String(d.id)} data-titulo={d.titulo} data-dias={String(d.diasVencida)}>
+                      data-id={String(d.id)} data-codigo={etiquetaOT(d)} data-titulo={d.titulo} data-dias={String(d.diasVencida)}>
                       Aceptar riesgo por escrito
                     </button>
                   </td>
@@ -407,7 +408,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
           {diferidoAceptado.map((r) => (
             <li class="rounded-md bg-white px-3 py-2">
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <a href={`/ordenes/${r.id}`} class="font-semibold text-brand-700 hover:underline">#{r.id} · {r.titulo}</a>
+                <a href={`/ordenes/${r.id}`} class="font-semibold text-brand-700 hover:underline">{etiquetaOT(r)} · {r.titulo}</a>
                 <span class="text-slate-500">
                   {r.aceptadoPorNombre ?? "—"} · {r.riesgoAceptadoEn ? fmtFechaCompacta(r.riesgoAceptadoEn) : "—"}
                   {r.diasVencida != null && <span class="ml-1">· {r.diasVencida} d vencida</span>}
@@ -979,11 +980,14 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       const el = (id: string) => document.getElementById(id);
       const showR = () => { riesgoModal.classList.remove("hidden"); riesgoModal.classList.add("flex"); };
       const hideR = () => { riesgoModal.classList.add("hidden"); riesgoModal.classList.remove("flex"); };
+      // El código de la orden abierta en el modal: el confirm lo vuelve a nombrar.
+      let codigoOT = "";
 
       document.querySelectorAll<HTMLButtonElement>(".riesgo-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           (el("r_id") as HTMLInputElement).value = btn.dataset.id ?? "";
-          el("r_ot")!.textContent = `OT #${btn.dataset.id} · ${btn.dataset.titulo ?? ""}`;
+          codigoOT = btn.dataset.codigo ?? "";
+          el("r_ot")!.textContent = `${codigoOT} · ${btn.dataset.titulo ?? ""}`;
           el("r_meta")!.textContent = `${btn.dataset.dias ?? "?"} días vencida · clase P1`;
           (el("r_notas") as HTMLTextAreaElement).value = "";
           el("r_err")!.classList.add("hidden");
@@ -1006,8 +1010,8 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
           return;
         }
         const ok = window.confirmAction
-          ? await window.confirmAction("Aceptar riesgo por escrito", `La OT #${ordenId} saldrá del indicador de mantenimiento diferido y la aceptación quedará registrada a tu nombre. ¿Continuar?`, { confirmLabel: "Aceptar riesgo" })
-          : confirm(`La OT #${ordenId} saldrá del indicador de mantenimiento diferido. ¿Continuar?`);
+          ? await window.confirmAction("Aceptar riesgo por escrito", `La ${codigoOT} saldrá del indicador de mantenimiento diferido y la aceptación quedará registrada a tu nombre. ¿Continuar?`, { confirmLabel: "Aceptar riesgo" })
+          : confirm(`La ${codigoOT} saldrá del indicador de mantenimiento diferido. ¿Continuar?`);
         if (!ok) return;
 
         const btn = ev.currentTarget as HTMLButtonElement;

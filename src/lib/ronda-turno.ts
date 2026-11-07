@@ -12,10 +12,12 @@ import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { ahoraSV, parsearTurnos, sumarDias, turnoActual, etiquetaTurno } from "./turnos";
 import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre, registrarAccion } from "./aop";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import {
   aopEventos,
   aopUmbrales,
   mediciones,
+  ordenes,
   procedimientos,
   rondaEjecuciones,
   rondaLecturas,
@@ -363,7 +365,10 @@ export async function ligarOrdenALectura(
     .update(aopEventos)
     .set({ ordenId, ...(emergencia ? { estado: "paso_a_eop" as const, escaladoEn: momento } : {}) })
     .where(eq(aopEventos.id, lectura.aopEventoId));
-  if (emergencia) await registrarAccion(db, lectura.aopEventoId, "Pasó a EOP desde la ronda", `Orden #${ordenId}`, usuarioId);
+  if (emergencia) {
+    const [orden] = await db.select({ codigo: ordenes.codigo }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
+    await registrarAccion(db, lectura.aopEventoId, "Pasó a EOP desde la ronda", etiquetaOT({ id: ordenId, codigo: orden?.codigo }), usuarioId);
+  }
 }
 
 // ── El tablero ──────────────────────────────────────────────────────────────

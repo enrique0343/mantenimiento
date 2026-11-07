@@ -9,6 +9,7 @@ import {
 } from "@/lib/schema";
 import { eq, desc, and, sql, isNotNull, gte } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
 import { areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
@@ -37,18 +38,20 @@ const otIds = ots.map((r) => r.o.id);
 
 // Comentarios de esas OTs
 const coms = otIds.length > 0 ? await db
-  .select({ c: comentarios, u: usuarios })
+  .select({ c: comentarios, u: usuarios, codigoOrden: ordenes.codigo })
   .from(comentarios)
   .leftJoin(usuarios, eq(usuarios.id, comentarios.usuarioId))
+  .leftJoin(ordenes, eq(ordenes.id, comentarios.ordenId))
   .where(sql`${comentarios.ordenId} IN (${sql.raw(otIds.join(","))})`)
   .orderBy(desc(comentarios.id))
   : [];
 
 // Repuestos consumidos
 const repuestos = otIds.length > 0 ? await db
-  .select({ rep: ordenRepuestos, it: itemsTable })
+  .select({ rep: ordenRepuestos, it: itemsTable, codigoOrden: ordenes.codigo })
   .from(ordenRepuestos)
   .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
+  .leftJoin(ordenes, eq(ordenes.id, ordenRepuestos.ordenId))
   .where(sql`${ordenRepuestos.ordenId} IN (${sql.raw(otIds.join(","))})`)
   .orderBy(desc(ordenRepuestos.id))
   : [];
@@ -161,7 +164,7 @@ for (const r of ots) {
   eventos.push({
     fecha: r.o.createdAt,
     tipo: "ot_creada",
-    titulo: `OT #${r.o.id}: ${r.o.titulo}`,
+    titulo: `${etiquetaOT(r.o)}: ${r.o.titulo}`,
     detalle: r.o.descripcion ?? "",
     meta: `${r.o.tipo} · ${r.o.prioridad}${r.asignado ? ` · ${r.asignado.nombre}` : ""}`,
     link: `/ordenes/${r.o.id}`,
@@ -172,7 +175,7 @@ for (const r of ots) {
     eventos.push({
       fecha: r.o.completadaEn,
       tipo: "ot_completada",
-      titulo: `Completada OT #${r.o.id}`,
+      titulo: `Completada ${etiquetaOT(r.o)}`,
       detalle: r.o.solucionAplicada ?? r.o.trabajosRealizados ?? "",
       meta: `${r.o.horasTrabajadas ?? 0}h trabajadas`,
       link: `/ordenes/${r.o.id}`,
@@ -184,7 +187,7 @@ for (const r of ots) {
     eventos.push({
       fecha: r.o.cerradoEn,
       tipo: "ot_cerrada",
-      titulo: `Cerrada OT #${r.o.id}`,
+      titulo: `Cerrada ${etiquetaOT(r.o)}`,
       detalle: "",
       link: `/ordenes/${r.o.id}`,
       color: "border-slate-400",
@@ -196,7 +199,7 @@ for (const c of coms) {
   eventos.push({
     fecha: c.c.createdAt,
     tipo: "comentario",
-    titulo: `Comentario en OT #${c.c.ordenId}`,
+    titulo: `Comentario en ${etiquetaOT({ id: c.c.ordenId, codigo: c.codigoOrden })}`,
     detalle: c.c.texto.slice(0, 200),
     meta: c.u?.nombre,
     link: `/ordenes/${c.c.ordenId}`,
@@ -210,7 +213,7 @@ for (const r of repuestos) {
     tipo: "repuesto",
     titulo: `Repuesto: ${r.it?.codigo ?? ""} ${r.it?.nombre ?? ""}`,
     detalle: `${r.rep.cantidad} ${r.it?.unidad ?? ""}${r.rep.precioUnitario ? ` × $${r.rep.precioUnitario}` : ""}`,
-    meta: `OT #${r.rep.ordenId}`,
+    meta: etiquetaOT({ id: r.rep.ordenId, codigo: r.codigoOrden }),
     link: `/ordenes/${r.rep.ordenId}`,
     color: "border-amber-400",
     icono: "",

@@ -10,7 +10,8 @@ const MAX_OPS = 25;
 // D1 permite 50 consultas por invocación en el plan gratuito (un batch cuenta como una).
 // Lo que no cabe se queda en la cola del celular y sale en la siguiente vuelta, en orden.
 const PRESUPUESTO = 45;
-const peso = (op: OperacionCampo) => (op?.tipo === "ronda.lectura" ? (op.resultado === "fuera" ? 15 : op.resultado === "no_verificado" ? 10 : 4) : 15);
+// La emergencia lee además el código de la orden para anotarlo en la bitácora del AOP.
+const peso = (op: OperacionCampo) => (op?.tipo === "ronda.lectura" ? (op.resultado === "fuera" ? 15 : op.resultado === "no_verificado" ? 10 : 4) : op?.tipo === "emergencia.abrir" ? 16 : 15);
 
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);

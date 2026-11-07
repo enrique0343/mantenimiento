@@ -11,6 +11,7 @@ import { eq, desc, asc } from "drizzle-orm";
 import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
 import { rubroLabel, rubroIcono, subcatLabel, subcatIcono, rubroDeActivo, MODALIDAD_LABEL } from "@/lib/rubros";
 import { areaHref, parseArea } from "@/lib/areas";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { leerDatosTecnicos } from "@/lib/activo-area";
 export const prerender = false;
 
@@ -187,7 +188,7 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
         <tbody class="divide-y divide-slate-100">
           {ots.map(({ o, tec }) => (
             <tr>
-              <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400">#{o.id}</td>
+              <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400 whitespace-nowrap">{etiquetaOT(o)}</td>
               <td class="px-2 py-1.5 capitalize">{o.tipo}</td>
               <td class="px-2 py-1.5">
                 <span class="font-medium text-slate-800">{o.titulo}</span>

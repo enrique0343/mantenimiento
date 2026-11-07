@@ -14,6 +14,7 @@ import {
 } from "@/lib/proyectos";
 import { ESTADO_LABEL as ESTADO_OT_LABEL, ESTADO_COLOR as ESTADO_OT_COLOR } from "@/lib/ordenes";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { fmtFechaSimple, fmtFechaLarga } from "@/lib/datetime";
 import { parseArea, AREAS, AREA_KEYS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
@@ -334,7 +335,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
         {otsHijas.map((r) => (
           <li class="flex items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50">
             <a href={`/ordenes/${r.o.id}`} class="flex-1">
-              <span class="font-mono text-xs text-slate-400">#{r.o.id}</span>
+              <span class="font-mono text-xs text-slate-400 whitespace-nowrap">{etiquetaOT(r.o)}</span>
               <span class="ml-2 font-medium text-sm">{r.o.titulo}</span>
               <div class="text-xs text-slate-500 mt-0.5">{r.u?.nombre ?? "Sin asignar"}</div>
             </a>

@@ -55,7 +55,7 @@ export const GET: APIRoute = async (ctx) => {
 
   return Response.json({
     orden: {
-      id: ot.id, titulo: ot.titulo, estado: ot.estado,
+      id: ot.id, codigo: ot.codigo, titulo: ot.titulo, estado: ot.estado,
       createdAt: ot.createdAt, iniciadaEn: ot.iniciadaEn,
       completadaEn: ot.completadaEn, verificadoEn: ot.verificadoEn,
       cerradoEn: ot.cerradoEn,

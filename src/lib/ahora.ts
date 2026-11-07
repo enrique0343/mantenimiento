@@ -18,6 +18,7 @@ import { getDb } from "./db";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva } from "./aop";
 import { inferirSistema, SISTEMA_LABEL, type Sistema } from "./resolver";
 import { resumenTablero, tableroRondas } from "./ronda-turno";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import {
   activos,
   aopEventos,
@@ -244,7 +245,7 @@ async function bloqueEmergencias(db: Db, opts: OpcionesAhora): Promise<BloqueAho
       detalle: "Ninguna emergencia abierta.", accion: null, items: [] };
   }
   const items: ItemAhora[] = filas.slice(0, 5).map((f) => ({
-    texto: `#${f.o.id} · ${f.o.titulo}`,
+    texto: `${etiquetaOT(f.o)} · ${f.o.titulo}`,
     meta: [f.codigoEop, f.activo, f.o.horaMitigacion ? "mitigada" : "sin mitigar"].filter(Boolean).join(" · "),
     href: `/ordenes/${f.o.id}`,
     tono: f.o.horaMitigacion ? "atencion" : "urgente",
@@ -309,7 +310,7 @@ async function bloqueIntervenciones(db: Db, opts: OpcionesAhora): Promise<Bloque
     .map((f) => {
       const n = pendientesPorOrden.get(f.o.id) ?? 0;
       return {
-        texto: `#${f.o.id} · ${f.o.titulo}`,
+        texto: `${etiquetaOT(f.o)} · ${f.o.titulo}`,
         meta: [f.codigoMop, f.activo, n > 0 ? `${n} prerrequisito(s) pendiente(s)` : "lista para iniciar"]
           .filter(Boolean)
           .join(" · "),
