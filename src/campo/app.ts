@@ -1235,7 +1235,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const final = nota.length >= 10 ? nota : h.valorTxt ? (nota ? `${h.valorTxt}. ${nota}` : h.valorTxt) : "";
     if (!final) { const e = $("#err-problema"); if (e) e.hidden = false; t?.focus(); return; }
     const o = ordenDe(E.flujo?.ordenId as number);
-    abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, nota: final }, `Correctivo: ${tituloOrden(o)}`);
+    abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, rubro: o.rubro ?? "infraestructura", nota: final }, `Correctivo: ${tituloOrden(o)}`);
     detenerOrden(o, final, h.valor);
   },
   problemaDetener() {
@@ -1249,7 +1249,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   abrirCorrectivoDesdeFin() {
     const o = ordenDe(E.flujo?.ordenId as number);
     const crit = o.pasos.find((p: Any) => p.estado === "desviacion" && p.critico);
-    abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, nota: crit?.nota ?? "Punto crítico con novedad durante el preventivo." }, `Correctivo: ${tituloOrden(o)}`);
+    abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, rubro: o.rubro ?? "infraestructura", nota: crit?.nota ?? "Punto crítico con novedad durante el preventivo." }, `Correctivo: ${tituloOrden(o)}`);
     pintar();
   },
   noconf() {

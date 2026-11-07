@@ -276,6 +276,10 @@ try {
     ['Puerta de vidrio', 'Puertas y ventanas', 'infraestructura', null, 'otro'],
   ]) igual(inferirSistema(nombre, categoria, rubro, lugar), esperado, `${nombre} / ${categoria} / ${lugar}`);
 
+  // Una orden sin equipo también puede abrir su correctivo: el celular manda el área de la orden.
+  const hoyAreas = await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' });
+  igual(hoyAreas.status, 200);
+  ok(hoyAreas.body.ordenes.concat(hoyAreas.body.libres).every((o) => 'rubro' in o), 'Cada orden del paquete trae su área');
   // ── Mantenimiento fuera de la lista ──────────────────────────────────────
   const crear = (data, rol = 'tecnico') => call(app.crear.POST, '/api/campo/ordenes', { method: 'POST', data, rol });
   let c = await crear({ activoId: 2, planId: 1 });

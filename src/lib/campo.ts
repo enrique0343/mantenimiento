@@ -88,6 +88,7 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
   const pasos = parseChecklist(o.checklistEjecucion);
   return {
     id: o.id,
+    rubro: o.rubro,
     codigo: o.codigo ?? null,
     titulo: o.titulo,
     tipo: o.tipo,
