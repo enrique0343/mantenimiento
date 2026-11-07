@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { items, proveedores } from "@/lib/schema";
@@ -96,7 +97,8 @@ const hoy = new Date().toISOString().slice(0, 10);
     </form>
   )}
 
-  <script define:vars={{ itemsJson }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ itemsJson }) }}>
+    const { itemsJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const ITEMS = JSON.parse(itemsJson);
     const lines = document.getElementById("lines");
     let idx = 0;

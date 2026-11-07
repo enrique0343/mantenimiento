@@ -2,9 +2,10 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { actividades, actividadCategorias, sucursales, usuarios } from "@/lib/schema";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, or, isNull } from "drizzle-orm";
 import { estadoFecha, ESTADO_FECHA_COLOR, FRECUENCIA_LABEL, diasParaFecha, puedeVerActividades, puedeAdministrarActividades } from "@/lib/actividades";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { parseArea, areaHref } from "@/lib/areas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -12,6 +13,7 @@ if (!puedeVerActividades(user.rol)) return Astro.redirect("/");
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
+const area = parseArea(url.searchParams.get("area"));
 const sucursalFiltro = url.searchParams.get("sucursal");
 const categoriaFiltro = url.searchParams.get("categoria");
 
@@ -21,7 +23,7 @@ const rowsRaw = await db
   .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
   .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
   .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
-  .where(eq(actividades.activo, true))
+  .where(and(eq(actividades.activo, true), area ? eq(actividades.rubro, area) : undefined))
   .orderBy(asc(actividades.proximaFecha));
 
 const rows = rowsRaw.filter((r) =>
@@ -30,7 +32,7 @@ const rows = rowsRaw.filter((r) =>
 );
 
 const sucursalesList = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
-const categoriasList = await db.select().from(actividadCategorias).where(eq(actividadCategorias.activo, true)).orderBy(actividadCategorias.orden);
+const categoriasList = await db.select().from(actividadCategorias).where(and(eq(actividadCategorias.activo, true), area ? or(eq(actividadCategorias.rubro, area), isNull(actividadCategorias.rubro)) : undefined)).orderBy(actividadCategorias.orden);
 
 const fmt = (s: string) => new Date(s + "T00:00:00").toLocaleDateString("es", { timeZone: "America/El_Salvador" });
 const vencidas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaDiasAntes) === "vencido").length;
@@ -44,13 +46,14 @@ const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaD
       <p class="text-sm text-slate-500">{rowsRaw.length} activas · {vencidas} vencidas · {proximas} próximas</p>
     </div>
     {puedeAdministrarActividades(user.rol) && (
-      <a href="/actividades/nuevo" class="btn-primary">+ Nueva actividad</a>
+      <a href={areaHref("/actividades/nuevo", area)} class="btn-primary">+ Nueva actividad</a>
     )}
   </div>
 
   <!-- Filtros -->
   <div class="card mt-4 p-3">
     <form class="flex flex-wrap items-end gap-3" method="get">
+    {area && <input type="hidden" name="area" value={area} />}
       <div>
         <label class="label text-xs">Sucursal</label>
         <select name="sucursal" class="input text-sm">
@@ -66,7 +69,7 @@ const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaD
         </select>
       </div>
       <button class="btn-primary text-sm">Filtrar</button>
-      {(sucursalFiltro || categoriaFiltro) && <a href="/actividades" class="btn-secondary text-sm">Limpiar</a>}
+      {(sucursalFiltro || categoriaFiltro) && <a href={areaHref("/actividades", area)} class="btn-secondary text-sm">Limpiar</a>}
     </form>
   </div>
 
@@ -92,7 +95,7 @@ const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaD
           return (
             <tr class="hover:bg-slate-50">
               <td class="px-4 py-2 font-mono text-xs">
-                <a class="text-brand-700 hover:underline" href={`/actividades/${r.a.id}`}>{r.a.codigo}</a>
+                <a class="text-brand-700 hover:underline" href={areaHref(`/actividades/${r.a.id}`, area ?? r.a.rubro)}>{r.a.codigo}</a>
               </td>
               <td class="px-4 py-2">{r.a.titulo}</td>
               <td class="px-4 py-2 text-sm">{r.c?.icono} {r.c?.nombre ?? "—"}</td>

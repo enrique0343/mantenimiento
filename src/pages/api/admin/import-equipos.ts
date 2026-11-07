@@ -4,6 +4,10 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { AREA_KEYS } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
+import { textoRegistro } from "@/lib/registro-activos";
 
 export const prerender = false;
 
@@ -13,18 +17,21 @@ export const prerender = false;
 // Cualquier columna extra se ignora. Solo codigo + nombre son obligatorias.
 
 const itemSchema = z.object({
-  codigo: z.string().min(1),
-  nombre: z.string().min(1),
+  codigo: z.string().trim().toUpperCase().min(1),
+  nombre: z.string().trim().toUpperCase().min(1),
   tipo: z.enum(["general", "biomedico"]).optional(),
-  categoria: z.string().optional().nullable(),
-  marca: z.string().optional().nullable(),
-  modelo: z.string().optional().nullable(),
-  serial: z.string().optional().nullable(),
+  rubro: z.enum(AREA_KEYS).optional(),
+  criticidadOperacional: z.enum(["alta", "media", "baja"]).default("media"),
+  datosTecnicos: datosTecnicosSchema,
+  categoria: textoRegistro,
+  marca: textoRegistro,
+  modelo: textoRegistro,
+  serial: textoRegistro,
   anio: z.number().int().optional().nullable(),
   estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
   ubicacion_nombre: z.string().optional().nullable(),
   sucursal_nombre: z.string().optional().nullable(),
-  descripcion: z.string().optional().nullable(),
+  descripcion: textoRegistro,
 });
 
 function parseCsv(text: string): Array<Record<string, string>> {
@@ -67,6 +74,7 @@ function parseLine(line: string): string[] {
 const bodySchema = z.object({
   csv: z.string().min(10),
   dryRun: z.boolean().optional(),
+  area: z.enum(AREA_KEYS).nullable().optional(),
 });
 
 export const POST: APIRoute = async (ctx) => {
@@ -90,7 +98,7 @@ export const POST: APIRoute = async (ctx) => {
 
   // Códigos existentes (para skip)
   const existRows = await db.select({ codigo: activos.codigo }).from(activos);
-  const codigosExist = new Set(existRows.map((e) => e.codigo));
+  const codigosExist = new Set(existRows.map((e) => e.codigo.toUpperCase()));
 
   const errores: Array<{ fila: number; codigo?: string; error: string }> = [];
   const aInsertar: any[] = [];
@@ -101,6 +109,16 @@ export const POST: APIRoute = async (ctx) => {
       codigo: row.codigo,
       nombre: row.nombre,
       tipo: (row.tipo as any) || undefined,
+      rubro: row.rubro || row.area || parsed.data.area || undefined,
+      criticidadOperacional: row.criticidad || row.criticidad_operacional || undefined,
+      datosTecnicos: {
+        tipoUnidad: row.tipo_unidad || null,
+        capacidadBtuH: row.capacidad_btu_h ? Number(row.capacidad_btu_h) : null,
+        refrigerante: row.refrigerante || null,
+        tipoInstalacion: row.tipo_instalacion || null,
+        sector: row.sector || null,
+        servicio: row.servicio || null,
+      },
       categoria: row.categoria || null,
       marca: row.marca || null,
       modelo: row.modelo || null,
@@ -114,6 +132,11 @@ export const POST: APIRoute = async (ctx) => {
     const v = itemSchema.safeParse(dataRaw);
     if (!v.success) { errores.push({ fila: filaNum, codigo: row.codigo, error: v.error.errors[0]?.message ?? "datos inválidos" }); return; }
     const d = v.data;
+    const rubro = rubroDeActivo(d.rubro, d.tipo);
+    const tipo = rubro === "biomedico" ? "biomedico" : "general";
+    if (parsed.data.area && rubro !== parsed.data.area) { errores.push({ fila: filaNum, codigo: d.codigo, error: "El área de la fila no corresponde al inventario seleccionado" }); return; }
+    if (d.tipo && d.tipo !== tipo) { errores.push({ fila: filaNum, codigo: d.codigo, error: "El tipo de equipo no corresponde al área" }); return; }
+    if (!datosTecnicosValidosParaArea(rubro, d.datosTecnicos)) { errores.push({ fila: filaNum, codigo: d.codigo, error: "Los datos técnicos no corresponden al área" }); return; }
 
     if (codigosExist.has(d.codigo)) { errores.push({ fila: filaNum, codigo: d.codigo, error: "código ya existe" }); return; }
 
@@ -127,7 +150,10 @@ export const POST: APIRoute = async (ctx) => {
     aInsertar.push({
       codigo: d.codigo,
       nombre: d.nombre,
-      tipo: d.tipo ?? "general",
+      tipo,
+      rubro,
+      criticidadOperacional: d.criticidadOperacional,
+      datosTecnicos: serializarDatosTecnicos(rubro, d.datosTecnicos),
       categoria: d.categoria,
       marca: d.marca,
       modelo: d.modelo,
@@ -138,6 +164,7 @@ export const POST: APIRoute = async (ctx) => {
       ubicacionId,
       qrCode: `QR-${d.codigo}`,
     });
+    codigosExist.add(d.codigo);
   });
 
   if (dryRun) {

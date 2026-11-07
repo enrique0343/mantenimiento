@@ -12,6 +12,17 @@ interface Env {
   JWT_SECRET: string;
   CRON_SECRET: string;
   APP_NAME: string;
+  // Opt-in scheduler; notifications still dry-run.
+  RONDAS_SCHEDULER_ENABLED?: string;
+  // Private SGO connector; absent/false keeps the entire integration disabled.
+  SGO_INTEGRATION_ENABLED?: string;
+  SGO_AUTH_DIAGNOSTICS_ENABLED?: string;
+  SGO_ACCESS_ISSUER?: string;
+  SGO_ACCESS_AUD?: string;
+  SGO_API_ORIGIN?: string;
+  SGO_SERVICE_PRINCIPALS_JSON?: string;
+  SGO_CURSOR_SECRET?: string;
+  SGO_PUBLISH_SECRET?: string;
   // Email config (cualquier proveedor compatible)
   EMAIL_PROVIDER?: string;
   EMAIL_FROM?: string;
@@ -45,6 +56,7 @@ interface Window {
 
 declare namespace App {
   interface Locals extends Runtime {
+    area?: import("./lib/areas").AreaKey | null;
     user?: {
       id: number;
       email: string;

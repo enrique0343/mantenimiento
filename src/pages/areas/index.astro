@@ -1,0 +1,22 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import AppIcon from "@/components/AppIcon.astro";
+import { AREA_KEYS, AREAS, activoAreaExpression } from "@/lib/areas";
+import { getDb } from "@/lib/db";
+import { activos, ordenes } from "@/lib/schema";
+import { sql, eq, and, inArray } from "drizzle-orm";
+export const prerender = false;
+const db = getDb(Astro);
+const user = Astro.locals.user!;
+const isTech = user.rol === "tecnico";
+const assetCounts = await db.select({area:activoAreaExpression,n:sql<number>`count(*)`}).from(activos).groupBy(activoAreaExpression);
+const orderCounts = await db.select({area:ordenes.rubro,n:sql<number>`count(*)`}).from(ordenes).where(and(inArray(ordenes.estado,["abierta","en_proceso","en_espera","completada"]),isTech?eq(ordenes.asignadoA,user.id):undefined)).groupBy(ordenes.rubro);
+const count = (rows: {area:string|null,n:number}[], area:string) => Number(rows.find(r=>r.area===area)?.n??0);
+---
+<Layout title="Áreas de mantenimiento">
+  <div class="workspace-heading"><div><span class="area-eyebrow">Operación</span><h1>Áreas de mantenimiento</h1><p>Elige el área en la que vas a trabajar.</p></div><span class="workspace-date">{new Date().toLocaleDateString("es-SV",{day:"numeric",month:"long",timeZone:"America/El_Salvador"})}</span></div>
+  <div class="workspace-grid">
+    {AREA_KEYS.map(key=><a href={`/areas/${key}`} class="workspace-card"><span class="area-symbol"><AppIcon name={AREAS[key].icon} size={24}/></span><h2>{AREAS[key].label}</h2><p>{AREAS[key].description}</p><div class="workspace-counts"><span>{count(assetCounts,key)} {AREAS[key].inventoryLabel.toLowerCase()}</span><span>{count(orderCounts,key)} órdenes abiertas</span></div><span class="workspace-enter">Entrar al área <AppIcon name="arrow" size={18}/></span></a>)}
+  </div>
+  <div class="workspace-footer"><span>Usuarios, ubicaciones y recursos compartidos.</span><a href="/mi-panel">Ver mi trabajo →</a></div>
+</Layout>

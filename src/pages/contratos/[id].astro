@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -344,7 +345,8 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
     </div>
   </div>
 
-  <script define:vars={{ contratoId: id, equiposDispJson }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ contratoId: id, equiposDispJson }) }}>
+    const { contratoId, equiposDispJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const DISP = JSON.parse(equiposDispJson);
 
     // ── Renovar ─────────────────────────────────────────

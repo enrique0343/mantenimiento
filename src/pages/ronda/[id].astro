@@ -16,7 +16,7 @@ import {
   rangoNormal,
   etiquetaTurno,
   type RondaLectura,
-} from "@/lib/rondas";
+} from "@/lib/ronda-turno";
 import { cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
 import { sistemaInfo } from "@/lib/procedimientos";
@@ -401,7 +401,7 @@ const criticosPendientes = puntos.filter((p) => p.critico && !porPunto.has(p.id)
       btn.setAttribute("disabled", "true");
       btn.textContent = "…";
       try {
-        const r = await fetch("/api/rondas/" + ejecId + "/lectura", {
+        const r = await fetch("/api/ronda-turno/" + ejecId + "/lectura", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -442,7 +442,7 @@ const criticosPendientes = puntos.filter((p) => p.critico && !porPunto.has(p.id)
     btn.textContent = "Cerrando…";
     try {
       const notas = document.getElementById("cerrar-notas")?.value?.trim() || null;
-      const r = await fetch("/api/rondas/" + ejecId + "/cerrar", {
+      const r = await fetch("/api/ronda-turno/" + ejecId + "/cerrar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notas }),

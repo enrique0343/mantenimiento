@@ -1,6 +1,7 @@
 ---
 // Tablero AOP · el espacio entre "lo anoté en la ronda" y "es una emergencia".
 // Ordenado por urgencia del reloj: lo vencido para escalar va primero.
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -605,7 +606,8 @@ const SECCIONES = [
     </div>
   )}
 
-  <script define:vars={{ umbralesJson, presetsJson, puedeOperar, puedeAdmin }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ umbralesJson, presetsJson, puedeOperar, puedeAdmin }) }}>
+    const { umbralesJson, presetsJson, puedeOperar, puedeAdmin } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const umbrales = JSON.parse(umbralesJson);
     const presets = JSON.parse(presetsJson);
     const $ = (id) => document.getElementById(id);

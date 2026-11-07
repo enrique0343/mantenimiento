@@ -166,26 +166,26 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
 
   await sendMail(ctx, {
     to: sol.email,
-    subject: `[OT #${orden.id}] Tu solicitud quedó resuelta — ${orden.titulo}`,
+    subject: `[OT #${orden.id}] Trabajo ejecutado; pendiente de verificación — ${orden.titulo}`,
     html: emailLayout(
-      "Tu solicitud quedó resuelta",
+      "Trabajo ejecutado; pendiente de verificación",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
-       <p>Te confirmamos que tu orden ya fue atendida.</p>
+       <p>El técnico registró la ejecución. Una persona autorizada distinta del ejecutor debe comprobar el trabajo antes del cierre.</p>
        <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico responsable:</strong> ${asg.nombre}</li>` : ""}
-         <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
-         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">✓ completada</span></li>
+         <li><strong>Fecha de ejecución:</strong> ${fechaCierre}</li>
+         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">Pendiente de verificación</span></li>
        </ul>
        ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
          <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
        <p style="margin-top:18px"><strong>Tu validación nos importa.</strong> Tú conoces el área mejor que nadie. Si al verificar notas que el problema original persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
-       <p>Si todo quedó conforme, no necesitas hacer nada. Tu silencio confirma el cierre.</p>
+       <p>Si todo quedó conforme, no necesitas hacer nada. El cierre requiere verificación independiente; el silencio no lo confirma.</p>
        <p style="margin:18px 0">
          <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">${linkLabel}</a>
          ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
        </p>
-       <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. Cada orden cerrada es una oportunidad de hacerlo mejor la próxima vez.</em></p>`
+       <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. La evidencia de ejecución y revisión quedará en el historial.</em></p>`
     ),
     tipo: "ot_completada",
     referencia: `orden:${orden.id}`,
@@ -193,14 +193,14 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
 
   if (sol.telegramChatId) {
     await sendTelegram(env, sol.telegramChatId,
-      `✅ <b>Completada:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
+      `🔎 <b>Pendiente de verificación:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
       { linkUrl: url, linkLabel: "Ver orden" }
     );
   }
   if (sol.usuarioId) {
     await crearNotificacion(ctx, {
       usuarioId: sol.usuarioId, tipo: "ot_completada",
-      titulo: `OT #${orden.id} completada`,
+      titulo: `OT #${orden.id} pendiente de verificación`,
       mensaje: orden.titulo,
       link: `/ordenes/${orden.id}`,
     });

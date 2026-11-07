@@ -11,12 +11,19 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
+import { parseArea } from "@/lib/areas";
+import { validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
+import { sembrarDesdeMop } from "@/lib/mop";
+
 export const prerender = false;
 
 const createSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().optional().nullable(),
-  tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
+  tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),
+  // El documento que la rige: una intervención hereda de él sus prerrequisitos.
+  procedimientoId: z.number().int().positive().optional().nullable(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   // Sucursal obligatoria, ubicación opcional
   sucursalId: z.number().int().positive(),
@@ -37,7 +44,11 @@ export const GET: APIRoute = async (ctx) => {
   const estado = url.searchParams.get("estado") as any;
   const asignado = url.searchParams.get("asignado");
 
+  const rawArea = url.searchParams.get("area");
+  const area = parseArea(rawArea);
+  if (rawArea !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   const conditions = [];
+  if (area) conditions.push(eq(ordenes.rubro, area));
   if (estado) conditions.push(eq(ordenes.estado, estado));
   if (asignado === "me") conditions.push(eq(ordenes.asignadoA, user.id));
   // Restricción de visibilidad: técnicos solo ven sus OTs
@@ -74,6 +85,11 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
 
+  const areaResult = await validarAreaTrabajo(db, parsed.data);
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  const contextError = validarContextoArea(ctx.request, areaResult.rubro);
+  if (contextError) return contextError;
+
   // Si no se proporcionó vencimiento explícito y hay equipo, calcular desde SLA
   let vencimiento = parsed.data.vencimiento ?? null;
   if (!vencimiento && parsed.data.activoId) {
@@ -86,13 +102,29 @@ export const POST: APIRoute = async (ctx) => {
     .insert(ordenes)
     .values({
       ...parsed.data,
+      rubro: areaResult.rubro,
       vencimiento,
       creadoPor: user.id,
       // Si la OT nace ya asignada, registramos la marca de asignación para que
       // la lista pueda mostrar "asignada hace N días" sin depender del log.
       asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
+      // Una emergencia nace P1 y con la hora de alarma: se actúa primero y se
+      // registra después (cap. 02), pero el reloj de la causa raíz ya corre.
+      ...(parsed.data.tipo === "emergencia" ? (() => {
+        const alarma = new Date().toISOString();
+        return { clasePrioridad: "P1" as const, horaAlarma: alarma, causaRaizVencimiento: vencimientoCausaRaiz(alarma) };
+      })() : {}),
     })
     .returning();
+
+  // MOP: la orden nace con los prerrequisitos y las lecturas de su plantilla.
+  let sembradoMop: Awaited<ReturnType<typeof sembrarDesdeMop>> | null = null;
+  if (row.tipo === "intervencion" && row.procedimientoId) {
+    try {
+      const r = await sembrarDesdeMop(db, row.id, row.procedimientoId);
+      if (r.prerrequisitos > 0 || r.liberaciones > 0) sembradoMop = r;
+    } catch {}
+  }
 
   // Audit: creación de OT
   await logAudit(ctx, {
@@ -180,5 +212,5 @@ export const POST: APIRoute = async (ctx) => {
     } catch {}
   }
 
-  return Response.json({ orden: row }, { status: 201 });
+  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}) }, { status: 201 });
 };

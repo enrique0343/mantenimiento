@@ -1,0 +1,253 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion, contratosMantenimiento, proveedores, ubicaciones, sucursales } from "@/lib/schema";
+import { sql, eq, and, lte, gte, asc, isNotNull, inArray, desc } from "drizzle-orm";
+import { diasParaVencer } from "@/lib/contratos";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+export const prerender = false;
+
+// Tecnico y Motorista → su panel personal
+const user = Astro.locals.user;
+if (user?.rol === "tecnico" || user?.rol === "motorista") return Astro.redirect("/mi-panel");
+
+const db = getDb(Astro);
+
+const ordenesPorEstado = await db
+  .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
+  .from(ordenes)
+  .groupBy(ordenes.estado);
+
+const activosPorEstado = await db
+  .select({ estado: activos.estado, n: sql<number>`count(*)` })
+  .from(activos)
+  .groupBy(activos.estado);
+
+const vencidas = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(ordenes)
+  .where(
+    sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso')`
+  );
+
+const hoy = new Date().toISOString().slice(0, 10);
+const en14 = new Date(); en14.setDate(en14.getDate() + 14);
+const en14Str = en14.toISOString().slice(0, 10);
+
+const proximos = await db
+  .select({
+    p: planesMantenimiento,
+    a: activos,
+    ub: ubicaciones,
+    suc: sucursales,
+  })
+  .from(planesMantenimiento)
+  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en14Str)))
+  .orderBy(asc(planesMantenimiento.proximaFecha))
+  .limit(10);
+
+const proximosConVencido = proximos.map((r) => ({
+  ...r,
+  venc: r.p.proximaFecha <= hoy,
+}));
+
+const total = (rows: { estado: string; n: number }[]) => rows.reduce((s, r) => s + Number(r.n), 0);
+const get = (rows: { estado: string; n: number }[], k: string) =>
+  Number(rows.find((r) => r.estado === k)?.n ?? 0);
+
+// KPI de satisfacción (encuestas respondidas)
+const [satRow] = await db
+  .select({
+    n: sql<number>`COUNT(*)`,
+    avg: sql<number>`AVG(${encuestasSatisfaccion.calificacion})`,
+  })
+  .from(encuestasSatisfaccion)
+  .where(isNotNull(encuestasSatisfaccion.respondidaEn));
+
+const [satEnviadas] = await db
+  .select({ n: sql<number>`COUNT(*)` })
+  .from(encuestasSatisfaccion);
+
+const satN = Number(satRow?.n ?? 0);
+const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
+const satEnv = Number(satEnviadas?.n ?? 0);
+const satTasa = satEnv > 0 ? Math.round((satN / satEnv) * 100) : 0;
+
+const fmt = (s: string) => fmtFechaSoloCompacta(s);
+
+// Contratos próximos a vencer (próximos 90 días)
+const limite90d = new Date(Date.now() + 90 * 86400_000).toISOString().slice(0, 10);
+const contratosProximosRaw = await db
+  .select({ c: contratosMantenimiento, prov: proveedores })
+  .from(contratosMantenimiento)
+  .leftJoin(proveedores, eq(proveedores.id, contratosMantenimiento.proveedorId))
+  .where(and(
+    inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]),
+    lte(contratosMantenimiento.fechaFin, limite90d),
+    gte(contratosMantenimiento.fechaFin, hoy),
+  ))
+  .orderBy(asc(contratosMantenimiento.fechaFin))
+  .limit(5);
+const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
+  const d = diasParaVencer(c.fechaFin);
+  const color = d > 60 ? "text-amber-600" : d > 30 ? "text-orange-600" : "text-red-600";
+  const diasLabel = d === 0 ? "Vence hoy" : `${d} día${d === 1 ? "" : "s"}`;
+  return { c, prov, d, color, diasLabel };
+});
+---
+
+<Layout title="Dashboard">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
+      <p class="mt-0.5 text-sm text-slate-500">Resumen del estado operativo</p>
+    </div>
+    <span class="text-xs text-slate-400">{new Date().toLocaleDateString("es", { weekday:"long", day:"numeric", month:"long", timeZone:"America/El_Salvador" })}</span>
+  </div>
+
+  <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+    <!-- Órdenes abiertas -->
+    <a href="/ordenes?estado=abierta" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Abiertas</div>
+        <div class="mt-1.5 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">órdenes de trabajo</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-xl">📋</div>
+    </a>
+    <!-- En proceso -->
+    <a href="/ordenes?estado=en_proceso" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">En proceso</div>
+        <div class="mt-1.5 text-3xl font-bold text-amber-600">{get(ordenesPorEstado, "en_proceso")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">en ejecución</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-xl">⚙️</div>
+    </a>
+    <!-- Completadas -->
+    <a href="/ordenes?estado=completada" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Completadas</div>
+        <div class="mt-1.5 text-3xl font-bold text-emerald-600">{get(ordenesPorEstado, "completada")}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">finalizadas</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-xl">✅</div>
+    </a>
+    <!-- Vencidas -->
+    <div class="card p-4 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Vencidas</div>
+        <div class="mt-1.5 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">requieren atención</div>
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-xl">⚡</div>
+    </div>
+    <!-- Satisfacción -->
+    <div class="card p-4 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Satisfacción</div>
+        {satAvg != null ? (
+          <>
+            <div class="mt-1.5 text-3xl font-bold text-violet-600">{satAvg.toFixed(1)}<span class="text-base font-normal text-slate-400">/5</span></div>
+            <div class="mt-0.5 text-[11px] text-slate-400">{satTasa}% respuesta</div>
+          </>
+        ) : (
+          <>
+            <div class="mt-1.5 text-3xl font-bold text-slate-300">—</div>
+            <div class="mt-0.5 text-[11px] text-slate-400">sin encuestas aún</div>
+          </>
+        )}
+      </div>
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-xl">⭐</div>
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-semibold text-slate-800">Próximos preventivos</h2>
+        <span class="badge bg-amber-100 text-amber-700">{proximosConVencido.length}</span>
+      </div>
+      <p class="text-xs text-slate-400 mb-3">Planes con vencimiento en los próximos 14 días</p>
+      <ul class="space-y-2 text-sm">
+        {proximosConVencido.length === 0 && (
+          <li class="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-4 text-slate-400 text-xs">
+            <span class="text-base">✓</span> Sin planes próximos a vencer.
+          </li>
+        )}
+        {proximosConVencido.map((r) => (
+          <li class="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5 hover:bg-slate-100 transition-colors">
+            <div class="min-w-0">
+              <a href={`/activos/${r.a?.id}`} class="font-medium text-brand-700 hover:underline text-sm">{r.p.titulo}</a>
+              <div class="text-xs text-slate-500 truncate mt-0.5">{r.a?.codigo} · {r.a?.nombre}</div>
+              {(r.suc?.nombre || r.ub?.nombre) && (
+                <div class="text-[11px] text-slate-400 truncate">
+                  📍 {r.suc?.nombre ?? "Sin sede"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
+                </div>
+              )}
+            </div>
+            <span class={`badge shrink-0 ${r.venc ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{fmt(r.p.proximaFecha)}</span>
+          </li>
+        ))}
+      </ul>
+      <div class="mt-4 border-t border-slate-100 pt-3">
+        <a class="btn-secondary btn-sm" href="/cronograma">Ver cronograma →</a>
+      </div>
+    </div>
+
+    <div class="card p-5">
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-semibold text-slate-800">Equipos</h2>
+        <span class="badge bg-slate-100 text-slate-600">{total(activosPorEstado)} total</span>
+      </div>
+      <p class="text-xs text-slate-400 mb-3">Estado actual del parque de equipos</p>
+      <ul class="space-y-1.5 text-sm">
+        {activosPorEstado.length === 0 && <li class="text-slate-400 text-xs py-2">Sin equipos registrados.</li>}
+        {activosPorEstado.map((r) => {
+          const pct = total(activosPorEstado) > 0 ? Math.round((Number(r.n) / total(activosPorEstado)) * 100) : 0;
+          return (
+            <li class="flex items-center gap-3">
+              <span class="w-20 capitalize text-slate-600 text-xs shrink-0">{r.estado}</span>
+              <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div class="h-full bg-brand-400 rounded-full" style={`width:${pct}%`}></div>
+              </div>
+              <span class="font-semibold text-slate-700 w-6 text-right text-xs">{r.n}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <div class="mt-4 flex gap-2 border-t border-slate-100 pt-3">
+        <a class="btn-primary btn-sm" href="/ordenes/nueva">+ Nueva orden</a>
+        <a class="btn-secondary btn-sm" href="/activos">Ver equipos</a>
+      </div>
+    </div>
+  </div>
+
+  {contratosProximos.length > 0 && (
+    <div class="card mt-4 p-5 border-l-4 border-amber-400">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📜</span>
+          <h2 class="font-semibold text-slate-800">Contratos próximos a vencer</h2>
+          <span class="badge bg-amber-100 text-amber-700">{contratosProximos.length}</span>
+        </div>
+        <a href="/contratos?proximos=90" class="text-xs text-brand-600 hover:underline font-medium">Ver todos →</a>
+      </div>
+      <ul class="divide-y divide-slate-100 text-sm">
+        {contratosProximos.map(({ c, prov, color, diasLabel }) => (
+          <li class="flex items-center justify-between gap-2 py-2.5">
+            <a href={`/contratos/${c.id}`} class="min-w-0 flex-1 hover:text-brand-700">
+              <span class="font-mono text-[10px] text-slate-400 mr-1.5 border border-slate-200 rounded px-1 py-0.5">{c.codigo}</span>
+              <span class="font-medium text-slate-800">{c.nombre}</span>
+              {prov?.nombre && <span class="ml-2 text-xs text-slate-400">{prov.nombre}</span>}
+            </a>
+            <span class={`badge shrink-0 ${color === "text-red-600" ? "bg-red-100 text-red-700" : color === "text-orange-600" ? "bg-orange-100 text-orange-700" : "bg-amber-100 text-amber-700"}`}>{diasLabel}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+</Layout>

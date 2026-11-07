@@ -24,7 +24,7 @@ import {
   turnoActual,
   etiquetaTurno,
   type FilaTablero,
-} from "./rondas";
+} from "./ronda-turno";
 import {
   activos,
   aopEventos,

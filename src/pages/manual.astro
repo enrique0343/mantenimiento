@@ -41,9 +41,20 @@ const secciones: Seccion[] = [
     icono: "🛠",
     titulo: "Equipos e inventario de activos",
     pasos: [
-      { t: "Registrar un equipo", d: "Menú Equipos → «+ Nuevo». Completa código, ubicación (sede → área) y datos de placa. Puedes importar desde CSV o generar códigos QR." },
+      { t: "Registrar un equipo", d: "Entra en el área de mantenimiento → Equipos → «+ Registrar equipo». El código interno y su QR se asignan automáticamente. Los campos del formulario son opcionales; puedes completar los datos después. Los textos se guardan en mayúsculas aunque escribas o pegues en minúsculas." },
       { t: "Programar su preventivo", d: "En la lista de Equipos, columna Cronograma → «+ Programar»: eliges fecha y frecuencia, y queda en el cronograma." },
       { t: "Hoja de vida", d: "Entra al equipo para ver su historial completo: OTs, planes, documentos y trazabilidad." },
+    ],
+  },
+  {
+    icono: "❄️",
+    titulo: "Catálogo de aires acondicionados",
+    pasos: [
+      { t: "Crear una ficha reutilizable", d: "Entra en Aire acondicionado → Catálogo de aires → «Crear ficha de modelo». Registra una sola vez el nombre, marca, modelo, categoría y características comunes: tipo de unidad, capacidad y refrigerante. Solo el nombre de la ficha es obligatorio. Administración y técnicos pueden gestionar el catálogo." },
+      { t: "Registrar cada unidad", d: "Desde la ficha pulsa «Registrar unidad», o selecciona una ficha del catálogo al registrar una unidad de aire. Se completan sus características comunes y puedes ajustarlas. Agrega la serie, ubicación y demás datos propios de esa unidad cuando los tengas; su código interno y QR se generan automáticamente." },
+      { t: "Registrar varias unidades del mismo modelo", d: "Usa «Guardar y registrar otra unidad» para guardar el registro actual y abrir el siguiente con la misma ficha seleccionada. La serie, ubicación y demás datos particulares quedan vacíos para evitar repetirlos por error." },
+      { t: "Conservar la trazabilidad", d: "Cada unidad conserva su ficha individual, mantenimientos y la versión del catálogo utilizada al registrarla. Editar una ficha crea una nueva versión sin modificar las unidades anteriores. En la ficha del catálogo puedes consultar las unidades registradas y el historial de cambios con fecha y responsable." },
+      { t: "Archivar una ficha", d: "Si ya no utilizarás un modelo para nuevas unidades, archiva su ficha. Desaparece de las opciones de registro, pero conserva sus unidades e historial. Puedes consultarla con «Incluir archivadas» y reactivarla después." },
     ],
   },
   {

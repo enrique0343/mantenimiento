@@ -6,12 +6,17 @@ import { actividades, actividadCategorias, sucursales, usuarios } from "@/lib/sc
 import { requireUser } from "@/lib/auth";
 import { puedeVerActividades, puedeAdministrarActividades } from "@/lib/actividades";
 
+import { parseArea, AREA_KEYS } from "@/lib/areas";
+import { validarContextoActividad } from "@/lib/actividades";
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
   if (!puedeVerActividades(user.rol)) return new Response("Sin permisos", { status: 403 });
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
   const rows = await db
     .select({ a: actividades, c: actividadCategorias, s: sucursales, u: usuarios })
@@ -19,6 +24,7 @@ export const GET: APIRoute = async (ctx) => {
     .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
     .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
     .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
+    .where(area ? eq(actividades.rubro, area) : undefined)
     .orderBy(desc(actividades.id));
   return Response.json({
     actividades: rows.map((r) => ({
@@ -31,6 +37,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 const createSchema = z.object({
+  rubro: z.enum(AREA_KEYS),
   codigo: z.string().min(1).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().nullable().optional(),
@@ -56,7 +63,14 @@ export const POST: APIRoute = async (ctx) => {
   const body = await ctx.request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
+
+  if (area && parsed.data.rubro !== area) return Response.json({ error: "La actividad debe pertenecer al área seleccionada" }, { status: 400 });
+  const contexto = await validarContextoActividad(db, parsed.data);
+  if (contexto.error) return Response.json({ error: contexto.error }, { status: 400 });
 
   // Auto-generar código ACT-XXXX si no viene en el payload
   let codigo = parsed.data.codigo;
@@ -71,7 +85,7 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   try {
-    const [row] = await db.insert(actividades).values({ ...parsed.data, codigo }).returning();
+    const [row] = await db.insert(actividades).values({ ...parsed.data, rubro: contexto.rubro!, sucursalId: contexto.sucursalId, codigo }).returning();
     return Response.json({ actividad: row }, { status: 201 });
   } catch (e: any) {
     if (String(e?.message ?? "").includes("UNIQUE")) {

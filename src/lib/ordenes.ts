@@ -1,4 +1,10 @@
 import type { Rol } from "./schema";
+import { eq } from "drizzle-orm";
+import type { getDb } from "./db";
+import { activos, ubicaciones, sucursales } from "./schema";
+import { parseArea, type AreaKey } from "./areas";
+import { rubroDeActivo } from "./rubros";
+
 
 // Tipos de OT. "intervencion" es el MOP (método de procedimiento: cambia el
 // estado de un sistema crítico con permiso, pasos y lecturas de liberación) y
@@ -38,7 +44,7 @@ export const ESTADO_LABEL: Record<EstadoOT, string> = {
   abierta: "Abierta",
   en_proceso: "En proceso",
   en_espera: "En espera",
-  completada: "Completada",
+  completada: "Pendiente de verificación",
   verificada: "Verificada",
   cerrada: "Cerrada",
   cancelada: "Cancelada",
@@ -143,7 +149,7 @@ const TRANSICIONES: Record<EstadoOT, EstadoOT[]> = {
   en_espera: ["en_proceso", "cancelada"],
   completada: ["verificada", "en_proceso", "cancelada"],
   verificada: ["cerrada", "completada"],
-  cerrada: [],
+  cerrada: ["en_proceso"],
   cancelada: ["abierta"],
 };
 
@@ -156,7 +162,7 @@ function puedeTransicionar(from: EstadoOT, to: EstadoOT, rol: Rol, esAsignado: b
   // Visualizador y proveedor no transicionan
   if (rol === "visualizador" || rol === "proveedor") return false;
 
-  // Admin y jefe pueden todo
+  // Admin y jefe siguen el mismo grafo; la API exige revisión independiente
   if (rol === "admin" || rol === "jefe") return true;
 
   // Cancelar / cerrar: solo admin o jefe
@@ -167,7 +173,7 @@ function puedeTransicionar(from: EstadoOT, to: EstadoOT, rol: Rol, esAsignado: b
 
   // Tecnico/solicitante asignado: tomar (abierta→en_proceso) y completar
   if (rol === "tecnico" && (esAsignado || from === "abierta")) {
-    return to === "en_proceso" || to === "completada";
+    return to === "en_proceso" || to === "en_espera" || to === "completada";
   }
 
   // Solicitante: solo crear (no transiciones)
@@ -180,10 +186,10 @@ export function puedeAsignarse(rol: Rol): boolean {
 }
 
 export function puedeEditarEjecucion(rol: Rol, esAsignado: boolean, estado: EstadoOT): boolean {
-  if (estado === "abierta" || estado === "cancelada" || estado === "cerrada") return false;
+  if (!["en_proceso", "en_espera"].includes(estado)) return false;
   if (rol === "admin" || rol === "jefe") return true;
   if (rol === "tecnico" && esAsignado) {
-    return estado === "en_proceso" || estado === "en_espera" || estado === "completada" || estado === "verificada";
+    return estado === "en_proceso" || estado === "en_espera";
   }
   return false;
 }
@@ -625,4 +631,52 @@ export function isoALocalInput(iso: string | null | undefined): string {
   }).format(d);
   // "sv-SE" entrega "YYYY-MM-DD HH:mm"
   return partes.replace(" ", "T").slice(0, 16);
+}
+
+// Las áreas organizan el trabajo; no sustituyen los permisos ni la prioridad.
+
+type AreaTrabajoInput = {
+  rubro?: string | null;
+  activoId?: number | null;
+  sucursalId?: number | null;
+  ubicacionId?: number | null;
+};
+
+/** Valida pertenencia real, también cuando la solicitud es solo por ubicación. */
+export async function validarAreaTrabajo(db: ReturnType<typeof getDb>, input: AreaTrabajoInput): Promise<{ rubro: AreaKey } | { error: string }> {
+  let area = parseArea(input.rubro);
+  if (input.rubro != null && !area) return { error: "Área de mantenimiento inválida" };
+  let activo: typeof activos.$inferSelect | undefined;
+  if (input.activoId != null) {
+    if (!Number.isInteger(input.activoId) || input.activoId <= 0) return { error: "Equipo o instalación inválido" };
+    [activo] = await db.select().from(activos).where(eq(activos.id, input.activoId)).limit(1);
+    if (!activo) return { error: "Equipo o instalación no encontrado" };
+    const assetArea = rubroDeActivo(activo.rubro, activo.tipo);
+    if (area && area !== assetArea) return { error: "El equipo o instalación pertenece a otra área de mantenimiento" };
+    area = assetArea;
+    if (input.ubicacionId && activo.ubicacionId && input.ubicacionId !== activo.ubicacionId) return { error: "El equipo o instalación no pertenece a la ubicación seleccionada" };
+  }
+  if (!area) return { error: "Selecciona el área de mantenimiento" };
+  if (input.sucursalId != null) {
+    if (!Number.isInteger(input.sucursalId) || input.sucursalId <= 0) return { error: "Sucursal inválida" };
+    const [sucursal] = await db.select({ id: sucursales.id }).from(sucursales).where(eq(sucursales.id, input.sucursalId)).limit(1);
+    if (!sucursal) return { error: "Sucursal no encontrada" };
+  }
+  const locationIds = [...new Set([input.ubicacionId, activo?.ubicacionId].filter((id): id is number => id != null))];
+  for (const locationId of locationIds) {
+    if (!Number.isInteger(locationId) || locationId <= 0) return { error: "Ubicación inválida" };
+    const [ubicacion] = await db.select({ sucursalId: ubicaciones.sucursalId }).from(ubicaciones).where(eq(ubicaciones.id, locationId)).limit(1);
+    if (!ubicacion) return { error: "Ubicación no encontrada" };
+    if (input.sucursalId && ubicacion.sucursalId !== input.sucursalId) return { error: "La ubicación no pertenece a la sucursal seleccionada" };
+  }
+  return { rubro: area };
+}
+
+export function validarContextoArea(request: Request, rubro: string | null): Response | null {
+  const raw = new URL(request.url).searchParams.get("area");
+  if (raw === null) return null;
+  const area = parseArea(raw);
+  if (!area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  if (rubro !== area) return Response.json({ error: "El registro pertenece a otra área de mantenimiento" }, { status: 400 });
+  return null;
 }

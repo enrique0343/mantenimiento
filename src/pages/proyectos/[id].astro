@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -14,6 +15,9 @@ import {
 import { ESTADO_LABEL as ESTADO_OT_LABEL, ESTADO_COLOR as ESTADO_OT_COLOR } from "@/lib/ordenes";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { fmtFechaSimple, fmtFechaLarga } from "@/lib/datetime";
+import { parseArea, AREAS, AREA_KEYS } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -42,6 +46,7 @@ const [row] = await db
   .limit(1);
 if (!row) return Astro.redirect("/proyectos");
 const p = row.p;
+const areaOrden = parseArea(row.ticket?.rubro) ?? (row.activo ? rubroDeActivo(row.activo.rubro, row.activo.tipo) : null);
 
 const items = await db
   .select({ i: proyectoPresupuestoItems, prov: proveedores })
@@ -486,6 +491,14 @@ const tecnicosJson = JSON.stringify(tecnicos);
   <div id="modalOT" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
     <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
       <h2 class="font-bold text-lg mb-3">Generar OT del proyecto</h2>
+      <div class="mb-3">
+        <label class="label" for="otRubro">Área de mantenimiento *</label>
+        <select id="otRubro" class="input" required disabled={!!areaOrden}>
+          <option value="">— Selecciona el área —</option>
+          {AREA_KEYS.map((area) => <option value={area} selected={area === areaOrden}>{AREAS[area].label}</option>)}
+        </select>
+        <p class="mt-1 text-xs text-slate-500">La orden aparecerá en el espacio de esta área.</p>
+      </div>
       <div class="space-y-3">
         <div>
           <label class="label">Título *</label>
@@ -533,7 +546,8 @@ const tecnicosJson = JSON.stringify(tecnicos);
   </div>
 </Layout>
 
-<script define:vars={{ proyectoId: id, esAdmin, puedeEditar, provsJson, tecnicosJson }}>
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ proyectoId: id, esAdmin, puedeEditar, provsJson, tecnicosJson }) }}>
+  const { proyectoId, esAdmin, puedeEditar, provsJson, tecnicosJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const provs = JSON.parse(provsJson);
   const tecnicos = JSON.parse(tecnicosJson);
 
@@ -761,7 +775,9 @@ const tecnicosJson = JSON.stringify(tecnicos);
     const titulo = document.getElementById("otTitulo").value.trim();
     if (!titulo) { alert("Título requerido"); return; }
     const v = (i) => document.getElementById(i).value;
+    if (!v("otRubro")) { alert("Selecciona el área de mantenimiento"); return; }
     const payload = {
+      rubro: v("otRubro"),
       titulo,
       descripcion: v("otDescripcion").trim() || null,
       tipo: v("otTipo"),
@@ -776,7 +792,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
     });
     if (res.ok) {
       const j = await res.json();
-      location.href = `/ordenes/${j.orden.id}`;
+      location.href = `/ordenes/${j.orden.id}?area=${encodeURIComponent(j.orden.rubro)}`;
     } else {
       const j = await res.json().catch(() => ({}));
       alert("Error: " + (j.error ?? ""));

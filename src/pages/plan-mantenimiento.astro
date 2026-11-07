@@ -12,6 +12,8 @@ import {
   RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, MODALIDAD_LABEL,
   rubroDeActivo, rubroDeActividad, subcatLabel, subcatIcono, type RubroKey,
 } from "@/lib/rubros";
+import { parseArea, areaHref } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -23,7 +25,7 @@ const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
 const anio = Number(url.searchParams.get("anio")) || new Date().getFullYear();
-const dominioParam = url.searchParams.get("dominio");
+const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 
 const sucursalesList = await db
@@ -37,7 +39,7 @@ const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null 
 // ── Configuración del documento (textos editables) ───────────────────────────
 const configRows = await db.select().from(appConfig).where(like(appConfig.clave, "plan.%"));
 const cfg = new Map(configRows.map((r) => [r.clave, r.valor]));
-const C = (clave: string, def: string) => cfg.get(`plan.${clave}`) ?? def;
+const C = (clave: string, def: string) => (dominio ? cfg.get(`plan.${dominio}.${clave}`) : null) ?? cfg.get(`plan.${clave}`) ?? def;
 
 const docCodigo  = C("codigo", "AVA-MTO-PL-001");
 const docVersion = C("version", "01");
@@ -80,7 +82,7 @@ const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId
 // Filtro por dominio (categoría): planes vía el dominio del equipo,
 // actividades vía el dominio de su categoría.
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
-const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 
 // Contratos para mostrar modalidad "contratado"
 const contratosList = await db
@@ -106,7 +108,7 @@ for (const g of gastosAnio) gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubr
 const dominiosResumen = dominio ? [dominio] : RUBRO_KEYS;
 const resumenRubros = dominiosResumen.map((k) => {
   const planes = planRows.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === k);
-  const acts = actRows.filter((r) => rubroDeActividad(r.c?.rubro) === k);
+  const acts = actRows.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === k);
   return {
     rubro: k,
     nPlanes: planes.length,
@@ -158,7 +160,7 @@ const titulo = sedeActiva ? `${tituloBase} — ${sedeActiva.nombre}` : tituloBas
 const qs = (cambios: Record<string, string | null>) => {
   const p = new URLSearchParams();
   if (sedeId) p.set("sede", String(sedeId));
-  if (dominio) p.set("dominio", dominio);
+  if (dominio) p.set("area", dominio);
   for (const [k, v] of Object.entries(cambios)) {
     if (v === null) p.delete(k);
     else p.set(k, v);
@@ -190,21 +192,21 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
       </select>
       {puedeEditar && <button id="editDocBtn" class="btn-secondary">✎ Editar textos</button>}
       <button id="printBtn" class="btn-primary">🖨 Imprimir / PDF</button>
-      <a href={`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">← Cronograma</a>
+      <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">← Cronograma</a>
     </div>
   </div>
 
   <!-- Filtro por dominio / categoría (no se imprime) -->
   <div class="no-print mt-3 flex flex-wrap gap-1.5 text-sm">
     <a
-      href={`/plan-mantenimiento${qs({ dominio: null })}`}
+      href={`/plan-mantenimiento${qs({ area: null })}`}
       class:list={["rounded-lg px-3 py-1.5 font-medium", !dominio ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
     >
       Plan general
     </a>
     {RUBRO_KEYS.map((k) => (
       <a
-        href={`/plan-mantenimiento${qs({ dominio: k })}`}
+        href={`/plan-mantenimiento${qs({ area: k })}`}
         class:list={["rounded-lg px-3 py-1.5 font-medium", dominio === k ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
       >
         {RUBROS[k].icono} {RUBROS[k].label}
@@ -442,10 +444,14 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
   </style>
 
   <script>
+    import { areaHref, parseArea } from "@/lib/areas";
+    const area = parseArea(new URLSearchParams(location.search).get("area") ?? new URLSearchParams(location.search).get("dominio"));
     document.getElementById("printBtn")?.addEventListener("click", () => window.print());
     document.getElementById("sedeSel")?.addEventListener("change", (e) => {
       const v = (e.currentTarget as HTMLSelectElement).value;
       const p = new URLSearchParams(location.search);
+      if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
+      p.delete("dominio");
       if (v) p.set("sede", v); else p.delete("sede");
       const s = p.toString();
       location.href = `/plan-mantenimiento${s ? `?${s}` : ""}`;
@@ -462,7 +468,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
 
       document.getElementById("docSave")?.addEventListener("click", async () => {
         const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
-        const res = await fetch("/api/plan-config", {
+        const res = await fetch(areaHref("/api/plan-config", area), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({

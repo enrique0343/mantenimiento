@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { subestaciones, cargasElectricas, sucursales, activos, ubicaciones } from "@/lib/schema";
@@ -312,7 +313,8 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
   )}
 
   {esAdmin && (
-    <script define:vars={{ subId: id }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ subId: id }) }}>
+      const { subId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const $ = (i) => document.getElementById(i);
       const show = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };
       const hide = (m) => { m.classList.add("hidden"); m.classList.remove("flex"); };

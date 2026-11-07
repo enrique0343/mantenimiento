@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { proveedores, items } from "@/lib/schema";
@@ -113,7 +114,8 @@ const codigoSugerido = `INV-${String(nextNum).padStart(4, "0")}`;
     </div>
   </form>
 
-  <script define:vars={{ codigoSugerido }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ codigoSugerido }) }}>
+    const { codigoSugerido } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const form = document.getElementById("form");
     const err = document.getElementById("err");
     document.getElementById("autoCodeBtn")?.addEventListener("click", () => {

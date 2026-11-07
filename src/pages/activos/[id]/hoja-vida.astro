@@ -8,6 +8,8 @@ import {
 import { eq, desc, asc } from "drizzle-orm";
 import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
 import { rubroLabel, rubroIcono, subcatLabel, subcatIcono, rubroDeActivo, MODALIDAD_LABEL } from "@/lib/rubros";
+import { areaHref, parseArea } from "@/lib/areas";
+import { leerDatosTecnicos } from "@/lib/activo-area";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -15,7 +17,7 @@ if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect(
 const db = getDb(Astro);
 
 const id = Number(Astro.params.id);
-if (!Number.isInteger(id)) return Astro.redirect("/activos");
+if (!Number.isInteger(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const [row] = await db
   .select({ a: activos, ub: ubicaciones, s: sucursales, prov: proveedores, resp: usuarios })
@@ -26,8 +28,11 @@ const [row] = await db
   .leftJoin(usuarios, eq(usuarios.id, activos.responsableId))
   .where(eq(activos.id, id));
 
-if (!row) return Astro.redirect("/activos");
+if (!row) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const a = row.a;
+const datosTecnicos = leerDatosTecnicos(a.datosTecnicos);
+const area = rubroDeActivo(a.rubro, a.tipo);
+if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
 
 const planes = await db
   .select()
@@ -62,7 +67,7 @@ const ESTADO_OT: Record<string, string> = {
   abierta: "Abierta", en_proceso: "En proceso", en_espera: "En espera",
   completada: "Completada", verificada: "Verificada", cerrada: "Cerrada", cancelada: "Cancelada",
 };
-const CRIT_LABEL: Record<string, string> = { alta: "A — Crítico", media: "B — Importante", baja: "C — General" };
+const CRIT_LABEL: Record<string, string> = { alta: "Alta", media: "Media", baja: "Baja" };
 const FREC_LABEL: Record<string, string> = {
   diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal", mensual: "Mensual",
   bimestral: "Bimestral", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual",
@@ -78,7 +83,7 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
 <Layout title={`Hoja de vida — ${a.codigo}`}>
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
-      <a href={`/activos/${a.id}`} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
+      <a href={areaHref(`/activos/${a.id}`, area)} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
       <h1 class="mt-1 text-2xl font-bold">📄 Hoja de vida del equipo</h1>
     </div>
     <button onclick="window.print()" class="btn-primary">🖨 Imprimir / PDF</button>
@@ -96,7 +101,7 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
           </div>
         </div>
         <div class="p-4 text-center">
-          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Hoja de vida de equipo</div>
+          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Hoja de vida {area === "infraestructura" ? "de instalación" : area === "aires" ? "de unidad" : "de equipo"}</div>
           <div class="text-xs text-slate-500 mt-0.5">JCI FMS.07 — historial de inspección, prueba y mantenimiento</div>
         </div>
         <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
@@ -108,13 +113,23 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
     </div>
 
     <!-- 1. Identificación -->
-    <h3 class="mt-6 text-base font-bold text-slate-900">1. Identificación del equipo</h3>
+    <h3 class="mt-6 text-base font-bold text-slate-900">1. Identificación {area === "infraestructura" ? "de la instalación" : area === "aires" ? "de la unidad" : "del equipo"}</h3>
     <div class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-3">
       <div><span class="text-xs text-slate-400 block">Nombre</span><span class="font-medium text-slate-800">{a.nombre}</span></div>
       <div><span class="text-xs text-slate-400 block">Marca / Modelo</span>{a.marca ?? "—"} {a.modelo ?? ""}</div>
       <div><span class="text-xs text-slate-400 block">Serie</span><span class="font-mono text-xs">{a.serial ?? "—"}</span></div>
       <div><span class="text-xs text-slate-400 block">Sede / Ubicación</span>{row.s?.nombre ?? "—"}{row.ub?.nombre ? ` · ${row.ub.nombre}` : ""}</div>
-      <div><span class="text-xs text-slate-400 block">Dominio</span>{rubroIcono(dominio)} {rubroLabel(dominio)}</div>
+      <div><span class="text-xs text-slate-400 block">Área de mantenimiento</span>{rubroIcono(dominio)} {rubroLabel(dominio)}</div>
+      {area === "aires" && <>
+        <div><span class="text-xs text-slate-400 block">Tipo de unidad</span>{datosTecnicos.tipoUnidad || "—"}</div>
+        <div><span class="text-xs text-slate-400 block">Capacidad (BTU/h)</span>{datosTecnicos.capacidadBtuH?.toLocaleString("es-SV") || "—"}</div>
+        <div><span class="text-xs text-slate-400 block">Refrigerante</span>{datosTecnicos.refrigerante || "—"}</div>
+      </>}
+      {area === "infraestructura" && <>
+        <div><span class="text-xs text-slate-400 block">Tipo de instalación</span>{datosTecnicos.tipoInstalacion || "—"}</div>
+        <div><span class="text-xs text-slate-400 block">Sector</span>{datosTecnicos.sector || "—"}</div>
+      </>}
+      {(area === "equipo_general" || area === "biomedico") && <div><span class="text-xs text-slate-400 block">Servicio / función</span>{datosTecnicos.servicio || "—"}</div>}
       {esBio && <div><span class="text-xs text-slate-400 block">Subcategoría clínica</span>{subcatIcono(a.subcategoria)} {subcatLabel(a.subcategoria)}</div>}
       <div><span class="text-xs text-slate-400 block">Criticidad</span>{a.criticidadOperacional ? CRIT_LABEL[a.criticidadOperacional] : "—"}</div>
       {esBio && <div><span class="text-xs text-slate-400 block">Clase de riesgo</span>{a.claseRiesgo ?? "—"}</div>}

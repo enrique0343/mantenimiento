@@ -22,7 +22,7 @@ import {
   turnoActual,
   etiquetaTurno,
   type FilaTablero,
-} from "@/lib/rondas";
+} from "@/lib/ronda-turno";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
 import { SISTEMA_LABEL } from "@/lib/resolver";
 import { rondaEjecuciones, rondas, rondaPuntos, sucursales, usuarios, aopEventos, procedimientos, ubicaciones } from "@/lib/schema";
@@ -316,7 +316,7 @@ const historial = await db
       btn.setAttribute("disabled", "true");
       btn.textContent = "Abriendo…";
       try {
-        const r = await fetch("/api/rondas", {
+        const r = await fetch("/api/ronda-turno", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sucursalId }),

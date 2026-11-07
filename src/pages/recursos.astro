@@ -1,0 +1,20 @@
+---
+import ModuleHub from "@/components/ModuleHub.astro";
+export const prerender=false;
+const rol=Astro.locals.user!.rol;
+const operativo=["admin","jefe","tecnico"].includes(rol),gestor=["admin","jefe"].includes(rol);
+const groups=[{label:"Abastecimiento",links:[
+{href:"/inventario",label:"Almacén",description:"Repuestos, existencias y movimientos.",show:rol!=="motorista"},
+{href:"/solicitudes-compra",label:"Compras",description:"Solicitudes, seguimiento y documentos.",show:operativo},
+{href:"/requisiciones",label:"Requisiciones",description:"Solicitud y recepción de materiales.",show:operativo},
+{href:"/recepciones",label:"Recepciones",description:"Entradas de materiales al almacén.",show:operativo},
+]},{label:"Control compartido de activos",links:[
+{href:"/calibraciones",label:"Calibraciones",description:"Certificados y vencimientos de los equipos de todas las áreas.",show:operativo},
+{href:"/alertas",label:"Alertas y retiros",description:"Seguimiento de alertas que afectan a los activos.",show:rol!=="motorista"},
+]},{label:"Servicios externos",links:[
+{href:"/proveedores",label:"Proveedores",description:"Directorio de proveedores y servicios.",show:gestor},
+{href:"/contratos",label:"Contratos",description:"Cobertura de activos y vencimientos.",show:gestor},
+{href:"/configuracion#compras",label:"Destinatarios de compras",description:"Personas que reciben las solicitudes.",show:rol==="admin"},
+]}];
+---
+<ModuleHub title="Recursos" description="Abastecimiento y servicios para las cuatro áreas de mantenimiento." groups={groups}/>

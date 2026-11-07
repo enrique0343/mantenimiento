@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
 import { tickets, ticketComentarios, usuarios, ordenes } from "@/lib/schema";
@@ -127,7 +128,8 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZo
         </>
       )}
     </main>
-    <script define:vars={{ token, abrirInconformidad }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ token, abrirInconformidad }) }}>
+      const { token, abrirInconformidad } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       document.getElementById("comForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const texto = document.getElementById("comTexto").value.trim();

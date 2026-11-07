@@ -1,0 +1,15 @@
+---
+import CatalogoAireResumen from "./CatalogoAireResumen.astro";
+interface Props { modeloAireId: number | null; snapshot: string | null; }
+const { modeloAireId, snapshot: saved } = Astro.props;
+let snapshot: Record<string, any> | null = null;
+try {
+  const parsed = saved ? JSON.parse(saved) : null;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Number.isSafeInteger(parsed.version) && parsed.version > 0 && parsed.id === modeloAireId) snapshot = parsed;
+} catch { /* Keep the catalog link even when the stored snapshot is unavailable. */ }
+---
+{modeloAireId && <section class="card p-5 mt-4" aria-labelledby="origenCatalogoTitulo">
+  <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 id="origenCatalogoTitulo" class="font-semibold">Ficha de catálogo utilizada</h2><p class="text-sm text-slate-500 mt-1">{snapshot ? `${snapshot.nombre} · Versión ${snapshot.version}` : "Unidad registrada desde el catálogo de aires."}</p></div><a class="text-sm text-brand-700 underline" href={`/catalogo-aires/${modeloAireId}?area=aires`}>Ver ficha e historial</a></div>
+  <p class="text-xs text-slate-500 mt-3">Esta unidad conserva la versión utilizada al registrarse. Las ediciones posteriores del catálogo no cambian sus datos ni sus mantenimientos.</p>
+  {snapshot ? <details class="mt-4"><summary class="text-sm text-brand-700 cursor-pointer">Ver características originales del catálogo</summary><CatalogoAireResumen modelo={snapshot} incluirNombre /></details> : <p class="text-xs text-slate-500 mt-3">La copia original no está disponible para consulta.</p>}
+</section>}

@@ -7,9 +7,13 @@ import { generateTrackingToken, calcularVencimientoSla } from "@/lib/tickets";
 import { sendMail, emailLayout } from "@/lib/email";
 import { jefesNotificar } from "@/lib/especialidad";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { rubroLabel } from "@/lib/rubros";
+
 export const prerender = false;
 
 const createSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   solicitanteNombre: z.string().min(2),
   solicitanteEmail: z.string().email(),
   solicitanteTelefono: z.string().optional().nullable(),
@@ -30,6 +34,10 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
+  const areaResult = await validarAreaTrabajo(db, parsed.data);
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  const contextError = validarContextoArea(ctx.request, areaResult.rubro);
+  if (contextError) return contextError;
   const trackingToken = generateTrackingToken();
   const { slaHoras, vencimiento } = calcularVencimientoSla(parsed.data.prioridad);
 
@@ -37,6 +45,8 @@ export const POST: APIRoute = async (ctx) => {
     .insert(tickets)
     .values({
       ...parsed.data,
+      rubro: areaResult.rubro,
+      tipoMantenimiento: areaResult.rubro === "biomedico" ? "biomedico" : "general",
       trackingToken,
       slaHoras,
       vencimientoSla: vencimiento,
@@ -55,7 +65,7 @@ export const POST: APIRoute = async (ctx) => {
     const jefes = await jefesNotificar(ctx, tipoEquipo);
     const jefesEmails = jefes.map((j) => j.email).filter(Boolean);
     if (jefesEmails.length > 0) {
-      const tipoLabel = tipoEquipo === "biomedico" ? "🩺 Biomédico" : tipoEquipo === "general" ? "🔧 General" : "Sin clasificar";
+      const tipoLabel = rubroLabel(row.rubro);
 
       // Resolver sucursal para más contexto
       let sucursalNombre: string | null = null;

@@ -6,6 +6,7 @@ import { tickets, ordenes, comentarios, ticketComentarios, usuarios } from "@/li
 import { sendMail, emailLayout } from "@/lib/email";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
+import { devolverOrdenDesdeTicket, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga } from "@/lib/datetime";
 
@@ -61,13 +62,12 @@ export const POST: APIRoute = async (ctx) => {
   const now = new Date().toISOString();
   const motivo = parsed.data.motivo.trim();
 
-  // 1) Reabrir OT a en_proceso, limpiar timestamps post
-  await db.update(ordenes).set({
-    estado: "en_proceso",
-    completadaEn: null,
-    verificadoPor: null,
-    verificadoEn: null,
-  }).where(eq(ordenes.id, ot.id));
+  // Return pending execution with an immutable snapshot and explicit external actor.
+  try { await devolverOrdenDesdeTicket(db, ot, t, motivo, now); }
+  catch (error) {
+    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message }, { status: error.status });
+    return Response.json({ error: 'No se pudo registrar la devolución. Intenta de nuevo.' }, { status: 500 });
+  }
 
   // 2) Comentario en la OT (autor: sistema, ya que el solicitante público no
   //    es un usuario interno)

@@ -1,8 +1,8 @@
 import type { APIRoute } from "astro";
-import { sql, eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, tickets, items, requisiciones, comentarios, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { parseArea } from "@/lib/areas";
 
 export const prerender = false;
 
@@ -25,6 +25,9 @@ export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
   const url = new URL(ctx.request.url);
+  const areaParam = url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || q.length < 2) {
     return Response.json({ resultados: { ordenes: [], equipos: [], tickets: [], items: [], requisiciones: [], comentarios: [] } });
@@ -39,19 +42,21 @@ export const GET: APIRoute = async (ctx) => {
 
   let ordenesList: any[] = [];
   if (isNumeric) {
-    const r = await db.execute(sql`
-      SELECT id, titulo, estado, tipo, NULL as snippet
-      FROM ordenes WHERE id = ${idNum} LIMIT 1
+    const r = await db.all(sql`
+      SELECT id, titulo, estado, tipo, rubro, NULL as snippet
+      FROM ordenes WHERE id = ${idNum}
+      ${area ? sql`AND rubro = ${area}` : sql``} LIMIT 1
     `);
     ordenesList = (r as any).results ?? r ?? [];
   }
   if (ftsQ && ordenesList.length < N) {
-    const r = await db.execute(sql`
-      SELECT o.id, o.titulo, o.estado, o.tipo,
+    const r = await db.all(sql`
+      SELECT o.id, o.titulo, o.estado, o.tipo, o.rubro,
              snippet(ordenes_fts, -1, '<mark>', '</mark>', '...', 12) as snippet
       FROM ordenes_fts
       JOIN ordenes o ON o.id = ordenes_fts.rowid
       WHERE ordenes_fts MATCH ${ftsQ}
+      ${area ? sql`AND o.rubro = ${area}` : sql``}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -66,12 +71,14 @@ export const GET: APIRoute = async (ctx) => {
   // Equipos
   let equiposList: any[] = [];
   if (ftsQ) {
-    const r = await db.execute(sql`
+    const r = await db.all(sql`
       SELECT a.id, a.codigo, a.nombre, a.tipo, a.estado,
+             CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END as rubro,
              snippet(activos_fts, -1, '<mark>', '</mark>', '...', 10) as snippet
       FROM activos_fts
       JOIN activos a ON a.id = activos_fts.rowid
       WHERE activos_fts MATCH ${ftsQ}
+      ${area ? sql`AND (CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END) = ${area}` : sql``}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -81,19 +88,21 @@ export const GET: APIRoute = async (ctx) => {
   // Tickets
   let ticketsList: any[] = [];
   if (isNumeric) {
-    const r = await db.execute(sql`
-      SELECT id, asunto, estado, tracking_token as trackingToken, NULL as snippet
-      FROM tickets WHERE id = ${idNum} LIMIT 1
+    const r = await db.all(sql`
+      SELECT id, asunto, estado, rubro, tracking_token as trackingToken, NULL as snippet
+      FROM tickets WHERE id = ${idNum}
+      ${area ? sql`AND rubro = ${area}` : sql``} LIMIT 1
     `);
     ticketsList = (r as any).results ?? r ?? [];
   }
   if (ftsQ && ticketsList.length < N) {
-    const r = await db.execute(sql`
-      SELECT t.id, t.asunto, t.estado, t.tracking_token as trackingToken,
+    const r = await db.all(sql`
+      SELECT t.id, t.asunto, t.estado, t.rubro, t.tracking_token as trackingToken,
              snippet(tickets_fts, -1, '<mark>', '</mark>', '...', 12) as snippet
       FROM tickets_fts
       JOIN tickets t ON t.id = tickets_fts.rowid
       WHERE tickets_fts MATCH ${ftsQ}
+      ${area ? sql`AND t.rubro = ${area}` : sql``}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -107,7 +116,7 @@ export const GET: APIRoute = async (ctx) => {
   // Items
   let itemsList: any[] = [];
   if (ftsQ) {
-    const r = await db.execute(sql`
+    const r = await db.all(sql`
       SELECT i.id, i.codigo, i.nombre, i.unidad,
              snippet(items_fts, -1, '<mark>', '</mark>', '...', 10) as snippet
       FROM items_fts
@@ -123,7 +132,7 @@ export const GET: APIRoute = async (ctx) => {
   let requisicionesList: any[] = [];
   if (q.length >= 2) {
     const pat = `%${q}%`;
-    const r = await db.execute(sql`
+    const r = await db.all(sql`
       SELECT id, numero, estado FROM requisiciones
       WHERE numero LIKE ${pat} OR notas LIKE ${pat}
       ORDER BY id DESC LIMIT ${N}
@@ -134,14 +143,15 @@ export const GET: APIRoute = async (ctx) => {
   // Comentarios (resultados con OT que los contiene)
   let comentariosList: any[] = [];
   if (ftsQ) {
-    const r = await db.execute(sql`
-      SELECT c.id, c.orden_id as ordenId, o.titulo as ordenTitulo,
+    const r = await db.all(sql`
+      SELECT c.id, c.orden_id as ordenId, o.titulo as ordenTitulo, o.rubro,
              snippet(comentarios_fts, -1, '<mark>', '</mark>', '...', 14) as snippet,
              c.created_at as createdAt
       FROM comentarios_fts
       JOIN comentarios c ON c.id = comentarios_fts.rowid
       JOIN ordenes o ON o.id = c.orden_id
       WHERE comentarios_fts MATCH ${ftsQ}
+      ${area ? sql`AND o.rubro = ${area}` : sql``}
       ORDER BY rank
       LIMIT ${N}
     `);

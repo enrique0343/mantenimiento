@@ -1,0 +1,42 @@
+---
+interface Props { area: string; }
+const { area } = Astro.props;
+---
+<section id="modeloAireSelector" class:list={["rounded-xl border border-cyan-200 bg-cyan-50 p-4", area !== "aires" && "hidden"]} aria-labelledby="modeloAireHeading">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h2 id="modeloAireHeading" class="font-semibold text-cyan-950">Usar una ficha del catálogo</h2>
+      <p class="mt-1 text-sm text-slate-600">Selecciona el modelo de aire y completa solo los datos de esta unidad. También puedes registrar sin ficha.</p>
+    </div>
+    <a class="text-sm font-medium text-cyan-800 underline" href="/catalogo-aires/nuevo?area=aires" target="_blank" rel="noopener">Crear ficha en otra pestaña ↗</a>
+  </div>
+  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+    <div>
+      <label class="label" for="buscarModeloAire">Buscar ficha</label>
+      <input class="input" type="search" id="buscarModeloAire" placeholder="Nombre, marca, modelo o capacidad" />
+    </div>
+    <div>
+      <label class="label" for="seleccionarModeloAire">Ficha del equipo</label>
+      <select class="input" id="seleccionarModeloAire" disabled><option value="">Sin ficha del catálogo</option></select>
+    </div>
+  </div>
+  <input type="hidden" id="modeloAireId" />
+  <input type="hidden" id="modeloAireVersion" />
+  <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
+    <button type="button" class="font-medium text-cyan-800 underline" id="actualizarCatalogoAire">Actualizar catálogo</button>
+    <a href="/catalogo-aires?area=aires" target="_blank" rel="noopener" class="text-slate-600 underline">Ver catálogo ↗</a>
+  </div>
+  <p id="modeloAireEstado" class="mt-3 text-sm text-slate-600" role="status" aria-live="polite"></p>
+  <div id="modeloAireConfirmacion" class="mt-3 hidden rounded-lg border border-amber-200 bg-amber-50 p-3">
+    <p class="text-sm text-amber-900">Ya escribiste datos del equipo. Aplicar esta ficha reemplazará el nombre, la descripción, la categoría, la marca, el modelo y los datos técnicos. Se conservarán la serie, la ubicación y los demás datos de esta unidad.</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      <button type="button" class="btn-primary" id="aplicarModeloAire">Aplicar ficha</button>
+      <button type="button" class="btn-secondary" id="cancelarModeloAire">Conservar mis datos</button>
+    </div>
+  </div>
+</section>
+<script>
+  import { installModeloAireSelector } from "./modelo-aire-selector";
+  installModeloAireSelector();
+  document.addEventListener("astro:page-load", installModeloAireSelector);
+</script>

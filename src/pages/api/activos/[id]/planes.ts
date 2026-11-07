@@ -2,17 +2,24 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq, asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { planesMantenimiento, usuarios } from "@/lib/schema";
+import { planesMantenimiento, usuarios, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
+import { parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
   const activoId = Number(ctx.params.id);
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
+  const [activo] = await db.select().from(activos).where(eq(activos.id, activoId)).limit(1);
+  if (!activo || (area && rubroDeActivo(activo.rubro, activo.tipo) !== area)) return Response.json({ error: "Activo no encontrado en esta área" }, { status: 404 });
   const rows = await db
     .select({ p: planesMantenimiento, u: usuarios })
     .from(planesMantenimiento)
@@ -61,7 +68,12 @@ export const POST: APIRoute = async (ctx) => {
   const body = await ctx.request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  const areaParam = ctx.url.searchParams.get("area");
+  const area = parseArea(areaParam);
+  if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
+  const [activo] = await db.select().from(activos).where(eq(activos.id, activoId)).limit(1);
+  if (!activo || (area && rubroDeActivo(activo.rubro, activo.tipo) !== area)) return Response.json({ error: "Activo no encontrado en esta área" }, { status: 404 });
   const [row] = await db
     .insert(planesMantenimiento)
     .values({

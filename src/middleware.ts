@@ -1,5 +1,11 @@
 import { defineMiddleware } from "astro:middleware";
+import { handleSgoRequest, handleSnapshotPublish } from "./lib/sgo/handler.mjs";
 import { getCurrentUser } from "./lib/auth";
+import { parseArea } from "./lib/areas";
+import { getDb } from "./lib/db";
+import { activos, ordenes, tickets, actividades, conjuntos } from "./lib/schema";
+import { eq } from "drizzle-orm";
+import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
 
 const PUBLIC_PATHS = new Set(["/login"]);
 const PUBLIC_PATH_PREFIXES = ["/soporte", "/encuesta", "/solicitudes-compra/r"];
@@ -28,6 +34,15 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   const url = new URL(ctx.request.url);
   const path = url.pathname;
 
+  // A separate server principal protects the integration before cookie auth.
+  // No human role or public-path exemption authorizes this namespace.
+  if (path === "/api/integraciones/sgo/v1" || path.startsWith("/api/integraciones/sgo/v1/")) {
+    return handleSgoRequest(ctx.request, ctx.locals.runtime?.env);
+  }
+  if (path === "/api/cron/sgo-snapshot" || path === "/api/cron/sgo-snapshot/") {
+    return handleSnapshotPublish(ctx.request, ctx.locals.runtime?.env);
+  }
+
   const user = await getCurrentUser(ctx).catch(() => null);
   if (user) ctx.locals.user = user;
 
@@ -42,8 +57,40 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
         headers: { "content-type": "application/json" },
       });
     }
-    return ctx.redirect(`/login?next=${encodeURIComponent(path)}`);
+    return ctx.redirect(`/login?next=${encodeURIComponent(path + url.search)}`);
   }
 
+  const requestedArea = url.searchParams.get("area");
+  if (requestedArea && !parseArea(requestedArea)) {
+    return new Response("Área de mantenimiento no válida", { status: 400 });
+  }
+  const pathArea = parseArea(path.match(/^\/areas\/([^/]+)\/?$/)?.[1]);
+  if (pathArea && requestedArea && pathArea !== requestedArea) {
+    return new Response("El área no corresponde al espacio seleccionado", { status: 400 });
+  }
+  ctx.locals.area = pathArea ?? parseArea(requestedArea);
+  // Detail pages derive their workspace from the saved record, even when opened
+  // from a notification or QR without a query string.
+  const recordPath = path.match(/^\/(activos|ordenes|tickets|actividades|conjuntos)\/(\d+)(?:\/|$)/);
+  if (recordPath) {
+    const db = getDb(ctx);
+    const id = Number(recordPath[2]);
+    if (recordPath[1] === "conjuntos") {
+      const [c] = await db.select({ rubro: conjuntos.rubro }).from(conjuntos).where(eq(conjuntos.id, id)).limit(1);
+      if (c) ctx.locals.area = parseArea(c.rubro);
+    } else if (recordPath[1] === "activos") {
+      const [a] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, id)).limit(1);
+      if (a) ctx.locals.area = rubroDeActivo(a.rubro, a.tipo);
+    } else if (recordPath[1] === "actividades") {
+      const [a] = await db.select({ rubro: actividades.rubro }).from(actividades).where(eq(actividades.id, id)).limit(1);
+      if (a) ctx.locals.area = rubroDeActividad(a.rubro);
+    } else if (recordPath[1] === "ordenes") {
+      const [o] = await db.select({ rubro: ordenes.rubro }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
+      if (o) ctx.locals.area = parseArea(o.rubro);
+    } else {
+      const [t] = await db.select({ rubro: tickets.rubro }).from(tickets).where(eq(tickets.id, id)).limit(1);
+      if (t) ctx.locals.area = parseArea(t.rubro);
+    }
+  }
   return next();
 });

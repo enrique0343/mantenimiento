@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, activos, usuarios, tickets } from "@/lib/schema";
@@ -142,7 +143,8 @@ const ubsJson = JSON.stringify(ubs);
     </div>
   </form>
 
-  <script define:vars={{ ubsJson, ticketId, ticketPreSucursalId: ticketPre?.sucursalId ?? null, ticketPreUbicacionId: ticketPre?.ubicacionId ?? null }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubsJson, ticketId, ticketPreSucursalId: ticketPre?.sucursalId ?? null, ticketPreUbicacionId: ticketPre?.ubicacionId ?? null }) }}>
+    const { ubsJson, ticketId, ticketPreSucursalId, ticketPreUbicacionId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const ALL_UBS = JSON.parse(ubsJson);
     const sucSel = document.getElementById("sucursalId");
     const ubSel = document.getElementById("ubicacionId");

@@ -4,16 +4,9 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales, ordenPrerrequisitos, ordenLiberaciones } from "@/lib/schema";
 
-import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
-import {
-  transicionesPermitidas, parseChecklist, validarChecklistParaCierre,
-  validarLecturasChecklistParaCierre,
-  validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
-  validarCausaRaizParaCierre, puedeCerrarSinLectura, vencimientoCausaRaiz,
-  type EstadoOT,
-} from "@/lib/ordenes";
-import { siguienteFecha } from "@/lib/frecuencias";
+import { vencimientoCausaRaiz, type EstadoOT } from "@/lib/ordenes";
+import { actualizarOrdenConVerificacion, leerVerificacionOrden, leerOrigenesRondaOrden, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
 import { sendTelegram } from "@/lib/telegram";
@@ -22,9 +15,13 @@ import { logAudit } from "@/lib/audit";
 import { sembrarDesdeMop } from "@/lib/mop";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
+
 export const prerender = false;
 
 const updateSchema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),
@@ -33,6 +30,10 @@ const updateSchema = z.object({
   activoId: z.number().int().positive().nullable().optional(),
   asignadoA: z.number().int().positive().nullable().optional(),
   vencimiento: z.string().nullable().optional(),
+  accion: z.enum(["devolver", "reabrir"]).optional(),
+  motivo: z.string().max(2000).optional(),
+  revisorId: z.number().int().positive().nullable().optional(),
+  revisorSuplenteId: z.number().int().positive().nullable().optional(),
   // Ejecucion
   trabajosRealizados: z.string().nullable().optional(),
   causaRaiz: z.string().nullable().optional(),
@@ -73,11 +74,7 @@ export const GET: APIRoute = async (ctx) => {
 
   // D1 corta el resultado a 100 columnas: ordenes(61) + activos(45) se pasa.
   const [row] = await db
-    .select({
-      orden: ordenes,
-      activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
-      asignado: { id: usuarios.id, nombre: usuarios.nombre },
-    })
+    .select({ orden: ordenes, activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre }, asignado: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -85,8 +82,11 @@ export const GET: APIRoute = async (ctx) => {
     .limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const contextError = validarContextoArea(ctx.request, row.orden.rubro);
+  if (contextError) return contextError;
+
   const coms = await db
-    .select({ c: comentarios, u: usuarios })
+    .select({ c: comentarios, u: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(comentarios)
     .leftJoin(usuarios, eq(usuarios.id, comentarios.usuarioId))
     .where(eq(comentarios.ordenId, id))
@@ -94,7 +94,12 @@ export const GET: APIRoute = async (ctx) => {
 
   const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
 
+  const verificacion = await leerVerificacionOrden(db, id);
+  const roundsOrigins = await leerOrigenesRondaOrden(db, id);
+  const [plan] = row.orden.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, row.orden.planId)).limit(1) : [];
+  const scheduledPM = plan ? { id: plan.id, assetId: plan.activoId, title: plan.titulo, frequency: plan.frecuencia, nextDate: plan.proximaFecha, href: `/activos/${plan.activoId}#plan-${plan.id}` } : null;
   return Response.json({
+    verificacion, roundsOrigins, scheduledPM,
     orden: {
       ...row.orden,
       activo: row.activo ? { id: row.activo.id, codigo: row.activo.codigo, nombre: row.activo.nombre } : null,
@@ -120,239 +125,34 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const {
-    reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras,
-    // cierreSinLecturaMotivo NO entra directo en el update: solo se persiste
-    // (con su autor y su hora) cuando de verdad se usa el escape del MOP.
-    cierreSinLecturaMotivo: _motivoSinLectura,
-    ...rest
-  } = parsed.data;
-  // horasTrabajadas se calcula SIEMPRE en el servidor (al cerrar la OT).
-  // Ignoramos cualquier valor que venga del cliente para evitar manipulacion.
-  const data: Record<string, unknown> = { ...rest };
+  const contextError = validarContextoArea(ctx.request, actual.rubro);
+  if (contextError) return contextError;
+  if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una orden no puede cambiarse" }, { status: 400 });
+  if (parsed.data.activoId !== undefined) {
+    if (actual.planId && parsed.data.activoId !== actual.activoId) return Response.json({ error: "La orden está vinculada al PM de este equipo. Conserva su origen y crea otra orden para un equipo distinto." }, { status: 409 });
+    if (parsed.data.activoId !== actual.activoId && await ordenesTienenConjunto(ctx, [id])) {
+      return Response.json({ error: "El equipo de esta orden está registrado en la trazabilidad de un conjunto. Conserva la orden original y abre otra para el equipo que corresponda." }, { status: 409 });
+    }
+    const areaResult = await validarAreaTrabajo(db, { ...actual, ...parsed.data });
+    if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  }
+
+  const { motivoReasignacion } = parsed.data;
   const now = new Date().toISOString();
 
-  // Validar transicion de estado segun rol
-  if (parsed.data.estado && parsed.data.estado !== actual.estado) {
-    // Las fotos "antes"/"después" son opcionales: el técnico puede adjuntar
-    // evidencia si la conexión y el dispositivo lo permiten, pero ya no
-    // bloquean el flujo (se reportaron equipos saturándose al subir fotos).
-    if (actual.estado === "en_proceso" && parsed.data.estado === "completada" && user.rol !== "admin") {
-      // Validación bloqueante de checklist: si la OT tiene checklist con
-      // items pendientes o desviaciones sin nota, NO se puede completar.
-      // El admin la salta cuando cierra administrativamente.
-      const checklist = parseChecklist(actual.checklistEjecucion);
-      const v = validarChecklistParaCierre(checklist);
-      if (!v.ok) {
-        return Response.json({ error: v.error }, { status: 400 });
-      }
-    }
-
-    const esAsignado = actual.asignadoA === user.id;
-    const permitidas = transicionesPermitidas(actual.estado as EstadoOT, user.rol, esAsignado);
-    // El admin (super admin) puede forzar cualquier transición desde cualquier
-    // estado — necesario para cerrar OTs antiguas cuyo trabajo se ejecutó
-    // fuera de la plataforma y nunca se siguió aquí.
-    if (user.rol !== "admin" && !permitidas.includes(parsed.data.estado as EstadoOT)) {
-      return Response.json(
-        { error: `No tienes permisos para mover de "${actual.estado}" a "${parsed.data.estado}"` },
-        { status: 403 }
-      );
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // REGLAS DURAS DEL MOP Y DEL EOP (Fase 47 · GO-GUI-011-2026, cap. 02)
-    // «En una intervención, la orden no le deja empezar sin el permiso
-    // firmado ni cerrar sin las lecturas de liberación. En una emergencia […]
-    // obliga a cerrar con un análisis de causa raíz.»
-    // Aplican a TODOS los roles, el admin incluido: son la evidencia de
-    // FMS.10.00 y FMS.08.01, no una comodidad de la interfaz. El único escape
-    // es el cierre sin lectura con motivo escrito, abajo.
-    // ══════════════════════════════════════════════════════════════════════
-    const tipoFinal = (parsed.data.tipo ?? actual.tipo) as string;
-
-    // MOP · prerrequisitos que bloquean iniciar
-    if (parsed.data.estado === "en_proceso" && tipoFinal === "intervencion") {
-      const prerreqs = await db
-        .select({
-          texto: ordenPrerrequisitos.texto,
-          tipo: ordenPrerrequisitos.tipo,
-          obligatorio: ordenPrerrequisitos.obligatorio,
-          cumplido: ordenPrerrequisitos.cumplido,
-        })
-        .from(ordenPrerrequisitos)
-        .where(eq(ordenPrerrequisitos.ordenId, id));
-      const v = validarPrerrequisitosParaIniciar(tipoFinal, prerreqs);
-      if (!v.ok) {
-        return Response.json({ error: v.error, faltantes: v.faltantes }, { status: 400 });
-      }
-    }
-
-    // Cierre: "completada" y "verificada" se auto-promueven a "cerrada" más
-    // abajo, así que los tres destinos cuentan como cierre.
-    const esCierre =
-      parsed.data.estado === "completada" ||
-      parsed.data.estado === "verificada" ||
-      parsed.data.estado === "cerrada";
-
-    if (esCierre) {
-      // SOP · la lectura obligatoria no la salta nadie, por ninguna vía de
-      // cierre (el admin incluido), siempre que el trabajo se haya iniciado de
-      // verdad: es la evidencia del SOP, «registro con fecha, hora, lectura y
-      // firma». Una OT que nunca se inició no tiene lecturas que exigir, así
-      // que el cierre administrativo de registros viejos sigue siendo posible.
-      if (actual.iniciadaEn) {
-        const vLect = validarLecturasChecklistParaCierre(parseChecklist(actual.checklistEjecucion));
-        if (!vLect.ok) {
-          return Response.json({ error: vLect.error }, { status: 400 });
-        }
-      }
-
-      // MOP · lecturas de liberación que bloquean cerrar
-      if (tipoFinal === "intervencion") {
-        const libs = await db
-          .select({
-            etiqueta: ordenLiberaciones.etiqueta,
-            unidad: ordenLiberaciones.unidad,
-            obligatoria: ordenLiberaciones.obligatoria,
-            valorMedido: ordenLiberaciones.valorMedido,
-            valorMedidoTexto: ordenLiberaciones.valorMedidoTexto,
-          })
-          .from(ordenLiberaciones)
-          .where(eq(ordenLiberaciones.ordenId, id));
-        const v = validarLiberacionesParaCierre(tipoFinal, libs);
-        if (!v.ok) {
-          const motivo = (parsed.data.cierreSinLecturaMotivo ?? "").trim();
-          if (!motivo) {
-            return Response.json(
-              { error: v.error, faltantes: v.faltantes, requiereMotivoSinLectura: true },
-              { status: 400 }
-            );
-          }
-          if (!puedeCerrarSinLectura(user.rol)) {
-            return Response.json(
-              { error: "Solo la jefatura (admin o jefe) puede cerrar un MOP sin la lectura de liberación. Pide a tu jefatura que lo cierre con el motivo escrito." },
-              { status: 403 }
-            );
-          }
-          if (motivo.length < 20) {
-            return Response.json(
-              { error: "El motivo del cierre sin lectura tiene que explicar por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres)." },
-              { status: 400 }
-            );
-          }
-          data.cierreSinLecturaPor = user.id;
-          data.cierreSinLecturaEn = now;
-          data.cierreSinLecturaMotivo = motivo;
-        }
-      }
-
-      // EOP · causa raíz obligatoria. También en todo correctivo sobre activo
-      // de criticidad alta (clase A).
-      let criticidadActivo: string | null = null;
-      const activoFinal = parsed.data.activoId !== undefined ? parsed.data.activoId : actual.activoId;
-      if (activoFinal) {
-        const [a] = await db
-          .select({ criticidad: activos.criticidadOperacional })
-          .from(activos)
-          .where(eq(activos.id, activoFinal))
-          .limit(1);
-        criticidadActivo = a?.criticidad ?? null;
-      }
-      const causaFinal = parsed.data.causaRaiz !== undefined ? parsed.data.causaRaiz : actual.causaRaiz;
-      const vc = validarCausaRaizParaCierre(tipoFinal, criticidadActivo, causaFinal);
-      if (!vc.ok) {
-        return Response.json({ error: vc.error, requiereCausaRaiz: true }, { status: 400 });
-      }
-    }
-
-    // Timestamps automaticos por estado de destino
-    switch (parsed.data.estado) {
-      case "en_espera":
-        // Guardar momento en que se pausa
-        data.pausadaEn = now;
-        break;
-      case "en_proceso":
-        // Si venía de en_espera, acumular el tiempo pausado
-        if (actual.estado === "en_espera" && actual.pausadaEn) {
-          const minPausados = Math.round((new Date(now).getTime() - new Date(actual.pausadaEn).getTime()) / 60_000);
-          data.tiempoPausadoMin = (actual.tiempoPausadoMin ?? 0) + minPausados;
-          data.pausadaEn = null;
-        }
-        // Si nunca se había iniciado, marcar inicio (para calcular horas)
-        if (!actual.iniciadaEn) data.iniciadaEn = now;
-        // Si venía de un estado posterior (rollback), limpiar timestamps post
-        if (actual.estado !== "abierta" && actual.estado !== "en_espera") {
-          data.completadaEn = null;
-          data.verificadoPor = null;
-          data.verificadoEn = null;
-        }
-        break;
-      case "completada":
-        data.completadaEn = now;
-        // SIEMPRE auto-calcular horas trabajadas desde inicio hasta ahora,
-        // descontando el tiempo pausado (en_espera). El campo en el cliente
-        // es solo lectura — ignoramos cualquier valor que venga en el PATCH
-        // para garantizar trazabilidad real de tiempo.
-        if (actual.iniciadaEn) {
-          const inicio = new Date(actual.iniciadaEn).getTime();
-          const fin = new Date(now).getTime();
-          const pausadoMs = (actual.tiempoPausadoMin ?? 0) * 60_000;
-          const horas = Math.max(0, (fin - inicio - pausadoMs) / 3_600_000);
-          data.horasTrabajadas = Math.round(horas * 100) / 100;
-        }
-        // Cuando se marca completada, automaticamente la cerramos.
-        // Esto dispara la encuesta de satisfaccion al solicitante y libera
-        // al jefe del paso intermedio de verificacion. Si despues hay
-        // inconformidad, el solicitante tiene 48h para reabrir desde el
-        // portal publico.
-        data.cerradoPor = user.id;
-        data.cerradoEn = now;
-        data.estado = "cerrada";
-        parsed.data.estado = "cerrada";
-        break;
-      case "verificada":
-        // Cuando el jefe verifica, automaticamente cerramos la OT.
-        // El intent del usuario es "doy por buena la ejecucion" — y eso
-        // implica cerrar definitivamente. Registramos quien verifica + cierra.
-        data.verificadoPor = user.id;
-        data.verificadoEn = now;
-        if (!actual.completadaEn) data.completadaEn = now;
-        data.cerradoPor = user.id;
-        data.cerradoEn = now;
-        // Promover el estado destino a "cerrada" (override del que vino del API)
-        data.estado = "cerrada";
-        parsed.data.estado = "cerrada";
-        break;
-      case "cerrada":
-        data.cerradoPor = user.id;
-        data.cerradoEn = now;
-        break;
-      case "abierta":
-        // Rollback total: limpiar todos los timestamps
-        data.completadaEn = null;
-        data.verificadoPor = null;
-        data.verificadoEn = null;
-        break;
-    }
-  }
-
-  // ── Fase 47 · derivados de los campos nuevos ─────────────────────────────
+  // ── Fase 47 · derivados de los campos de EOP y MOP ───────────────────────
+  // Las reglas duras (prerrequisitos, liberaciones, lecturas, causa raíz) viven
+  // en actualizarOrdenConVerificacion: aplican por cualquier vía de cierre.
+  const entrada: Record<string, unknown> = { ...parsed.data };
   // El plazo de la causa raíz corre desde la hora de alarma: 72 h (cap. 06).
   if (parsed.data.horaAlarma !== undefined) {
-    data.causaRaizVencimiento = vencimientoCausaRaiz(parsed.data.horaAlarma);
+    entrada.causaRaizVencimiento = vencimientoCausaRaiz(parsed.data.horaAlarma);
   }
-
   // Una emergencia nace P1: atención inmediata. Solo se rellena si nadie fijó
   // la clase todavía (no sobreescribe una decisión de la jefatura).
-  if (
-    parsed.data.tipo === "emergencia" &&
-    parsed.data.clasePrioridad === undefined &&
-    !actual.clasePrioridad
-  ) {
-    data.clasePrioridad = "P1";
+  if (parsed.data.tipo === "emergencia" && parsed.data.clasePrioridad === undefined && !actual.clasePrioridad) {
+    entrada.clasePrioridad = "P1";
   }
-
   // «Cualquier reversa se informa a la jefatura antes de cerrar»: no se marca
   // ejecutada sin decir qué se revirtió.
   if (parsed.data.reversaEjecutada === true) {
@@ -365,18 +165,25 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
-  // Si cambia el asignado, actualizar la marca temporal de asignación.
-  // Esto alimenta la columna "Asignado hace N días" del listado de OTs.
-  if (parsed.data.asignadoA !== undefined && parsed.data.asignadoA !== actual.asignadoA) {
-    data.asignadoEn = parsed.data.asignadoA ? now : null;
+  let row: typeof ordenes.$inferSelect;
+  try {
+    const result = await actualizarOrdenConVerificacion(db, actual, user, entrada, now);
+    row = result.row;
+    if (result.estado !== actual.estado) parsed.data.estado = result.estado as EstadoOT;
+  } catch (error) {
+    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message }, { status: error.status });
+    if (parsed.data.activoId !== undefined && parsed.data.activoId !== actual.activoId
+      && await ordenesTienenConjunto(ctx, [id])) {
+      return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
+    }
+    console.error('No se pudo guardar la orden con su verificación', error);
+    return Response.json({ error: 'No se pudo confirmar la operación. Actualiza la orden para consultar su estado antes de reintentar.' }, { status: 500 });
   }
-
-  const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
 
   // ── MOP · la plantilla baja a la orden ──
   // Al quedar vinculada a un MOP, la orden hereda sus prerrequisitos y sus
-  // lecturas de liberación. Sin esto la regla dura de más arriba no tiene qué
-  // revisar y el MOP queda de adorno.
+  // lecturas de liberación. Sin esto la regla dura de prerrequisitos no tiene
+  // qué revisar y el MOP queda de adorno.
   let sembradoMop: { prerrequisitos: number; liberaciones: number; plantilla: string | null } | null = null;
   const procAhora = row.procedimientoId ?? null;
   const vinculoNuevo = parsed.data.procedimientoId != null && parsed.data.procedimientoId !== actual.procedimientoId;
@@ -439,60 +246,8 @@ export const PATCH: APIRoute = async (ctx) => {
     });
   }
 
-  // Reprogramación: si se completó una OT correctiva sobre un activo,
-  // reiniciar el contador de los planes preventivos del activo.
-  // Por defecto sí; el cliente puede mandar reprogramarPreventivos:false para opt-out.
-  const seCompleto = parsed.data.estado === "completada" && actual.estado !== "completada";
-  if (
-    seCompleto &&
-    actual.tipo === "correctivo" &&
-    actual.activoId &&
-    reprogramarPreventivos !== false
-  ) {
-    try {
-      const planes = await db
-        .select()
-        .from(planesMantenimiento)
-        .where(and(eq(planesMantenimiento.activoId, actual.activoId), eq(planesMantenimiento.activo, true)));
-      for (const p of planes) {
-        const nuevaProxima = siguienteFecha(now.slice(0, 10), p.frecuencia as any);
-        await db
-          .update(planesMantenimiento)
-          .set({ proximaFecha: nuevaProxima })
-          .where(eq(planesMantenimiento.id, p.id));
-      }
-    } catch {}
-  }
-
-  // Al CERRAR una OT vinculada a un plan preventivo o a una actividad
-  // recurrente, avanzar proximaFecha al siguiente ciclo desde HOY. Esto
-  // mantiene la programación al ritmo real (no teórico) y evita que se
-  // generen OTs duplicadas mientras la actual sigue abierta.
-  const seCerro = parsed.data.estado === "cerrada" && actual.estado !== "cerrada";
-  if (seCerro) {
-    if (actual.planId) {
-      try {
-        const [pl] = await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, actual.planId)).limit(1);
-        if (pl) {
-          const nueva = siguienteFecha(now.slice(0, 10), pl.frecuencia as any);
-          await db.update(planesMantenimiento)
-            .set({ proximaFecha: nueva })
-            .where(eq(planesMantenimiento.id, pl.id));
-        }
-      } catch {}
-    }
-    if (actual.actividadId) {
-      try {
-        const [act] = await db.select().from(actividades).where(eq(actividades.id, actual.actividadId)).limit(1);
-        if (act) {
-          const nueva = siguienteFecha(now.slice(0, 10), act.frecuencia as any);
-          await db.update(actividades)
-            .set({ proximaFecha: nueva, ultimaEjecucion: now })
-            .where(eq(actividades.id, act.id));
-        }
-      } catch {}
-    }
-  }
+  // El avance preventivo se confirma una sola vez en la misma transacción
+  // que la aprobación independiente y su evidencia inmutable.
 
   // Sync con ticket vinculado: si la OT cambió de estado, propagar al ticket
   if (parsed.data.estado && parsed.data.estado !== actual.estado) {
@@ -500,8 +255,8 @@ export const PATCH: APIRoute = async (ctx) => {
       const mapeo: Record<string, string> = {
         abierta: "asignado",
         en_proceso: "en_proceso",
-        completada: "resuelto",
-        verificada: "resuelto",
+        completada: "en_proceso",
+        verificada: "en_proceso",
         cerrada: "cerrado",
         cancelada: "descartado",
       };
@@ -511,18 +266,15 @@ export const PATCH: APIRoute = async (ctx) => {
           estado: nuevoEstadoTicket,
           updatedAt: now,
         };
-        // Si el ticket queda resuelto o cerrado, registra la marca temporal y
-        // (si existe) la solución aplicada. Se chequea contra el estado FINAL
-        // del ticket (no el de la OT), porque el switch de arriba reasigna
-        // parsed.data.estado a "cerrada" cuando viene "completada"/"verificada",
-        // dejando estas dos comparaciones efectivamente muertas si se chequean
-        // contra parsed.data.estado.
+        // Solo el cierre verificado resuelve el ticket; una ejecución pendiente
+        // o una devolución permanece en proceso.
         if (nuevoEstadoTicket === "resuelto" || nuevoEstadoTicket === "cerrado") {
           updateTicket.resueltoEn = now;
           if (actual.solucionAplicada || parsed.data.solucionAplicada) {
             updateTicket.resolucionNotas = parsed.data.solucionAplicada ?? actual.solucionAplicada;
           }
         }
+        if (nuevoEstadoTicket === "en_proceso" || nuevoEstadoTicket === "asignado") updateTicket.resueltoEn = null;
         await db.update(tickets).set(updateTicket).where(eq(tickets.otId, id));
       }
     } catch {}
@@ -685,24 +437,32 @@ export const DELETE: APIRoute = async (ctx) => {
   const [ot] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!ot) return Response.json({ error: "No encontrada" }, { status: 404 });
 
-  // Borrar adjuntos de R2
-  const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
-  if (adjs.length && env?.R2) {
-    await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
+  const contextError = validarContextoArea(ctx.request, ot.rubro);
+  if (contextError) return contextError;
+
+  if (await ordenesTienenConjunto(ctx, [id])) {
+    return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
   }
 
-  // Limpiar FKs sin cascade (preserva historial)
-  try { await db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)); } catch {}
-  try { await db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)); } catch {}
-  try { await db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)); } catch {}
-
-  await logAudit(ctx, { entidad: "orden", entidadId: id, accion: "delete", resumen: `OT eliminada: "${ot.titulo}"` });
-
+  // Los archivos se retiran únicamente después de que la base confirme el
+  // borrado. Una asociación concurrente a un conjunto debe preservar todo.
+  const historial = await leerVerificacionOrden(db, id);
+  if (historial.eventos.length) return Response.json({ error: "La orden conserva evidencia de ejecución/verificación. Cancélala con motivo; no se puede eliminar su historial." }, { status: 409 });
+  const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
   try {
-    await db.delete(ordenes).where(eq(ordenes.id, id));
+    await db.batch([
+      db.update(tickets).set({ otId: null }).where(eq(tickets.otId, id)),
+      db.update(movimientosInventario).set({ ordenId: null }).where(eq(movimientosInventario.ordenId, id)),
+      db.update(extintorEventos).set({ otId: null }).where(eq(extintorEventos.otId, id)),
+      db.delete(ordenes).where(eq(ordenes.id, id)),
+    ]);
   } catch (e: any) {
+    if (await ordenesTienenConjunto(ctx, [id])) return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
     return Response.json({ error: `No se pudo borrar: ${e?.message ?? e}` }, { status: 500 });
   }
+
+  if (adjs.length && env?.R2) await Promise.allSettled(adjs.map((a) => env.R2.delete(a.r2Key)));
+  await logAudit(ctx, { entidad: "orden", entidadId: id, accion: "delete", resumen: `OT eliminada: "${ot.titulo}"` });
 
   if (ot.planId) {
     try { await db.update(planesMantenimiento).set({ ultimaGeneracion: null }).where(eq(planesMantenimiento.id, ot.planId)); } catch {}

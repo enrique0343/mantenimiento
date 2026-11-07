@@ -82,6 +82,36 @@ export const usuarios = sqliteTable("usuarios", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Fichas reutilizables de modelos de aire acondicionado ────────────────────
+export const modelosAire = sqliteTable("modelos_aire", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  nombre: text("nombre").notNull().unique(),
+  descripcion: text("descripcion"),
+  categoria: text("categoria"),
+  marca: text("marca"),
+  modelo: text("modelo"),
+  datosTecnicos: text("datos_tecnicos"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  version: integer("version").notNull().default(1),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  creadoPorNombre: text("creado_por_nombre").notNull(),
+  actualizadoPor: integer("actualizado_por").notNull().references(() => usuarios.id),
+  actualizadoPorNombre: text("actualizado_por_nombre").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const modelosAireHistorial = sqliteTable("modelos_aire_historial", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  modeloAireId: integer("modelo_aire_id").notNull().references(() => modelosAire.id),
+  version: integer("version").notNull(),
+  fecha: text("fecha").notNull(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  usuarioNombre: text("usuario_nombre").notNull(),
+  accion: text("accion", { enum: ["crear", "editar", "archivar", "reactivar"] }).notNull(),
+  snapshot: text("snapshot").notNull(),
+}, table => [index("modelos_aire_historial_modelo_idx").on(table.modeloAireId)]);
+
 // ─── Activos / Equipos ────────────────────────────────────────────────────────
 export const activos = sqliteTable("activos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -106,6 +136,10 @@ export const activos = sqliteTable("activos", {
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
   // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
   rubro: text("rubro"),
+  datosTecnicos: text("datos_tecnicos"),
+  // Origen inmutable: una ficha puede cambiar sin reescribir unidades registradas.
+  modeloAireId: integer("modelo_aire_id").references(() => modelosAire.id),
+  modeloAireSnapshot: text("modelo_aire_snapshot"),
   // Subcategoría biomédica (soporte_vida/diagnostico/tratamiento/esterilizacion/cadena_frio/imagenologia/apoyo)
   subcategoria: text("subcategoria"),
   // Inspección de aceptación / entrada en servicio (JCI FMS.07)
@@ -146,6 +180,7 @@ export const activos = sqliteTable("activos", {
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
   tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"] }).notNull().default("correctivo"),
@@ -360,6 +395,7 @@ export const requisicionItems = sqliteTable("requisicion_items", {
 
 // ─── Helpdesk ────────────────────────────────────────────────────────────────
 export const tickets = sqliteTable("tickets", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   trackingToken: text("tracking_token").notNull().unique(),
   solicitanteNombre: text("solicitante_nombre").notNull(),
@@ -672,6 +708,7 @@ export const actividadCategorias = sqliteTable("actividad_categorias", {
 });
 
 export const actividades = sqliteTable("actividades", {
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   codigo: text("codigo").notNull().unique(),
   titulo: text("titulo").notNull(),
@@ -1624,3 +1661,67 @@ export type AopEvento = typeof aopEventos.$inferSelect;
 export type EopFicha = typeof eopFicha.$inferSelect;
 export type OrdenPrerrequisito = typeof ordenPrerrequisitos.$inferSelect;
 export type OrdenLiberacion = typeof ordenLiberaciones.$inferSelect;
+// ─── Conjuntos operativos y trazabilidad de composición ──────────────────────
+export const conjuntos = sqliteTable("conjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }).notNull(),
+  criticidad: text("criticidad", { enum: ["alta", "media", "baja"] }).notNull(),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id, { onDelete: "restrict" }),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  version: integer("version").notNull().default(1),
+  ultimaOperacionId: text("ultima_operacion_id").notNull().unique(),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+  updatedAt: text("updated_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+export const conjuntoPuestos = sqliteTable("conjunto_puestos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  funcion: text("funcion").notNull(),
+  esencial: integer("esencial", { mode: "boolean" }).notNull(),
+  createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`),
+});
+export const conjuntoComponentes = sqliteTable("conjunto_componentes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  puestoId: integer("puesto_id").notNull().references(() => conjuntoPuestos.id, { onDelete: "restrict" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "restrict" }),
+  incorporadoEn: text("incorporado_en").notNull(),
+  retiradoEn: text("retirado_en"),
+  incorporadoPor: integer("incorporado_por").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  retiradoPor: integer("retirado_por").references(() => usuarios.id, { onDelete: "restrict" }),
+  motivoAlta: text("motivo_alta").notNull(),
+  motivoRetiro: text("motivo_retiro"),
+  activoCodigo: text("activo_codigo").notNull(),
+  activoNombre: text("activo_nombre").notNull(),
+  activoSerial: text("activo_serial"),
+  incorporadoPorNombre: text("incorporado_por_nombre").notNull(),
+  retiradoPorNombre: text("retirado_por_nombre"),
+});
+export const conjuntoEventos = sqliteTable("conjunto_eventos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  fecha: text("fecha").notNull(),
+  accion: text("accion", { enum: ["crear", "editar", "archivar", "reactivar", "incorporar", "retirar", "reemplazar"] }).notNull(),
+  motivo: text("motivo").notNull(),
+  actorId: integer("actor_id").notNull().references(() => usuarios.id, { onDelete: "restrict" }),
+  actorNombre: text("actor_nombre").notNull(),
+  antes: text("antes"),
+  despues: text("despues").notNull(),
+});
+export const ordenConjuntos = sqliteTable("orden_conjuntos", {
+  ordenId: integer("orden_id").primaryKey().references(() => ordenes.id, { onDelete: "restrict" }),
+  conjuntoId: integer("conjunto_id").notNull().references(() => conjuntos.id, { onDelete: "restrict" }),
+  puestoId: integer("puesto_id").notNull().references(() => conjuntoPuestos.id, { onDelete: "restrict" }),
+  componenteId: integer("componente_id").notNull().references(() => conjuntoComponentes.id, { onDelete: "restrict" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "restrict" }),
+  fecha: text("fecha").notNull(),
+  funcion: text("funcion").notNull(),
+  activoCodigo: text("activo_codigo").notNull(),
+  activoNombre: text("activo_nombre").notNull(),
+  activoSerial: text("activo_serial"),
+});
+
+export { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';

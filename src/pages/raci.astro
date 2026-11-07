@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { raciProcesos, raciAsignaciones } from "@/lib/schema";
@@ -129,7 +130,8 @@ const procesosJson = JSON.stringify(procesos.map((p) => ({ id: p.id, nombre: p.n
   </div>
 
   {canEdit && (
-    <script define:vars={{ procesosJson }}>
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ procesosJson }) }}>
+      const { procesosJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const $ = (id) => document.getElementById(id);
       $("procBtn")?.addEventListener("click", () => $("procForm")?.classList.toggle("hidden"));
       $("proc_cancel")?.addEventListener("click", () => $("procForm")?.classList.add("hidden"));

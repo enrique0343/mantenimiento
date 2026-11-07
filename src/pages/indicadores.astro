@@ -1,0 +1,14 @@
+---
+import ModuleHub from "@/components/ModuleHub.astro";
+export const prerender=false;
+if(!["admin","jefe"].includes(Astro.locals.user!.rol))return Astro.redirect("/");
+const groups=[{label:"Resultados y seguimiento",links:[
+{href:"/resumen",label:"Resumen global",description:"Estado operativo, contratos y próximos servicios."},
+{href:"/kpis",label:"Indicadores",description:"Cumplimiento, tiempos, disponibilidad y costos."},
+{href:"/reportes",label:"Reportes",description:"Consulta y exportación de resultados."},
+{href:"/satisfaccion",label:"Satisfacción",description:"Encuestas y seguimiento de la atención."},
+{href:"/presupuesto",label:"Presupuesto",description:"Plan y ejecución de gastos por área."},
+{href:"/cumplimiento",label:"Cumplimiento",description:"Documentos y cobertura del mantenimiento."},
+]}];
+---
+<ModuleHub title="Indicadores y reportes" description="Una vista conjunta de las cuatro áreas." groups={groups}/>

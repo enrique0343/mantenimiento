@@ -1,0 +1,21 @@
+---
+interface Props {
+  modelo?: {
+    nombre?: string | null; descripcion?: string | null; categoria?: string | null;
+    marca?: string | null; modelo?: string | null;
+    datosTecnicos?: { tipoUnidad?: string | null; capacidadBtuH?: number | null; refrigerante?: string | null } | null;
+  };
+}
+const { modelo = {} } = Astro.props;
+const datos = modelo.datosTecnicos ?? {};
+---
+<div class="cq-fields">
+  <div class="cq-full"><label class="label" for="nombre">Nombre de la ficha *</label><input class="input" id="nombre" name="nombre" data-uppercase autocapitalize="characters" required maxlength="200" value={modelo.nombre ?? ""} placeholder="Ej.: AIRE SPLIT INVERTER 24,000 BTU/H" /><p class="cq-field-help">Un nombre que permita reconocer este modelo al registrar una unidad.</p></div>
+  <div><label class="label" for="marca">Marca</label><input class="input" id="marca" name="marca" data-uppercase autocapitalize="characters" maxlength="200" value={modelo.marca ?? ""} /></div>
+  <div><label class="label" for="modelo">Modelo del fabricante</label><input class="input" id="modelo" name="modelo" data-uppercase autocapitalize="characters" maxlength="200" value={modelo.modelo ?? ""} /></div>
+  <div><label class="label" for="categoria">Categoría</label><input class="input" id="categoria" name="categoria" data-uppercase autocapitalize="characters" maxlength="200" value={modelo.categoria ?? ""} placeholder="Ej.: CLIMATIZACIÓN" /></div>
+  <div><label class="label" for="tipoUnidad">Tipo de unidad</label><input class="input" id="tipoUnidad" name="tipoUnidad" data-uppercase autocapitalize="characters" maxlength="200" value={datos.tipoUnidad ?? ""} placeholder="Ej.: MINI SPLIT, CASSETTE, CENTRAL" /></div>
+  <div><label class="label" for="capacidadBtuH">Capacidad (BTU/h)</label><input class="input" id="capacidadBtuH" name="capacidadBtuH" type="number" min="0.01" max="10000000" step="any" inputmode="decimal" value={datos.capacidadBtuH ?? ""} placeholder="Ej.: 24000" /></div>
+  <div><label class="label" for="refrigerante">Refrigerante</label><input class="input" id="refrigerante" name="refrigerante" data-uppercase autocapitalize="characters" maxlength="200" value={datos.refrigerante ?? ""} placeholder="Ej.: R410A" /></div>
+  <div class="cq-full"><label class="label" for="descripcion">Descripción y características comunes</label><textarea class="input" id="descripcion" name="descripcion" data-uppercase autocapitalize="characters" rows="3" maxlength="2000" placeholder="Características que comparten todas las unidades de este modelo">{modelo.descripcion ?? ""}</textarea></div>
+</div>

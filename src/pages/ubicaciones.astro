@@ -1,0 +1,12 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { sucursales, ubicaciones } from "@/lib/schema";
+import { asc } from "drizzle-orm";
+export const prerender=false;
+const db=getDb(Astro);
+const suc=await db.select().from(sucursales).orderBy(asc(sucursales.nombre));
+const ub=await db.select().from(ubicaciones).orderBy(asc(ubicaciones.nombre));
+const admin=Astro.locals.user!.rol==="admin";
+---
+<Layout title="Ubicaciones"><div class="workspace-heading"><div><span class="area-eyebrow">Catálogo compartido</span><h1>Ubicaciones</h1><p>Una estructura física común para las cuatro áreas de mantenimiento.</p></div>{admin&&<a class="btn-primary" href="/configuracion#sucursales">Administrar ubicaciones</a>}</div>{suc.length===0?<div class="card workspace-empty"><h3>Agrega la primera sucursal</h3><p>Después podrás registrar edificios y ubicaciones para tus equipos e instalaciones.</p>{admin&&<a class="btn-secondary" href="/configuracion#sucursales">Crear sucursal</a>}</div>:<div class="grid gap-5 sm:grid-cols-2">{suc.map(s=><section class="card p-5"><h2 class="font-medium">{s.nombre}</h2><p class="text-sm text-slate-500 mt-1">{s.direccion}</p><ul class="mt-4 space-y-2 text-sm">{ub.filter(u=>u.sucursalId===s.id).map(u=><li class="rounded-lg bg-slate-50 px-3 py-2">{u.nombre}</li>)}</ul>{!ub.some(u=>u.sucursalId===s.id)&&<p class="mt-4 text-sm text-slate-500">Sin ubicaciones registradas.</p>}</section>)}</div>}</Layout>

@@ -6,6 +6,8 @@ import { eq, asc, and } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
+import { areaHref } from "@/lib/areas";
+import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -15,7 +17,7 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
-const dominioParam = url.searchParams.get("dominio");
+const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 const esTecnico = user.rol === "tecnico";
 
@@ -50,7 +52,7 @@ const actRowsAll = await db
 const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
 const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
-const actRows = dominio ? actRowsSede.filter((r) => rubroDeActividad(r.c?.rubro) === dominio) : actRowsSede;
+const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 
 // ── Horizonte de 12 meses desde el mes actual ────────────────────────────────
 const hoyD = new Date();
@@ -108,7 +110,7 @@ for (const r of planRows) {
     titulo: r.p.titulo,
     contexto: r.a ? `${r.a.codigo} · ${r.a.nombre}` : "",
     sede: r.s?.nombre ?? null,
-    link: r.a ? `/activos/${r.a.id}` : "/cronograma",
+    link: areaHref(r.a ? `/activos/${r.a.id}` : "/cronograma", dominio ?? r.a?.rubro),
     frecuencia: r.p.frecuencia,
     proximaFecha: r.p.proximaFecha,
     vencido: r.p.proximaFecha <= hoy,
@@ -127,7 +129,7 @@ for (const r of actRows) {
     titulo: r.a.titulo,
     contexto: r.a.codigo + (r.c ? ` · ${r.c.nombre}` : ""),
     sede: r.s?.nombre ?? null,
-    link: `/actividades/${r.a.id}`,
+    link: areaHref(`/actividades/${r.a.id}`, dominio ?? r.a.rubro),
     frecuencia: r.a.frecuencia,
     proximaFecha: r.a.proximaFecha,
     vencido: r.a.proximaFecha <= hoy,
@@ -168,13 +170,13 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
         ))}
       </select>
       <select id="dominioSel" class="input w-auto text-sm py-1.5">
-        <option value="">🏷 Todas las categorías</option>
+        <option value="">🏷 Todas las áreas</option>
         {RUBRO_KEYS.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
-      <a href={`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`} class="btn-secondary">📅 Vista por fechas</a>
-      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `dominio=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan anual</a>
+      <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">📅 Vista por fechas</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan anual</a>
     </div>
   </div>
 
@@ -250,6 +252,8 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
   <script>
     function nav(param: string, value: string) {
       const p = new URLSearchParams(location.search);
+      if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
+      p.delete("dominio");
       if (value) p.set(param, value); else p.delete(param);
       const s = p.toString();
       location.href = `/gantt${s ? `?${s}` : ""}`;
@@ -258,7 +262,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
       nav("sede", (e.currentTarget as HTMLSelectElement).value);
     });
     document.getElementById("dominioSel")?.addEventListener("change", (e) => {
-      nav("dominio", (e.currentTarget as HTMLSelectElement).value);
+      nav("area", (e.currentTarget as HTMLSelectElement).value);
     });
   </script>
 </Layout>

@@ -2,6 +2,7 @@
 // Detalle del episodio AOP: la ficha del procedimiento, las acciones inmediatas
 // que el técnico va marcando con hora, la relectura, la evaluación de riesgo y
 // las tres salidas: normalizar, escalar o pasar a EOP.
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -430,7 +431,8 @@ const msEscalar = msDe(e.escalarAntesDe);
     </div>
   )}
 
-  <script define:vars={{ eventoId: e.id, puedeOperar, abierto }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ eventoId: e.id, puedeOperar, abierto }) }}>
+    const { eventoId, puedeOperar, abierto } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
 
     function fmtDur(min) {

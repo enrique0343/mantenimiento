@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -265,7 +266,8 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   </div>
 </Layout>
 
-<script define:vars={{ solJson, itemsJson, adjJson, destJson, id }}>
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ solJson, itemsJson, adjJson, destJson, id }) }}>
+  const { solJson, itemsJson, adjJson, destJson, id } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const sol = JSON.parse(solJson);
   let items = JSON.parse(itemsJson);
   const destinatarios = JSON.parse(destJson);

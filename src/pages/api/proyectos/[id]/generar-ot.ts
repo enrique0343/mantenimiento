@@ -2,14 +2,19 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { proyectos, ordenes } from "@/lib/schema";
+import { proyectos, ordenes, tickets, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { disparadorProyecto } from "@/lib/notificaciones";
 
+import { validarAreaTrabajo } from "@/lib/ordenes";
+import { parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+
 export const prerender = false;
 
 const schema = z.object({
+  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).default("correctivo"),
@@ -37,6 +42,14 @@ export const POST: APIRoute = async (ctx) => {
     return Response.json({ error: "El proyecto debe estar aprobado o en ejecución para generar OTs" }, { status: 400 });
   }
 
+  const [ticket] = p.ticketId ? await db.select().from(tickets).where(eq(tickets.id, p.ticketId)).limit(1) : [null];
+  const [proyectoActivo] = p.activoId ? await db.select().from(activos).where(eq(activos.id, p.activoId)).limit(1) : [null];
+  const inheritedArea = parseArea(ticket?.rubro) ?? (proyectoActivo ? rubroDeActivo(proyectoActivo.rubro, proyectoActivo.tipo) : null);
+  if (inheritedArea && parsed.data.rubro && inheritedArea !== parsed.data.rubro) return Response.json({ error: "El área debe coincidir con la solicitud o activo de origen" }, { status: 400 });
+  const activoId = parsed.data.activoId !== undefined ? parsed.data.activoId : p.activoId;
+  const areaResult = await validarAreaTrabajo(db, { rubro: inheritedArea ?? parsed.data.rubro, activoId, sucursalId: p.sucursalId, ubicacionId: p.ubicacionId });
+  if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+
   // Si el proyecto está aprobado y se genera primera OT, pasar a en_ejecucion
   const ahora = new Date().toISOString();
   if (p.estado === "aprobado") {
@@ -59,7 +72,8 @@ export const POST: APIRoute = async (ctx) => {
     prioridad: parsed.data.prioridad,
     estado: "abierta",
     proyectoId,
-    activoId: parsed.data.activoId ?? p.activoId,
+    activoId,
+    rubro: areaResult.rubro,
     sucursalId: p.sucursalId,
     ubicacionId: p.ubicacionId,
     ubicacionDetalle: p.ubicacionDetalle,

@@ -1,4 +1,5 @@
 ---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import {
@@ -607,7 +608,8 @@ const veredictoJson = JSON.stringify(veredicto);
   )}
 </Layout>
 
-<script define:vars={{ procId: id, esAdmin, veredictoJson }}>
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ procId: id, esAdmin, veredictoJson }) }}>
+  const { procId, esAdmin, veredictoJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const $ = (id) => document.getElementById(id);
   const veredicto = JSON.parse(veredictoJson);
   const abrir = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };

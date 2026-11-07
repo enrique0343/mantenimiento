@@ -1,24 +1,28 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import { AREAS, areaHref, parseArea } from "@/lib/areas";
 export const prerender = false;
+const area = parseArea(Astro.url.searchParams.get("area"));
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin") return Astro.redirect("/activos");
+if (user.rol !== "admin") return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 ---
 
-<Layout title="Importar equipos desde CSV">
-  <a href="/activos" class="text-sm text-slate-500 hover:underline">← Volver</a>
-  <h1 class="mt-2 text-2xl font-bold">Importar equipos desde CSV</h1>
-  <p class="text-sm text-slate-500">Sube un CSV con tus equipos. Podrás simular antes de ejecutar la importación.</p>
+<Layout title="Importar inventario desde CSV">
+  <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">← Volver</a>
+  <h1 class="mt-2 text-2xl font-bold">Importar inventario desde CSV</h1>
+  <p class="text-sm text-slate-500">{area ? `Importando en ${AREAS[area].label}.` : "Importación de activos por área."} Podrás simular antes de ejecutar la importación.</p>
 
   <div class="card mt-4 p-5 text-sm">
     <h2 class="font-semibold">Formato esperado</h2>
     <p class="mt-1 text-slate-600">Encabezados (primera fila). Solo <code>codigo</code> y <code>nombre</code> son obligatorios:</p>
-    <pre class="mt-2 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200">codigo,nombre,tipo,categoria,marca,modelo,serial,anio,estado,ubicacion_nombre,sucursal_nombre,descripcion
-ACX-0100,Aire Acondicionado 12000 BTU,general,Aires acondicionados,LG,LS-12V,SN12345,2023,operativo,Sala 3,Sucursal Centro,</pre>
+    <pre class="mt-2 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200">codigo,nombre,rubro,criticidad,categoria,marca,modelo,serial,anio,estado,ubicacion_nombre,sucursal_nombre,descripcion</pre>
 
     <ul class="mt-3 list-disc pl-5 text-xs text-slate-600 space-y-1">
-      <li><strong>tipo:</strong> <code>general</code> o <code>biomedico</code> (default: general)</li>
+      <li><strong>rubro:</strong> <code>aires</code>, <code>infraestructura</code>, <code>equipo_general</code> o <code>biomedico</code>. {area ? "Si se omite se usa el área seleccionada. Las filas de otras áreas se rechazan." : "Si se omite se deriva del tipo: general o biomédico."}</li>
+      <li><strong>criticidad:</strong> <code>alta</code>, <code>media</code> o <code>baja</code> (predeterminado: media).</li>
+      <li><strong>Datos específicos:</strong> aires: <code>tipo_unidad,capacidad_btu_h,refrigerante</code>; infraestructura: <code>tipo_instalacion,sector</code>; equipos: <code>servicio</code>.</li>
+      <li><strong>tipo:</strong> <code>general</code> o <code>biomedico</code> (opcional; se deriva del área)</li>
       <li><strong>estado:</strong> <code>operativo</code>, <code>averiado</code>, <code>mantenimiento</code> o <code>baja</code> (default: operativo)</li>
       <li><strong>ubicacion_nombre:</strong> debe coincidir exactamente con una ubicación existente (mayús/minús no importan)</li>
       <li>Códigos duplicados se omiten automáticamente</li>
@@ -27,7 +31,7 @@ ACX-0100,Aire Acondicionado 12000 BTU,general,Aires acondicionados,LG,LS-12V,SN1
 
   <div class="card mt-4 p-5">
     <h2 class="font-semibold mb-3">Subir archivo</h2>
-    <input id="file" type="file" accept=".csv,text/csv" class="block w-full text-sm" />
+    <input id="file" data-area={area ?? ""} type="file" accept=".csv,text/csv" class="block w-full text-sm" />
     <div class="mt-4 flex flex-wrap gap-2">
       <button id="simBtn" class="btn-secondary text-sm" disabled>🔍 Simular (sin escribir DB)</button>
       <button id="goBtn" class="btn-primary text-sm" disabled>🚀 Ejecutar importación</button>
@@ -63,7 +67,7 @@ ACX-0100,Aire Acondicionado 12000 BTU,general,Aires acondicionados,LG,LS-12V,SN1
         const r = await fetch("/api/admin/import-equipos", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ csv: csvText, dryRun }),
+          body: JSON.stringify({ csv: csvText, dryRun, area: file.dataset.area || null }),
         });
         const j = await r.json();
         if (!r.ok) {

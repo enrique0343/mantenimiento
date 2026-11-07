@@ -5,6 +5,8 @@ import { getDb } from "@/lib/db";
 import { mediciones, variablesPredictivas, ordenes, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { evaluarMedicion } from "@/lib/predictivo";
+import { rubroDeActivo } from "@/lib/rubros";
+import { validarContextoArea } from "@/lib/ordenes";
 
 export const prerender = false;
 
@@ -25,6 +27,11 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [v] = await db.select().from(variablesPredictivas).where(eq(variablesPredictivas.id, parsed.data.variableId)).limit(1);
   if (!v) return Response.json({ error: "Variable no existe" }, { status: 404 });
+  const [act] = await db.select().from(activos).where(eq(activos.id, v.activoId)).limit(1);
+  if (!act) return Response.json({ error: "Equipo o instalación no encontrado" }, { status: 404 });
+  const rubro = rubroDeActivo(act.rubro, act.tipo);
+  const areaError = validarContextoArea(ctx.request, rubro);
+  if (areaError) return areaError;
 
   const estado = evaluarMedicion(parsed.data.valor, v);
 
@@ -43,7 +50,6 @@ export const POST: APIRoute = async (ctx) => {
   // Si es critico, genera OT predictiva automatica
   let ordenAuto = null;
   if (estado === "critico") {
-    const [act] = await db.select().from(activos).where(eq(activos.id, v.activoId)).limit(1);
     const titulo = `[Predictivo] ${v.nombre} fuera de rango - ${act?.codigo ?? `Activo #${v.activoId}`}`;
     const desc = `Medición de ${v.nombre} = ${parsed.data.valor}${v.unidad ? " " + v.unidad : ""} (rango crítico). Revisar.`;
     const [orden] = await db
@@ -52,6 +58,7 @@ export const POST: APIRoute = async (ctx) => {
         titulo,
         descripcion: desc,
         tipo: "predictivo",
+        rubro,
         prioridad: "alta",
         estado: "abierta",
         activoId: v.activoId,
