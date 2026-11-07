@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos } from "@/lib/schema";
+import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos, procedimientos, activoUbicacionesServidas, variablesPredictivas } from "@/lib/schema";
 import { eq, asc, desc, and, inArray, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { FRECUENCIAS } from "@/lib/frecuencias";
@@ -11,6 +11,14 @@ import {
   CRITICIDAD_LABEL, CRITICIDAD_COLOR, RESULTADO_CALIB_LABEL, RESULTADO_CALIB_COLOR,
   CATEGORIA_DOC_LABEL, vidaUtilRemanente, vidaUtilVencida, finVidaUtil, llevaCalibracion,
 } from "@/lib/inventario-jci";
+import {
+  NIVELES_JERARQUIA, NIVEL_LABEL, NIVEL_COLOR, PROFUNDIDAD_MAXIMA,
+  ROLES_UBICACION_SERVIDA, ROL_SERVIDA_LABEL, ROL_SERVIDA_COLOR, ROL_SERVIDA_AYUDA,
+  TIPO_ATRIBUTO_LABEL, TIPO_ATRIBUTO_COLOR, ESTADO_PROCEDIMIENTO_LABEL, ESTADO_PROCEDIMIENTO_COLOR,
+  valorNominalTexto, rutaAscendente, hijosConOrdenesAbiertas, descendientesDe,
+  type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
+} from "@/lib/jerarquia";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -175,10 +183,90 @@ const candidatosRespaldo = canJefe
   : [];
 const fueraDeServicio = a.estado === "averiado" || a.estado === "mantenimiento";
 const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operativo");
+
+// ─── Fase 47 · SCP: jerarquía, puntos de ajuste y mapa de distribución ──────
+// GO-GUI-011-2026 cap. 02-03: «Cada sistema crítico se registra como activo
+// padre con sus componentes como hijos»; el SCP es la ficha del sistema y su
+// versión vive como atributo del activo.
+const nivel = (a.nivelJerarquia ?? "componente") as NivelJerarquia;
+const estadoColorActivo: Record<string, string> = {
+  operativo: "bg-emerald-100 text-emerald-700",
+  averiado: "bg-red-100 text-red-700",
+  mantenimiento: "bg-amber-100 text-amber-700",
+  baja: "bg-slate-200 text-slate-600",
+};
+
+const ancestros = await rutaAscendente(db, id);
+const componentes = await hijosConOrdenesAbiertas(db, id);
+
+// SCP vinculado (activos.scpProcedimientoId → procedimientos)
+let scpInfo: { id: number; codigoCorto: string; titulo: string; version: string; estado: string; sistema: string; proximaRevision: string | null } | null = null;
+if (a.scpProcedimientoId) {
+  const [p] = await db
+    .select({
+      id: procedimientos.id, codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo,
+      version: procedimientos.version, estado: procedimientos.estado, sistema: procedimientos.sistema,
+      proximaRevision: procedimientos.proximaRevision,
+    })
+    .from(procedimientos).where(eq(procedimientos.id, a.scpProcedimientoId)).limit(1);
+  if (p) scpInfo = p;
+}
+// Un activo de nivel «sistema» sin SCP es un sistema crítico sin ficha.
+const faltaScp = nivel === "sistema" && !a.scpProcedimientoId;
+
+// Puntos de ajuste: atributos del activo con valor normal, mínimo y máximo.
+const atributosScp = await db
+  .select().from(variablesPredictivas)
+  .where(and(
+    eq(variablesPredictivas.activoId, id),
+    inArray(variablesPredictivas.tipoAtributo, ["punto_ajuste", "posicion_normal"]),
+  ))
+  .orderBy(asc(variablesPredictivas.nombre));
+
+// Mapa de distribución: «una manejadora sirve varias salas».
+const servidasRows = await db
+  .select({ rel: activoUbicacionesServidas, u: ubicaciones, s: sucursales })
+  .from(activoUbicacionesServidas)
+  .innerJoin(ubicaciones, eq(ubicaciones.id, activoUbicacionesServidas.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(eq(activoUbicacionesServidas.activoId, id))
+  .orderBy(asc(ubicaciones.nombre));
+
+// Opciones de los formularios (solo si el usuario puede editar).
+const descendientesIds = canEdit ? await descendientesDe(db, id) : new Set<number>();
+const candidatosPadre = canEdit
+  ? (await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, nivelJerarquia: activos.nivelJerarquia })
+      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"))).orderBy(asc(activos.codigo)))
+      .filter((c) => !descendientesIds.has(c.id))
+  : [];
+const procedimientosScp = canEdit
+  ? await db.select({ id: procedimientos.id, codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo, version: procedimientos.version })
+      .from(procedimientos).where(and(eq(procedimientos.tipo, "scp"), eq(procedimientos.activo, true)))
+      .orderBy(asc(procedimientos.codigoCorto))
+  : [];
+const idsYaServidos = new Set(servidasRows.map((r) => r.u.id));
+const ubicacionesOpciones = canEdit
+  ? await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursal: sucursales.nombre })
+      .from(ubicaciones).leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+      .where(eq(ubicaciones.activa, true)).orderBy(asc(ubicaciones.nombre))
+  : [];
 ---
 
 <Layout title={a.nombre}>
-  <a href="/activos" class="text-sm text-slate-500 hover:underline">&larr; Equipos</a>
+  <nav class="flex flex-wrap items-center gap-1 text-sm text-slate-500" aria-label="Jerarquía del activo">
+    <a href="/activos" class="hover:underline">&larr; Equipos</a>
+    {ancestros.map((an) => (
+      <Fragment>
+        <span class="text-slate-300">/</span>
+        <a href={`/activos/${an.id}`} class="hover:underline" title={an.nombre}>
+          <span class="font-mono text-xs">{an.codigo}</span>
+          <span class="ml-1">{an.nombre}</span>
+        </a>
+      </Fragment>
+    ))}
+    {ancestros.length > 0 && <span class="text-slate-300">/</span>}
+    {ancestros.length > 0 && <span class="font-medium text-slate-700">{a.nombre}</span>}
+  </nav>
 
   <div class="mt-2 flex items-start justify-between gap-4">
     <div>
@@ -310,6 +398,312 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     <a href={`/activos/${a.id}/predictivo`} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
   </div>
 
+  <!-- Configuración de sitio (SCP) — GO-GUI-011-2026 cap. 03 -->
+  <div class="grid grid-cols-1 gap-4 mt-6 lg:grid-cols-2">
+    <div class="card p-5" id="scp">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 class="font-semibold text-slate-900">🧩 Configuración de sitio (SCP)</h2>
+          <p class="text-xs text-slate-500">Cómo está configurado este sistema cuando todo está normal. La versión del SCP es un atributo del activo.</p>
+        </div>
+        <span class={`badge ${NIVEL_COLOR[nivel]}`} title="Nivel en la jerarquía del SCP">{NIVEL_LABEL[nivel]}</span>
+      </div>
+
+      {faltaScp && (
+        <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          ⚠ Este activo es de nivel <strong>sistema</strong> y no tiene un SCP vinculado. Un sistema crítico sin
+          configuración de sitio escrita deja sin referencia a sus SOP, MOP y AOP (FMS.08.00).
+        </div>
+      )}
+
+      {scpInfo ? (
+        <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-mono text-sm font-semibold text-slate-800">{scpInfo.codigoCorto}</span>
+            <span class={`badge ${ESTADO_PROCEDIMIENTO_COLOR[scpInfo.estado] ?? "bg-slate-100 text-slate-600"}`}>
+              {ESTADO_PROCEDIMIENTO_LABEL[scpInfo.estado] ?? scpInfo.estado}
+            </span>
+            <span class="badge bg-slate-100 text-slate-600">v{scpInfo.version}</span>
+            <span class="badge bg-slate-100 text-slate-600 capitalize">{scpInfo.sistema}</span>
+          </div>
+          <p class="mt-1 text-sm text-slate-700">{scpInfo.titulo}</p>
+          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
+            <div>
+              <div class="uppercase">Versión en el activo</div>
+              <div class="font-mono text-slate-700">{a.scpVersionRef ?? "—"}</div>
+              {a.scpVersionRef && a.scpVersionRef !== scpInfo.version && (
+                <div class="mt-0.5 text-amber-600">⚠ El SCP ya va en v{scpInfo.version}: actualice la referencia del activo.</div>
+              )}
+            </div>
+            <div>
+              <div class="uppercase">Próxima revisión</div>
+              <div class="text-slate-700">{fmtFechaSoloCompacta(scpInfo.proximaRevision)}</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p class="mt-3 text-sm text-slate-500">Sin SCP vinculado. {canEdit && "Vincula el procedimiento de configuración de sitio que describe este activo."}</p>
+      )}
+
+      {canEdit && (
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button id="jerModalBtn" class="btn-secondary btn-sm">✎ Jerarquía y SCP</button>
+          <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">⚙ Puntos de ajuste</a>
+        </div>
+      )}
+    </div>
+
+    <!-- Jerarquía: componentes hijos -->
+    <div class="card p-5" id="componentes">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 class="font-semibold text-slate-900">🧱 Componentes ({componentes.length})</h2>
+          <p class="text-xs text-slate-500">Cada sistema crítico se registra como activo padre con sus componentes como hijos.</p>
+        </div>
+      </div>
+
+      {ancestros.length > 0 && (
+        <div class="mt-3 text-xs text-slate-500">
+          Cuelga de{" "}
+          {ancestros.map((an, i) => (
+            <Fragment>
+              {i > 0 && <span class="text-slate-300"> › </span>}
+              <a href={`/activos/${an.id}`} class="text-brand-600 hover:underline">{an.codigo}</a>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
+      {componentes.length === 0 ? (
+        <p class="mt-3 text-sm text-slate-500">
+          Sin componentes registrados.
+          {canEdit && " Para colgar un componente, abre ese equipo y elige este activo como padre."}
+        </p>
+      ) : (
+        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+          {componentes.map((c) => (
+            <li class="flex items-center justify-between gap-3 py-2">
+              <div class="min-w-0 flex-1">
+                <a href={`/activos/${c.id}`} class="font-medium text-brand-700 hover:underline">{c.nombre}</a>
+                <div class="text-xs text-slate-500">
+                  <span class="font-mono">{c.codigo}</span>
+                  <span class={`badge ml-2 text-[10px] ${NIVEL_COLOR[(c.nivelJerarquia ?? "componente") as NivelJerarquia]}`}>
+                    {NIVEL_LABEL[(c.nivelJerarquia ?? "componente") as NivelJerarquia]}
+                  </span>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 whitespace-nowrap">
+                {c.otsAbiertas > 0 && (
+                  <span class="badge bg-blue-100 text-blue-700 text-[10px]" title="Órdenes de trabajo abiertas (abierta, en proceso o en espera)">
+                    {c.otsAbiertas} OT{c.otsAbiertas === 1 ? "" : "s"} abierta{c.otsAbiertas === 1 ? "" : "s"}
+                  </span>
+                )}
+                <span class={`badge text-[10px] ${estadoColorActivo[c.estado] ?? "bg-slate-100 text-slate-600"}`}>{c.estado}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </div>
+
+  <!-- Puntos de ajuste del SCP -->
+  <div class="card mt-6 p-5" id="puntos-ajuste">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">🎯 Puntos de ajuste del SCP</h2>
+        <p class="text-xs text-slate-500">
+          Los puntos de ajuste se cargan como atributos con valor normal, mínimo y máximo. Una posición normal
+          («selector en AUTO») se registra como texto.
+        </p>
+      </div>
+      {canEdit && <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">+ Agregar atributo</a>}
+    </div>
+
+    {atributosScp.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">
+        Sin puntos de ajuste cargados.
+        {canEdit && " Cárgalos desde Mantenimiento predictivo eligiendo el tipo «Punto de ajuste» o «Posición normal»."}
+      </p>
+    ) : (
+      <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-2 py-2">Parámetro</th>
+              <th class="px-2 py-2">Valor nominal</th>
+              <th class="px-2 py-2">Mín.</th>
+              <th class="px-2 py-2">Máx.</th>
+              <th class="px-2 py-2">Unidad</th>
+              <th class="px-2 py-2">Fuente normativa</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {atributosScp.map((v) => {
+              const tipo = (v.tipoAtributo ?? "punto_ajuste") as TipoAtributo;
+              const sinNominal = v.valorNominal == null && !v.valorNominalTexto;
+              return (
+                <tr class={!v.activo ? "opacity-50" : undefined}>
+                  <td class="px-2 py-2">
+                    <div class="font-medium text-slate-800">{v.nombre}</div>
+                    <span class={`badge text-[10px] ${TIPO_ATRIBUTO_COLOR[tipo]}`}>{TIPO_ATRIBUTO_LABEL[tipo]}</span>
+                    {!v.activo && <span class="badge ml-1 bg-slate-200 text-[10px] text-slate-600">Inactivo</span>}
+                  </td>
+                  <td class="px-2 py-2 font-mono">
+                    {sinNominal ? (
+                      <span class="badge bg-blue-50 text-blue-700" title="Campo en azul: celda pendiente de decisión">Pendiente</span>
+                    ) : (
+                      valorNominalTexto({ valorNominal: v.valorNominal, valorNominalTexto: v.valorNominalTexto, unidad: null })
+                    )}
+                  </td>
+                  <td class="px-2 py-2 font-mono text-slate-600">{v.minWarning ?? v.minCritico ?? "—"}</td>
+                  <td class="px-2 py-2 font-mono text-slate-600">{v.maxWarning ?? v.maxCritico ?? "—"}</td>
+                  <td class="px-2 py-2 text-slate-600">{v.unidad ?? "—"}</td>
+                  <td class="px-2 py-2 text-xs text-slate-600">
+                    {v.fuente ? (
+                      <span>
+                        {v.fuente}
+                        {v.fuenteReferencia && <span class="block text-slate-400">{v.fuenteReferencia}</span>}
+                      </span>
+                    ) : (
+                      <span class="badge bg-blue-50 text-blue-700" title="Campo en azul: norma por adoptar">Norma por adoptar</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+
+  <!-- Mapa de distribución: una manejadora sirve varias salas -->
+  <div class="card mt-6 p-5" id="mapa-distribucion">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">🗺 Mapa de distribución ({servidasRows.length})</h2>
+        <p class="text-xs text-slate-500">Qué salas depende de este activo: una manejadora sirve varias salas, un tablero alimenta varios servicios (FMS.08.00).</p>
+      </div>
+      {canEdit && <button id="servBtn" class="btn-primary btn-sm">+ Agregar ubicación</button>}
+    </div>
+
+    {canEdit && (
+      <div id="servForm" class="mt-4 hidden rounded-md border border-slate-200 bg-slate-50 p-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <label class="label text-xs" for="serv_ubic">Ubicación *</label>
+            <select id="serv_ubic" class="input">
+              <option value="">Seleccionar…</option>
+              {ubicacionesOpciones.map((u) => (
+                <option value={u.id} disabled={idsYaServidos.has(u.id)}>
+                  {u.nombre} ({u.tipo}){u.sucursal ? ` · ${u.sucursal}` : ""}{idsYaServidos.has(u.id) ? " — ya en el mapa" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="serv_rol">Rol *</label>
+            <select id="serv_rol" class="input">
+              {ROLES_UBICACION_SERVIDA.map((r) => <option value={r}>{ROL_SERVIDA_LABEL[r]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="serv_notas">Notas</label>
+            <input id="serv_notas" class="input" placeholder="Difusor, circuito, ramal…" />
+          </div>
+        </div>
+        <ul class="mt-2 space-y-0.5 text-xs text-slate-500">
+          {ROLES_UBICACION_SERVIDA.map((r) => <li><strong>{ROL_SERVIDA_LABEL[r]}:</strong> {ROL_SERVIDA_AYUDA[r]}</li>)}
+        </ul>
+        <p id="serv_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-3 flex gap-2">
+          <button id="serv_save" class="btn-primary btn-sm">Agregar al mapa</button>
+          <button id="serv_cancel" class="btn-secondary btn-sm">Cancelar</button>
+        </div>
+      </div>
+    )}
+
+    {servidasRows.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Sin ubicaciones servidas. {canEdit && "Agrega las salas que este activo sirve, alimenta, controla o de las que extrae."}</p>
+    ) : (
+      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+        {servidasRows.map(({ rel, u, s }) => (
+          <li class="flex items-center justify-between gap-3 py-2">
+            <div class="min-w-0 flex-1">
+              <span class={`badge text-[10px] ${ROL_SERVIDA_COLOR[(rel.rol ?? "sirve") as RolUbicacionServida]}`}>
+                {ROL_SERVIDA_LABEL[(rel.rol ?? "sirve") as RolUbicacionServida]}
+              </span>
+              <span class="ml-2 font-medium text-slate-800">📍 {u.nombre}</span>
+              <span class="ml-1 text-xs capitalize text-slate-400">({u.tipo})</span>
+              <div class="text-xs text-slate-500">
+                {s?.nombre && <span>🏢 {s.nombre}</span>}
+                {rel.notas && <span class="ml-2">{rel.notas}</span>}
+              </div>
+            </div>
+            {canEdit && <button class="serv-del text-xs text-red-600 hover:underline" data-rel={rel.id}>Quitar</button>}
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
+  <!-- Modal: jerarquía (padre + nivel) y SCP vinculado -->
+  {canEdit && (
+    <div id="jerModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900">🧩 Jerarquía y configuración de sitio</h3>
+        <p class="mt-1 text-xs text-slate-500">
+          La jerarquía admite {PROFUNDIDAD_MAXIMA} niveles: sistema → subsistema → componente. Un activo no puede
+          colgar de sí mismo ni de uno de sus propios componentes.
+        </p>
+        <div class="mt-4 grid grid-cols-1 gap-3">
+          <div>
+            <label class="label text-xs" for="jer_padre">Activo padre</label>
+            <select id="jer_padre" class="input">
+              <option value="">Sin padre (raíz)</option>
+              {candidatosPadre.map((c) => (
+                <option value={c.id} selected={a.padreId === c.id}>
+                  {c.codigo} · {c.nombre} ({NIVEL_LABEL[(c.nivelJerarquia ?? "componente") as NivelJerarquia]})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_nivel">Nivel *</label>
+            <select id="jer_nivel" class="input">
+              {NIVELES_JERARQUIA.map((n) => <option value={n} selected={nivel === n}>{NIVEL_LABEL[n]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_scp">Procedimiento SCP</label>
+            <select id="jer_scp" class="input">
+              <option value="">Sin SCP vinculado</option>
+              {procedimientosScp.map((p) => (
+                <option value={p.id} selected={a.scpProcedimientoId === p.id} data-version={p.version}>
+                  {p.codigoCorto} · {p.titulo} (v{p.version})
+                </option>
+              ))}
+            </select>
+            {procedimientosScp.length === 0 && (
+              <p class="mt-1 text-xs text-amber-600">No hay procedimientos SCP activos todavía.</p>
+            )}
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_version">Versión del SCP en este activo</label>
+            <input id="jer_version" class="input" value={a.scpVersionRef ?? ""} placeholder="0.9" />
+            <p class="mt-1 text-xs text-slate-500">Se completa con la versión del SCP elegido; edítala si el activo está configurado según otra.</p>
+          </div>
+        </div>
+        <p id="jer_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="jer_cancel" class="btn-secondary">Cancelar</button>
+          <button id="jer_save" class="btn-primary">Guardar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
   <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -401,7 +795,10 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <!-- Documentos del equipo (ficha técnica, manual, garantía…) -->
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
-      <h2 class="font-semibold">📄 Documentos del equipo</h2>
+      <div>
+        <h2 class="font-semibold">📄 Documentos del equipo</h2>
+        <p class="text-xs text-slate-500">Planos, unifilares y diagramas de válvulas se adjuntan al activo; los <strong>as-built</strong> son la configuración vigente del SCP.</p>
+      </div>
       {canEdit && <button id="docUploadBtn" class="btn-primary text-sm">+ Subir documento</button>}
     </div>
 
@@ -439,8 +836,15 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
           <li class="flex items-center justify-between gap-3 py-2">
             <div class="min-w-0 flex-1">
               <a href={`/api/activos/documento/${d.id}`} target="_blank" class="font-medium text-brand-700 hover:underline">{d.nombre}</a>
+              {d.asBuilt && (
+                <span class="badge ml-2 bg-indigo-100 text-[10px] text-indigo-700" title="Plano o esquema as-built: refleja la instalación tal como está construida (SCP)">
+                  📐 As-built
+                </span>
+              )}
               <div class="text-xs text-slate-500">
                 <span class="rounded bg-slate-100 px-1.5 py-0.5">{CATEGORIA_DOC_LABEL[d.categoria ?? "otro"] ?? d.categoria}</span>
+                {d.version && <span class="ml-2 font-mono">v{d.version}</span>}
+                {d.fechaVersion && <span class="ml-1">({fmtFechaSoloCompacta(d.fechaVersion)})</span>}
                 <span class="ml-2">{(d.tamano / 1024).toFixed(0)} KB · {fmt(d.createdAt)}</span>
               </div>
             </div>
@@ -1131,6 +1535,92 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
         const rid = e.currentTarget.dataset.id;
         const res = await fetch(`/api/activos/${activoId}/respaldos?respaldoId=${rid}`, { method: "DELETE" });
         if (res.ok) location.reload(); else alert("Error al quitar");
+      });
+    });
+
+    // ─── Fase 47 · Jerarquía del SCP (padre + nivel + SCP vinculado) ───────
+    const jerModal = $("jerModal");
+    const abrirJer = () => { jerModal?.classList.remove("hidden"); jerModal?.classList.add("flex"); };
+    const cerrarJer = () => { jerModal?.classList.add("hidden"); jerModal?.classList.remove("flex"); };
+    $("jerModalBtn")?.addEventListener("click", abrirJer);
+    $("jer_cancel")?.addEventListener("click", cerrarJer);
+    jerModal?.addEventListener("click", (e) => { if (e.target === jerModal) cerrarJer(); });
+
+    // Al elegir un SCP se propone su versión vigente como referencia del activo.
+    $("jer_scp")?.addEventListener("change", () => {
+      const sel = $("jer_scp");
+      const opt = sel.options[sel.selectedIndex];
+      const ver = opt?.dataset?.version;
+      if (!sel.value) { $("jer_version").value = ""; return; }
+      if (ver) $("jer_version").value = ver;
+    });
+
+    $("jer_save")?.addEventListener("click", async () => {
+      const err = $("jer_err");
+      err.classList.add("hidden");
+      const padreVal = $("jer_padre").value;
+      const scpVal = $("jer_scp").value;
+      const payload = {
+        padreId: padreVal ? Number(padreVal) : null,
+        nivelJerarquia: $("jer_nivel").value,
+        scpProcedimientoId: scpVal ? Number(scpVal) : null,
+        scpVersionRef: scpVal ? ($("jer_version").value.trim() || null) : null,
+      };
+      const res = await fetch(`/api/activos/${activoId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        err.textContent = typeof j.error === "string" ? j.error : "No se pudo guardar la jerarquía.";
+        err.classList.remove("hidden");
+        window.showToast?.(typeof j.error === "string" ? j.error : "No se pudo guardar", "error");
+        return;
+      }
+      window.showToast?.("Jerarquía y SCP actualizados", "success");
+      location.reload();
+    });
+
+    // ─── Fase 47 · Mapa de distribución (ubicaciones servidas) ─────────────
+    $("servBtn")?.addEventListener("click", () => $("servForm")?.classList.toggle("hidden"));
+    $("serv_cancel")?.addEventListener("click", () => $("servForm")?.classList.add("hidden"));
+    $("serv_save")?.addEventListener("click", async () => {
+      const err = $("serv_err");
+      err.classList.add("hidden");
+      if (!$("serv_ubic").value) {
+        err.textContent = "Selecciona una ubicación.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const res = await fetch(`/api/activos/${activoId}/ubicaciones-servidas`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ubicacionId: Number($("serv_ubic").value),
+          rol: $("serv_rol").value,
+          notas: $("serv_notas").value.trim() || null,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        err.textContent = typeof j.error === "string" ? j.error : "No se pudo agregar al mapa.";
+        err.classList.remove("hidden");
+        return;
+      }
+      window.showToast?.("Ubicación agregada al mapa", "success");
+      location.reload();
+    });
+    document.querySelectorAll(".serv-del").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        const relId = e.currentTarget.dataset.rel;
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Quitar del mapa", "¿Quitar esta ubicación del mapa de distribución del activo?")
+          : confirm("¿Quitar esta ubicación del mapa de distribución?"));
+        if (!ok) return;
+        const res = await fetch(`/api/activos/${activoId}/ubicaciones-servidas?relId=${relId}`, { method: "DELETE" });
+        if (res.ok) { window.showToast?.("Ubicación quitada", "success"); location.reload(); }
+        else window.showToast?.("Error al quitar", "error");
       });
     });
 

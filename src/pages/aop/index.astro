@@ -1,0 +1,789 @@
+---
+// Tablero AOP · el espacio entre "lo anoté en la ronda" y "es una emergencia".
+// Ordenado por urgencia del reloj: lo vencido para escalar va primero.
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  activos,
+  aopEventos,
+  aopUmbrales,
+  procedimientos,
+  sucursales,
+  ubicaciones,
+  usuarios,
+  variablesPredictivas,
+} from "@/lib/schema";
+import { and, asc, eq, gte, inArray, or } from "drizzle-orm";
+import {
+  BANDA,
+  ESTADOS_AOP_ABIERTOS,
+  ESTADO_AOP,
+  RELOJ,
+  cronometro,
+  evaluarLectura,
+  fmtCuentaRegresiva,
+  fmtDuracion,
+  fmtRango,
+  horasFueraRangoPorSala,
+  msDe,
+  puedeAdministrarAop,
+  puedeOperarAop,
+  puedeVerAop,
+  type EstadoAop,
+} from "@/lib/aop";
+import { fmtFechaCompacta } from "@/lib/datetime";
+import { periodoActualSV } from "@/lib/metricas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerAop(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const puedeOperar = puedeOperarAop(user.rol);
+const puedeAdmin = puedeAdministrarAop(user.rol);
+
+// Inicio del día en hora de El Salvador (UTC-6) para la sección "cerradas hoy".
+const sv = new Date(Date.now() - 6 * 3600_000);
+const p2 = (n: number) => String(n).padStart(2, "0");
+const hoySV = `${sv.getUTCFullYear()}-${p2(sv.getUTCMonth() + 1)}-${p2(sv.getUTCDate())}`;
+const inicioHoy = new Date(Date.parse(`${hoySV}T00:00:00-06:00`)).toISOString();
+const ahoraInput = `${hoySV}T${p2(sv.getUTCHours())}:${p2(sv.getUTCMinutes())}`;
+
+const rows = await db
+  .select({
+    e: aopEventos,
+    codigoAop: procedimientos.codigoCorto,
+    tituloAop: procedimientos.titulo,
+    sistemaAop: procedimientos.sistema,
+    varNombre: variablesPredictivas.nombre,
+    varUnidad: variablesPredictivas.unidad,
+    varMinW: variablesPredictivas.minWarning,
+    varMaxW: variablesPredictivas.maxWarning,
+    varMinC: variablesPredictivas.minCritico,
+    varMaxC: variablesPredictivas.maxCritico,
+    uMinAlerta: aopUmbrales.minAlerta,
+    uMaxAlerta: aopUmbrales.maxAlerta,
+    uPersistente: aopUmbrales.minutosEventoPersistente,
+    sala: ubicaciones.nombre,
+    equipo: activos.nombre,
+    equipoCodigo: activos.codigo,
+    sede: sucursales.nombre,
+    detectadoPorNombre: usuarios.nombre,
+  })
+  .from(aopEventos)
+  .leftJoin(procedimientos, eq(procedimientos.id, aopEventos.procedimientoId))
+  .leftJoin(variablesPredictivas, eq(variablesPredictivas.id, aopEventos.variableId))
+  .leftJoin(aopUmbrales, eq(aopUmbrales.id, aopEventos.umbralId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, aopEventos.ubicacionId))
+  .leftJoin(activos, eq(activos.id, aopEventos.activoId))
+  .leftJoin(sucursales, eq(sucursales.id, aopEventos.sucursalId))
+  .leftJoin(usuarios, eq(usuarios.id, aopEventos.detectadoPor))
+  .where(
+    or(
+      inArray(aopEventos.estado, ESTADOS_AOP_ABIERTOS),
+      and(eq(aopEventos.estado, "cerrado"), gte(aopEventos.cerradoEn, inicioHoy)),
+      and(eq(aopEventos.estado, "paso_a_eop"), gte(aopEventos.escaladoEn, inicioHoy)),
+    ),
+  );
+
+const fichas = rows.map((r) => {
+  const lectura =
+    r.e.valorDetectado != null
+      ? evaluarLectura(
+          { minWarning: r.varMinW, maxWarning: r.varMaxW, minCritico: r.varMinC, maxCritico: r.varMaxC },
+          r.e.valorDetectado,
+          { minAlerta: r.uMinAlerta, maxAlerta: r.uMaxAlerta },
+        )
+      : null;
+  return {
+    ...r,
+    lectura,
+    cron: cronometro(r.e),
+    unidad: r.e.unidad ?? r.varUnidad ?? null,
+    msActuar: msDe(r.e.actuarAntesDe),
+    msEscalar: msDe(r.e.escalarAntesDe),
+  };
+});
+type Ficha = (typeof fichas)[number];
+const porUrgencia = (a: Ficha, b: Ficha) => a.cron.urgencia - b.cron.urgencia;
+
+const abiertas = fichas.filter((f) => ESTADOS_AOP_ABIERTOS.includes(f.e.estado as EstadoAop));
+const porEscalar = abiertas.filter((f) => f.e.estado === "escalado" || f.cron.reloj === "vencido_escalar").sort(porUrgencia);
+const idsEscalar = new Set(porEscalar.map((f) => f.e.id));
+const porActuar = abiertas.filter((f) => !idsEscalar.has(f.e.id) && f.e.estado === "abierto").sort(porUrgencia);
+const enCorreccion = abiertas.filter((f) => !idsEscalar.has(f.e.id) && f.e.estado === "en_correccion").sort(porUrgencia);
+const cerradasHoy = fichas
+  .filter((f) => f.e.estado === "cerrado" || f.e.estado === "paso_a_eop")
+  .sort((a, b) => (b.e.cerradoEn ?? b.e.escaladoEn ?? "").localeCompare(a.e.cerradoEn ?? a.e.escaladoEn ?? ""));
+
+// Indicador 8 del volumen: horas fuera de rango por sala, mes corriente.
+const periodo = periodoActualSV();
+const indicador8 = await horasFueraRangoPorSala(db, periodo);
+const horasMes = Math.round(indicador8.reduce((s, f) => s + f.horasFueraRango, 0) * 10) / 10;
+
+// Umbrales activos: de aquí se abre una desviación a mano desde la ronda.
+const umbralesRows = await db
+  .select({
+    u: aopUmbrales,
+    codigoAop: procedimientos.codigoCorto,
+    tituloAop: procedimientos.titulo,
+    varNombre: variablesPredictivas.nombre,
+    varUnidad: variablesPredictivas.unidad,
+    sala: ubicaciones.nombre,
+    equipo: activos.nombre,
+  })
+  .from(aopUmbrales)
+  .leftJoin(procedimientos, eq(procedimientos.id, aopUmbrales.procedimientoId))
+  .leftJoin(variablesPredictivas, eq(variablesPredictivas.id, aopUmbrales.variableId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, aopUmbrales.ubicacionId))
+  .leftJoin(activos, eq(activos.id, aopUmbrales.activoId))
+  .where(eq(aopUmbrales.activo, true))
+  .orderBy(asc(aopUmbrales.procedimientoId), asc(aopUmbrales.id));
+
+const umbralesUI = umbralesRows.map((r) => ({
+  id: r.u.id,
+  etiqueta: [r.codigoAop ?? "AOP", r.varNombre ?? "atributo", r.sala ?? r.equipo ?? "sin sala"].join(" · "),
+  unidad: r.varUnidad ?? "",
+  minAlerta: r.u.minAlerta,
+  maxAlerta: r.u.maxAlerta,
+  minutosParaActuar: r.u.minutosParaActuar,
+  minutosParaEscalar: r.u.minutosParaEscalar,
+  rango: fmtRango(r.u.minAlerta, r.u.maxAlerta, r.varUnidad),
+}));
+const umbralesJson = JSON.stringify(umbralesUI);
+
+// Catálogos para los dos formularios.
+const procsAop = await db
+  .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo })
+  .from(procedimientos)
+  .where(and(eq(procedimientos.tipo, "aop"), eq(procedimientos.activo, true)))
+  .orderBy(asc(procedimientos.codigoCorto));
+const procsEop = await db
+  .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo })
+  .from(procedimientos)
+  .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
+  .orderBy(asc(procedimientos.codigoCorto));
+const salas = await db
+  .select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sede: sucursales.nombre })
+  .from(ubicaciones)
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(eq(ubicaciones.activa, true))
+  .orderBy(asc(ubicaciones.nombre));
+const variablesUI = puedeAdmin
+  ? await db
+      .select({
+        id: variablesPredictivas.id,
+        nombre: variablesPredictivas.nombre,
+        unidad: variablesPredictivas.unidad,
+        activoId: variablesPredictivas.activoId,
+        equipo: activos.nombre,
+      })
+      .from(variablesPredictivas)
+      .leftJoin(activos, eq(activos.id, variablesPredictivas.activoId))
+      .where(eq(variablesPredictivas.activo, true))
+      .orderBy(asc(variablesPredictivas.nombre))
+  : [];
+
+// Presets del capítulo 07 (AOP-HVAC-01 y AOP-HVAC-02) para no teclear umbrales.
+const PRESETS = [
+  { k: "Quirófano · humedad", min: 35, max: 60, act: 120, esc: 480, per: 1080, nota: "HR fuera de 35–60 %" },
+  { k: "Quirófano · temperatura", min: 18, max: 22, act: 120, esc: 480, per: 1080, nota: "18–22 °C" },
+  { k: "Almacén estéril · humedad", min: 35, max: 70, act: 480, esc: 480, per: 1080, nota: "HR fuera de 35–70 %" },
+  { k: "Almacén estéril · temperatura", min: 18, max: 25, act: 480, esc: 480, per: 1080, nota: "18–25 °C" },
+  { k: "Perioperatoria · humedad", min: 40, max: 60, act: 120, esc: 480, per: 1080, nota: "HR fuera de 40–60 %" },
+  { k: "Perioperatoria · temperatura", min: 18, max: 25, act: 120, esc: 480, per: 1080, nota: "18–25 °C" },
+  { k: "Quirófano · presión (+2.5 Pa)", min: 2.5, max: null, act: 5, esc: 60, per: null, nota: "Sin presión positiva" },
+  { k: "Aislamiento · presión (−2.5 Pa)", min: null, max: -2.5, act: 5, esc: 60, per: null, nota: "Sin presión negativa" },
+];
+const presetsJson = JSON.stringify(PRESETS);
+
+const SECCIONES = [
+  { id: "escalar", titulo: "Vencidas para escalar", icono: "🚨", lista: porEscalar, nota: "El tiempo tolerable se agotó: avisar al nivel superior o pasar al EOP." },
+  { id: "actuar", titulo: "Por actuar", icono: "⏱️", lista: porActuar, nota: "Detectadas y sin una sola acción registrada." },
+  { id: "correccion", titulo: "En corrección", icono: "🔧", lista: enCorreccion, nota: "Alguien está ejecutando las acciones inmediatas." },
+];
+---
+
+<Layout title="AOP · desviaciones">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">🌡️ AOP · condición anormal</h1>
+      <p class="mt-1 max-w-2xl text-sm text-slate-500">
+        Una lectura fuera de rango con un reloj corriendo. No es todavía una emergencia, pero tiene
+        tiempo tolerable y criterio de paso al EOP. Ordenado por urgencia del reloj.
+      </p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {puedeOperar && <button id="nuevaDesvBtn" class="btn-primary">+ Registrar desviación</button>}
+      {puedeAdmin && <button id="nuevoUmbralBtn" class="btn-secondary">Nuevo umbral</button>}
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Abiertas</div>
+      <div class="mt-1 text-2xl font-bold text-slate-700">{abiertas.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Vencidas para escalar</div>
+      <div class={`mt-1 text-2xl font-bold ${porEscalar.length ? "text-red-600" : "text-slate-700"}`}>{porEscalar.length}</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Horas fuera de rango · {periodo}</div>
+      <div class="mt-1 text-2xl font-bold text-slate-700">{horasMes.toFixed(1)}</div>
+      <div class="text-[11px] text-slate-400">indicador 8</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs uppercase text-slate-500">Salas afectadas</div>
+      <div class="mt-1 text-2xl font-bold text-slate-700">{indicador8.length}</div>
+    </div>
+  </div>
+
+  {abiertas.length === 0 && (
+    <div class="card mt-6 p-10 text-center">
+      <div class="text-4xl">✅</div>
+      <h2 class="mt-3 font-semibold text-slate-800">Ninguna desviación abierta</h2>
+      <p class="mx-auto mt-1 max-w-md text-sm text-slate-500">
+        Cuando una lectura de la ronda sale de la banda de operación, se abre aquí con su reloj.
+        {umbralesUI.length === 0 && " Todavía no hay umbrales configurados sobre los activos."}
+      </p>
+      {puedeOperar && <button id="nuevaDesvBtn2" class="btn-primary mt-4">Registrar una desviación</button>}
+    </div>
+  )}
+
+  {SECCIONES.map((sec) => sec.lista.length > 0 && (
+    <section class="mt-7">
+      <div class="flex flex-wrap items-baseline gap-2">
+        <h2 class="font-semibold text-slate-700">{sec.icono} {sec.titulo}</h2>
+        <span class="badge bg-slate-100 text-slate-600">{sec.lista.length}</span>
+        <span class="text-xs text-slate-400">{sec.nota}</span>
+      </div>
+      <div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {sec.lista.map((f) => {
+          const rel = RELOJ[f.cron.reloj];
+          const est = ESTADO_AOP[f.e.estado as EstadoAop];
+          const persistente = f.uPersistente != null && f.cron.minutosAbierto >= f.uPersistente;
+          return (
+            <a href={`/aop/${f.e.id}`} class={`card block border-l-4 p-4 transition-shadow hover:shadow-md ${rel.borde}`}>
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="font-mono text-[11px] text-slate-400">{f.codigoAop ?? "Sin AOP vinculado"}</div>
+                  <div class="truncate font-semibold text-slate-800">
+                    {f.varNombre ?? f.tituloAop ?? "Desviación"}
+                  </div>
+                </div>
+                <span class={`badge shrink-0 ${est.badge}`}>{est.label}</span>
+              </div>
+
+              <div class="mt-2 flex flex-wrap items-baseline gap-2">
+                <span class="text-2xl font-bold text-slate-900 tabular-nums">
+                  {f.e.valorDetectado ?? "—"}{f.unidad ? <span class="ml-1 text-sm font-normal text-slate-500">{f.unidad}</span> : null}
+                </span>
+                {f.lectura && (
+                  <span class={`badge ${BANDA[f.lectura.banda].badge}`}>{BANDA[f.lectura.banda].label}</span>
+                )}
+              </div>
+              {f.lectura && (
+                <div class="mt-0.5 text-xs text-slate-500">
+                  rango de operación {fmtRango(f.lectura.minAlerta, f.lectura.maxAlerta, f.unidad)}
+                </div>
+              )}
+
+              <div class="mt-2 text-xs text-slate-500">
+                📍 {f.sala ?? "Sin sala"}{f.sede ? ` · ${f.sede}` : ""}
+                {f.equipo && <span class="block">⚙️ {f.equipo}{f.equipoCodigo ? ` (${f.equipoCodigo})` : ""}</span>}
+              </div>
+
+              <div class="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
+                Desde {fmtFechaCompacta(f.e.detectadoEn)} · abierta {fmtDuracion(f.cron.minutosAbierto)}
+                {f.detectadoPorNombre ? ` · ${f.detectadoPorNombre}` : ""}
+              </div>
+
+              <div class="mt-2 space-y-1 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-slate-500">Actuar</span>
+                  {f.msActuar != null ? (
+                    <span class="tabular-nums font-medium" data-reloj={f.msActuar}>{fmtCuentaRegresiva(f.cron.minutosParaActuar)}</span>
+                  ) : (
+                    <span class="text-slate-400">sin plazo definido</span>
+                  )}
+                </div>
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-slate-500">Escalar</span>
+                  {f.msEscalar != null ? (
+                    <span class="tabular-nums font-medium" data-reloj={f.msEscalar}>{fmtCuentaRegresiva(f.cron.minutosParaEscalar)}</span>
+                  ) : (
+                    <span class="text-slate-400">sin plazo definido</span>
+                  )}
+                </div>
+              </div>
+
+              <div class="mt-2 flex flex-wrap gap-1">
+                <span class={`badge ${rel.badge}`}>{rel.label}</span>
+                {persistente && <span class="badge bg-purple-100 text-purple-700">Evento persistente</span>}
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </section>
+  ))}
+
+  {cerradasHoy.length > 0 && (
+    <section class="mt-7">
+      <div class="flex flex-wrap items-baseline gap-2">
+        <h2 class="font-semibold text-slate-700">✅ Cerradas hoy</h2>
+        <span class="badge bg-slate-100 text-slate-600">{cerradasHoy.length}</span>
+      </div>
+      <div class="card mt-3 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2">AOP</th>
+              <th class="px-3 py-2">Qué se desvió</th>
+              <th class="px-3 py-2">Dónde</th>
+              <th class="px-3 py-2">Detectado</th>
+              <th class="px-3 py-2 text-right">Fuera de rango</th>
+              <th class="px-3 py-2">Cierre</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {cerradasHoy.map((f) => (
+              <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2 font-mono text-xs text-slate-500">
+                  <a href={`/aop/${f.e.id}`} class="hover:underline">{f.codigoAop ?? `#${f.e.id}`}</a>
+                </td>
+                <td class="px-3 py-2">
+                  {f.varNombre ?? f.tituloAop ?? "—"}
+                  <span class="text-slate-400"> · {f.e.valorDetectado ?? "—"}{f.unidad ? ` ${f.unidad}` : ""}</span>
+                  {f.e.valorFinal != null && <span class="text-emerald-600"> → {f.e.valorFinal}{f.unidad ? ` ${f.unidad}` : ""}</span>}
+                </td>
+                <td class="px-3 py-2 text-slate-600">{f.sala ?? "—"}</td>
+                <td class="px-3 py-2 text-slate-500">{fmtFechaCompacta(f.e.detectadoEn)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(f.e.minutosFuera)}</td>
+                <td class="px-3 py-2">
+                  <span class={`badge ${ESTADO_AOP[f.e.estado as EstadoAop].badge}`}>{ESTADO_AOP[f.e.estado as EstadoAop].label}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )}
+
+  {indicador8.length > 0 && (
+    <section class="mt-7">
+      <h2 class="font-semibold text-slate-700">📊 Indicador 8 · horas fuera de rango por sala ({periodo})</h2>
+      <div class="card mt-3 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2">Sala</th>
+              <th class="px-3 py-2 text-right">Horas fuera de rango</th>
+              <th class="px-3 py-2 text-right">Desviaciones</th>
+              <th class="px-3 py-2 text-right">Escaladas</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {indicador8.map((f) => (
+              <tr>
+                <td class="px-3 py-2 text-slate-700">{f.sala}</td>
+                <td class="px-3 py-2 text-right font-medium tabular-nums">{f.horasFueraRango.toFixed(1)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{f.desviaciones}</td>
+                <td class={`px-3 py-2 text-right tabular-nums ${f.desviacionesEscaladas ? "text-red-600" : ""}`}>{f.desviacionesEscaladas}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-2 text-xs text-slate-400">
+        Un episodio todavía abierto cuenta desde que se detectó hasta ahora: la desviación que sigue corriendo ya pesa.
+      </p>
+    </section>
+  )}
+
+  <section class="mt-7">
+    <div class="flex flex-wrap items-baseline gap-2">
+      <h2 class="font-semibold text-slate-700">🎚️ Umbrales sobre los activos</h2>
+      <span class="badge bg-slate-100 text-slate-600">{umbralesUI.length}</span>
+      <span class="text-xs text-slate-400">Los AOP no ocupan filas del plan: viven como umbrales sobre los activos.</span>
+    </div>
+    {umbralesRows.length === 0 ? (
+      <p class="card mt-3 p-4 text-sm text-slate-500">
+        Sin umbrales configurados. Un umbral define la banda de alerta de un atributo y los minutos del reloj
+        (cuánto se tolera antes de actuar y antes de escalar).
+      </p>
+    ) : (
+      <div class="card mt-3 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2">AOP</th>
+              <th class="px-3 py-2">Atributo</th>
+              <th class="px-3 py-2">Dónde</th>
+              <th class="px-3 py-2">Banda de alerta</th>
+              <th class="px-3 py-2 text-right">Actuar</th>
+              <th class="px-3 py-2 text-right">Escalar</th>
+              <th class="px-3 py-2 text-right">Persistente</th>
+              {puedeAdmin && <th class="px-3 py-2"></th>}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {umbralesRows.map((r) => (
+              <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2 font-mono text-xs text-slate-500">{r.codigoAop ?? "—"}</td>
+                <td class="px-3 py-2 text-slate-700">{r.varNombre ?? "—"}</td>
+                <td class="px-3 py-2 text-slate-600">{r.sala ?? r.equipo ?? "—"}</td>
+                <td class="px-3 py-2 tabular-nums">{fmtRango(r.u.minAlerta, r.u.maxAlerta, r.varUnidad)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosParaActuar)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosParaEscalar)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosEventoPersistente)}</td>
+                {puedeAdmin && (
+                  <td class="px-3 py-2 text-right">
+                    <button class="btn-secondary btn-sm bajaUmbral" data-id={r.u.id}>Dar de baja</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </section>
+
+  <!-- Modal: registrar desviación a mano desde la ronda -->
+  {puedeOperar && (
+    <div id="desvModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-xl p-5">
+        <h2 class="font-semibold text-slate-800">Registrar desviación</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          Cuando hay sensor, la lectura abre el episodio sola. Cuando no lo hay, la abre el técnico desde la ronda.
+        </p>
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Umbral del AOP</label>
+            <select id="d_umbral" class="input">
+              {umbralesUI.map((u) => <option value={u.id}>{u.etiqueta} · {u.rango}</option>)}
+              <option value="otro">Otro — elegir procedimiento y sala…</option>
+            </select>
+            <p id="d_rango" class="mt-1 text-xs text-slate-400"></p>
+          </div>
+          <div id="d_bloqueOtro" class="hidden sm:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="label text-xs">Procedimiento AOP *</label>
+              <select id="d_proc" class="input">
+                <option value="">Seleccionar…</option>
+                {procsAop.map((p) => <option value={p.id}>{p.codigo} · {p.titulo}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">Sala</label>
+              <select id="d_sala" class="input">
+                <option value="">Sin sala</option>
+                {salas.map((s) => <option value={s.id}>{s.nombre}{s.sede ? ` · ${s.sede}` : ""}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs">Minutos para actuar</label>
+              <input id="d_actuar" class="input" type="number" min="0" step="5" placeholder="120" />
+            </div>
+            <div>
+              <label class="label text-xs">Minutos para escalar</label>
+              <input id="d_escalar" class="input" type="number" min="0" step="5" placeholder="480" />
+            </div>
+          </div>
+          <div>
+            <label class="label text-xs">Valor detectado</label>
+            <input id="d_valor" class="input" type="number" step="0.01" placeholder="68" />
+          </div>
+          <div>
+            <label class="label text-xs">Unidad</label>
+            <input id="d_unidad" class="input" placeholder="%" />
+          </div>
+          <div>
+            <label class="label text-xs">Detectado el</label>
+            <input id="d_detectado" class="input" type="datetime-local" value={ahoraInput} />
+          </div>
+          <div>
+            <label class="label text-xs">Origen</label>
+            <select id="d_origen" class="input">
+              <option value="ronda" selected>Ronda</option>
+              <option value="sensor">Sensor</option>
+              <option value="manual">Aviso del personal</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Qué se observó</label>
+            <textarea id="d_nota" class="input" rows="2" placeholder="Condensación en el empaque, puerta abierta, alarma del panel…"></textarea>
+          </div>
+        </div>
+        <p id="d_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="d_cancel" class="btn-secondary">Cancelar</button>
+          <button id="d_save" class="btn-primary">Abrir el episodio</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <!-- Modal: nuevo umbral -->
+  {puedeAdmin && (
+    <div id="umbralModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card max-h-[90vh] w-full max-w-xl overflow-y-auto p-5">
+        <h2 class="font-semibold text-slate-800">Nuevo umbral</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          La banda de alerta sobrescribe la de la variable sólo si la llenas; si la dejas vacía, hereda de la variable.
+        </p>
+        <div class="mt-3">
+          <div class="label text-xs">Presets del capítulo 07</div>
+          <div class="flex flex-wrap gap-1">
+            {PRESETS.map((p, i) => (
+              <button type="button" class="btn-secondary btn-sm presetBtn" data-i={i} title={p.nota}>{p.k}</button>
+            ))}
+          </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Procedimiento AOP *</label>
+            <select id="u_proc" class="input">
+              <option value="">Seleccionar…</option>
+              {procsAop.map((p) => <option value={p.id}>{p.codigo} · {p.titulo}</option>)}
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Variable del activo</label>
+            <select id="u_var" class="input">
+              <option value="">Sin variable (umbral de sala)</option>
+              {variablesUI.map((v) => (
+                <option value={v.id} data-unidad={v.unidad ?? ""} data-activo={v.activoId}>
+                  {v.nombre}{v.unidad ? ` (${v.unidad})` : ""}{v.equipo ? ` · ${v.equipo}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs">Sala</label>
+            <select id="u_sala" class="input">
+              <option value="">Sin sala</option>
+              {salas.map((s) => <option value={s.id}>{s.nombre}{s.sede ? ` · ${s.sede}` : ""}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs">Mínimo de alerta</label>
+            <input id="u_min" class="input" type="number" step="0.01" placeholder="35" />
+          </div>
+          <div>
+            <label class="label text-xs">Máximo de alerta</label>
+            <input id="u_max" class="input" type="number" step="0.01" placeholder="60" />
+          </div>
+          <div>
+            <label class="label text-xs">Minutos para actuar</label>
+            <input id="u_actuar" class="input" type="number" min="0" step="5" placeholder="120" />
+          </div>
+          <div>
+            <label class="label text-xs">Minutos para escalar</label>
+            <input id="u_escalar" class="input" type="number" min="0" step="5" placeholder="480" />
+          </div>
+          <div>
+            <label class="label text-xs">Evento persistente (min)</label>
+            <input id="u_persistente" class="input" type="number" min="0" step="30" placeholder="1080" />
+          </div>
+          <div>
+            <label class="label text-xs">EOP al que pasa</label>
+            <select id="u_eop" class="input">
+              <option value="">Ninguno</option>
+              {procsEop.map((p) => <option value={p.id}>{p.codigo} · {p.titulo}</option>)}
+            </select>
+          </div>
+        </div>
+        <p id="u_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="u_cancel" class="btn-secondary">Cancelar</button>
+          <button id="u_save" class="btn-primary">Crear umbral</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <script define:vars={{ umbralesJson, presetsJson, puedeOperar, puedeAdmin }}>
+    const umbrales = JSON.parse(umbralesJson);
+    const presets = JSON.parse(presetsJson);
+    const $ = (id) => document.getElementById(id);
+
+    // ── El cronómetro: cada tarjeta recalcula lo que le queda ──
+    function fmtDur(min) {
+      const m = Math.abs(Math.round(min));
+      if (m < 60) return m + " min";
+      const h = Math.floor(m / 60), r = m % 60;
+      if (h < 24) return r ? h + " h " + r + " min" : h + " h";
+      const d = Math.floor(h / 24), hr = h % 24;
+      return hr ? d + " d " + hr + " h" : d + " d";
+    }
+    function tick() {
+      const now = Date.now();
+      document.querySelectorAll("[data-reloj]").forEach((el) => {
+        const ms = Number(el.getAttribute("data-reloj"));
+        if (!ms) return;
+        const restante = Math.round((ms - now) / 60000);
+        el.textContent = restante >= 0 ? "faltan " + fmtDur(restante) : "vencido hace " + fmtDur(restante);
+        el.classList.toggle("text-red-600", restante < 0);
+        el.classList.toggle("font-semibold", restante < 0);
+        el.classList.toggle("text-amber-600", restante >= 0 && restante <= 30);
+      });
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // ── Registrar desviación ──
+    if (puedeOperar) {
+      const modal = $("desvModal");
+      const abrir = () => { modal.classList.remove("hidden"); modal.classList.add("flex"); sincronizarUmbral(); };
+      const cerrar = () => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+      $("nuevaDesvBtn")?.addEventListener("click", abrir);
+      $("nuevaDesvBtn2")?.addEventListener("click", abrir);
+      $("d_cancel")?.addEventListener("click", cerrar);
+      modal.addEventListener("click", (e) => { if (e.target === modal) cerrar(); });
+
+      function sincronizarUmbral() {
+        const v = $("d_umbral").value;
+        const otro = v === "otro";
+        $("d_bloqueOtro").classList.toggle("hidden", !otro);
+        $("d_bloqueOtro").classList.toggle("grid", otro);
+        const u = umbrales.find((x) => String(x.id) === v);
+        $("d_rango").textContent = u
+          ? "Banda de alerta " + u.rango + " · actuar " + (u.minutosParaActuar != null ? fmtDur(u.minutosParaActuar) : "sin plazo") +
+            " · escalar " + (u.minutosParaEscalar != null ? fmtDur(u.minutosParaEscalar) : "sin plazo")
+          : "";
+        if (u && u.unidad && !$("d_unidad").value) $("d_unidad").value = u.unidad;
+      }
+      $("d_umbral").addEventListener("change", sincronizarUmbral);
+
+      $("d_save").addEventListener("click", async () => {
+        const err = $("d_err");
+        err.classList.add("hidden");
+        const sel = $("d_umbral").value;
+        const otro = sel === "otro";
+        const body = {
+          origen: $("d_origen").value,
+          detectadoEn: $("d_detectado").value || null,
+          valorDetectado: $("d_valor").value === "" ? null : Number($("d_valor").value),
+          unidad: $("d_unidad").value.trim() || null,
+          nota: $("d_nota").value.trim() || null,
+        };
+        if (otro) {
+          const procId = Number($("d_proc").value);
+          if (!procId) {
+            err.textContent = "Elige el procedimiento AOP.";
+            err.classList.remove("hidden");
+            return;
+          }
+          body.procedimientoId = procId;
+          const salaId = Number($("d_sala").value);
+          if (salaId) body.ubicacionId = salaId;
+          if ($("d_actuar").value !== "") body.minutosParaActuar = Number($("d_actuar").value);
+          if ($("d_escalar").value !== "") body.minutosParaEscalar = Number($("d_escalar").value);
+        } else if (sel) {
+          body.umbralId = Number(sel);
+        } else {
+          err.textContent = "No hay umbrales configurados: usa «Otro».";
+          err.classList.remove("hidden");
+          return;
+        }
+        const res = await fetch("/api/aop/eventos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j.evento) {
+          if (j.yaExistia) window.showToast?.(j.aviso || "Ya había un episodio abierto", "warning");
+          else window.showToast?.("Desviación abierta con su reloj", "success");
+          location.href = "/aop/" + j.evento.id;
+        } else {
+          err.textContent = typeof j.error === "string" ? j.error : "No se pudo abrir el episodio";
+          err.classList.remove("hidden");
+        }
+      });
+    }
+
+    // ── Umbrales ──
+    if (puedeAdmin) {
+      const um = $("umbralModal");
+      const abrirU = () => { um.classList.remove("hidden"); um.classList.add("flex"); };
+      const cerrarU = () => { um.classList.add("hidden"); um.classList.remove("flex"); };
+      $("nuevoUmbralBtn")?.addEventListener("click", abrirU);
+      $("u_cancel")?.addEventListener("click", cerrarU);
+      um.addEventListener("click", (e) => { if (e.target === um) cerrarU(); });
+
+      document.querySelectorAll(".presetBtn").forEach((b) => {
+        b.addEventListener("click", () => {
+          const p = presets[Number(b.getAttribute("data-i"))];
+          $("u_min").value = p.min == null ? "" : p.min;
+          $("u_max").value = p.max == null ? "" : p.max;
+          $("u_actuar").value = p.act == null ? "" : p.act;
+          $("u_escalar").value = p.esc == null ? "" : p.esc;
+          $("u_persistente").value = p.per == null ? "" : p.per;
+        });
+      });
+
+      $("u_var").addEventListener("change", () => {
+        const opt = $("u_var").selectedOptions[0];
+        const u = opt?.getAttribute("data-unidad");
+        if (u) $("u_min").placeholder = "mín en " + u;
+      });
+
+      $("u_save").addEventListener("click", async () => {
+        const err = $("u_err");
+        err.classList.add("hidden");
+        const procId = Number($("u_proc").value);
+        if (!procId) {
+          err.textContent = "Elige el procedimiento AOP.";
+          err.classList.remove("hidden");
+          return;
+        }
+        const num = (id) => ($(id).value === "" ? null : Number($(id).value));
+        const varId = Number($("u_var").value) || null;
+        const activoId = varId ? Number($("u_var").selectedOptions[0].getAttribute("data-activo")) || null : null;
+        const body = {
+          procedimientoId: procId,
+          variableId: varId,
+          activoId,
+          ubicacionId: Number($("u_sala").value) || null,
+          minAlerta: num("u_min"),
+          maxAlerta: num("u_max"),
+          minutosParaActuar: num("u_actuar"),
+          minutosParaEscalar: num("u_escalar"),
+          minutosEventoPersistente: num("u_persistente"),
+          eopProcedimientoId: Number($("u_eop").value) || null,
+        };
+        const res = await fetch("/api/aop/umbrales", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j.umbral) {
+          window.showToast?.("Umbral creado", "success");
+          location.reload();
+        } else {
+          err.textContent = typeof j.error === "string" ? j.error : "No se pudo crear el umbral";
+          err.classList.remove("hidden");
+        }
+      });
+
+      document.querySelectorAll(".bajaUmbral").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const ok = await window.confirmAction?.(
+            "Dar de baja el umbral",
+            "Los episodios ya abiertos conservan su referencia, pero no se abrirán nuevos con este umbral.",
+            { danger: true, confirmLabel: "Dar de baja" },
+          );
+          if (!ok) return;
+          const res = await fetch("/api/aop/umbrales?id=" + b.getAttribute("data-id"), { method: "DELETE" });
+          if (res.ok) { window.showToast?.("Umbral dado de baja", "success"); location.reload(); }
+          else window.showToast?.("No se pudo dar de baja", "error");
+        });
+      });
+    }
+  </script>
+</Layout>

@@ -1,0 +1,699 @@
+---
+// EOP · emergencias. Cap. 02 del GO-GUI-011-2026: «El EOP no se ejecuta desde
+// una pantalla: se imprime y se coloca en el cuarto técnico y en el servicio
+// clínico.»  Por eso esta página NO es un asistente paso a paso: es la ficha
+// imprimible de una página (con las tres primeras acciones destacadas, que se
+// aprenden de memoria) más los dos registros que el volumen exige —el estado de
+// los simulacros (cap. 06: «un EOP sin simulacro es una hipótesis») y la
+// constancia de que el papel está colgado donde toca.
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  eopColocaciones,
+  eopFicha,
+  eopSimulacros,
+  procedimientos,
+  procedimientoEscalamientos,
+  sucursales,
+  ubicaciones,
+  usuarios,
+} from "@/lib/schema";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import {
+  estadoInfo,
+  hoyISO,
+  puedeAdministrarProcedimientos,
+  puedeVerProcedimientos,
+  revisionAnual,
+  sistemaInfo,
+} from "@/lib/procedimientos";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerProcedimientos(user.rol)) return Astro.redirect("/");
+const esAdmin = puedeAdministrarProcedimientos(user.rol);
+
+const db = getDb(Astro);
+const hoy = hoyISO();
+
+const filas = await db
+  .select({ p: procedimientos, f: eopFicha, resp: usuarios, suc: sucursales })
+  .from(procedimientos)
+  .leftJoin(eopFicha, eq(eopFicha.procedimientoId, procedimientos.id))
+  .leftJoin(usuarios, eq(usuarios.id, procedimientos.responsableId))
+  .leftJoin(sucursales, eq(sucursales.id, procedimientos.sucursalId))
+  .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
+  .orderBy(asc(procedimientos.codigoCorto));
+
+const ids = filas.map((r) => r.p.id);
+
+const [escalamientos, simulacros, colocaciones, sedes, salas] = await Promise.all([
+  ids.length
+    ? db
+        .select()
+        .from(procedimientoEscalamientos)
+        .where(inArray(procedimientoEscalamientos.procedimientoId, ids))
+        .orderBy(asc(procedimientoEscalamientos.orden), asc(procedimientoEscalamientos.minutos))
+    : Promise.resolve([]),
+  ids.length
+    ? db
+        .select({ s: eopSimulacros, conduce: usuarios.nombre, sede: sucursales.nombre })
+        .from(eopSimulacros)
+        .leftJoin(usuarios, eq(usuarios.id, eopSimulacros.conducidoPor))
+        .leftJoin(sucursales, eq(sucursales.id, eopSimulacros.sucursalId))
+        .where(inArray(eopSimulacros.procedimientoId, ids))
+        .orderBy(desc(eopSimulacros.fecha), desc(eopSimulacros.id))
+    : Promise.resolve([]),
+  ids.length
+    ? db
+        .select({ c: eopColocaciones, sala: ubicaciones.nombre, sede: sucursales.nombre, quien: usuarios.nombre })
+        .from(eopColocaciones)
+        .leftJoin(ubicaciones, eq(ubicaciones.id, eopColocaciones.ubicacionId))
+        .leftJoin(sucursales, eq(sucursales.id, eopColocaciones.sucursalId))
+        .leftJoin(usuarios, eq(usuarios.id, eopColocaciones.colocadoPor))
+        .where(inArray(eopColocaciones.procedimientoId, ids))
+        .orderBy(asc(eopColocaciones.id))
+    : Promise.resolve([]),
+  db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(asc(sucursales.nombre)),
+  db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre }).from(ubicaciones).orderBy(asc(ubicaciones.nombre)),
+]);
+
+const diasEntre = (a: string, b: string): number =>
+  Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+
+// Un EOP por tarjeta, con su reloj de simulacro y sus copias en pared.
+const docs = filas.map(({ p, f, resp, suc }) => {
+  const mios = simulacros.filter((x) => x.s.procedimientoId === p.id);
+  const funcionales = mios.filter((x) => x.s.tipo === "funcional");
+  const mesas = mios.filter((x) => x.s.tipo === "mesa");
+  const ultimoFuncional = funcionales[0]?.s.fecha ?? f?.ultimoSimulacroFuncional ?? null;
+  const ultimaMesa = mesas[0]?.s.fecha ?? null;
+  // El ensayo de mesa vale para la versión que se ensayó: si el documento
+  // cambió de versión, la hipótesis vuelve a estar sin probar.
+  const mesaDeEstaVersion = mesas.some((x) => !x.s.versionEnsayada || x.s.versionEnsayada === p.version);
+  const proximoFuncional = ultimoFuncional
+    ? (f?.proximoSimulacroFuncional ?? revisionAnual(ultimoFuncional))
+    : null;
+  const diasParaFuncional = proximoFuncional ? diasEntre(hoy, proximoFuncional) : null;
+  const vencidoAnual = !ultimoFuncional || (proximoFuncional !== null && proximoFuncional < hoy);
+  const colos = colocaciones.filter((x) => x.c.procedimientoId === p.id);
+  const colosDesactualizadas = colos.filter((x) => x.c.versionColocada && x.c.versionColocada !== p.version);
+  const acciones = [f?.accion1, f?.accion2, f?.accion3].filter((a): a is string => !!a && a.trim() !== "");
+  return {
+    p, f, resp, suc,
+    escal: escalamientos.filter((e) => e.procedimientoId === p.id),
+    simulacros: mios,
+    colos,
+    colosDesactualizadas,
+    acciones,
+    ultimoFuncional,
+    ultimaMesa,
+    mesaDeEstaVersion,
+    proximoFuncional,
+    diasParaFuncional,
+    vencidoAnual,
+  };
+});
+
+const nSinFicha = docs.filter((d) => !d.f).length;
+const nVencidos = docs.filter((d) => d.vencidoAnual).length;
+const nSinMesa = docs.filter((d) => !d.mesaDeEstaVersion).length;
+const nSinColocar = docs.filter((d) => d.colos.length === 0).length;
+const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
+---
+
+<Layout title="EOP · emergencias">
+  <div class="no-print">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold">🚨 EOP · operación en emergencia</h1>
+        <p class="mt-1 max-w-3xl text-sm text-slate-500">
+          El EOP empieza cuando el sistema <strong>ya falló</strong>: prioriza estabilizar antes que
+          diagnosticar y cabe en una página. No se ejecuta desde esta pantalla —
+          <strong>se imprime y se coloca</strong> en el cuarto técnico y en el servicio clínico.
+          Aquí está la ficha para imprimir y los dos registros que el volumen exige: el simulacro y la colocación.
+        </p>
+      </div>
+      <a href="/procedimientos?tipo=eop" class="btn-secondary btn-sm">Ver en la biblioteca</a>
+    </div>
+
+    <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div class="card p-3">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">EOP en el catálogo</div>
+        <div class="mt-0.5 text-2xl font-bold text-slate-700">{docs.length}</div>
+        <div class="text-[11px] text-slate-400">{nVigentes} vigente{nVigentes === 1 ? "" : "s"} · 5 en el volumen</div>
+      </div>
+      <div class="card p-3">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">⏰ Simulacro anual vencido</div>
+        <div class:list={["mt-0.5 text-2xl font-bold", nVencidos > 0 ? "text-red-600" : "text-emerald-600"]}>{nVencidos}</div>
+        <div class="text-[11px] text-slate-400">funcional en sitio, una vez al año</div>
+      </div>
+      <div class="card p-3">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">🧪 Sin ensayo de mesa</div>
+        <div class:list={["mt-0.5 text-2xl font-bold", nSinMesa > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinMesa}</div>
+        <div class="text-[11px] text-slate-400">de la versión cargada</div>
+      </div>
+      <div class="card p-3">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">📌 Sin copia colocada</div>
+        <div class:list={["mt-0.5 text-2xl font-bold", nSinColocar > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinColocar}</div>
+        <div class="text-[11px] text-slate-400">cuarto técnico y servicio clínico</div>
+      </div>
+      <div class="card p-3">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">📄 Sin ficha redactada</div>
+        <div class:list={["mt-0.5 text-2xl font-bold", nSinFicha > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinFicha}</div>
+        <div class="text-[11px] text-slate-400">señal, acciones y escalamiento</div>
+      </div>
+    </div>
+
+    {docs.length === 0 && (
+      <div class="card mt-4 p-6 text-center text-sm text-slate-500">
+        Todavía no hay ningún EOP en el catálogo. Créalos desde la
+        <a href="/procedimientos" class="text-brand-600 underline"> biblioteca de procedimientos</a>
+        (cinco emergencias del volumen: energía <code>EOP-ELE-01</code>, oxígeno <code>EOP-GAS-01</code>,
+        quirófano <code>EOP-HVAC-01</code>, agua <code>EOP-AGU-01</code> y ascensor <code>EOP-ASC-01</code>).
+      </div>
+    )}
+
+    {docs.length > 0 && (
+      <nav class="card mt-4 flex flex-wrap gap-2 p-3">
+        {docs.map((d) => (
+          <a href={`#doc-${d.p.id}`} class="btn-secondary btn-sm">
+            {sistemaInfo(d.p.sistema).icono} {d.p.codigoCorto}
+            {d.vencidoAnual && <span class="ml-1 text-red-600">⏰</span>}
+          </a>
+        ))}
+      </nav>
+    )}
+  </div>
+
+  {docs.map((d) => (
+    <section id={`doc-${d.p.id}`} class="eop-doc card print-doc mt-5 p-5">
+      <!-- ══ Cabecera documental ══ -->
+      <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3">
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-slate-500">
+            {sistemaInfo(d.p.sistema).icono} {sistemaInfo(d.p.sistema).label}
+            {d.p.codigoInstitucional && <span> · {d.p.codigoInstitucional}</span>}
+          </div>
+          <h2 class="text-xl font-bold">{d.p.codigoCorto} · {d.p.titulo}</h2>
+          <div class="mt-1 text-xs text-slate-500">
+            Versión {d.p.version} · <span class:list={["rounded px-1.5 py-0.5", estadoInfo(d.p.estado).color]}>
+              {estadoInfo(d.p.estado).icono} {estadoInfo(d.p.estado).label}
+            </span>
+            {d.resp?.nombre && <span> · Responsable: {d.resp.nombre}</span>}
+            {d.suc?.nombre && <span> · Sede: {d.suc.nombre}</span>}
+            {d.p.aprobadoEn && <span> · Aprobado {fmtFechaSoloCompacta(d.p.aprobadoEn)}</span>}
+          </div>
+        </div>
+        <div class="no-print flex gap-2">
+          <button class="btn-secondary btn-sm imprimir" data-doc={d.p.id}>🖨️ Imprimir ficha</button>
+          <a href={`/procedimientos/${d.p.id}`} class="btn-secondary btn-sm">Abrir documento</a>
+        </div>
+      </div>
+
+      {!d.f && (
+        <p class="mt-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
+          Este EOP todavía no tiene ficha de emergencia redactada (señal de activación, quién activa,
+          quién dirige y las tres primeras acciones). Sin ella no hay nada que imprimir ni que ensayar:
+          el capítulo 06 lo considera una hipótesis, no un procedimiento.
+        </p>
+      )}
+
+      {d.f && (
+        <>
+          <!-- ══ Señal de activación y mando ══ -->
+          <div class="mt-3 grid gap-3 sm:grid-cols-3">
+            <div class="rounded border border-red-200 bg-red-50 p-3">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-red-700">Señal de activación</div>
+              <p class="mt-1 text-sm text-slate-800">{d.f.senalActivacion ?? "—"}</p>
+            </div>
+            <div class="rounded border border-slate-200 p-3">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Activa</div>
+              <p class="mt-1 text-sm text-slate-800">{d.f.activaQuien ?? "—"}</p>
+            </div>
+            <div class="rounded border border-slate-200 p-3">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dirige</div>
+              <p class="mt-1 text-sm text-slate-800">{d.f.dirigeQuien ?? "—"}</p>
+              {d.f.dirigeFueraHorario && (
+                <p class="mt-1 text-xs text-slate-500">Fuera de horario: {d.f.dirigeFueraHorario}</p>
+              )}
+            </div>
+          </div>
+
+          <!-- ══ Las tres primeras acciones: se saben de memoria ══ -->
+          <div class="mt-4">
+            <h3 class="text-sm font-semibold text-slate-700">
+              Primeras acciones · se aprenden de memoria
+            </h3>
+            {d.acciones.length === 0 ? (
+              <p class="mt-1 text-sm text-slate-500">Sin acciones inmediatas redactadas.</p>
+            ) : (
+              <ol class="mt-2 space-y-2">
+                {d.acciones.map((a, i) => (
+                  <li class="flex gap-3 rounded-lg border-2 border-red-300 bg-red-50 p-3">
+                    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-600 text-base font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <span class="text-base font-semibold leading-snug text-slate-900">{a}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+
+          <!-- ══ Estabilizar · comunicar · decidir · restablecer ══ -->
+          <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { t: "Estabilizar", v: d.f.estabilizar },
+              { t: "Comunicar", v: d.f.comunicar },
+              { t: "Decidir", v: d.f.decidir },
+              { t: "Restablecer", v: d.f.restablecer },
+            ].map((b) => (
+              <div class="rounded border border-slate-200 p-3">
+                <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{b.t}</div>
+                <p class="mt-1 text-sm text-slate-800">{b.v ?? "—"}</p>
+              </div>
+            ))}
+          </div>
+
+          <!-- ══ Escalamiento y cierre ══ -->
+          <div class="mt-4 grid gap-3 lg:grid-cols-2">
+            <div>
+              <h3 class="text-sm font-semibold text-slate-700">Escalamiento</h3>
+              {d.escal.length === 0 ? (
+                <p class="mt-1 text-sm text-slate-500">
+                  Sin cadena de escalamiento registrada.
+                  {d.f.minutosEscalarGerencia && <span> Gerencia a los {d.f.minutosEscalarGerencia} min.</span>}
+                </p>
+              ) : (
+                <table class="mt-2 w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500">
+                      <th class="py-1 pr-2">Min</th>
+                      <th class="py-1 pr-2">Avisar a</th>
+                      <th class="py-1">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.escal.map((e) => (
+                      <tr class="border-b border-slate-100">
+                        <td class="py-1 pr-2 font-mono font-semibold">{e.minutos}′</td>
+                        <td class="py-1 pr-2">{e.avisarCargo}</td>
+                        <td class="py-1 text-slate-600">
+                          {e.accion ?? "—"}
+                          {e.esPasoAEop && <span class="ml-1 rounded bg-red-100 px-1 text-[11px] text-red-700">activa EOP</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div class="rounded border border-slate-200 p-3 text-sm">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cierre del episodio</div>
+              <p class="mt-1 text-slate-700">
+                La falla abre una <strong>orden de emergencia</strong> con este código y registra hora de alarma,
+                hora de llegada y hora de restablecimiento. No cierra sin análisis de causa raíz
+                dentro de las <strong>{d.f.horasCausaRaiz ?? 72} h</strong>.
+              </p>
+              {d.f.etiquetaHoraMitigacion && (
+                <p class="mt-1 text-xs text-slate-500">Hora de mitigación: {d.f.etiquetaHoraMitigacion}</p>
+              )}
+              {d.p.registro && <p class="mt-1 text-xs text-slate-500">Registro: {d.p.registro}</p>}
+              {d.p.normaAdoptada && <p class="mt-1 text-xs text-slate-500">Norma adoptada: {d.p.normaAdoptada}</p>}
+              <a href={`/ordenes?tipo=emergencia`} class="no-print mt-2 inline-block text-xs text-brand-600 underline">
+                Ver órdenes de emergencia
+              </a>
+            </div>
+          </div>
+
+          <div class="mt-3 border-t border-slate-200 pt-2 text-[11px] text-slate-400">
+            {d.p.codigoCorto} v{d.p.version} · impreso desde el sistema de mantenimiento ·
+            la copia en pared debe coincidir con esta versión.
+          </div>
+        </>
+      )}
+
+      <!-- ══ Registro 1: simulacros ══ -->
+      <div class="no-print mt-5 border-t border-slate-200 pt-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-slate-700">
+            🧪 Simulacros — «un EOP sin simulacro es una hipótesis»
+          </h3>
+          {esAdmin && (
+            <button class="btn-secondary btn-sm nuevoSimulacro" data-doc={d.p.id}>+ Registrar simulacro</button>
+          )}
+        </div>
+
+        <div class="mt-2 grid gap-2 sm:grid-cols-3">
+          <div class:list={["rounded p-2 text-sm", d.vencidoAnual ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-800"]}>
+            <div class="text-[11px] uppercase tracking-wide opacity-70">Último funcional en sitio</div>
+            <div class="font-semibold">
+              {d.ultimoFuncional ? fmtFechaSoloCompacta(d.ultimoFuncional) : "Nunca"}
+            </div>
+            <div class="text-[11px]">
+              {d.vencidoAnual
+                ? "Vencido: el funcional se hace al menos una vez al año."
+                : d.diasParaFuncional !== null
+                  ? `Próximo ${fmtFechaSoloCompacta(d.proximoFuncional!)} · en ${d.diasParaFuncional} día${d.diasParaFuncional === 1 ? "" : "s"}`
+                  : ""}
+            </div>
+          </div>
+          <div class:list={["rounded p-2 text-sm", d.mesaDeEstaVersion ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"]}>
+            <div class="text-[11px] uppercase tracking-wide opacity-70">Ensayo de mesa</div>
+            <div class="font-semibold">{d.ultimaMesa ? fmtFechaSoloCompacta(d.ultimaMesa) : "Nunca"}</div>
+            <div class="text-[11px]">
+              {d.mesaDeEstaVersion
+                ? `Cubre la versión ${d.p.version}.`
+                : `Falta ensayar la versión ${d.p.version}: sin ese ensayo el documento no pasa a vigente.`}
+            </div>
+          </div>
+          <div class="rounded bg-slate-50 p-2 text-sm text-slate-700">
+            <div class="text-[11px] uppercase tracking-wide opacity-70">Constancias</div>
+            <div class="font-semibold">{d.simulacros.length}</div>
+            <div class="text-[11px]">
+              {d.simulacros.filter((x) => x.s.requiereActualizacion).length} con hallazgos que exigen actualizar
+            </div>
+          </div>
+        </div>
+
+        {d.simulacros.length > 0 && (
+          <table class="mt-2 w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500">
+                <th class="py-1 pr-2">Fecha</th>
+                <th class="py-1 pr-2">Tipo</th>
+                <th class="py-1 pr-2">Versión</th>
+                <th class="py-1 pr-2">Condujo</th>
+                <th class="py-1">Hallazgos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.simulacros.map((x) => (
+                <tr class="border-b border-slate-100">
+                  <td class="py-1 pr-2 whitespace-nowrap">{fmtFechaSoloCompacta(x.s.fecha)}</td>
+                  <td class="py-1 pr-2">
+                    <span class:list={["rounded px-1.5 py-0.5 text-[11px]", x.s.tipo === "funcional" ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600"]}>
+                      {x.s.tipo === "funcional" ? "Funcional en sitio" : "De mesa"}
+                    </span>
+                  </td>
+                  <td class="py-1 pr-2 font-mono text-xs">{x.s.versionEnsayada ?? "—"}</td>
+                  <td class="py-1 pr-2 text-slate-600">{x.conduce ?? "—"}{x.sede ? ` · ${x.sede}` : ""}</td>
+                  <td class="py-1 text-slate-600">
+                    {x.s.hallazgos ?? "—"}
+                    {x.s.requiereActualizacion && (
+                      <span class="ml-1 rounded bg-amber-100 px-1 text-[11px] text-amber-800">exige actualizar</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <!-- ══ Registro 2: colocaciones ══ -->
+      <div class="no-print mt-5 border-t border-slate-200 pt-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-slate-700">
+            📌 Constancias de colocación — se imprime y se cuelga
+          </h3>
+          {esAdmin && (
+            <button class="btn-secondary btn-sm nuevaColocacion" data-doc={d.p.id}>+ Registrar colocación</button>
+          )}
+        </div>
+
+        {d.colos.length === 0 ? (
+          <p class="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-800">
+            Ninguna copia registrada. El capítulo 02 pide la ficha impresa en el cuarto técnico
+            <strong> y</strong> en el servicio clínico: imprímela arriba y registra dónde quedó.
+          </p>
+        ) : (
+          <>
+            {d.colosDesactualizadas.length > 0 && (
+              <p class="mt-2 rounded bg-red-50 p-2 text-sm text-red-800">
+                {d.colosDesactualizadas.length} copia{d.colosDesactualizadas.length === 1 ? "" : "s"} en pared
+                de una versión anterior a la v{d.p.version}: hay que reimprimir y reemplazar.
+              </p>
+            )}
+            <table class="mt-2 w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500">
+                  <th class="py-1 pr-2">Lugar</th>
+                  <th class="py-1 pr-2">Sede / sala</th>
+                  <th class="py-1 pr-2">Versión</th>
+                  <th class="py-1 pr-2">Colocó</th>
+                  <th class="py-1">Verificada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.colos.map((x) => (
+                  <tr class="border-b border-slate-100">
+                    <td class="py-1 pr-2">{x.c.lugarDetalle ?? "—"}</td>
+                    <td class="py-1 pr-2 text-slate-600">
+                      {[x.sede, x.sala].filter(Boolean).join(" · ") || "—"}
+                    </td>
+                    <td class="py-1 pr-2 font-mono text-xs">
+                      {x.c.versionColocada ?? "—"}
+                      {x.c.versionColocada && x.c.versionColocada !== d.p.version && (
+                        <span class="ml-1 rounded bg-red-100 px-1 text-[11px] text-red-700">desactualizada</span>
+                      )}
+                    </td>
+                    <td class="py-1 pr-2 text-slate-600">
+                      {x.quien ?? "—"}{x.c.colocadoEn ? ` · ${fmtFechaSoloCompacta(x.c.colocadoEn)}` : ""}
+                    </td>
+                    <td class="py-1 text-slate-600">
+                      {x.c.verificadoEn ? fmtFechaSoloCompacta(x.c.verificadoEn) : (
+                        esAdmin
+                          ? <button class="verificarColo text-xs text-brand-600 underline" data-doc={d.p.id} data-row={x.c.id}>Marcar verificada hoy</button>
+                          : "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
+    </section>
+  ))}
+
+  <!-- ══ Modal: simulacro ══ -->
+  {esAdmin && (
+    <div id="mSimulacro" class="no-print fixed inset-0 z-50 hidden items-center justify-center bg-black/40 p-4">
+      <div class="card max-h-[90vh] w-full max-w-lg overflow-y-auto p-5">
+        <h3 class="text-lg font-bold">Registrar simulacro</h3>
+        <p class="mt-1 text-xs text-slate-500">
+          Simulacro de mesa para cada versión nueva; funcional en sitio al menos una vez al año.
+        </p>
+        <input type="hidden" id="sDoc" />
+        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label class="label text-xs" for="sTipo">Tipo</label>
+            <select id="sTipo" class="input">
+              <option value="mesa">De mesa (versión nueva)</option>
+              <option value="funcional">Funcional en sitio (anual)</option>
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="sFecha">Fecha</label>
+            <input id="sFecha" type="date" class="input" />
+          </div>
+          <div>
+            <label class="label text-xs" for="sVersion">Versión ensayada</label>
+            <input id="sVersion" type="text" class="input" placeholder="la cargada" />
+          </div>
+          <div>
+            <label class="label text-xs" for="sSede">Sede</label>
+            <select id="sSede" class="input">
+              <option value="">La del documento</option>
+              {sedes.map((s) => <option value={String(s.id)}>{s.nombre}</option>)}
+            </select>
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="label text-xs" for="sPart">Participantes</label>
+          <input id="sPart" type="text" class="input" placeholder="Turno, servicio clínico, proveedor…" />
+        </div>
+        <div class="mt-3">
+          <label class="label text-xs" for="sHall">Hallazgos</label>
+          <textarea id="sHall" class="input" rows="3" placeholder="Qué no funcionó como dice el papel"></textarea>
+        </div>
+        <label class="mt-3 flex items-center gap-2 text-sm">
+          <input id="sAct" type="checkbox" />
+          Los hallazgos exigen actualizar el EOP (lo devuelve a revisión)
+        </label>
+        <div class="mt-4 flex justify-end gap-2">
+          <button id="sCancel" class="btn-secondary">Cancelar</button>
+          <button id="sGuardar" class="btn-primary">Guardar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <!-- ══ Modal: colocación ══ -->
+  {esAdmin && (
+    <div id="mColocacion" class="no-print fixed inset-0 z-50 hidden items-center justify-center bg-black/40 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-bold">Registrar colocación</h3>
+        <p class="mt-1 text-xs text-slate-500">
+          Dónde quedó la copia impresa y de qué versión es.
+        </p>
+        <input type="hidden" id="cDoc" />
+        <div class="mt-3">
+          <label class="label text-xs" for="cLugar">Lugar</label>
+          <input id="cLugar" type="text" class="input" placeholder="Cuarto técnico · tablero general" />
+        </div>
+        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label class="label text-xs" for="cSede">Sede</label>
+            <select id="cSede" class="input">
+              <option value="">La del documento</option>
+              {sedes.map((s) => <option value={String(s.id)}>{s.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="cSala">Ubicación</label>
+            <select id="cSala" class="input">
+              <option value="">Sin ubicación precisa</option>
+              {salas.map((s) => <option value={String(s.id)}>{s.nombre}</option>)}
+            </select>
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="label text-xs" for="cVersion">Versión colocada</label>
+          <input id="cVersion" type="text" class="input" placeholder="la cargada" />
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button id="cCancel" class="btn-secondary">Cancelar</button>
+          <button id="cGuardar" class="btn-primary">Guardar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <style>
+    /* La ficha cabe en una página: al imprimir se oculta todo lo demás. */
+    @media print {
+      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
+      main { padding: 0 !important; }
+      body { background: white !important; }
+      .print-doc { border: none !important; box-shadow: none !important; margin-top: 0 !important; }
+      .eop-doc { break-after: page; }
+      .eop-doc:last-of-type { break-after: auto; }
+      body.solo-uno .eop-doc { display: none !important; }
+      body.solo-uno .eop-doc.imprimiendo { display: block !important; break-after: auto; }
+      tr { break-inside: avoid; }
+    }
+  </style>
+
+  <script>
+    const hoyStr = new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10);
+
+    // Imprimir una sola ficha: se marca la elegida y el CSS esconde las demás.
+    document.querySelectorAll<HTMLButtonElement>(".imprimir").forEach((b) => {
+      b.addEventListener("click", () => {
+        const sec = document.getElementById(`doc-${b.dataset.doc}`);
+        if (!sec) return;
+        document.body.classList.add("solo-uno");
+        sec.classList.add("imprimiendo");
+        const limpiar = () => {
+          document.body.classList.remove("solo-uno");
+          sec.classList.remove("imprimiendo");
+          window.removeEventListener("afterprint", limpiar);
+        };
+        window.addEventListener("afterprint", limpiar);
+        window.print();
+        // Safari no siempre dispara afterprint.
+        setTimeout(limpiar, 2000);
+      });
+    });
+
+    const mS = document.getElementById("mSimulacro");
+    const mC = document.getElementById("mColocacion");
+    const abrir = (el: HTMLElement | null) => el && (el.classList.remove("hidden"), el.classList.add("flex"));
+    const cerrar = (el: HTMLElement | null) => el && (el.classList.add("hidden"), el.classList.remove("flex"));
+    const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ?? "";
+    const set = (id: string, v: string) => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      if (el) el.value = v;
+    };
+
+    async function enviar(url: string, metodo: string, cuerpo: unknown) {
+      const r = await fetch(url, {
+        method: metodo,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cuerpo),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        alert(j.error ?? `No se pudo guardar (${r.status})`);
+        return false;
+      }
+      location.reload();
+      return true;
+    }
+
+    document.querySelectorAll<HTMLButtonElement>(".nuevoSimulacro").forEach((b) => {
+      b.addEventListener("click", () => {
+        set("sDoc", b.dataset.doc ?? "");
+        set("sFecha", hoyStr);
+        set("sVersion", "");
+        set("sPart", "");
+        const h = document.getElementById("sHall") as HTMLTextAreaElement | null;
+        if (h) h.value = "";
+        const a = document.getElementById("sAct") as HTMLInputElement | null;
+        if (a) a.checked = false;
+        abrir(mS);
+      });
+    });
+    document.getElementById("sCancel")?.addEventListener("click", () => cerrar(mS));
+    document.getElementById("sGuardar")?.addEventListener("click", async () => {
+      const doc = val("sDoc");
+      if (!doc) return;
+      const sede = val("sSede");
+      await enviar(`/api/procedimientos/${doc}/simulacros`, "POST", {
+        tipo: val("sTipo"),
+        fecha: val("sFecha"),
+        versionEnsayada: val("sVersion").trim() || null,
+        sucursalId: sede ? Number(sede) : null,
+        participantes: val("sPart").trim() || null,
+        hallazgos: val("sHall").trim() || null,
+        requiereActualizacion: (document.getElementById("sAct") as HTMLInputElement | null)?.checked ?? false,
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>(".nuevaColocacion").forEach((b) => {
+      b.addEventListener("click", () => {
+        set("cDoc", b.dataset.doc ?? "");
+        set("cLugar", "");
+        set("cVersion", "");
+        abrir(mC);
+      });
+    });
+    document.getElementById("cCancel")?.addEventListener("click", () => cerrar(mC));
+    document.getElementById("cGuardar")?.addEventListener("click", async () => {
+      const doc = val("cDoc");
+      if (!doc) return;
+      const sede = val("cSede");
+      const sala = val("cSala");
+      await enviar(`/api/procedimientos/${doc}/colocaciones`, "POST", {
+        lugarDetalle: val("cLugar").trim(),
+        sucursalId: sede ? Number(sede) : null,
+        ubicacionId: sala ? Number(sala) : null,
+        versionColocada: val("cVersion").trim() || null,
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>(".verificarColo").forEach((b) => {
+      b.addEventListener("click", async () => {
+        await enviar(`/api/procedimientos/${b.dataset.doc}/colocaciones`, "PATCH", {
+          id: Number(b.dataset.row),
+          verificadoEn: hoyStr,
+        });
+      });
+    });
+  </script>
+</Layout>

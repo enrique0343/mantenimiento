@@ -2,11 +2,17 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales } from "@/lib/schema";
+import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales, ordenPrerrequisitos, ordenLiberaciones } from "@/lib/schema";
 
 import { and } from "drizzle-orm";
 import { requireUser } from "@/lib/auth";
-import { transicionesPermitidas, parseChecklist, validarChecklistParaCierre, type EstadoOT } from "@/lib/ordenes";
+import {
+  transicionesPermitidas, parseChecklist, validarChecklistParaCierre,
+  validarLecturasChecklistParaCierre,
+  validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
+  validarCausaRaizParaCierre, puedeCerrarSinLectura, vencimientoCausaRaiz,
+  type EstadoOT,
+} from "@/lib/ordenes";
 import { siguienteFecha } from "@/lib/frecuencias";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
@@ -20,7 +26,7 @@ export const prerender = false;
 const updateSchema = z.object({
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
-  tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
+  tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   estado: z.enum(["abierta", "en_proceso", "en_espera", "completada", "verificada", "cerrada", "cancelada"]).optional(),
   activoId: z.number().int().positive().nullable().optional(),
@@ -39,6 +45,23 @@ const updateSchema = z.object({
   // Si es correctivo y se cierra, reprogramar planes preventivos del activo
   // (default true; el técnico puede desmarcar si fue trivial)
   reprogramarPreventivos: z.boolean().optional(),
+  // ── Biblioteca de procedimientos (Fase 47) ──
+  procedimientoId: z.number().int().positive().nullable().optional(),
+  nivelRiesgo: z.enum(["bajo", "medio", "alto"]).nullable().optional(),
+  clasePrioridad: z.enum(["P1", "P2", "P3", "P4"]).nullable().optional(),
+  // Los tres tiempos del EOP. Editables HACIA ATRÁS a propósito: en una
+  // emergencia el técnico actúa primero y registra después (cap. 02, 2.5).
+  horaAlarma: z.string().nullable().optional(),
+  horaLlegada: z.string().nullable().optional(),
+  horaMitigacion: z.string().nullable().optional(),
+  horaRestablecimiento: z.string().nullable().optional(),
+  // Plan de reversa del MOP: se escribe antes de empezar.
+  planReversa: z.string().nullable().optional(),
+  reversaEjecutada: z.boolean().optional(),
+  reversaNotas: z.string().nullable().optional(),
+  // Único escape de la regla de liberación: cerrar sin lectura con motivo
+  // escrito. Solo admin o jefe; se valida aparte, no se escribe desde el body.
+  cierreSinLecturaMotivo: z.string().nullable().optional(),
 });
 
 export const GET: APIRoute = async (ctx) => {
@@ -91,7 +114,13 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
-  const { reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras, ...rest } = parsed.data;
+  const {
+    reprogramarPreventivos, motivoReasignacion, horasTrabajadas: _ignoreHoras,
+    // cierreSinLecturaMotivo NO entra directo en el update: solo se persiste
+    // (con su autor y su hora) cuando de verdad se usa el escape del MOP.
+    cierreSinLecturaMotivo: _motivoSinLectura,
+    ...rest
+  } = parsed.data;
   // horasTrabajadas se calcula SIEMPRE en el servidor (al cerrar la OT).
   // Ignoramos cualquier valor que venga del cliente para evitar manipulacion.
   const data: Record<string, unknown> = { ...rest };
@@ -123,6 +152,112 @@ export const PATCH: APIRoute = async (ctx) => {
         { error: `No tienes permisos para mover de "${actual.estado}" a "${parsed.data.estado}"` },
         { status: 403 }
       );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // REGLAS DURAS DEL MOP Y DEL EOP (Fase 47 · GO-GUI-011-2026, cap. 02)
+    // «En una intervención, la orden no le deja empezar sin el permiso
+    // firmado ni cerrar sin las lecturas de liberación. En una emergencia […]
+    // obliga a cerrar con un análisis de causa raíz.»
+    // Aplican a TODOS los roles, el admin incluido: son la evidencia de
+    // FMS.10.00 y FMS.08.01, no una comodidad de la interfaz. El único escape
+    // es el cierre sin lectura con motivo escrito, abajo.
+    // ══════════════════════════════════════════════════════════════════════
+    const tipoFinal = (parsed.data.tipo ?? actual.tipo) as string;
+
+    // MOP · prerrequisitos que bloquean iniciar
+    if (parsed.data.estado === "en_proceso" && tipoFinal === "intervencion") {
+      const prerreqs = await db
+        .select({
+          texto: ordenPrerrequisitos.texto,
+          tipo: ordenPrerrequisitos.tipo,
+          obligatorio: ordenPrerrequisitos.obligatorio,
+          cumplido: ordenPrerrequisitos.cumplido,
+        })
+        .from(ordenPrerrequisitos)
+        .where(eq(ordenPrerrequisitos.ordenId, id));
+      const v = validarPrerrequisitosParaIniciar(tipoFinal, prerreqs);
+      if (!v.ok) {
+        return Response.json({ error: v.error, faltantes: v.faltantes }, { status: 400 });
+      }
+    }
+
+    // Cierre: "completada" y "verificada" se auto-promueven a "cerrada" más
+    // abajo, así que los tres destinos cuentan como cierre.
+    const esCierre =
+      parsed.data.estado === "completada" ||
+      parsed.data.estado === "verificada" ||
+      parsed.data.estado === "cerrada";
+
+    if (esCierre) {
+      // SOP · la lectura obligatoria no la salta nadie, por ninguna vía de
+      // cierre (el admin incluido), siempre que el trabajo se haya iniciado de
+      // verdad: es la evidencia del SOP, «registro con fecha, hora, lectura y
+      // firma». Una OT que nunca se inició no tiene lecturas que exigir, así
+      // que el cierre administrativo de registros viejos sigue siendo posible.
+      if (actual.iniciadaEn) {
+        const vLect = validarLecturasChecklistParaCierre(parseChecklist(actual.checklistEjecucion));
+        if (!vLect.ok) {
+          return Response.json({ error: vLect.error }, { status: 400 });
+        }
+      }
+
+      // MOP · lecturas de liberación que bloquean cerrar
+      if (tipoFinal === "intervencion") {
+        const libs = await db
+          .select({
+            etiqueta: ordenLiberaciones.etiqueta,
+            unidad: ordenLiberaciones.unidad,
+            obligatoria: ordenLiberaciones.obligatoria,
+            valorMedido: ordenLiberaciones.valorMedido,
+            valorMedidoTexto: ordenLiberaciones.valorMedidoTexto,
+          })
+          .from(ordenLiberaciones)
+          .where(eq(ordenLiberaciones.ordenId, id));
+        const v = validarLiberacionesParaCierre(tipoFinal, libs);
+        if (!v.ok) {
+          const motivo = (parsed.data.cierreSinLecturaMotivo ?? "").trim();
+          if (!motivo) {
+            return Response.json(
+              { error: v.error, faltantes: v.faltantes, requiereMotivoSinLectura: true },
+              { status: 400 }
+            );
+          }
+          if (!puedeCerrarSinLectura(user.rol)) {
+            return Response.json(
+              { error: "Solo la jefatura (admin o jefe) puede cerrar un MOP sin la lectura de liberación. Pide a tu jefatura que lo cierre con el motivo escrito." },
+              { status: 403 }
+            );
+          }
+          if (motivo.length < 20) {
+            return Response.json(
+              { error: "El motivo del cierre sin lectura tiene que explicar por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres)." },
+              { status: 400 }
+            );
+          }
+          data.cierreSinLecturaPor = user.id;
+          data.cierreSinLecturaEn = now;
+          data.cierreSinLecturaMotivo = motivo;
+        }
+      }
+
+      // EOP · causa raíz obligatoria. También en todo correctivo sobre activo
+      // de criticidad alta (clase A).
+      let criticidadActivo: string | null = null;
+      const activoFinal = parsed.data.activoId !== undefined ? parsed.data.activoId : actual.activoId;
+      if (activoFinal) {
+        const [a] = await db
+          .select({ criticidad: activos.criticidadOperacional })
+          .from(activos)
+          .where(eq(activos.id, activoFinal))
+          .limit(1);
+        criticidadActivo = a?.criticidad ?? null;
+      }
+      const causaFinal = parsed.data.causaRaiz !== undefined ? parsed.data.causaRaiz : actual.causaRaiz;
+      const vc = validarCausaRaizParaCierre(tipoFinal, criticidadActivo, causaFinal);
+      if (!vc.ok) {
+        return Response.json({ error: vc.error, requiereCausaRaiz: true }, { status: 400 });
+      }
     }
 
     // Timestamps automaticos por estado de destino
@@ -196,6 +331,34 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
+  // ── Fase 47 · derivados de los campos nuevos ─────────────────────────────
+  // El plazo de la causa raíz corre desde la hora de alarma: 72 h (cap. 06).
+  if (parsed.data.horaAlarma !== undefined) {
+    data.causaRaizVencimiento = vencimientoCausaRaiz(parsed.data.horaAlarma);
+  }
+
+  // Una emergencia nace P1: atención inmediata. Solo se rellena si nadie fijó
+  // la clase todavía (no sobreescribe una decisión de la jefatura).
+  if (
+    parsed.data.tipo === "emergencia" &&
+    parsed.data.clasePrioridad === undefined &&
+    !actual.clasePrioridad
+  ) {
+    data.clasePrioridad = "P1";
+  }
+
+  // «Cualquier reversa se informa a la jefatura antes de cerrar»: no se marca
+  // ejecutada sin decir qué se revirtió.
+  if (parsed.data.reversaEjecutada === true) {
+    const notas = (parsed.data.reversaNotas ?? actual.reversaNotas ?? "").trim();
+    if (notas.length < 10) {
+      return Response.json(
+        { error: "Para marcar la reversa como ejecutada, describe qué se revirtió y cómo quedó el sistema (mínimo 10 caracteres). Cualquier reversa se informa a la jefatura antes de cerrar." },
+        { status: 400 }
+      );
+    }
+  }
+
   // Si cambia el asignado, actualizar la marca temporal de asignación.
   // Esto alimenta la columna "Asignado hace N días" del listado de OTs.
   if (parsed.data.asignadoA !== undefined && parsed.data.asignadoA !== actual.asignadoA) {
@@ -228,7 +391,14 @@ export const PATCH: APIRoute = async (ctx) => {
     });
   }
   // Audit: otros cambios (campos de ejecución, prioridad, etc.)
-  const camposEditables = ["titulo", "descripcion", "prioridad", "tipo", "vencimiento", "trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas"];
+  const camposEditables = [
+    "titulo", "descripcion", "prioridad", "tipo", "vencimiento",
+    "trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas",
+    // Fase 47 — MOP/EOP
+    "clasePrioridad", "nivelRiesgo", "procedimientoId",
+    "horaAlarma", "horaLlegada", "horaMitigacion", "horaRestablecimiento",
+    "planReversa", "reversaEjecutada", "reversaNotas",
+  ];
   const otrosCambios: any = {};
   for (const c of camposEditables) {
     if ((parsed.data as any)[c] !== undefined && (parsed.data as any)[c] !== (actual as any)[c]) {

@@ -5,6 +5,8 @@ import { activos, planesMantenimiento, ubicaciones, sucursales, alertasEquipo } 
 import { eq, ne, and } from "drizzle-orm";
 import { SUBCAT_KEYS, SUBCATS_BIOMEDICO, subcatLabel, subcatIcono, rubroDeActivo } from "@/lib/rubros";
 import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+// Tablero de la biblioteca de procedimientos modelo GO-GUI-011-2026 (cap. 08).
+import { avanceBiblioteca, META_BIBLIOTECA } from "@/lib/metricas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -86,6 +88,14 @@ const fechaGeneracion = fmtFechaSolo(hoy);
 
 // Criticidad A sin plan = hallazgo grave
 const claseASinPlan = sinPlan.filter((r) => r.a.criticidadOperacional === "alta");
+
+// ── Biblioteca de procedimientos modelo (GO-GUI-011-2026, capítulo 08) ──────
+// Avance real de los 25 documentos y de la ruta de validación de cuatro
+// semanas: SCP en la 1; SOP y AOP en la 2; EOP en la 3 (con simulacro de
+// mesa); MOP en la 4. Regla 8.1: un campo en azul sin valor es trabajo
+// pendiente, así que un documento con celdas vacías no está aprobado.
+const biblio = await avanceBiblioteca(db);
+const bt = biblio.totales;
 ---
 
 <Layout title="Cumplimiento FMS.07">
@@ -233,6 +243,170 @@ const claseASinPlan = sinPlan.filter((r) => r.a.criticidadOperacional === "alta"
       </table>
     </div>
   </div>
+
+  <!-- ═══ Biblioteca de procedimientos modelo · GO-GUI-011-2026 cap. 08 ═══ -->
+  <section class="card mt-6 overflow-hidden">
+    <div class="border-b border-slate-100 px-5 py-3">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-800">📚 Biblioteca de procedimientos (GO-GUI-011-2026)</h2>
+          <p class="mt-0.5 text-xs text-slate-500">
+            Avance real de los {META_BIBLIOTECA} documentos modelo y de la ruta de validación de cuatro semanas:
+            SCP en la 1 · SOP y AOP en la 2 · EOP en la 3 (con simulacro de mesa) · MOP en la 4.
+            Regla 8.1: un documento con un campo en azul vacío no está aprobado.
+          </p>
+        </div>
+        <div class="shrink-0 text-right">
+          <div class={`text-3xl font-bold ${colorPct(bt.pctVigente)}`}>{bt.vigentes}<span class="text-lg text-slate-300">/{META_BIBLIOTECA}</span></div>
+          <div class="text-[11px] text-slate-400">vigentes</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4 p-5 lg:grid-cols-4">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Documentos cargados</div>
+        <div class="mt-1.5 text-2xl font-bold text-slate-800">{bt.existen}<span class="text-sm text-slate-300">/{META_BIBLIOTECA}</span></div>
+        <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+          <div class={`h-full rounded-full ${barPct(bt.pctCarga)}`} style={`width:${bt.pctCarga}%`}></div>
+        </div>
+        <div class="mt-1 text-[11px] text-slate-400">{bt.pctCarga}% de la biblioteca en el sistema</div>
+        {bt.faltantes.length > 0 && (
+          <div class="mt-1 font-mono text-[10px] text-slate-400">
+            faltan {bt.faltantes.length}: {bt.faltantes.slice(0, 6).join(", ")}{bt.faltantes.length > 6 ? "…" : ""}
+          </div>
+        )}
+      </div>
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Vigentes</div>
+        <div class={`mt-1.5 text-2xl font-bold ${colorPct(bt.pctVigente)}`}>{bt.vigentes}</div>
+        <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+          <div class={`h-full rounded-full ${barPct(bt.pctVigente)}`} style={`width:${bt.pctVigente}%`}></div>
+        </div>
+        <div class="mt-1 text-[11px] text-slate-400">{bt.enValidacion} en validación · {bt.borradores} borrador</div>
+      </div>
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Campos en azul pendientes</div>
+        <div class={`mt-1.5 text-2xl font-bold ${bt.camposPendientes === 0 ? "text-emerald-600" : "text-amber-600"}`}>{bt.camposPendientes}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">en {bt.docsConCamposPendientes} documento(s) — celdas que decide Avante</div>
+      </div>
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Validaciones pendientes</div>
+        <div class={`mt-1.5 text-2xl font-bold ${bt.validacionesPendientes === 0 ? "text-emerald-600" : "text-red-600"}`}>{bt.validacionesPendientes}</div>
+        <div class="mt-0.5 text-[11px] text-slate-400">
+          de {bt.validacionesTotal} programadas{bt.validacionesObservadas > 0 ? ` · ${bt.validacionesObservadas} observada(s)` : ""}
+        </div>
+      </div>
+    </div>
+
+    {bt.existen === 0 ? (
+      <p class="border-t border-slate-100 px-5 py-5 text-center text-xs text-slate-400">
+        Todavía no hay documentos cargados. La biblioteca entrega {META_BIBLIOTECA}: cinco SCP, cinco SOP, cinco MOP, cinco EOP y cinco AOP.
+      </p>
+    ) : (
+      <>
+        <!-- Ruta de validación de cuatro semanas -->
+        <div class="grid grid-cols-2 gap-3 border-t border-slate-100 px-5 py-4 lg:grid-cols-4">
+          {biblio.porSemana.map((w) => (
+            <div class="rounded-md border border-slate-200 p-3">
+              <div class="text-[11px] font-semibold text-slate-700" title={w.detalle}>{w.label}</div>
+              <div class="mt-1 text-lg font-bold text-slate-800">{w.vigentes}<span class="text-xs text-slate-300">/{w.meta}</span></div>
+              <div class="mt-1 h-1 overflow-hidden rounded-full bg-slate-100">
+                <div class={`h-full rounded-full ${barPct(pct(w.vigentes, w.meta))}`} style={`width:${pct(w.vigentes, w.meta)}%`}></div>
+              </div>
+              <div class="mt-1 text-[10px] text-slate-400">
+                {w.existen} cargado(s) · {w.camposPendientes} campo(s) azul · {w.validacionesPendientes} validación(es) pend.
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <!-- Avance por tipo de documento -->
+        <div class="overflow-x-auto border-t border-slate-100">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-50 uppercase text-slate-500">
+              <tr>
+                <th class="px-4 py-2">Tipo</th>
+                <th class="px-2 py-2 text-center">Semana</th>
+                <th class="px-2 py-2 text-center">Cargados</th>
+                <th class="px-2 py-2 text-center">Vigentes</th>
+                <th class="px-2 py-2 text-center">En validación</th>
+                <th class="px-2 py-2 text-center">Borrador</th>
+                <th class="px-2 py-2 text-center">Campos azul pend.</th>
+                <th class="px-2 py-2 text-center">Validaciones pend.</th>
+                <th class="px-4 py-2 text-right">Vigente</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {biblio.porTipo.map((t) => (
+                <tr>
+                  <td class="px-4 py-2">
+                    <span class={`badge font-mono text-[10px] ${t.color}`}>{t.label}</span>
+                    <span class="ml-1 font-medium text-slate-700">{t.icono} {t.nombre}</span>
+                    {t.faltantes.length > 0 && (
+                      <div class="mt-0.5 font-mono text-[10px] text-slate-400" title="Códigos del volumen que aún no existen">
+                        falta: {t.faltantes.join(", ")}
+                      </div>
+                    )}
+                  </td>
+                  <td class="px-2 py-2 text-center text-slate-500">{t.semana}</td>
+                  <td class="px-2 py-2 text-center text-slate-700">{t.existen}<span class="text-slate-300">/{t.meta}</span></td>
+                  <td class="px-2 py-2 text-center font-semibold text-emerald-700">{t.vigentes || "—"}</td>
+                  <td class="px-2 py-2 text-center text-amber-700">{t.enValidacion || "—"}</td>
+                  <td class="px-2 py-2 text-center text-slate-500">{t.borradores || "—"}</td>
+                  <td class={`px-2 py-2 text-center ${t.camposPendientes > 0 ? "font-semibold text-amber-600" : "text-slate-400"}`}>
+                    {t.camposPendientes || "—"}
+                  </td>
+                  <td class={`px-2 py-2 text-center ${t.validacionesPendientes > 0 ? "font-semibold text-red-600" : "text-slate-400"}`}>
+                    {t.validacionesPendientes || "—"}
+                  </td>
+                  <td class={`px-4 py-2 text-right font-bold ${colorPct(t.pctVigente)}`}>{t.pctVigente}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Documentos con trabajo pendiente -->
+        {biblio.pendientes.length > 0 && (
+          <div class="border-t border-slate-100 px-5 py-4">
+            <h3 class="text-xs font-semibold text-slate-700">
+              🔎 Documentos con trabajo pendiente ({biblio.pendientes.length})
+            </h3>
+            <ul class="mt-2 max-h-72 space-y-1 overflow-y-auto text-xs">
+              {biblio.pendientes.map((d) => (
+                <li>
+                  <a href={`/procedimientos/${d.id}`} class="flex flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                    <span class="min-w-0">
+                      <span class="font-mono text-[10px] text-slate-400">{d.codigoCorto}</span>
+                      <span class="ml-1 font-medium text-slate-700">{d.titulo}</span>
+                      <span class="ml-1 text-[10px] text-slate-400">· {d.sistemaLabel} · v{d.version} · sem. {d.semana}</span>
+                      <span class={`badge ml-1 ${d.estadoColor}`}>{d.estadoLabel}</span>
+                    </span>
+                    <span class="flex shrink-0 flex-wrap items-center gap-1.5">
+                      {d.camposPendientes > 0 && (
+                        <span class="badge bg-amber-100 text-amber-700">{d.camposPendientes} campo(s) azul</span>
+                      )}
+                      {d.validacionesPendientes > 0 && (
+                        <span class="badge bg-red-100 text-red-700">{d.validacionesPendientes} validación(es)</span>
+                      )}
+                      {d.validacionesObservadas > 0 && (
+                        <span class="badge bg-orange-100 text-orange-700">{d.validacionesObservadas} observada(s)</span>
+                      )}
+                      {d.proximaValidacion && (
+                        <span class="text-[10px] text-slate-400">programada {fmt(d.proximaValidacion)}</span>
+                      )}
+                      <span class={`font-mono text-[10px] font-bold ${colorPct(d.pct)}`}>{d.pct}%</span>
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </>
+    )}
+  </section>
 
   <!-- Listas de trabajo -->
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">

@@ -3,7 +3,12 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, vehiculos, actividades } from "@/lib/schema";
 import { desc, inArray } from "drizzle-orm";
-import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import {
+  ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
+  TIPOS_OT, CLASES_PRIORIDAD, CLASE_PRIORIDAD_COLOR, CLASE_PRIORIDAD_LABEL,
+  CLASE_PRIORIDAD_PLAZO, NIVEL_RIESGO_COLOR,
+  type EstadoOT, type TipoOT, type ClasePrioridad,
+} from "@/lib/ordenes";
 import { tipoActivoFiltro } from "@/lib/especialidad";
 export const prerender = false;
 
@@ -13,6 +18,8 @@ const url = new URL(Astro.request.url);
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
 const filtroVista = url.searchParams.get("vista"); // "mias" | null
+// Clase de prioridad P1–P4 del plan maestro de 52 semanas (cap. 02 del PDF)
+const filtroClase = url.searchParams.get("clase");
 const verCerradas = url.searchParams.get("verCerradas") === "1"; // por defecto false: solo activas
 
 // Filtro por especialidad (jefe/tecnico): solo OTs cuyo activo coincide
@@ -78,6 +85,7 @@ const rows = rowsRaw.filter((r) => {
   if (filtroVista === "mias" && !asignadaAMi) return false;
   if (filtroEstado && r.orden.estado !== filtroEstado) return false;
   if (filtroTipo && r.orden.tipo !== filtroTipo) return false;
+  if (filtroClase && r.orden.clasePrioridad !== filtroClase) return false;
   // Por defecto solo mostrar activas, salvo que el usuario filtre por estado
   // explicitamente o haya pulsado "Ver cerradas"
   if (!filtroEstado && !verCerradas && !ESTADOS_ACTIVOS.has(r.orden.estado as EstadoOT)) return false;
@@ -100,6 +108,27 @@ const conteoEstados = rowsRaw.reduce<Record<string, number>>((acc, r) => {
   acc[r.orden.estado] = (acc[r.orden.estado] ?? 0) + 1;
   return acc;
 }, {});
+
+// Conteos de los catálogos nuevos: tipo (con el MOP y el EOP) y clase P1–P4.
+const conteoTipos = rowsRaw.reduce<Record<string, number>>((acc, r) => {
+  acc[r.orden.tipo] = (acc[r.orden.tipo] ?? 0) + 1;
+  return acc;
+}, {});
+const conteoClases = rowsRaw.reduce<Record<string, number>>((acc, r) => {
+  if (r.orden.clasePrioridad) acc[r.orden.clasePrioridad] = (acc[r.orden.clasePrioridad] ?? 0) + 1;
+  return acc;
+}, {});
+// Query string que preserva vista / estado / verCerradas al cambiar de filtro
+const qs = (extra: Record<string, string | null>) => {
+  const sp = new URLSearchParams();
+  const base: Record<string, string | null> = {
+    vista: filtroVista, estado: filtroEstado, tipo: filtroTipo, clase: filtroClase,
+    verCerradas: verCerradas ? "1" : null,
+  };
+  for (const [k, v] of Object.entries({ ...base, ...extra })) if (v) sp.set(k, v);
+  const q = sp.toString();
+  return q ? `/ordenes?${q}` : "/ordenes";
+};
 
 const esAdmin = usrLogged.rol === "admin";
 ---
@@ -148,21 +177,21 @@ const esAdmin = usrLogged.rol === "admin";
 
   <!-- Filtros rapidos por estado -->
   <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
-    <a href={`/ordenes${filtroVista ? `?vista=${filtroVista}` : ""}`}
+    <a href={qs({ estado: null, verCerradas: null })}
        class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerradas ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
       ⚡ Activas ({conteoActivas})
     </a>
     <span class="text-slate-300">·</span>
-    <a href={`/ordenes?estado=abierta${filtroVista ? `&vista=${filtroVista}` : ""}`}
+    <a href={qs({ estado: "abierta" })}
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "abierta" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
       🔵 Abiertas ({conteoAbiertas + conteoCreadas})
     </a>
-    <a href={`/ordenes?estado=en_proceso${filtroVista ? `&vista=${filtroVista}` : ""}`}
+    <a href={qs({ estado: "en_proceso" })}
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_proceso" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
       🟢 En progreso ({conteoEnProceso})
     </a>
     {conteoEnEspera > 0 && (
-      <a href={`/ordenes?estado=en_espera${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={qs({ estado: "en_espera" })}
          class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_espera" ? "bg-purple-600 text-white" : "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"]}>
         🟣 En espera ({conteoEnEspera})
       </a>
@@ -176,17 +205,50 @@ const esAdmin = usrLogged.rol === "admin";
     )}
     <span class="text-slate-300">·</span>
     {(["completada", "verificada", "cerrada", "cancelada"] as EstadoOT[]).map((s) => (
-      <a href={`/ordenes?estado=${s}${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={qs({ estado: s })}
          class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === s ? `${ESTADO_COLOR[s]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {ESTADO_LABEL[s]} ({conteoEstados[s] ?? 0})
       </a>
     ))}
     {!filtroEstado && (
-      <a href={`/ordenes?verCerradas=1${filtroVista ? `&vista=${filtroVista}` : ""}`}
+      <a href={qs({ estado: null, verCerradas: "1" })}
          class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerradas ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
         {verCerradas ? "🗂 Mostrando todas" : "🗂 Ver cerradas (" + conteoCerradas + ")"}
       </a>
     )}
+  </div>
+
+  <!-- Filtros por tipo de documento (el MOP y el EOP son tipos de OT) -->
+  <div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+    <span class="font-medium text-slate-500">Tipo:</span>
+    <a href={qs({ tipo: null })}
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroTipo ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      Todos
+    </a>
+    {(TIPOS_OT as readonly TipoOT[]).map((t) => (
+      <a href={qs({ tipo: t })}
+         class:list={["rounded-md px-2 py-1 font-medium", filtroTipo === t ? `${TIPO_COLOR[t]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-600 hover:bg-slate-200"]}
+         title={t === "intervencion" ? "MOP · método de procedimiento: permiso, pasos y lecturas de liberación" : t === "emergencia" ? "EOP · el sistema ya falló: tres tiempos y causa raíz" : undefined}>
+        {TIPO_ICONO[t]} {TIPO_LABEL[t]} ({conteoTipos[t] ?? 0})
+      </a>
+    ))}
+  </div>
+
+  <!-- Clase de prioridad del plan maestro de 52 semanas -->
+  <div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+    <span class="font-medium text-slate-500">Clase:</span>
+    <a href={qs({ clase: null })}
+       class:list={["rounded-md px-2 py-1 font-medium", !filtroClase ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
+      Todas
+    </a>
+    {(CLASES_PRIORIDAD as readonly ClasePrioridad[]).map((c) => (
+      <a href={qs({ clase: c })}
+         class:list={["rounded-md px-2 py-1 font-medium", filtroClase === c ? `${CLASE_PRIORIDAD_COLOR[c]} ring-2 ring-offset-1` : "bg-slate-100 text-slate-600 hover:bg-slate-200"]}
+         title={CLASE_PRIORIDAD_PLAZO[c]}>
+        {CLASE_PRIORIDAD_LABEL[c]} ({conteoClases[c] ?? 0})
+      </a>
+    ))}
+    <span class="text-slate-400">· P1 ≤ 1 h · P2 ≤ 24 h · P3 ≤ 7 días · P4 próxima ruta</span>
   </div>
 
   <!-- Vista de tarjetas (móvil) -->
@@ -214,7 +276,15 @@ const esAdmin = usrLogged.rol === "admin";
               {asignadaAMi && <span title="Asignada a ti" class="mr-1">👤</span>}
               #{r.orden.id}
             </div>
-            <span class={`badge ${PRIO_COLOR[prio]} capitalize text-[10px]`}>{r.orden.prioridad}</span>
+            <div class="flex flex-wrap items-center gap-1">
+              {r.orden.clasePrioridad && (
+                <span class={`badge ${CLASE_PRIORIDAD_COLOR[r.orden.clasePrioridad as ClasePrioridad]} text-[10px]`}
+                      title={CLASE_PRIORIDAD_PLAZO[r.orden.clasePrioridad as ClasePrioridad]}>
+                  {r.orden.clasePrioridad}
+                </span>
+              )}
+              <span class={`badge ${PRIO_COLOR[prio]} capitalize text-[10px]`}>{r.orden.prioridad}</span>
+            </div>
           </div>
           <div class="mt-1 text-base font-semibold text-slate-900">{r.orden.titulo}</div>
           <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
@@ -234,7 +304,10 @@ const esAdmin = usrLogged.rol === "admin";
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-1.5">
             <span class={`badge ${ESTADO_COLOR[e]} text-[10px]`}>{ESTADO_LABEL[e]}</span>
-            <span class={`badge ${TIPO_COLOR[tipo]} text-[10px] capitalize`}>{r.orden.tipo}</span>
+            <span class={`badge ${TIPO_COLOR[tipo]} text-[10px]`}>{TIPO_ICONO[tipo] ?? ""} {TIPO_LABEL[tipo] ?? r.orden.tipo}</span>
+            {r.orden.nivelRiesgo === "alto" && (
+              <span class="badge bg-red-100 text-red-700 text-[10px]">Riesgo alto</span>
+            )}
             {e === "abierta" && !r.orden.asignadoA && (
               <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Sin asignar</span>
             )}
@@ -254,6 +327,7 @@ const esAdmin = usrLogged.rol === "admin";
           <th class="px-4 py-2">Título</th>
           <th class="px-4 py-2">Equipo / Vehículo / Actividad</th>
           <th class="px-4 py-2">Tipo</th>
+          <th class="px-4 py-2" title="Clase del plan maestro: P1 ≤ 1 h · P2 ≤ 24 h · P3 ≤ 7 días · P4 próxima ruta">Clase</th>
           <th class="px-4 py-2">Prioridad</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2">Asignado</th>
@@ -263,7 +337,7 @@ const esAdmin = usrLogged.rol === "admin";
       </thead>
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && !errorMsg && (
-          <tr><td colspan={esAdmin ? 10 : 9} class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
+          <tr><td colspan={esAdmin ? 11 : 10} class="px-4 py-6 text-center text-slate-500">Sin órdenes con esos filtros.</td></tr>
         )}
         {rows.map((r) => {
           const e = (r.orden.estado ?? "abierta") as EstadoOT;
@@ -298,7 +372,18 @@ const esAdmin = usrLogged.rol === "admin";
                 {!r.activo && !r.vehiculo && !r.actividad && <span class="text-slate-400">— sin asociar —</span>}
               </td>
               <td class="px-4 py-2">
-                <span class={`badge ${TIPO_COLOR[tipo] ?? "bg-slate-100 text-slate-600"} capitalize`}>{r.orden.tipo}</span>
+                <span class={`badge ${TIPO_COLOR[tipo] ?? "bg-slate-100 text-slate-600"}`}>{TIPO_ICONO[tipo] ?? ""} {TIPO_LABEL[tipo] ?? r.orden.tipo}</span>
+                {r.orden.nivelRiesgo && (
+                  <span class={`ml-1 badge ${NIVEL_RIESGO_COLOR[r.orden.nivelRiesgo] ?? "bg-slate-100 text-slate-600"} text-[10px]`}>Riesgo {r.orden.nivelRiesgo}</span>
+                )}
+              </td>
+              <td class="px-4 py-2">
+                {r.orden.clasePrioridad ? (
+                  <span class={`badge ${CLASE_PRIORIDAD_COLOR[r.orden.clasePrioridad as ClasePrioridad]}`}
+                        title={CLASE_PRIORIDAD_PLAZO[r.orden.clasePrioridad as ClasePrioridad]}>
+                    {r.orden.clasePrioridad}
+                  </span>
+                ) : <span class="text-slate-300">—</span>}
               </td>
               <td class="px-4 py-2"><span class={`badge ${PRIO_COLOR[prio] ?? "bg-slate-100 text-slate-600"} capitalize`}>{r.orden.prioridad}</span></td>
               <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[e] ?? "bg-slate-100 text-slate-600"}`}>{ESTADO_LABEL[e] ?? r.orden.estado}</span></td>

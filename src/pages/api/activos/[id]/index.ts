@@ -2,9 +2,10 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { activos } from "@/lib/schema";
+import { activos, procedimientos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit, calcularDiff } from "@/lib/audit";
+import { NIVELES_JERARQUIA, validarPadre } from "@/lib/jerarquia";
 
 export const prerender = false;
 
@@ -42,6 +43,11 @@ const updateSchema = z.object({
   slaAltaHoras: z.number().int().nonnegative().optional(),
   slaMediaHoras: z.number().int().nonnegative().optional(),
   slaBajaHoras: z.number().int().nonnegative().optional(),
+  // ── SCP · jerarquía y configuración de sitio (Fase 47, GO-GUI-011-2026) ──
+  padreId: z.number().int().positive().nullable().optional(),
+  nivelJerarquia: z.enum(NIVELES_JERARQUIA).optional(),
+  scpProcedimientoId: z.number().int().positive().nullable().optional(),
+  scpVersionRef: z.string().nullable().optional(),
 });
 
 export const GET: APIRoute = async (ctx) => {
@@ -67,9 +73,31 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  // Guarda anti-ciclo de la jerarquía del SCP: ni auto-padre, ni un
+  // descendiente como padre, ni más de tres niveles.
+  if ("padreId" in parsed.data) {
+    const chequeo = await validarPadre(db, id, parsed.data.padreId ?? null);
+    if (!chequeo.ok) return Response.json({ error: chequeo.error }, { status: 400 });
+  }
+
+  // El SCP vinculado debe ser un procedimiento de tipo scp que exista.
+  if (parsed.data.scpProcedimientoId != null) {
+    const [proc] = await db
+      .select({ id: procedimientos.id, tipo: procedimientos.tipo, version: procedimientos.version })
+      .from(procedimientos).where(eq(procedimientos.id, parsed.data.scpProcedimientoId)).limit(1);
+    if (!proc) return Response.json({ error: "El procedimiento SCP no existe." }, { status: 404 });
+    if (proc.tipo !== "scp") return Response.json({ error: "El procedimiento vinculado debe ser de tipo SCP." }, { status: 400 });
+  }
+
   // Al registrar la inspección de aceptación, se firma con el usuario actual
   const data: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.aceptacionFecha) data.aceptacionPor = user.id;
+
+  // Desvincular el SCP borra también la versión de referencia: la versión del
+  // SCP es un atributo del activo y sin procedimiento no significa nada.
+  if ("scpProcedimientoId" in parsed.data && parsed.data.scpProcedimientoId == null) {
+    data.scpVersionRef = null;
+  }
 
   const [row] = await db.update(activos).set(data).where(eq(activos.id, id)).returning();
 

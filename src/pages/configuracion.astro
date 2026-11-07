@@ -367,13 +367,60 @@ const TIPOS_UB = [
     </div>
   </div>
 
-  <!-- Tab: Plantillas de checklist (gestión movida a /procedimientos) -->
+  <!-- Tab: Plantillas de checklist (SOP/MOP ejecutables) -->
   <div id="tab-checklists" class="tab-panel mt-4 hidden">
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">📋 Procedimientos estándar</h2>
-      <p class="mt-1 text-sm text-slate-600">La gestión de plantillas de checklist se trasladó a la sección <strong>Procedimientos</strong>, donde cada paso lleva <strong>criterio de aceptación</strong>, <strong>punto crítico</strong>, tiempo estimado y materiales (requisitos JCI). Editarlas aquí habría descartado esos datos.</p>
-      <p class="mt-1 text-sm text-slate-500">Actualmente hay {plantillas.length} procedimiento{plantillas.length === 1 ? "" : "s"} configurado{plantillas.length === 1 ? "" : "s"}.</p>
-      <a href="/procedimientos" class="btn-primary mt-3 inline-block">Ir a Procedimientos →</a>
+      <h2 class="font-semibold text-slate-900">📋 Plantillas de checklist (SOP / MOP)</h2>
+      <p class="mt-1 text-sm text-slate-600">
+        Son la <strong>parte ejecutable</strong> del documento: los pasos que la orden de trabajo copia, con
+        criterio de aceptación, punto crítico, lectura exigida, tiempo estimado y materiales (requisitos JCI).
+        No se confunden con <a href="/procedimientos" class="text-brand-600 underline">la biblioteca de
+        procedimientos</a>, que es el documento firmado (SCP, SOP, MOP, EOP, AOP) con su matriz de validación.
+      </p>
+      <p class="mt-1 text-sm text-amber-700">
+        Todavía no hay pantalla de edición propia para estas plantillas: se administran por
+        <code>/api/checklist-plantillas</code>. Abajo queda el inventario de sólo lectura.
+      </p>
+      <p class="mt-2 text-sm text-slate-500">
+        Hay {plantillas.length} plantilla{plantillas.length === 1 ? "" : "s"} configurada{plantillas.length === 1 ? "" : "s"}.
+      </p>
+      {plantillas.length > 0 && (
+        <table class="mt-3 w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500">
+              <th class="py-1 pr-2">Plantilla</th>
+              <th class="py-1 pr-2">Tipo</th>
+              <th class="py-1 pr-2">Riesgo</th>
+              <th class="py-1 pr-2">Pasos</th>
+              <th class="py-1">Documento</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plantillas.map((pl) => (
+              <tr class="border-b border-slate-100">
+                <td class="py-1 pr-2">
+                  {pl.nombre}
+                  {!pl.activa && <span class="ml-1 rounded bg-slate-100 px-1 text-[11px] text-slate-500">inactiva</span>}
+                </td>
+                <td class="py-1 pr-2">
+                  <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] uppercase text-slate-600">
+                    {pl.tipoDocumento}
+                  </span>
+                </td>
+                <td class="py-1 pr-2 text-slate-600">{pl.nivelRiesgo ?? "—"}</td>
+                <td class="py-1 pr-2 text-slate-600">{pl.items.length}</td>
+                <td class="py-1">
+                  {pl.procedimientoId
+                    ? <a href={`/procedimientos/${pl.procedimientoId}`} class="text-brand-600 underline">
+                        Ver documento{pl.procedimientoVersion ? ` v${pl.procedimientoVersion}` : ""}
+                      </a>
+                    : <span class="text-slate-400">sin documento vinculado</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   </div>
 

@@ -27,6 +27,16 @@ const updateSchema = z.object({
   maxCritico: z.number().nullable().optional(),
   activo: z.boolean().optional(),
   notas: z.string().nullable().optional(),
+  // ── Punto de ajuste del SCP (Fase 47, GO-GUI-011-2026 cap. 03) ──
+  // «Los puntos de ajuste se cargan como atributos con valor normal, mínimo y
+  // máximo». posicion_normal usa valorNominalTexto («selector en AUTO»).
+  tipoAtributo: z.enum(["punto_ajuste", "posicion_normal", "predictiva"]).optional(),
+  valorNominal: z.number().nullable().optional(),
+  valorNominalTexto: z.string().nullable().optional(),
+  fuente: z.string().nullable().optional(),
+  fuenteReferencia: z.string().nullable().optional(),
+  procedimientoId: z.number().int().positive().nullable().optional(),
+  procedimientoVersion: z.string().nullable().optional(),
 });
 
 export const PATCH: APIRoute = async (ctx) => {

@@ -1,6 +1,6 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { variablesPredictivas } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
@@ -13,8 +13,13 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const url = new URL(ctx.request.url);
   const activoId = url.searchParams.get("activo_id");
-  const rows = activoId
-    ? await db.select().from(variablesPredictivas).where(eq(variablesPredictivas.activoId, Number(activoId))).orderBy(variablesPredictivas.nombre)
+  const tipoAtributo = url.searchParams.get("tipo_atributo");
+  const filtros = [
+    activoId ? eq(variablesPredictivas.activoId, Number(activoId)) : undefined,
+    tipoAtributo ? eq(variablesPredictivas.tipoAtributo, tipoAtributo as any) : undefined,
+  ].filter(Boolean) as any[];
+  const rows = filtros.length > 0
+    ? await db.select().from(variablesPredictivas).where(and(...filtros)).orderBy(variablesPredictivas.nombre)
     : await db.select().from(variablesPredictivas).orderBy(desc(variablesPredictivas.id));
   return Response.json({ variables: rows });
 };
@@ -28,6 +33,16 @@ const createSchema = z.object({
   maxWarning: z.number().nullable().optional(),
   maxCritico: z.number().nullable().optional(),
   notas: z.string().nullable().optional(),
+  // ── Punto de ajuste del SCP (Fase 47, GO-GUI-011-2026 cap. 03) ──
+  // «Los puntos de ajuste se cargan como atributos con valor normal, mínimo y
+  // máximo». posicion_normal usa valorNominalTexto («selector en AUTO»).
+  tipoAtributo: z.enum(["punto_ajuste", "posicion_normal", "predictiva"]).optional(),
+  valorNominal: z.number().nullable().optional(),
+  valorNominalTexto: z.string().nullable().optional(),
+  fuente: z.string().nullable().optional(),
+  fuenteReferencia: z.string().nullable().optional(),
+  procedimientoId: z.number().int().positive().nullable().optional(),
+  procedimientoVersion: z.string().nullable().optional(),
 });
 
 export const POST: APIRoute = async (ctx) => {
