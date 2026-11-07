@@ -578,6 +578,17 @@ const preJson = JSON.stringify({
             "La orden se creó, pero no se pudo guardar su tipo ni el procedimiento que la rige. Ajústalo en la ficha de la orden.",
             "error",
           );
+        } else {
+          // Si el MOP tenía plantilla, la orden ya nace con sus prerrequisitos
+          // y sus lecturas de liberación: hay que decirlo, porque de eso
+          // depende que pueda iniciarse.
+          const dj = await pr.json().catch(() => ({}));
+          if (dj && dj.mop) {
+            window.showToast?.(
+              `${dj.mop.prerrequisitos} prerrequisito(s) y ${dj.mop.liberaciones} lectura(s) de liberación aplicadas desde el MOP.`,
+              "success",
+            );
+          }
         }
       }
 

@@ -101,14 +101,24 @@ export async function enviarDigestDiario(
 
   // ── Datos para el resumen ejecutivo ───────────────────────────────────────
   const otsCerradasAyerRaw = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
     .where(and(eq(ordenes.estado, "cerrada"), gte(ordenes.cerradoEn, ayerIni), lte(ordenes.cerradoEn, ayerFin)));
 
   const otsEnProceso = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -116,7 +126,12 @@ export async function enviarDigestDiario(
     .orderBy(desc(ordenes.iniciadaEn));
 
   const otsAtrasadasRaw = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -127,7 +142,8 @@ export async function enviarDigestDiario(
     ));
 
   const otsAbiertasSinAsignarRaw = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(eq(ordenes.estado, "abierta"), isNull(ordenes.asignadoA)));
@@ -153,7 +169,12 @@ export async function enviarDigestDiario(
 
   // ── KPIs del mes ──────────────────────────────────────────────────────────
   const otsDelMes = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -225,7 +246,10 @@ export async function enviarDigestDiario(
 
   // ── Próximos preventivos (3 días) ─────────────────────────────────────────
   const proximosPlanes = await db
-    .select({ p: planesMantenimiento, a: activos })
+    .select({
+      p: planesMantenimiento,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+    })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en3)))

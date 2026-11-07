@@ -42,6 +42,9 @@ const homeLabel = user?.rol === "tecnico" ? "Mi panel"  : "Dashboard";
 const allLinks: NavItem[] = [
   // 1. Operación diaria
   { href: homeHref,         label: homeLabel,       icon: "🏠" },
+  // La ronda va primero: es el paso 1 de la cadena del volumen y lo primero
+  // que se hace al entrar de turno.
+  { href: "/ronda",         label: "Ronda de turno", icon: "🧭", show: isOperativo || user?.rol === "visualizador" },
   { href: "/tickets",       label: "Tickets",       icon: "🎫", show: !isMotorista },
   { href: "/ordenes",       label: "Órdenes",       icon: "📋", show: !isMotorista && !esProveedor },
   { href: "/aop",           label: "Desviaciones (AOP)", icon: "⏱", show: isOperativo },

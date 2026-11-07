@@ -27,8 +27,27 @@ if (!Number.isFinite(id)) return Astro.redirect("/ordenes");
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 
+// D1 corta el resultado a 100 columnas y ordenes(61) + activos(45) ya se pasa:
+// la consulta fallaba entera y la ficha de la orden quedaba en error. Se piden
+// solo las columnas que esta pantalla usa.
 const [row] = await db
-  .select({ orden: ordenes, activo: activos, asignado: usuarios, ubicacion: ubicaciones, sucursal: sucursales })
+  .select({
+    orden: ordenes,
+    activo: {
+      id: activos.id,
+      codigo: activos.codigo,
+      nombre: activos.nombre,
+      tipo: activos.tipo,
+      marca: activos.marca,
+      modelo: activos.modelo,
+      serial: activos.serial,
+      ubicacion: activos.ubicacion,
+      criticidadOperacional: activos.criticidadOperacional,
+    },
+    asignado: { id: usuarios.id, nombre: usuarios.nombre, email: usuarios.email },
+    ubicacion: { id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo },
+    sucursal: { id: sucursales.id, nombre: sucursales.nombre },
+  })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))

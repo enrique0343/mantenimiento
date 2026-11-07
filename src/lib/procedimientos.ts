@@ -769,9 +769,109 @@ export const MATRIZ_CAP08: Record<string, FilaMatriz> = {
     ],
     campos: ["Puntos de caudal", "Partes a notificar"],
   },
+
+  // ── Fase 51 · los cinco que faltaban para cerrar el juego por familia
+  // Escritos cortos a propósito: incendios y ascensores no tenían la cadena
+  // completa, y una familia incompleta es una familia que el sistema no puede
+  // gobernar cuando algo pasa.
+  "AOP-INC-01": {
+    titulo: "Sistema contra incendios fuera de servicio, total o parcial",
+    tipo: "aop",
+    sistema: "incendios",
+    queConfirma:
+      "Horas máximas de deterioro, vigilancia contra incendios, avisos a Bomberos y a la aseguradora, criterio de cierre de área",
+    areas: [
+      "Seguridad y Salud Ocupacional",
+      "Mantenimiento General",
+      "Legal",
+      "Calidad",
+      "Proveedor de alarma y rociadores",
+    ],
+    campos: [
+      "Cargo que autoriza el deterioro",
+      "Horas máximas sin vigilancia",
+      "Número de Bomberos",
+      "Contacto de la aseguradora",
+    ],
+  },
+  "EOP-INC-01": {
+    titulo: "Alarma de incendio o fuego confirmado",
+    tipo: "eop",
+    sistema: "incendios",
+    queConfirma:
+      "Las tres primeras acciones (rescatar, alarma, confinar), el mando, el criterio de evacuación horizontal y quién autoriza reocupar",
+    areas: [
+      "Seguridad y Salud Ocupacional",
+      "Enfermería",
+      "Dirección Médica",
+      "Mantenimiento General",
+      "Vigilancia",
+      "Central telefónica",
+      "Cocina",
+    ],
+    campos: [
+      "Número de Bomberos",
+      "Extensión de la central",
+      "Texto del aviso por altavoz",
+      "Punto de reunión",
+      "Compartimiento de evacuación por piso",
+    ],
+  },
+  "SCP-ASC-01": {
+    titulo: "Ascensores: configuración normal",
+    tipo: "scp",
+    sistema: "ascensores",
+    queConfirma:
+      "Inventario y paradas, capacidad, rama eléctrica, teléfono de cabina, inspección vigente y quién puede liberar personas",
+    areas: [
+      "Mantenimiento General",
+      "Proveedor de ascensores",
+      "Seguridad y Salud Ocupacional",
+      "Tecnología",
+      "Calidad",
+    ],
+    campos: [
+      "Identificación de cada ascensor",
+      "Capacidad",
+      "Paradas",
+      "Rama eléctrica",
+      "A dónde timbra el teléfono de cabina",
+      "Tiempo de respuesta contractual",
+    ],
+  },
+  "AOP-ASC-01": {
+    titulo: "Ascensor con falla, sin personas atrapadas",
+    tipo: "aop",
+    sistema: "ascensores",
+    queConfirma:
+      "Criterio para sacarlo de servicio, tiempo de respuesta del proveedor y ruta alterna de traslado de pacientes",
+    areas: ["Mantenimiento General", "Proveedor de ascensores", "Enfermería", "Seguridad y Salud Ocupacional"],
+    campos: [
+      "Tiempo de respuesta contractual",
+      "Número de emergencia del proveedor",
+      "Ruta alterna de traslado",
+      "Horas máximas con un solo ascensor",
+    ],
+  },
+  "MOP-ASC-01": {
+    titulo: "Puesta fuera de servicio programada de un ascensor",
+    tipo: "mop",
+    sistema: "ascensores",
+    nivelRiesgo: "alto",
+    queConfirma:
+      "Ventana autorizada, bloqueo y etiquetado, ruta alterna de traslado y la prueba de recorrido con la que se repone",
+    areas: [
+      "Mantenimiento General",
+      "Proveedor de ascensores",
+      "Enfermería",
+      "Seguridad y Salud Ocupacional",
+      "Servicios Generales",
+    ],
+    campos: ["Ventana autorizada", "Cargo que autoriza", "Ruta alterna de traslado", "Cargo que firma la prueba"],
+  },
 };
 
-/** Los 25 códigos cortos del volumen, en el orden del documento. */
+/** Los 30 códigos cortos del volumen y sus cinco complementos, en orden. */
 export const CODIGOS_VOLUMEN = Object.keys(MATRIZ_CAP08);
 
 /** Devuelve la fila del 8.2 para un código corto (tolera minúsculas y espacios). */

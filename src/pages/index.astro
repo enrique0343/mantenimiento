@@ -5,6 +5,9 @@ import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion, contratos
 import { sql, eq, and, lte, gte, asc, isNotNull, inArray, desc } from "drizzle-orm";
 import { diasParaVencer } from "@/lib/contratos";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import CadenaAhora from "@/components/CadenaAhora.astro";
+import { estadoAhora, ordenarPorTono, tituloAhora } from "@/lib/ahora";
+import { usuarios } from "@/lib/schema";
 export const prerender = false;
 
 // Tecnico y Motorista → su panel personal
@@ -12,6 +15,26 @@ const user = Astro.locals.user;
 if (user?.rol === "tecnico" || user?.rol === "motorista") return Astro.redirect("/mi-panel");
 
 const db = getDb(Astro);
+
+// ── «Ahora mismo»: la cadena de los cinco documentos ────────────────────────
+// Esto va primero porque es lo primero que hay que saber. Los contadores de
+// órdenes de abajo dicen cuánto trabajo hay; esta franja dice qué está pasando
+// y qué hay que hacer si algo pasó.
+const [miUsuario] = await db
+  .select({ sucursalId: usuarios.sucursalId })
+  .from(usuarios)
+  .where(eq(usuarios.id, user!.id))
+  .limit(1);
+const bloquesAhora = ordenarPorTono(
+  await estadoAhora(db, {
+    usuarioId: user!.id,
+    rol: user!.rol,
+    sucursalId: null,          // la jefatura ve las cuatro sedes
+    soloMias: false,
+    incluirCobertura: true,
+  }),
+);
+const resumenAhora = tituloAhora(bloquesAhora);
 
 const ordenesPorEstado = await db
   .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
@@ -108,7 +131,10 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
     <span class="text-xs text-slate-400">{new Date().toLocaleDateString("es", { weekday:"long", day:"numeric", month:"long", timeZone:"America/El_Salvador" })}</span>
   </div>
 
-  <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+  <CadenaAhora bloques={bloquesAhora} resumen={resumenAhora} />
+
+  <h2 class="mt-7 text-sm font-semibold uppercase tracking-wide text-slate-400">Carga de trabajo</h2>
+  <div class="mt-2 grid grid-cols-2 gap-4 lg:grid-cols-5">
     <!-- Órdenes abiertas -->
     <a href="/ordenes?estado=abierta" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
       <div class="min-w-0">

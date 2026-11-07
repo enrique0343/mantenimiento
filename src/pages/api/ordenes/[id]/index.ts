@@ -19,6 +19,7 @@ import { disparadorOT } from "@/lib/notificaciones";
 import { sendTelegram } from "@/lib/telegram";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
+import { sembrarDesdeMop } from "@/lib/mop";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 export const prerender = false;
@@ -70,8 +71,13 @@ export const GET: APIRoute = async (ctx) => {
   const id = Number(ctx.params.id);
   const db = getDb(ctx);
 
+  // D1 corta el resultado a 100 columnas: ordenes(61) + activos(45) se pasa.
   const [row] = await db
-    .select({ orden: ordenes, activo: activos, asignado: usuarios })
+    .select({
+      orden: ordenes,
+      activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      asignado: { id: usuarios.id, nombre: usuarios.nombre },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -367,6 +373,27 @@ export const PATCH: APIRoute = async (ctx) => {
 
   const [row] = await db.update(ordenes).set(data).where(eq(ordenes.id, id)).returning();
 
+  // ── MOP · la plantilla baja a la orden ──
+  // Al quedar vinculada a un MOP, la orden hereda sus prerrequisitos y sus
+  // lecturas de liberación. Sin esto la regla dura de más arriba no tiene qué
+  // revisar y el MOP queda de adorno.
+  let sembradoMop: { prerrequisitos: number; liberaciones: number; plantilla: string | null } | null = null;
+  const procAhora = row.procedimientoId ?? null;
+  const vinculoNuevo = parsed.data.procedimientoId != null && parsed.data.procedimientoId !== actual.procedimientoId;
+  const esIntervencion = (row.tipo ?? actual.tipo) === "intervencion";
+  if (procAhora && esIntervencion && (vinculoNuevo || parsed.data.tipo === "intervencion")) {
+    try {
+      const r = await sembrarDesdeMop(db, id, procAhora);
+      if (r.prerrequisitos > 0 || r.liberaciones > 0) {
+        sembradoMop = r;
+        await logAudit(ctx, {
+          entidad: "orden", entidadId: id, accion: "update",
+          resumen: `MOP aplicado desde «${r.plantilla}»: ${r.prerrequisitos} prerrequisito(s) y ${r.liberaciones} lectura(s) de liberación`,
+        });
+      }
+    } catch {}
+  }
+
   // Audit: cambio de estado (con resumen legible)
   if (parsed.data.estado && parsed.data.estado !== actual.estado) {
     await logAudit(ctx, {
@@ -646,7 +673,7 @@ export const PATCH: APIRoute = async (ctx) => {
     } catch {}
   }
 
-  return Response.json({ orden: row });
+  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}) });
 };
 
 export const DELETE: APIRoute = async (ctx) => {

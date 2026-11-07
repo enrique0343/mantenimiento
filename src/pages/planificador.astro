@@ -28,7 +28,8 @@ const db = getDb(Astro);
 
 // OTs con vencimiento en el mes
 const otRows = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { id: activos.id }, u: { id: usuarios.id, nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))

@@ -44,10 +44,12 @@ export const GET: APIRoute = async (ctx) => {
   if (user.rol === "tecnico") conditions.push(eq(ordenes.asignadoA, user.id));
 
   const rows = await db
+    // D1 corta el resultado a 100 columnas: ordenes(61) + activos(45) ya se
+    // pasa. Solo se piden las columnas que la respuesta devuelve.
     .select({
       orden: ordenes,
-      activo: activos,
-      asignado: usuarios,
+      activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo, estado: activos.estado },
+      asignado: { id: usuarios.id, nombre: usuarios.nombre },
     })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))

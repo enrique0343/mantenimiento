@@ -1398,6 +1398,8 @@ export const aopEventos = sqliteTable("aop_eventos", {
   cerradoPor: integer("cerrado_por").references(() => usuarios.id),
   cerradoEn: text("cerrado_en"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // De qué lectura de ronda salió la desviación (fase 52)
+  rondaLecturaId: integer("ronda_lectura_id"),
 });
 
 export const aopEventoAcciones = sqliteTable("aop_evento_acciones", {
@@ -1534,6 +1536,86 @@ export const procedimientoSistemas = sqliteTable("procedimiento_sistemas", {
   procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
   sistema: text("sistema").notNull(),
 });
+
+// ─── La ronda de turno (Fase 52) ─────────────────────────────────────────────
+// El SOP se ejecuta como una ronda: una plantilla de recorrido, una ejecución
+// por turno y una lectura por punto. Cada punto declara qué AOP lo rige, así
+// que la lectura fuera de rango abre sola el episodio con su reloj.
+export const rondas = sqliteTable("rondas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  procedimientoId: integer("procedimiento_id").references(() => procedimientos.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  turnos: text("turnos").notNull().default('["06:00","14:00","22:00"]'),
+  minutosEstimados: integer("minutos_estimados"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const rondaPuntos = sqliteTable("ronda_puntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  rondaId: integer("ronda_id").notNull().references(() => rondas.id, { onDelete: "cascade" }),
+  orden: integer("orden").notNull().default(0),
+  sistema: text("sistema").notNull(),
+  etiqueta: text("etiqueta").notNull(),
+  instruccion: text("instruccion"),
+  activoId: integer("activo_id").references(() => activos.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  variableId: integer("variable_id").references(() => variablesPredictivas.id),
+  requiereValor: integer("requiere_valor", { mode: "boolean" }).notNull().default(false),
+  unidad: text("unidad"),
+  minEsperado: real("min_esperado"),
+  maxEsperado: real("max_esperado"),
+  valorEsperadoTexto: text("valor_esperado_texto"),
+  fuente: text("fuente"),
+  aopProcedimientoId: integer("aop_procedimiento_id").references(() => procedimientos.id),
+  critico: integer("critico", { mode: "boolean" }).notNull().default(false),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+});
+
+export const rondaEjecuciones = sqliteTable("ronda_ejecuciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  rondaId: integer("ronda_id").notNull().references(() => rondas.id, { onDelete: "cascade" }),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  fecha: text("fecha").notNull(),
+  turno: text("turno").notNull(),
+  estado: text("estado", { enum: ["en_curso", "completada"] }).notNull().default("en_curso"),
+  iniciadaEn: text("iniciada_en"),
+  iniciadaPor: integer("iniciada_por").references(() => usuarios.id),
+  completadaEn: text("completada_en"),
+  completadaPor: integer("completada_por").references(() => usuarios.id),
+  minutosRonda: integer("minutos_ronda"),
+  puntosTotal: integer("puntos_total").notNull().default(0),
+  puntosOk: integer("puntos_ok").notNull().default(0),
+  puntosFuera: integer("puntos_fuera").notNull().default(0),
+  puntosNoVerificados: integer("puntos_no_verificados").notNull().default(0),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// La UNIQUE (ejecucion_id, punto_id) vive en la migración 0052: reanotar un
+// punto corrige la lectura en lugar de duplicarla.
+export const rondaLecturas = sqliteTable("ronda_lecturas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ejecucionId: integer("ejecucion_id").notNull().references(() => rondaEjecuciones.id, { onDelete: "cascade" }),
+  puntoId: integer("punto_id").notNull().references(() => rondaPuntos.id, { onDelete: "cascade" }),
+  resultado: text("resultado", { enum: ["ok", "fuera", "no_verificado"] }).notNull(),
+  valor: real("valor"),
+  valorTexto: text("valor_texto"),
+  nota: text("nota"),
+  medicionId: integer("medicion_id").references(() => mediciones.id),
+  aopEventoId: integer("aop_evento_id").references(() => aopEventos.id),
+  registradoPor: integer("registrado_por").references(() => usuarios.id),
+  registradoEn: text("registrado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type Ronda = typeof rondas.$inferSelect;
+export type RondaPunto = typeof rondaPuntos.$inferSelect;
+export type RondaEjecucion = typeof rondaEjecuciones.$inferSelect;
+export type RondaLectura = typeof rondaLecturas.$inferSelect;
 
 export type Procedimiento = typeof procedimientos.$inferSelect;
 export type ProcedimientoValidacion = typeof procedimientoValidaciones.$inferSelect;

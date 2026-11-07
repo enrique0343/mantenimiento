@@ -20,8 +20,18 @@ const user = Astro.locals.user!;
 const id = Number(Astro.params.id);
 const db = getDb(Astro);
 
+// D1 corta el resultado a 100 columnas: proyectos + usuarios + sucursales +
+// ubicaciones + activos + tickets se pasa de largo y la consulta falla entera.
+// Solo se piden las columnas que esta pantalla usa.
 const [row] = await db
-  .select({ p: proyectos, creador: usuarios, sucursal: sucursales, ubicacion: ubicaciones, activo: activos, ticket: tickets })
+  .select({
+    p: proyectos,
+    creador: { nombre: usuarios.nombre },
+    sucursal: { id: sucursales.id, nombre: sucursales.nombre },
+    ubicacion: { id: ubicaciones.id, nombre: ubicaciones.nombre },
+    activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+    ticket: { id: tickets.id, asunto: tickets.asunto },
+  })
   .from(proyectos)
   .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
   .leftJoin(sucursales, eq(sucursales.id, proyectos.sucursalId))

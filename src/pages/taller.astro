@@ -21,7 +21,8 @@ const ahoraIso = new Date().toISOString();
 
 // OTs activas (lo que está en el taller ahora).
 const abiertas = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { codigo: activos.codigo }, u: { nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -30,7 +31,8 @@ const abiertas = await db
 
 // Completadas esta semana (throughput).
 const completadasSemana = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { codigo: activos.codigo }, u: { nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))

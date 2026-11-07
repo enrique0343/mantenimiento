@@ -40,7 +40,8 @@ export const GET: APIRoute = async (ctx) => {
 
   // OTs activas asignadas
   const ots = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(
@@ -49,7 +50,8 @@ export const GET: APIRoute = async (ctx) => {
     ));
 
   const otsEnProceso = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(

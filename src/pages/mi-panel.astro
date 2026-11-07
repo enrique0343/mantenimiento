@@ -5,6 +5,9 @@ import { ordenes, activos, planesMantenimiento, vehiculos, viajes, tickets, sucu
 import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 import { fmtKm, fmtDuracion } from "@/lib/flota";
+import CadenaAhora from "@/components/CadenaAhora.astro";
+import { estadoAhora, ordenarPorTono, tituloAhora, type BloqueAhora } from "@/lib/ahora";
+import { usuarios } from "@/lib/schema";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -68,9 +71,37 @@ let nivelActual: any = { min: 0, nombre: "Aprendiz", emoji: "🔧" };
 let nivelSiguiente: any = null;
 let pctSiguiente = 100;
 
+// ── «Ahora mismo» para el técnico ───────────────────────────────────────────
+// Su ronda de turno, sus desviaciones y sus órdenes. Es lo primero que ve: no
+// cuántas OT lleva en el mes, sino qué tiene que hacer en los próximos minutos.
+let bloquesAhora: BloqueAhora[] = [];
+let resumenAhora: { texto: string; tono: "ok" | "atencion" | "urgente" | "vacio" } = { texto: "", tono: "ok" };
+if (!esMotorista) {
+  const [miU] = await db
+    .select({ sucursalId: usuarios.sucursalId })
+    .from(usuarios)
+    .where(eq(usuarios.id, user.id))
+    .limit(1);
+  bloquesAhora = ordenarPorTono(
+    await estadoAhora(db, {
+      usuarioId: user.id,
+      rol: user.rol,
+      sucursalId: miU?.sucursalId ?? null,
+      soloMias: true,
+      incluirCobertura: false,
+    }),
+  );
+  resumenAhora = tituloAhora(bloquesAhora);
+}
+
 if (!esMotorista) {
   misActivas = await db
-    .select({ o: ordenes, a: activos })
+    // D1 limita el resultado a 100 columnas: ordenes(61) + activos(45) se
+    // pasa y la consulta falla. Solo se piden las columnas que se pintan.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
@@ -265,7 +296,10 @@ if (!esMotorista) {
         </div>
       </div>
 
-      <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <CadenaAhora bloques={bloquesAhora} titulo="Lo primero del turno" resumen={resumenAhora} />
+
+      <h2 class="mt-7 text-sm font-semibold uppercase tracking-wide text-slate-400">Mi mes</h2>
+      <div class="mt-2 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div class="card p-4">
           <div class="text-xs uppercase text-slate-500">OTs activas</div>
           <div class="mt-1 text-3xl font-bold text-brand-600">{misActivas.length}</div>
