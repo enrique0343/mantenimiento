@@ -1528,6 +1528,13 @@ export const metricasSala = sqliteTable("metricas_sala", {
   capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// Un documento puede cubrir varias familias de equipo (la ronda por turno las recorre todas)
+export const procedimientoSistemas = sqliteTable("procedimiento_sistemas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  sistema: text("sistema").notNull(),
+});
+
 export type Procedimiento = typeof procedimientos.$inferSelect;
 export type ProcedimientoValidacion = typeof procedimientoValidaciones.$inferSelect;
 export type AopUmbral = typeof aopUmbrales.$inferSelect;

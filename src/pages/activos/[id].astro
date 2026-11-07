@@ -19,8 +19,11 @@ import {
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
-import { queRigeEsteActivo, queSigue, SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
-import { TIPO_PROC, SISTEMAS, estadoInfo, type TipoProc } from "@/lib/procedimientos";
+import {
+  queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
+  SISTEMA_LABEL, type Sistema,
+} from "@/lib/resolver";
+import { TIPO_PROC, SISTEMAS, estadoInfo } from "@/lib/procedimientos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -282,20 +285,64 @@ const ORIGEN_SISTEMA: Record<"declarado" | "heredado" | "inferido", { label: str
   },
 };
 
-// Los documentos en el orden de la cadena del cap. 01: SCP cómo está
-// configurado → SOP cómo se opera → AOP se desvió → EOP ya falló → MOP se
-// interviene.
-const gruposRige: Array<{ tipo: TipoProc; docs: any[] }> = rige
-  ? [
-      { tipo: "scp", docs: rige.scp ? [rige.scp] : [] },
-      { tipo: "sop", docs: rige.sop },
-      { tipo: "aop", docs: rige.aop },
-      { tipo: "eop", docs: rige.eop },
-      { tipo: "mop", docs: rige.mop },
-    ]
-  : [];
-const nDocsRige = gruposRige.reduce((n, g) => n + g.docs.length, 0);
 const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
+
+// ─── El juego de los cinco es de la FAMILIA, no de este equipo ───────────────
+// «Todos los aires acondicionados deben aplicarse los mismos 5 documentos.»
+// El juego no se arma equipo por equipo: se define una vez por sistema crítico
+// y todos sus equipos lo heredan. Por eso la cadena se lee de juegoDeFamilia
+// —que incluye los documentos que cubren varias familias a la vez, como la
+// ronda por turno— y no de una lista suelta de este equipo.
+const juego = sistemaResuelto ? await juegoDeFamilia(db, sistemaResuelto, sucursalInfo?.id ?? null) : null;
+// Cuántos equipos comparten el juego: la brecha de 40 aires sin EOP no pesa
+// igual que la de uno.
+const familiaConteo = sistemaResuelto
+  ? (await equiposPorFamilia(db))[sistemaResuelto] ?? { total: 0, criticos: 0 }
+  : null;
+
+// Red de seguridad: si un documento existe para el sistema pero le falta su
+// fila en procedimiento_sistemas, igual debe verse. Nunca decir «falta» de algo
+// que ya está escrito.
+const docsDeRige: Record<string, any[]> = rige
+  ? { scp: rige.scp ? [rige.scp] : [], sop: rige.sop, aop: rige.aop, eop: rige.eop, mop: rige.mop }
+  : {};
+
+// La cadena del cap. 01 en orden: SCP cómo está configurado → SOP cómo se opera
+// → AOP se desvió → EOP ya falló → MOP se interviene. Un eslabón por tipo, con
+// el documento con el que de verdad se opera: el vigente manda sobre el
+// borrador. Única excepción: el SCP que declara el propio equipo manda sobre el
+// de la familia, porque la configuración sí es de cada máquina.
+const cadena = (juego?.slots ?? []).map((s) => {
+  const docs = s.documentos.length > 0 ? s.documentos : (docsDeRige[s.tipo] ?? []);
+  const pref =
+    docs.find((d: any) => d.estado === "vigente") ??
+    docs.find((d: any) => d.estado === "en_validacion") ??
+    docs[0] ??
+    null;
+  const propio = s.tipo === "scp" && !!a.scpProcedimientoId && !!rige?.scp;
+  const doc = propio ? rige!.scp! : pref;
+  return {
+    tipo: s.tipo,
+    label: s.label,
+    pregunta: s.pregunta,
+    doc,
+    propio,
+    cubierto: !!doc,
+    vigente: doc?.estado === "vigente",
+    otros: docs.filter((d: any) => d.id !== doc?.id).length,
+  };
+});
+const nCubiertos = cadena.filter((s) => s.cubierto).length;
+const nVigentes = cadena.filter((s) => s.vigente).length;
+// Lo que le falta a la familia se dice en la ficha del equipo: el hueco no es
+// de este equipo, es de todos los que comparten el juego.
+const faltanEnFamilia = cadena.filter((s) => !s.cubierto);
+const textoFaltantes = faltanEnFamilia
+  .map((s) => `el ${TIPO_PROC[s.tipo].label}`)
+  .reduce((acc, t, i, arr) => (i === 0 ? t : i === arr.length - 1 ? `${acc} y ${t}` : `${acc}, ${t}`), "");
+const sinNingunDocumento = cadena.length > 0 && nCubiertos === 0;
+// El EOP con el que se abrirá la respuesta si este equipo falla.
+const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 ---
 
 <Layout title={a.nombre}>
@@ -406,7 +453,7 @@ const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
           <div class="mt-4 flex flex-wrap gap-2">
             <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia`} class="btn-primary">🚨 Abrir orden de emergencia</a>
             {canJefe && sistemaResuelto && (
-              <a href={`/procedimientos?sistema=${sistemaResuelto}&tipo=eop`} class="btn-secondary">
+              <a href={`/procedimientos?nuevo=1&sistema=${sistemaResuelto}&tipo=eop`} class="btn-secondary">
                 📋 Registrar el EOP que falta
               </a>
             )}
@@ -423,8 +470,8 @@ const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
         <div>
           <h2 class="font-semibold text-slate-900">🧭 Qué rige este equipo</h2>
           <p class="text-xs text-slate-500">
-            Nadie tiene que buscar el documento: el sistema resuelve qué procedimientos gobiernan este equipo
-            y en qué estado están.
+            Nadie tiene que buscar el documento: el sistema resuelve el juego de cinco que gobierna a toda la
+            familia de este equipo y en qué estado está cada eslabón.
           </p>
         </div>
         <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">🛡 Cobertura del sistema</a>
@@ -469,71 +516,162 @@ const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
         </div>
       )}
 
-      <!-- Los documentos que lo gobiernan, por tipo -->
-      {rige.sinCobertura || nDocsRige === 0 ? (
-        <div class="mt-4 rounded-md border-2 border-red-300 bg-red-50 p-4">
-          <div class="text-sm font-bold text-red-800">Este equipo no tiene ningún documento que lo gobierne.</div>
+      <!-- ══ El juego es de la familia, no de este equipo ════════════════════ -->
+      {juego && (
+        <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p class="text-sm text-slate-700">
+            Este equipo pertenece a la familia <strong>{juego.label}</strong>.
+            {familiaConteo && familiaConteo.total > 1 ? (
+              <Fragment>
+                {" "}Los 5 documentos de la familia aplican a sus <strong>{familiaConteo.total} equipos</strong>
+                {familiaConteo.criticos > 0 && (
+                  <Fragment> ({familiaConteo.criticos} de criticidad alta)</Fragment>
+                )}.
+              </Fragment>
+            ) : (
+              <Fragment> Los 5 documentos se definen para toda la familia, no para este equipo.</Fragment>
+            )}
+            <span class="text-slate-500">
+              {" "}El juego no se arma equipo por equipo: se define una vez por familia y todos lo heredan.
+            </span>
+          </p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+            <span class:list={[
+              "badge",
+              nCubiertos === 5 ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700",
+            ]}>
+              Juego {nCubiertos} de 5
+            </span>
+            <span class:list={[
+              "badge",
+              nVigentes === 5 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
+            ]}>
+              {nVigentes} vigente{nVigentes === 1 ? "" : "s"}
+            </span>
+            <a href={`/procedimientos?nuevo=1&sistema=${juego.sistema}`} class="font-medium text-brand-600 hover:underline">
+              Ver la biblioteca de la familia &rarr;
+            </a>
+          </div>
+        </div>
+      )}
+
+      <!-- La cadena del cap. 01: SCP → SOP → AOP → EOP → MOP ─────────────── -->
+      {sinNingunDocumento ? (
+        <div class="mt-3 rounded-md border-2 border-red-300 bg-red-50 p-4">
+          <div class="text-sm font-bold text-red-800">
+            La familia {SISTEMA_LABEL[rige.sistema]} no tiene ningún documento del juego.
+          </div>
           <p class="mt-1 text-xs text-red-700">
-            No hay SCP, SOP, AOP, EOP ni MOP para {SISTEMA_LABEL[rige.sistema]}. Si este equipo falla, nadie
-            sabrá qué sigue más que de memoria.
+            No hay SCP, SOP, AOP, EOP ni MOP para {SISTEMA_LABEL[rige.sistema]}
+            {familiaConteo && familiaConteo.total > 1 && (
+              <Fragment>, y son {familiaConteo.total} equipos los que quedan sin gobierno</Fragment>
+            )}. Si este equipo falla, nadie sabrá qué sigue más que de memoria.
           </p>
           {canJefe && (
-            <a href={`/procedimientos?sistema=${rige.sistema}`} class="btn-secondary btn-sm mt-2 inline-block">
+            <a href={`/procedimientos?nuevo=1&sistema=${rige.sistema}`} class="btn-secondary btn-sm mt-2 inline-block">
               📋 Registrarlo en la biblioteca
             </a>
           )}
         </div>
       ) : (
-        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {gruposRige.map((g) => (
-            <div class:list={["rounded-md border p-3", g.docs.length > 0 ? TIPO_PROC[g.tipo].borde : "border-dashed border-slate-200"]}>
-              <div class="flex flex-wrap items-center gap-2">
-                <span class={`badge ${TIPO_PROC[g.tipo].color}`}>{TIPO_PROC[g.tipo].icono} {TIPO_PROC[g.tipo].label}</span>
-                <span class="text-[11px] text-slate-500">{TIPO_PROC[g.tipo].nombre}</span>
-              </div>
-              {g.docs.length === 0 ? (
-                <p class="mt-2 text-xs text-slate-400">Sin documento — {TIPO_PROC[g.tipo].pregunta}</p>
-              ) : (
-                <ul class="mt-2 space-y-2">
-                  {g.docs.map((d) => (
-                    <li class:list={[
-                      "rounded border-l-4 bg-white px-2 py-1.5",
-                      d.estado === "vigente" ? "border-emerald-500" : "border-amber-400",
-                    ]}>
-                      <div class="flex flex-wrap items-center gap-1.5">
-                        <a href={`/procedimientos/${d.id}`} class="font-mono text-sm font-semibold text-brand-600 hover:underline">
-                          {d.codigoCorto}
+        <Fragment>
+          <div class="mt-3 -mx-1 overflow-x-auto pb-1">
+            <ol class="flex min-w-max items-stretch px-1" aria-label="Juego de documentos de la familia">
+              {cadena.map((s, i) => (
+                <Fragment>
+                  {i > 0 && (
+                    <li class="flex select-none items-center px-1 text-lg text-slate-300" aria-hidden="true">&rarr;</li>
+                  )}
+                  <li class:list={[
+                    "flex w-[9.5rem] shrink-0 flex-col rounded-md border-2 p-2",
+                    !s.cubierto
+                      ? "border-dashed border-red-300 bg-red-50"
+                      : s.vigente
+                        ? "border-emerald-300 bg-white"
+                        : "border-amber-300 bg-white",
+                  ]}>
+                    <span class={`badge w-fit px-1.5 text-[10px] ${TIPO_PROC[s.tipo].color}`}>
+                      {TIPO_PROC[s.tipo].icono} {TIPO_PROC[s.tipo].label}
+                    </span>
+
+                    {s.doc ? (
+                      <Fragment>
+                        <a
+                          href={`/procedimientos/${s.doc.id}`}
+                          class="mt-1 block font-mono text-sm font-bold text-brand-600 hover:underline"
+                          title={s.doc.titulo}
+                        >
+                          {s.doc.codigoCorto}
                         </a>
-                        <span class="text-[11px] text-slate-500">v{d.version}</span>
                         <span class:list={[
-                          "badge text-[10px]",
-                          d.estado === "vigente" ? "bg-emerald-100 text-emerald-700" : estadoInfo(d.estado).color,
+                          "badge mt-1 w-fit text-[10px]",
+                          s.vigente ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
                         ]}>
-                          {estadoInfo(d.estado).icono} {estadoInfo(d.estado).label}
+                          {estadoInfo(s.doc.estado).icono} {estadoInfo(s.doc.estado).label}
                         </span>
-                      </div>
-                      <div class="mt-0.5 text-xs text-slate-700">{d.titulo}</div>
-                      {d.estado !== "vigente" && (
-                        <div class="mt-0.5 text-[11px] font-medium text-amber-700">
-                          ⚠ Todavía no aprobado: no se opera con esto.
-                        </div>
-                      )}
-                      {d.codigoInstitucional && (
-                        <div class="text-[10px] font-mono text-slate-400">{d.codigoInstitucional}</div>
-                      )}
-                    </li>
+                        {s.propio && (
+                          <span class="mt-1 text-[10px] font-medium text-sky-700">Propio de este equipo</span>
+                        )}
+                        {s.otros > 0 && (
+                          <span class="mt-1 text-[10px] text-slate-400">+{s.otros} más en la familia</span>
+                        )}
+                      </Fragment>
+                    ) : (
+                      <Fragment>
+                        <span class="mt-1 block text-sm font-bold text-red-700">Falta</span>
+                        {canJefe ? (
+                          <a
+                            href={`/procedimientos?nuevo=1&sistema=${rige.sistema}&tipo=${s.tipo}`}
+                            class="mt-1 text-[10px] font-medium text-red-700 underline"
+                          >
+                            Crear el {TIPO_PROC[s.tipo].label}
+                          </a>
+                        ) : (
+                          <span class="mt-1 text-[10px] text-red-600">Nadie lo ha redactado</span>
+                        )}
+                      </Fragment>
+                    )}
+
+                    <p class="mt-auto pt-2 text-[10px] leading-tight text-slate-500">{s.pregunta}</p>
+                  </li>
+                </Fragment>
+              ))}
+            </ol>
+          </div>
+
+          {faltanEnFamilia.length > 0 && (
+            <div class="mt-3 rounded-md border border-red-300 bg-red-50 p-3">
+              <div class="text-sm font-semibold text-red-800">
+                A esta familia le falta {textoFaltantes}.
+              </div>
+              <p class="mt-0.5 text-xs text-red-700">
+                El hueco no es de este equipo: es de
+                {familiaConteo && familiaConteo.total > 1
+                  ? ` los ${familiaConteo.total} equipos de ${juego?.label ?? ""} que comparten el juego`
+                  : " toda la familia"}.
+                Redactarlo una vez lo cierra para todos.
+              </p>
+              {canJefe && (
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {faltanEnFamilia.map((s) => (
+                    <a
+                      href={`/procedimientos?nuevo=1&sistema=${rige.sistema}&tipo=${s.tipo}`}
+                      class="btn-secondary btn-sm"
+                    >
+                      {TIPO_PROC[s.tipo].icono} Crear el {TIPO_PROC[s.tipo].label} de la familia
+                    </a>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
-          ))}
-        </div>
+          )}
+        </Fragment>
       )}
 
-      {!fueraDeServicio && rige.eop.length > 0 && (
+      {!fueraDeServicio && eopDeLaFamilia && (
         <p class="mt-3 text-xs text-slate-500">
           Si este equipo falla, el sistema abrirá la respuesta con
-          <strong class="mx-1">{rige.eop.find((p) => p.estado === "vigente")?.codigoCorto ?? rige.eop[0].codigoCorto}</strong>
+          <strong class="mx-1">{eopDeLaFamilia.codigoCorto}</strong>
           sin que nadie tenga que buscarlo.
         </p>
       )}

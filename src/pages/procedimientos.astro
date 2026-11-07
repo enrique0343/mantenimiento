@@ -504,8 +504,22 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
       modal.classList.add("hidden");
       modal.classList.remove("flex");
     };
-    $("nuevoBtn")?.addEventListener("click", abrir);
-    $("nuevoBtn2")?.addEventListener("click", abrir);
+    $("nuevoBtn")?.addEventListener("click", () => abrir());
+    $("nuevoBtn2")?.addEventListener("click", () => abrir());
+
+    // Llegada desde "falta el AOP de incendios" (cobertura o ficha del equipo):
+    // ?nuevo=1&tipo=aop&sistema=incendios abre el formulario ya apuntado al hueco,
+    // en vez de dejar al usuario frente a un filtro sin saber que hacer.
+    (() => {
+      const qs = new URLSearchParams(location.search);
+      if (qs.get("nuevo") !== "1") return;
+      const t = qs.get("tipo");
+      const sis = qs.get("sistema");
+      abrir();
+      if (t && $("n_tipo")) $("n_tipo").value = t;
+      if (sis && $("n_sistema")) $("n_sistema").value = sis;
+      pintarSemana();
+    })();
     $("n_cancel")?.addEventListener("click", cerrar);
     modal.addEventListener("click", (ev) => { if (ev.target === modal) cerrar(); });
     $("n_tipo")?.addEventListener("change", pintarSemana);

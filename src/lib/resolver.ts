@@ -12,7 +12,7 @@
 //   MOP  se interviene planificado  -> permiso, bloqueo, liberacion medida
 
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { activos, procedimientos, aopFicha, eopFicha, aopUmbrales } from "@/lib/schema";
+import { activos, procedimientos, procedimientoSistemas, aopFicha, eopFicha, aopUmbrales } from "@/lib/schema";
 
 export type Sistema = "electrico" | "hvac" | "gases" | "agua" | "incendios" | "ascensores" | "otro";
 export type Situacion = "falla" | "desviacion" | "preventivo" | "intervencion";
@@ -293,4 +293,119 @@ export async function cobertura(db: any) {
         cubierto: tipos.size > 0,
       };
     });
+}
+
+// ─── El juego de documentos por familia de equipo ────────────────────────────
+// "Todos los aires acondicionados deben aplicarse los mismos 5 documentos."
+// El juego no se arma equipo por equipo: se define una vez por familia (el
+// sistema critico) y todos sus equipos lo heredan. Un documento puede cubrir
+// varias familias — la ronda por turno las recorre todas.
+
+export const LOS_CINCO: Array<{ tipo: "scp" | "sop" | "aop" | "eop" | "mop"; label: string; pregunta: string }> = [
+  { tipo: "scp", label: "SCP · Configuración", pregunta: "¿Cómo está configurado y cuáles son sus valores normales?" },
+  { tipo: "sop", label: "SOP · Rutina",        pregunta: "¿Cómo se opera y verifica a diario?" },
+  { tipo: "aop", label: "AOP · Desviación",    pregunta: "¿Qué hacer si un valor se sale de rango?" },
+  { tipo: "eop", label: "EOP · Emergencia",    pregunta: "¿Qué hacer si ya falló?" },
+  { tipo: "mop", label: "MOP · Intervención",  pregunta: "¿Cómo se interviene sin dañar al paciente?" },
+];
+
+export interface SlotJuego {
+  tipo: "scp" | "sop" | "aop" | "eop" | "mop";
+  label: string;
+  pregunta: string;
+  documentos: ProcedimientoRige[];
+  cubierto: boolean;
+  vigente: boolean;
+}
+
+export interface JuegoFamilia {
+  sistema: Sistema;
+  label: string;
+  slots: SlotJuego[];
+  cubiertos: number;   // de 5
+  vigentes: number;    // de 5
+  completo: boolean;
+  faltantes: string[]; // etiquetas de los tipos que faltan
+}
+
+/**
+ * El juego de los cinco documentos de una familia. Incluye los que cubren esa
+ * familia aunque su sistema principal sea otro (procedimiento_sistemas).
+ */
+export async function juegoDeFamilia(db: any, sistema: Sistema, sucursalId?: number | null): Promise<JuegoFamilia> {
+  const filas = await db
+    .select({
+      id: procedimientos.id,
+      codigoCorto: procedimientos.codigoCorto,
+      codigoInstitucional: procedimientos.codigoInstitucional,
+      tipo: procedimientos.tipo,
+      sistema: procedimientos.sistema,
+      titulo: procedimientos.titulo,
+      version: procedimientos.version,
+      estado: procedimientos.estado,
+    })
+    .from(procedimientoSistemas)
+    .innerJoin(procedimientos, eq(procedimientos.id, procedimientoSistemas.procedimientoId))
+    .where(
+      and(
+        eq(procedimientoSistemas.sistema, sistema),
+        eq(procedimientos.activo, true),
+        sucursalId
+          ? or(isNull(procedimientos.sucursalId), eq(procedimientos.sucursalId, sucursalId))
+          : isNull(procedimientos.sucursalId),
+      ),
+    );
+
+  const slots: SlotJuego[] = LOS_CINCO.map((c) => {
+    const docs = filas.filter((f: any) => f.tipo === c.tipo);
+    return {
+      ...c,
+      documentos: docs,
+      cubierto: docs.length > 0,
+      vigente: docs.some((d: any) => d.estado === "vigente"),
+    };
+  });
+
+  const cubiertos = slots.filter((s) => s.cubierto).length;
+  return {
+    sistema,
+    label: SISTEMA_LABEL[sistema],
+    slots,
+    cubiertos,
+    vigentes: slots.filter((s) => s.vigente).length,
+    completo: cubiertos === 5,
+    faltantes: slots.filter((s) => !s.cubierto).map((s) => s.label),
+  };
+}
+
+/** El juego de todas las familias: el tablero de qué parte de la operación está gobernada. */
+export async function juegosDeTodasLasFamilias(db: any, sucursalId?: number | null): Promise<JuegoFamilia[]> {
+  const sistemas: Sistema[] = ["electrico", "hvac", "gases", "agua", "incendios", "ascensores"];
+  const out: JuegoFamilia[] = [];
+  for (const s of sistemas) out.push(await juegoDeFamilia(db, s, sucursalId));
+  return out.sort((a, b) => a.cubiertos - b.cubiertos || a.label.localeCompare(b.label, "es"));
+}
+
+/** Cuántos equipos vivos hay en cada familia (para pesar la brecha: 40 aires sin EOP duele más que 1). */
+export async function equiposPorFamilia(db: any): Promise<Record<string, { total: number; criticos: number }>> {
+  const todos = await db
+    .select({
+      nombre: activos.nombre,
+      categoria: activos.categoria,
+      rubro: activos.rubro,
+      sistema: activos.sistema,
+      criticidad: activos.criticidadOperacional,
+      estado: activos.estado,
+    })
+    .from(activos);
+  const acc: Record<string, { total: number; criticos: number }> = {};
+  for (const a of todos) {
+    if (a.estado === "baja") continue;
+    const sis = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro);
+    const e = acc[sis] ?? { total: 0, criticos: 0 };
+    e.total++;
+    if (a.criticidad === "alta") e.criticos++;
+    acc[sis] = e;
+  }
+  return acc;
 }
