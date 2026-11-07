@@ -12,6 +12,11 @@ const paths: Record<string, string[]> = {
   arrow: ["M4 12h16m-6-6 6 6-6 6"],
   report: ["M5 3h14v18H5Z", "M8 16v-4m4 4V8m4 8v-6"],
   book: ["M3 4h7l2 2 2-2h7v16h-7l-2 2-2-2H3Z", "M12 6v16"],
+  clipboard: ["M9 4h6v3H9Z", "M9 5.5H6v15.5h12V5.5h-3", "m9 13 2 2 4-4"],
+  clock: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z", "M12 7v5l3 3"],
+  alert: ["M12 3 2 20h20Z", "M12 10v4M12 17v.5"],
+  search: ["M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15Z", "m16 16 5 5"],
+  help: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z", "M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1.9-1.1 1.8M12 17v.5"],
 };
 ---
 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{(paths[name] ?? paths.equipment).map(d => <path d={d} />)}</svg>

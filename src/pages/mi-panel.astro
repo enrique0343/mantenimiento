@@ -29,7 +29,8 @@ let pctSiguiente = 100;
 
 if (!esMotorista) {
   misActivas = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos completas se pasan.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
