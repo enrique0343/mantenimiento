@@ -23,6 +23,11 @@ a{color:inherit;text-decoration:none;touch-action:manipulation}
 h1,h2,h3,p,ol{margin:0}
 :focus-visible{outline:2px solid var(--azul-cl);outline-offset:2px}
 .etq{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--azul)}
+/* Emergencia: el rojo va solo en la marca pequeña. */
+.etq.urgente::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:999px;background:var(--rojo);vertical-align:1px}
+.cod{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--azul)}
+.tag{display:inline-flex;align-items:center;min-height:22px;padding:0 9px;border:1px solid var(--filete);border-radius:999px;background:var(--blanco);font-size:12px;font-weight:600;color:var(--tinta2)}
+.tag.obl{border-color:var(--azul);color:var(--azul)}
 .oculto{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
 svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
@@ -87,8 +92,6 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .paso-tit{flex:1;min-width:0;line-height:1.2;padding-left:4px}
 .paso-tit strong{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .paso-tit span{display:block;font-size:13px;color:var(--tinta2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.paso-der{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-.reloj{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
 .segs{display:flex;gap:3px;padding:0 var(--gd) 8px var(--gi);background:var(--blanco);border-bottom:1px solid var(--filete)}
 .segs i{flex:1;height:5px;background:var(--papel)}
 .segs i.h{background:var(--azul)}
@@ -97,7 +100,6 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .paso-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
 .critico{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--rojo)}
 .critico::before{content:"";width:8px;height:8px;background:var(--rojo);border-radius:999px}
-.min{font-size:14px;color:var(--tinta2)}
 .paso-cuerpo h1{font-size:28px;line-height:1.14;font-weight:600;letter-spacing:-.015em;text-wrap:balance;overflow-wrap:anywhere}
 .paso-cuerpo h1.largo{font-size:21px;line-height:1.22;letter-spacing:0}
 .ayuda{font-size:16px;color:var(--tinta2)}
@@ -105,6 +107,8 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .lect-caja input{flex:1;min-width:0;width:100%;min-height:72px;padding:0 14px;border:0;background:none;font-size:44px;font-weight:600;font-variant-numeric:tabular-nums;outline:none;border-radius:0}
 .lect-caja span{font-size:20px;font-weight:600;color:var(--tinta2)}
 .lect-caja.mini input{min-height:52px;font-size:24px}
+/* Una lectura de liberación sin rango se escribe: «Sin fugas con espuma». */
+.lect-caja.texto input{min-height:60px;font-size:22px}
 .lect-info{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font-size:15px;color:var(--tinta2)}
 .lect-info b{font-weight:600;color:var(--tinta)}
 .lect-estado{min-height:24px;font-weight:600}
@@ -128,6 +132,14 @@ input.campo,select.campo{min-height:48px}
 .simple h1{font-size:26px;line-height:1.14;font-weight:600;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
 .simple p{color:var(--tinta2)}
 .bloque-cierre{margin-top:auto;padding:12px var(--gd) calc(12px + var(--gb)) var(--gi);display:grid;gap:8px;background:var(--papel)}
+/* Los permisos de una intervención, antes de empezar */
+.permisos{display:grid}
+.permisos>.etq{padding-bottom:4px}
+.perm{display:flex;align-items:center;gap:10px;width:100%;min-height:50px;padding:6px 0;border-top:1px solid var(--filete);text-align:left}
+.perm:active{background:var(--panel)}
+.perm .txt{flex:1;min-width:0}
+.perm strong{display:block;font-weight:600;overflow-wrap:anywhere}
+.perm small{display:block;font-size:13px;color:var(--tinta2);overflow-wrap:anywhere}
 
 /* Hoja inferior */
 #hoja{position:absolute;inset:0;z-index:20;display:flex;align-items:flex-end;background:rgba(30,33,66,.6)}
@@ -157,5 +169,7 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .final{gap:6px}
   .final h1{font-size:24px}
   .dato{padding:5px 0}
+  .perm{min-height:44px}
+  .lect-caja.texto input{min-height:52px}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}

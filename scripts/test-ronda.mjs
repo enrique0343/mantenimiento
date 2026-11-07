@@ -179,28 +179,38 @@ try {
   ok(co.ok && one('SELECT orden_id o FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', eid, cuartos.id).o === co.datos.ordenId, 'El correctivo de una parada que pide orden queda ligado');
   ok(all('SELECT id FROM aop_eventos WHERE ronda_punto_id=?', cuartos.id).length === 0, 'Bitácora y cuartos técnicos no abren AOP');
 
-  // Por sede
-  const sede = async (data, rol = 'admin') => { const c = ctx('/api/ronda-turno/puntos', { method: 'PUT', data, rol }); const r = await app.puntos.PUT(c); return { status: r.status, body: await r.json().catch(() => ({})) }; };
-  let s = await sede({ sucursalId: 2 }, 'tecnico');
+  // Por sede: el recorrido propio copia el modelo y deja de recibir sus cambios
+  const pedir = (metodo) => async (data, rol = 'admin') => { const c = ctx('/api/ronda-turno/puntos', { method: metodo, data, rol }); const r = await app.puntos[metodo](c); const t = await r.text(); let body; try { body = JSON.parse(t); } catch { body = t; } return { status: r.status, body }; };
+  const put = pedir('PUT'), patch = pedir('PATCH'), post = pedir('POST');
+  let s = await put({ accion: 'crear_propio', sucursalId: 2 }, 'tecnico');
   ok(s.status === 403, 'Solo jefatura ajusta el recorrido');
-  s = await sede({ sucursalId: 2, turnos: ['06:00', '14:00'] });
-  ok(s.status === 200 && s.body.ronda.sucursal_id !== null, JSON.stringify(s.body));
-  const r2 = one("SELECT id FROM rondas WHERE sucursal_id=2").id;
-  ok(one('SELECT count(*) n FROM ronda_puntos WHERE ronda_id=?', r2).n === 23, 'El recorrido propio copia las paradas del modelo');
+  ok((await put({ accion: 'crear_propio', sucursalId: 2 }, 'visualizador')).status === 403, 'El visualizador tampoco');
+  s = await put({ sucursalId: 2, turnos: ['06:00'] });
+  igual(s.body.error, 'Acción desconocida: usa «turnos», «crear_propio» o «hace_ronda».', 'Un pedido sin acción se contesta con una frase, no con un objeto');
+  const modeloId = one("SELECT id FROM rondas WHERE codigo='RONDA-TURNO'").id;
+  const ordenDe = (rid) => all('SELECT id, etiqueta FROM ronda_puntos WHERE ronda_id=? ORDER BY orden, id', rid);
+  const modeloAntes = ordenDe(modeloId);
+  faults.statement = (q) => /INSERT INTO ronda_vigencias/.test(q);
+  await assert.rejects(() => put({ accion: 'crear_propio', sucursalId: 4 }));
+  ok(!one('SELECT id FROM rondas WHERE sucursal_id=4') && one('SELECT count(*) n FROM ronda_puntos').n === modeloAntes.length, 'Crear el recorrido propio es todo o nada');
+  s = await put({ accion: 'crear_propio', sucursalId: 2 });
+  ok(s.status === 200 && s.body.ronda.sucursalId === 2 && s.body.ronda.activa, JSON.stringify(s.body));
+  const r2 = s.body.ronda.id;
+  igual(ordenDe(r2).map((x) => x.etiqueta), modeloAntes.map((x) => x.etiqueta), 'El recorrido propio copia las paradas del modelo, en su orden');
+  ok((await put({ accion: 'crear_propio', sucursalId: 2 })).body.yaExistia && all('SELECT id FROM rondas WHERE sucursal_id=2').length === 1, 'Pedirlo otra vez no lo duplica');
+  s = await put({ accion: 'turnos', rondaId: r2, turnos: ['06:00', '14:00'] });
+  ok(s.status === 200 && s.body.aplicaDesde, JSON.stringify(s.body));
   const h2 = await hoy(2);
   ok(h2.ronda.turnos.join() === '06:00,14:00', 'Y usa sus propios turnos');
-  if (h2.ronda.turno === c2.turno) ok(h2.ronda.puntos[0].id < 1000 && h2.ronda.ejecucionId, 'La ronda ya abierta conserva lo que decía al abrir');
-  await sede({ sucursalId: 2, activa: false });
-  ok((await hoy(2)).ronda === null, 'Una sede que no hace ronda queda fuera de la obligación');
-  filas = await app.rt.tableroRondas(db, { fecha: '2000-01-01', turno: '06:00' });
-  igual(fila(2).estado, 'no_aplica');
-  await sede({ sucursalId: 2, activa: true });
+  const delModelo = new Set(modeloAntes.map((x) => x.id));
+  if (h2.ronda.turno === c2.turno) ok(h2.ronda.ejecucionId && h2.ronda.puntos.every((p) => delModelo.has(p.id)), 'La ronda ya abierta conserva lo que decía al abrir');
 
   // Revisión semanal
   const lunes = (d) => { const t = new Date(`${d}T12:00:00Z`); return new Date(t.getTime() - ((t.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10); };
   const hoyFecha = new Date(Date.now() - 6 * 3600000).toISOString().slice(0, 10);
   sqlite.prepare('UPDATE rondas SET vigente_desde=?').run('2000-01-01');
-  const estaSemana = lunes(hoyFecha);
+  // La semana del turno que corre: el lunes de madrugada todavía es la del domingo.
+  const estaSemana = lunes(c1.fecha);
   const pasada = new Date(Date.parse(`${estaSemana}T12:00:00Z`) - 7 * 86400000).toISOString().slice(0, 10);
   const firmar = async (data, rol, id) => { const c = ctx('/api/ronda-turno/revision', { method: 'POST', data, rol }); const r = await app.revision.POST(c); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   let v = await firmar({ sucursalId: 1, semana: estaSemana }, 'jefe');
@@ -225,5 +235,166 @@ try {
   ok(v.status === 403 && /otra persona/.test(v.body.error), 'Quien hizo rondas esa semana no la revisa');
   v = await firmar({ sucursalId: 3, semana: pasada, observaciones: 'Revisada' }, 'admin');
   ok(v.status === 200, 'Otra jefatura sí');
+
+  // ── Configurar la ronda: cada parada se edita completa ─────────────────────
+  const parada = (id) => one('SELECT * FROM ronda_puntos WHERE id=?', id);
+  const tempPropia = one("SELECT id FROM ronda_puntos WHERE ronda_id=? AND etiqueta='Quirófanos · temperatura'", r2).id;
+  ok((await patch({ id: tempPropia, maxEsperado: 30 }, 'tecnico')).status === 403, 'El técnico no edita paradas');
+  ok((await post({ rondaId: r2, sistema: 'otro', etiqueta: 'Parada de prueba' }, 'visualizador')).status === 403, 'Ni las agrega');
+  const sop = one("SELECT id FROM procedimientos WHERE tipo='sop' LIMIT 1").id;
+  const otroAop = one("SELECT id FROM procedimientos WHERE tipo='aop' AND id <> ? ORDER BY id LIMIT 1", parada(tempPropia).aop_procedimiento_id).id;
+  const nuevo = { etiqueta: 'Quirófanos · temperatura de sala', instruccion: 'Lee el termómetro de pared de cada quirófano.', sistema: 'minisplit', unidad: '°F', minEsperado: 18, maxEsperado: 24, aopProcedimientoId: otroAop, critico: false, fuente: 'SCP-HVAC-01 v2', lineaSop: 6, minutosActuar: 30, minutosEscalar: 90 };
+  const columna = { etiqueta: 'etiqueta', instruccion: 'instruccion', sistema: 'sistema', unidad: 'unidad', minEsperado: 'min_esperado', maxEsperado: 'max_esperado', aopProcedimientoId: 'aop_procedimiento_id', critico: 'critico', fuente: 'fuente', lineaSop: 'linea_sop', minutosActuar: 'minutos_actuar', minutosEscalar: 'minutos_escalar' };
+  const antesTemp = parada(tempPropia);
+  let e = await patch({ id: tempPropia, ...nuevo });
+  ok(e.status === 200, JSON.stringify(e.body));
+  for (const [k, col] of Object.entries(columna)) {
+    igual(parada(tempPropia)[col], typeof nuevo[k] === 'boolean' ? Number(nuevo[k]) : nuevo[k], `Se edita ${k}`);
+    igual(e.body.cambios[k], { antes: typeof nuevo[k] === 'boolean' ? !!antesTemp[col] : antesTemp[col], despues: nuevo[k] }, `La auditoría de ${k} lleva lo de antes y lo de después`);
+  }
+  ok(!('activo' in e.body.cambios) && !('requiereValor' in e.body.cambios), 'Lo que no cambió no se anota');
+  e = await patch({ id: tempPropia, requiereValor: false, valorEsperadoTexto: '  Sala entre 18 y 24 °C  ' });
+  let t = parada(tempPropia);
+  ok(e.status === 200 && t.requiere_valor === 0 && t.min_esperado === null && t.max_esperado === null && t.unidad === null && t.valor_esperado_texto === 'Sala entre 18 y 24 °C', 'Pasar a conforme guarda el texto y no deja rango ni unidad escondidos');
+  e = await patch({ id: tempPropia, requiereValor: true, minEsperado: 20, maxEsperado: 22, unidad: '°C' });
+  t = parada(tempPropia);
+  ok(e.status === 200 && t.requiere_valor === 1 && t.valor_esperado_texto === null && t.min_esperado === 20 && t.unidad === '°C', 'Volver a número no deja el texto esperado');
+  e = await patch({ id: tempPropia, instruccion: '', fuente: null });
+  ok(e.status === 200 && parada(tempPropia).instruccion === null && parada(tempPropia).fuente === null, 'Un texto vacío queda vacío');
+  e = await patch({ id: tempPropia, activo: false });
+  ok(e.status === 200 && parada(tempPropia).activo === 0, 'Una parada se desactiva');
+  e = await patch({ id: tempPropia, activo: true, critico: true });
+  ok(e.status === 200 && parada(tempPropia).activo === 1 && parada(tempPropia).critico === 1, 'Y se vuelve a activar');
+  e = await patch({ id: tempPropia, critico: true });
+  ok(e.status === 200 && Object.keys(e.body.cambios).length === 0, 'Guardar sin cambios no anota nada');
+
+  // El rango se valida con lo que va a quedar, no con lo que había
+  e = await patch({ id: tempPropia, minEsperado: null, maxEsperado: 15 });
+  ok(e.status === 200 && parada(tempPropia).min_esperado === null && parada(tempPropia).max_esperado === 15, 'Vaciar el mínimo y bajar el máximo en un solo guardado se acepta');
+  e = await patch({ id: tempPropia, minEsperado: 16 });
+  ok(e.status === 400 && e.body.error === 'El mínimo no puede ser mayor que el máximo.' && parada(tempPropia).min_esperado === null, 'Un mínimo nuevo contra el máximo que quedó se rechaza y no guarda nada');
+  e = await patch({ id: tempPropia, minEsperado: 10, maxEsperado: 5 });
+  ok(e.status === 400 && parada(tempPropia).max_esperado === 15, 'Dos límites nuevos al revés se rechazan');
+  ok((await patch({ id: tempPropia, minEsperado: 20, maxEsperado: 22 })).status === 200, 'Y un rango correcto se guarda');
+
+  // Los errores llegan como una frase que la pantalla muestra tal cual
+  for (const [data, msg] of [
+    [{ id: tempPropia, minEsperado: 'veinte' }, 'El mínimo tiene que ser un número.'],
+    [{ id: tempPropia, etiqueta: 'ab' }, 'Escribe qué se verifica: al menos 3 caracteres.'],
+    [{ id: tempPropia, sistema: 'cocina' }, 'Elige la familia de la parada.'],
+    [{ id: tempPropia, lineaSop: 12 }, 'La línea del SOP va de 1 a 11.'],
+    [{ id: tempPropia, minutosActuar: 0 }, 'Minutos para actuar: tienen que ser más de cero.'],
+    [{ id: tempPropia, minutosActuar: 120 }, 'Los minutos para escalar no pueden ser menos que los minutos para actuar.'],
+    [{ id: tempPropia, aopProcedimientoId: sop }, 'Ese documento no es un AOP: elige uno de la lista.'],
+    [{ id: tempPropia, aopProcedimientoId: 999999 }, 'Ese AOP no existe.'],
+    [{ id: tempPropia, minimo: 3 }, 'Campo desconocido: minimo.'],
+    [{ id: 999999, critico: true }, 'La parada no existe.'],
+    [null, 'No se entendió lo que se envió.'],
+  ]) { e = await patch(data); ok(e.status >= 400 && e.body.error === msg, `Error tal cual: «${msg}» (${JSON.stringify(e.body)})`); }
+
+  // Subir y bajar; borrar no: desactivar
+  const ids = () => ordenDe(r2).map((x) => x.id);
+  const o0 = ids(), segunda = o0[1];
+  ok((await patch({ id: segunda, mover: 'subir' })).status === 200 && ids()[0] === segunda && ids()[1] === o0[0], 'Subir la pone un puesto arriba');
+  igual(all('SELECT orden FROM ronda_puntos WHERE ronda_id=? ORDER BY orden, id', r2).map((x) => x.orden), o0.map((_, k) => k + 1), 'El recorrido queda numerado de corrido');
+  e = await patch({ id: segunda, mover: 'subir' });
+  ok(e.status === 409 && e.body.error === 'Ya es la primera parada del recorrido.', 'La primera no sube');
+  ok((await patch({ id: segunda, mover: 'bajar' })).status === 200, 'Bajar');
+  igual(ids(), o0, 'Bajar la devuelve a su puesto');
+  e = await patch({ id: o0.at(-1), mover: 'bajar' });
+  ok(e.status === 409 && e.body.error === 'Ya es la última parada del recorrido.', 'La última no baja');
+  igual((await patch({ id: segunda, mover: 'arriba' })).body.error, 'Mover: «subir» o «bajar».');
+  igual(ordenDe(modeloId), modeloAntes, 'Mover en el recorrido propio no toca el modelo');
+  ok((await patch({ id: segunda, activo: false })).status === 200 && parada(segunda).activo === 0, 'Para quitar una parada se desactiva');
+
+  // Agregar al final, con todos sus campos
+  e = await post({ rondaId: r2, sistema: 'agua', etiqueta: 'Cisterna de reserva · nivel', requiereValor: true, unidad: '%', minEsperado: 40, maxEsperado: null, valorEsperadoTexto: 'no aplica a una numérica', aopProcedimientoId: otroAop, critico: true, fuente: 'SCP-AGU-01', lineaSop: 7, minutosActuar: 60, minutosEscalar: 240 });
+  ok(e.status === 200 && ids().at(-1) === e.body.punto.id, 'La parada nueva queda al final del recorrido');
+  const cisterna = e.body.punto;
+  ok(cisterna.valorEsperadoTexto === null && cisterna.unidad === '%' && cisterna.minEsperado === 40 && cisterna.minutosEscalar === 240 && cisterna.lineaSop === 7 && cisterna.activo === true, 'Con todos sus campos');
+  igual((await post({ rondaId: r2, etiqueta: 'Sin familia' })).body.error, 'Elige la familia de la parada.');
+  igual((await post({ rondaId: r2, sistema: 'agua' })).body.error, 'Escribe qué se verifica.');
+  igual((await post({ rondaId: r2, sistema: 'agua', etiqueta: 'Rango al revés', requiereValor: true, minEsperado: 5, maxEsperado: 1 })).body.error, 'El mínimo no puede ser mayor que el máximo.');
+  igual((await post({ rondaId: 999999, sistema: 'agua', etiqueta: 'Recorrido que no existe' })).body.error, 'El recorrido no existe.');
+  const abierta = await hoy(2);
+  if (abierta.ronda.turno === c2.turno) ok(abierta.ronda.puntos.some((p) => p.texto === 'Quirófanos · temperatura') && !abierta.ronda.puntos.some((p) => p.id === cisterna.id), 'La ronda que ya empezó conserva lo que decía al abrir');
+
+  // Turnos del modelo
+  for (const [turnos, msg] of [
+    [['06:00', '25:00'], 'Hora inválida: «25:00». Usa HH:MM, por ejemplo 06:00.'],
+    [['6.00'], 'Hora inválida: «6.00». Usa HH:MM, por ejemplo 06:00.'],
+    [[], 'Escribe al menos un turno, por ejemplo 06:00.'],
+  ]) { s = await put({ accion: 'turnos', rondaId: modeloId, turnos }); ok(s.status === 400 && s.body.error === msg, `La hora inválida llega a la pantalla: «${msg}»`); }
+
+  // Esta sede no hace ronda: sin copiar el modelo, y entra en el turno que todavía no empezó.
+  // Lo esperado se calcula aquí, aparte del código, para que valga a cualquier hora de RELOJ_PRUEBA.
+  const masDias = (f, k) => new Date(Date.parse(`${f}T12:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+  const inicio = (f, tt) => Date.parse(`${f}T${tt}:00-06:00`);
+  const proximo = (lista) => { const ya = Date.now(), f0 = new Date(ya - 6 * 3600000).toISOString().slice(0, 10); for (const f of [masDias(f0, -1), f0, masDias(f0, 1)]) for (const tt of lista) if (inicio(f, tt) >= ya) return { fecha: f, turno: tt }; };
+  const despuesDe = (x) => new Date(inicio(x.fecha, x.turno) + 30 * 60000).toISOString();
+  const sigDe3 = proximo(['06:00', '14:00', '22:00']);
+  s = await put({ accion: 'hace_ronda', sucursalId: 3, haceRonda: false });
+  ok(s.status === 200 && s.body.sede.haceRonda === false, JSON.stringify(s.body));
+  igual(s.body.aplicaDesde, sigDe3, 'Entra en el turno que todavía no empezó');
+  igual(s.body.cambios, { haceRonda: { antes: true, despues: false } });
+  ok(!one('SELECT id FROM rondas WHERE sucursal_id=3') && one('SELECT hace_ronda h FROM sucursales WHERE id=3').h === 0, 'Sin copiar el modelo');
+  const vig = one('SELECT * FROM ronda_vigencias WHERE sucursal_id=3');
+  ok(vig.hace_ronda_antes === 1 && vig.usuario_id === 1 && Date.parse(vig.hasta) <= Date.now(), 'Queda escrito lo que regía, cuándo cambió y quién lo cambió');
+  assert.throws(() => sqlite.exec('UPDATE ronda_vigencias SET hace_ronda_antes=0')); assert.throws(() => sqlite.exec('DELETE FROM ronda_vigencias')); ok(true, 'Eso no se edita ni se borra');
+  ok((await hoy(3)).ronda?.turno === c3.turno, 'La ronda del turno que ya empezó sigue en el celular');
+  filas = await app.rt.tableroRondas(db);
+  ok(fila(3).haceRonda && fila(3).estado === 'completa', 'Y en el tablero cuenta como siempre');
+  filas = await app.rt.tableroRondas(db, sigDe3);
+  ok(!fila(3).haceRonda && fila(3).estado === 'no_aplica', 'Desde el turno siguiente el tablero no se la exige');
+  let sem = await app.rt.resumenSemana(db, 3, pasada);
+  ok(sem.esperadas === 21 && !sem.haceRonda, `La semana pasada se revisa con lo que regía entonces (${sem.esperadas} esperadas)`);
+
+  // Turnos del modelo: entran en el turno que todavía no empezó y no reescriben la semana
+  const nuevoTurno = proximo(['06:00', '18:00']);
+  s = await put({ accion: 'turnos', rondaId: modeloId, turnos: ['18:00', '6:00', '18:00'] });
+  ok(s.status === 200 && s.body.ronda.turnos === '["06:00","18:00"]', '«6:00» es 06:00, sin repetidos y en orden');
+  igual(s.body.aplicaDesde, nuevoTurno, 'Los turnos nuevos entran en el turno que todavía no empezó');
+  const cambioMs = Date.parse(one('SELECT hasta FROM ronda_vigencias WHERE ronda_id=?', modeloId).hasta);
+  igual(s.body.cambios.turnos, { antes: ['06:00', '14:00', '22:00'], despues: ['06:00', '18:00'] }, 'La auditoría lleva los turnos de antes y los de después');
+  ok(one('SELECT turnos_antes t FROM ronda_vigencias WHERE ronda_id=?', modeloId).t === '["06:00","14:00","22:00"]', 'Lo que regía queda escrito');
+  ok((await hoy(4)).ronda.turnos.join() === '06:00,18:00', 'Las sedes que usan el modelo reciben sus turnos');
+  ok((await hoy(2)).ronda.turnos.join() === '06:00,14:00', 'El recorrido propio no recibe cambios del modelo');
+  sem = await app.rt.resumenSemana(db, 1, pasada);
+  ok(sem.esperadas === 21 && sem.turnos.join() === '06:00,14:00,22:00', `La semana pasada se revisa con los turnos que regían (${sem.turnos.join()})`);
+  const dias = Array.from({ length: 7 }, (_, k) => masDias(estaSemana, k));
+  const viejos = ['06:00', '14:00', '22:00'], nuevos = ['06:00', '18:00'];
+  const filasSemana = [...new Set([...viejos, ...nuevos])].sort().filter((tt) => dias.some((f) => (viejos.includes(tt) && inicio(f, tt) < cambioMs) || (nuevos.includes(tt) && inicio(f, tt) >= cambioMs) || (f === c1.fecha && tt === c1.turno)));
+  igual((await app.rt.resumenSemana(db, 1, estaSemana)).turnos, filasSemana, 'Esta semana se ven los turnos que rigieron cada día, ni más ni menos');
+
+  // Ya en el turno nuevo del modelo
+  fijarReloj(despuesDe(nuevoTurno));
+  ok((await hoy(3)).ronda === null, 'En el turno siguiente el celular no le ofrece ronda a la sede que no hace ronda');
+  [x] = await enviar([op('ronda.iniciar', new Date().toISOString(), { sucursalId: 3, ...nuevoTurno })]);
+  ok(!x.ok && !one('SELECT id FROM ronda_ejecuciones WHERE sucursal_id=3 AND fecha=? AND turno=?', nuevoTurno.fecha, nuevoTurno.turno), 'Y el servidor no le abre una');
+  ok(await app.rt.rondaDeSede(db, 3, { fecha: c3.fecha, turno: c3.turno }), 'Un turno que ya empezó se juzga con lo que regía al empezar');
+  filas = await app.rt.tableroRondas(db);
+  ok(fila(3).turno === nuevoTurno.turno && fila(3).estado === 'no_aplica' && !fila(3).haceRonda, 'En el tablero no se le exige');
+  ok(fila(4).turno === nuevoTurno.turno && fila(4).estado === 'sin_iniciar' && fila(4).haceRonda, 'El turno nuevo del modelo ya se exige');
+  const lunesDe = (d) => lunes(d);
+  sem = await app.rt.resumenSemana(db, 1, lunesDe(nuevoTurno.fecha));
+  const quitadas = sem.celdas.filter((c) => ['14:00', '22:00'].includes(c.turno) && inicio(c.fecha, c.turno) > cambioMs && inicio(c.fecha, c.turno) < Date.now());
+  ok(quitadas.every((c) => c.estado === 'no_aplica'), `Los turnos que se quitaron no salen como «no se hizo» después del cambio (${quitadas.length})`);
+  const celda = (r, x) => r.celdas.find((c) => c.fecha === x.fecha && c.turno === x.turno)?.estado ?? 'no_aplica';
+  ok(celda(await app.rt.resumenSemana(db, 3, lunesDe(c3.fecha)), c3) === 'completa', 'La sede que no hace ronda: lo que ya hizo se sigue viendo');
+  ok(celda(await app.rt.resumenSemana(db, 3, lunesDe(nuevoTurno.fecha)), nuevoTurno) === 'no_aplica', 'Y lo de después no se le exige');
+  const h2b = await hoy(2);
+  ok(!h2b.ronda.ejecucionId, `El recorrido propio está en un turno que todavía no se abre (${h2b.ronda.fecha} ${h2b.ronda.turno})`);
+  ok(h2b.ronda.puntos.some((p) => p.texto === nuevo.etiqueta && p.min === 20 && p.max === 22) && !h2b.ronda.puntos.some((p) => p.id === segunda) && h2b.ronda.puntos.at(-1).id === cisterna.id, 'La ronda que todavía no empezó trae lo editado, sin la desactivada y con la nueva al final');
+  igual(h2b.ronda.puntos.map((p) => p.id), all('SELECT id FROM ronda_puntos WHERE ronda_id=? AND activo=1 ORDER BY orden, id', r2).map((x) => x.id), 'Solo las activas, en el orden del recorrido');
+
+  const vuelve = proximo(['06:00', '18:00']);
+  s = await put({ accion: 'hace_ronda', sucursalId: 3, haceRonda: true });
+  igual(s.body.aplicaDesde, vuelve, 'Volver a hacer ronda también entra en el turno que todavía no empezó');
+  ok((await hoy(3)).ronda === null, 'El turno de ahora sigue como estaba');
+  ok((await app.rt.resumenSemana(db, 3, pasada)).esperadas === 21, 'Dos cambios seguidos no borran lo que se debía antes');
+  fijarReloj(despuesDe(vuelve));
+  ok((await hoy(3)).ronda?.turno === vuelve.turno, 'Y en el turno siguiente vuelve la ronda');
+  igual(app.rt.vigenteAl([{ hasta: '2026-01-02T00:00:00Z', antes: 'b' }, { hasta: '2026-01-01T00:00:00Z', antes: 'a' }], 'c', Date.parse('2025-12-31T00:00:00Z')), 'a', 'Rige lo de antes del primer cambio posterior');
+  igual(app.rt.vigenteAl([{ hasta: '2026-01-01T00:00:00Z', antes: 'a' }], 'c', Date.parse('2026-01-01T00:00:00Z')), 'c', 'Un turno que empieza en el momento del cambio ya entra con lo nuevo');
   console.log(`PASS test-ronda: ${casos} casos; rutas y migraciones reales, sin red.`);
 } finally { await f.close(); }

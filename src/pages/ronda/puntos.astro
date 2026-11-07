@@ -6,350 +6,680 @@
 // los cilindros de reserva, la presión del sistema de incendios. El volumen
 // los deja «en azul» y aquí es donde se llenan. Una parada sin valor normal
 // nunca avisa, y eso se dice en pantalla en lugar de disimularlo.
+//
+// Aquí se edita todo el recorrido: cada parada completa, su orden, los turnos y
+// si una sede hace ronda. La pantalla dice siempre qué recorrido se edita.
+// Guardar no recarga la página: el servidor vuelve a pintar la tabla y solo esa
+// parte se reemplaza, así que nada de lo que se está escribiendo se pierde.
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { asc, eq, inArray } from "drizzle-orm";
-import { puedeConfigurarRondas, rangoNormal } from "@/lib/ronda-turno";
+import {
+  FAMILIAS_RONDA,
+  cambiosDeSede,
+  cambiosDeTurnos,
+  inicioTurno,
+  nombreRecorrido,
+  parsearTurnos,
+  puedeConfigurarRondas,
+  rangoNormal,
+  recorridoDeSede,
+  siguienteTurno,
+  turnoActual,
+  vigenteAl,
+} from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
-import { sistemaInfo } from "@/lib/procedimientos";
-import { procedimientos, rondaPuntos, rondas, sucursales } from "@/lib/schema";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { aopUmbrales, procedimientos, rondaPuntos, rondaVigencias, rondas, sucursales } from "@/lib/schema";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (!puedeConfigurarRondas(user.rol)) return Astro.redirect("/ronda");
 
 const db = getDb(Astro);
-// El modelo o el recorrido propio de una sede. Sin recorrido propio, la sede hereda el modelo.
-const rondasTodas = await db.select().from(rondas).orderBy(asc(rondas.id));
-const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
-const pedida = Number(new URL(Astro.request.url).searchParams.get("ronda"));
-const ronda = rondasTodas.find((r) => r.id === pedida) ?? rondasTodas.find((r) => r.sucursalId == null) ?? rondasTodas[0];
-const puntos = ronda
-  ? await db.select().from(rondaPuntos).where(eq(rondaPuntos.rondaId, ronda.id)).orderBy(asc(rondaPuntos.orden))
-  : [];
+const [rondasTodas, sedesTodas, vigencias, aopsDisponibles, umbrales] = await db.batch([
+  db.select().from(rondas).orderBy(asc(rondas.id)),
+  db.select({ id: sucursales.id, nombre: sucursales.nombre, activa: sucursales.activa, haceRonda: sucursales.haceRonda }).from(sucursales).orderBy(asc(sucursales.nombre)),
+  db.select().from(rondaVigencias),
+  // Los AOP que pueden regir una parada.
+  db.select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo }).from(procedimientos).where(eq(procedimientos.tipo, "aop")).orderBy(asc(procedimientos.codigoCorto)),
+  db.select({
+    procedimientoId: aopUmbrales.procedimientoId, actuar: aopUmbrales.minutosParaActuar, escalar: aopUmbrales.minutosParaEscalar,
+    ubicacionId: aopUmbrales.ubicacionId, activoId: aopUmbrales.activoId, variableId: aopUmbrales.variableId,
+  }).from(aopUmbrales).where(eq(aopUmbrales.activo, true)).orderBy(asc(aopUmbrales.id)),
+]);
 
+// El modelo o el recorrido propio de una sede. Sin recorrido propio, la sede usa el modelo.
+const sedes = sedesTodas.filter((s) => s.activa);
+const nombreSede = (id: number | null) => sedesTodas.find((s) => s.id === id)?.nombre ?? null;
+const modelo = rondasTodas.find((r) => r.sucursalId == null) ?? null;
+const pedida = Number(new URL(Astro.request.url).searchParams.get("ronda"));
+const ronda = rondasTodas.find((r) => r.id === pedida) ?? modelo ?? rondasTodas[0] ?? null;
+const esModelo = ronda?.sucursalId == null;
+const nombreActual = ronda ? nombreRecorrido(ronda, nombreSede(ronda.sucursalId)) : "Sin recorrido";
+const queEdita = !ronda
+  ? "No hay recorrido configurado"
+  : esModelo
+    ? "Modelo: lo usan todas las sedes sin recorrido propio"
+    : `${nombreActual}: ya no recibe cambios del modelo`;
+const propiaDe = (sedeId: number) => rondasTodas.find((r) => r.sucursalId === sedeId) ?? null;
+const usanModelo = sedes.filter((s) => !propiaDe(s.id));
+const CAMBIO = "Un cambio entra en la ronda del turno que todavía no empezó; la ronda que ya empezó conserva lo que decía al abrir.";
+
+const puntos = ronda
+  ? await db.select().from(rondaPuntos).where(eq(rondaPuntos.rondaId, ronda.id)).orderBy(asc(rondaPuntos.orden), asc(rondaPuntos.id))
+  : [];
 const idsAop = [...new Set(puntos.map((p) => p.aopProcedimientoId).filter((x): x is number => x != null))];
 const aops = idsAop.length
-  ? await db
-      .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto })
-      .from(procedimientos)
-      .where(inArray(procedimientos.id, idsAop))
+  ? await db.select({ id: procedimientos.id, codigo: procedimientos.codigoCorto }).from(procedimientos).where(inArray(procedimientos.id, idsAop))
   : [];
 const mapaAop = new Map(aops.map((a) => [a.id, a.codigo]));
 
-// Los AOP disponibles, para asignarlos a una parada nueva
-const aopsDisponibles = await db
-  .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema })
-  .from(procedimientos)
-  .where(eq(procedimientos.tipo, "aop"))
-  .orderBy(asc(procedimientos.codigoCorto));
+// Los plazos del AOP, para decir qué pasa si la parada no trae los suyos. Como en la ronda:
+// manda el umbral sin sala, equipo ni variable; si no hay, el primero.
+const generico = (u: (typeof umbrales)[number]) => u.ubicacionId == null && u.activoId == null && u.variableId == null;
+const plazosAop: Record<number, { actuar: number | null; escalar: number | null }> = {};
+for (const u of [...umbrales.filter(generico), ...umbrales.filter((x) => !generico(x))]) {
+  plazosAop[u.procedimientoId] ??= { actuar: u.actuar ?? null, escalar: u.escalar ?? null };
+}
+
+// Los turnos de este recorrido y, si cambiaron a mitad de un turno, desde cuándo rigen.
+const turnosRonda = ronda ? parsearTurnos(ronda.turnos) : [];
+const fechaTurno = (t: { fecha: string; turno: string }) => `el turno ${t.turno} del ${fmtFechaSoloCompacta(t.fecha)}`;
+function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
+  return [...lista].sort((a, b) => b.hasta.localeCompare(a.hasta))[0] ?? null;
+}
+let turnosPendientes: { rigen: string[]; desde: string } | null = null;
+if (ronda) {
+  const t = turnoActual(turnosRonda);
+  const cambios = cambiosDeTurnos(vigencias, ronda.id);
+  const rigen = vigenteAl(cambios, turnosRonda, inicioTurno(t.fecha, t.turno));
+  const ultimo = ultimoCambio(cambios);
+  if (ultimo && rigen.join() !== turnosRonda.join()) turnosPendientes = { rigen, desde: fechaTurno(siguienteTurno(turnosRonda, Date.parse(ultimo.hasta))) };
+}
+
+// Cada sede: qué recorrido usa, si hace ronda y, si se acaba de cambiar, desde qué turno entra.
+const filasSede = sedes.map((s) => {
+  const propia = propiaDe(s.id);
+  const recorrido = recorridoDeSede(rondasTodas, s.id);
+  const turnos = parsearTurnos(recorrido?.turnos);
+  const t = turnoActual(turnos);
+  const cambios = cambiosDeSede(vigencias, s.id);
+  const rige = vigenteAl(cambios, s.haceRonda, inicioTurno(t.fecha, t.turno));
+  const ultimo = ultimoCambio(cambios);
+  const entra = ultimo && rige !== s.haceRonda ? fechaTurno(siguienteTurno(turnos, Date.parse(ultimo.hasta))) : null;
+  return { ...s, propia, entra };
+});
 
 // Una parada numérica sin mínimo ni máximo no puede avisar nunca.
-const sinValorNormal = puntos.filter(
-  (p) => p.activo && (p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto),
-);
+const faltaValorNormal = (p: (typeof puntos)[number]) => (p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto);
+const sinValorNormal = puntos.filter((p) => p.activo && faltaValorNormal(p));
 // Bitácora y cuartos técnicos no llevan AOP: la guía les pide una orden.
-const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId && !LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0));
+const pideOrden = (p: (typeof puntos)[number]) => LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0);
+const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId && !pideOrden(p));
 const provisionales = puntos.filter((p) => p.activo && /^Provisional/.test(p.fuente ?? ""));
+const activas = puntos.filter((p) => p.activo).length;
+
+// Lo que la ventana de edición necesita de cada parada.
+const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
+  id: p.id, etiqueta: p.etiqueta, instruccion: p.instruccion, sistema: p.sistema, requiereValor: !!p.requiereValor, unidad: p.unidad,
+  minEsperado: p.minEsperado, maxEsperado: p.maxEsperado, valorEsperadoTexto: p.valorEsperadoTexto, aopProcedimientoId: p.aopProcedimientoId,
+  critico: !!p.critico, activo: !!p.activo, fuente: p.fuente, lineaSop: p.lineaSop, minutosActuar: p.minutosActuar, minutosEscalar: p.minutosEscalar,
+});
 ---
 
 <Layout title="Paradas del recorrido">
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
-      <a href="/ronda" class="text-xs text-slate-400 hover:text-brand-600">← Ronda de turno</a>
+      <a href="/ronda" class="text-xs text-slate-500 hover:text-brand-600">← Ronda de turno</a>
       <h1 class="mt-1 text-2xl font-bold text-slate-900">Paradas del recorrido</h1>
-      <p class="mt-1 text-sm text-slate-500">
-        {ronda?.nombre ?? "Sin ronda configurada"} · {puntos.filter((p) => p.activo).length} paradas activas
-      </p>
     </div>
-    <button class="btn-primary btn-sm" id="btn-nueva">+ Agregar parada</button>
+    {ronda && <button type="button" class="btn-primary btn-sm" data-accion="nueva">+ Agregar parada</button>}
   </div>
 
-  <div class="card mt-4 p-4 text-sm">
-    <div class="flex flex-wrap items-center gap-2">
-      <a class={`btn-sm ${ronda?.sucursalId == null ? "btn-primary" : "btn-secondary"}`} href="/ronda/puntos">Modelo (todas las sedes)</a>
-      {sedes.map((s) => {
-        const propia = rondasTodas.find((r) => r.sucursalId === s.id);
-        return propia
-          ? <a class={`btn-sm ${ronda?.id === propia.id ? "btn-primary" : "btn-secondary"}`} href={`/ronda/puntos?ronda=${propia.id}`}>{s.nombre}{propia.activa ? "" : " · no hace ronda"}</a>
-          : <button class="btn-secondary btn-sm" data-sede={s.id} data-activa="true">{s.nombre} · crear recorrido propio</button>;
-      })}
+  <div id="aviso-pagina" role="alert" class="mt-4 hidden border-l-4 border-red-600 bg-white px-4 py-3 text-sm text-slate-800"></div>
+
+  {/* ── Qué recorrido se edita ── */}
+  <section class="card mt-4 border-l-4 border-l-brand-600 p-4" aria-labelledby="recorrido-actual">
+    <div class="etq">Estás editando</div>
+    <h2 id="recorrido-actual" class="mt-1 text-lg font-bold text-slate-900">{queEdita}</h2>
+    <p id="recorrido-resumen" class="mt-1 text-sm text-slate-600">
+      {activas} paradas activas de {puntos.length}
+      {esModelo && ronda && (usanModelo.length
+        ? <> · Hoy lo usan: {usanModelo.map((s) => s.haceRonda ? s.nombre : `${s.nombre} (no hace ronda)`).join(", ")}.</>
+        : <> · Hoy ninguna sede lo usa: todas tienen recorrido propio.</>)}
+    </p>
+
+    <nav class="mt-3 flex flex-wrap gap-2" aria-label="Recorridos">
+      {modelo && <a class={`btn-sm ${ronda?.id === modelo.id ? "btn-primary" : "btn-secondary"}`} href="/ronda/puntos" aria-current={ronda?.id === modelo.id ? "page" : undefined}>Modelo</a>}
+      {filasSede.filter((s) => s.propia).map((s) => (
+        <a class={`btn-sm ${ronda?.id === s.propia!.id ? "btn-primary" : "btn-secondary"}`} href={`/ronda/puntos?ronda=${s.propia!.id}`} aria-current={ronda?.id === s.propia!.id ? "page" : undefined}>Recorrido propio de {s.nombre}</a>
+      ))}
+    </nav>
+
+    {ronda && (
+      <form id="form-turnos" class="mt-4 flex flex-wrap items-end gap-2" data-ronda={ronda.id} novalidate>
+        <div class="min-w-[14rem]">
+          <label class="label" for="r_turnos">Turnos de este recorrido</label>
+          <input class="input" id="r_turnos" name="turnos" value={turnosRonda.join(", ")} autocomplete="off" aria-describedby="r_turnos_ayuda" />
+        </div>
+        <button type="submit" class="btn-secondary btn-sm">Guardar turnos</button>
+        <p id="r_turnos_ayuda" class="w-full text-xs text-slate-500">
+          Hora de inicio de cada turno, HH:MM, separadas por coma.
+          {esModelo ? " Cambian para todas las sedes sin recorrido propio." : " Solo para esta sede."}
+        </p>
+        <p id="turnos-estado" role="status" class="w-full text-xs text-slate-700">
+          {turnosPendientes && <>El turno de ahora sigue con {turnosPendientes.rigen.join(", ")}. Estos turnos entran desde {turnosPendientes.desde}.</>}
+        </p>
+      </form>
+    )}
+    <p class="mt-3 text-xs text-slate-600">{CAMBIO}</p>
+  </section>
+
+  {/* ── Cada sede: qué recorrido usa y si hace ronda ── */}
+  <section id="panel-sedes" class="card mt-4" aria-labelledby="titulo-sedes">
+    <div class="border-b border-slate-200 px-4 py-3">
+      <h2 id="titulo-sedes" class="font-semibold text-slate-900">Sedes</h2>
+      <p class="mt-0.5 text-xs text-slate-500">Una sede sin recorrido propio usa el modelo. Marcar que no hace ronda no copia nada.</p>
     </div>
-    {ronda?.sucursalId != null && (
-      <div class="mt-3 flex flex-wrap items-end gap-2">
-        <div><label class="label" for="s_turnos">Turnos de esta sede</label><input class="input" id="s_turnos" value={JSON.parse(ronda.turnos).join(", ")} /></div>
-        <button class="btn-secondary btn-sm" id="s_guardar" data-sede-id={ronda.sucursalId}>Guardar turnos</button>
-        <button class="btn-secondary btn-sm" data-sede={ronda.sucursalId} data-activa={ronda.activa ? "false" : "true"}>{ronda.activa ? "Esta sede no hace ronda" : "Esta sede sí hace ronda"}</button>
+    <ul class="divide-y divide-slate-100">
+      {filasSede.map((s) => (
+        <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3" data-sede-fila={s.id}>
+          <div class="min-w-[14rem] flex-1">
+            <div class="font-semibold text-slate-900">{s.nombre}</div>
+            <div class="text-xs text-slate-600">
+              {s.propia ? "Recorrido propio" : "Usa el modelo"} · {s.haceRonda ? "Hace ronda" : "No hace ronda"}
+              {s.entra && <> · desde {s.entra}; el turno de ahora sigue como estaba</>}
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            {s.propia
+              ? <a class="btn-secondary btn-sm" href={`/ronda/puntos?ronda=${s.propia.id}`}>Editar su recorrido</a>
+              : <button type="button" class="btn-secondary btn-sm" data-accion="crear-propio" data-sede={s.id} data-nombre={s.nombre}>Crear recorrido propio</button>}
+            <button type="button" class="btn-secondary btn-sm" data-accion="hace-ronda" data-sede={s.id} data-nombre={s.nombre} data-hace={s.haceRonda ? "false" : "true"}>
+              {s.haceRonda ? "Esta sede no hace ronda" : "Esta sede sí hace ronda"}
+            </button>
+          </div>
+        </li>
+      ))}
+      {filasSede.length === 0 && <li class="px-4 py-6 text-sm text-slate-500">No hay sedes activas.</li>}
+    </ul>
+  </section>
+
+  {/* ── Lo que falta para que avise sola ── */}
+  <div id="faltantes">
+    {(sinValorNormal.length > 0 || sinAop.length > 0 || provisionales.length > 0) && (
+      <div class="card mt-4 border-l-4 border-l-amber-500 p-4">
+        <h2 class="text-sm font-bold text-slate-900">Lo que falta para que la ronda avise sola</h2>
+        <ul class="mt-2 space-y-1 text-xs text-slate-700">
+          {sinValorNormal.length > 0 && (
+            <li>
+              <span class="font-semibold text-amber-700">{sinValorNormal.length} parada(s) sin valor normal.</span>{" "}
+              Mientras estén así, el técnico anota el número pero el sistema no puede decir si está fuera de rango.
+            </li>
+          )}
+          {provisionales.length > 0 && (
+            <li>
+              <span class="font-semibold text-amber-700">{provisionales.length} valor(es) provisional(es).</span>{" "}
+              No salen de la guía: {provisionales.map((p) => p.etiqueta.split(" · ")[0]).join(", ")}. Hay que fijarlos en el SCP de cada sede.
+            </li>
+          )}
+          {sinAop.length > 0 && (
+            <li>
+              <span class="font-semibold text-amber-700">{sinAop.length} parada(s) sin AOP asignado.</span>{" "}
+              Una desviación ahí no abre episodio ni arranca reloj.
+            </li>
+          )}
+        </ul>
       </div>
     )}
-    <p class="mt-2 text-xs text-slate-400">Un cambio aplica desde el turno siguiente: la ronda ya abierta conserva lo que decía al abrir.</p>
   </div>
 
-  {(sinValorNormal.length > 0 || sinAop.length > 0 || provisionales.length > 0) && (
-    <div class="card mt-4 border-l-4 border-amber-400 p-4">
-      <h2 class="text-sm font-bold text-amber-800">Lo que falta para que la ronda avise sola</h2>
-      <ul class="mt-2 space-y-1 text-xs text-slate-700">
-        {sinValorNormal.length > 0 && (
-          <li>
-            <span class="font-semibold text-amber-700">{sinValorNormal.length} parada(s) sin valor normal.</span>{" "}
-            Mientras estén así, el técnico anota el número pero el sistema no puede decir si está fuera de rango.
-          </li>
-        )}
-        {provisionales.length > 0 && (
-          <li>
-            <span class="font-semibold text-amber-700">{provisionales.length} valor(es) provisional(es).</span>{" "}
-            No salen de la guía: {provisionales.map((p) => p.etiqueta.split(" · ")[0]).join(", ")}. Hay que fijarlos en el SCP de cada sede.
-          </li>
-        )}
-        {sinAop.length > 0 && (
-          <li>
-            <span class="font-semibold text-amber-700">{sinAop.length} parada(s) sin AOP asignado.</span>{" "}
-            Una desviación ahí no abre episodio ni arranca reloj.
-          </li>
-        )}
-      </ul>
-    </div>
-  )}
-
-  <div class="card mt-4 overflow-x-auto">
+  {/* ── Las paradas ── */}
+  <div id="tabla-paradas" class="card mt-4 overflow-x-auto">
     <table class="w-full text-sm">
+      <caption class="sr-only">Paradas de {nombreActual}, en el orden del recorrido</caption>
       <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
         <tr>
-          <th class="px-3 py-2.5">#</th>
-          <th class="px-3 py-2.5">Familia</th>
-          <th class="px-3 py-2.5">Parada</th>
-          <th class="px-3 py-2.5">Valor normal</th>
-          <th class="px-3 py-2.5">AOP</th>
-          <th class="px-3 py-2.5 text-center">Crítico</th>
-          <th class="px-3 py-2.5 text-center">Activa</th>
-          <th class="px-3 py-2.5"></th>
+          <th scope="col" class="px-3 py-2.5">#</th>
+          <th scope="col" class="px-3 py-2.5">Familia</th>
+          <th scope="col" class="px-3 py-2.5">Parada</th>
+          <th scope="col" class="px-3 py-2.5">Valor normal</th>
+          <th scope="col" class="px-3 py-2.5">AOP</th>
+          <th scope="col" class="px-3 py-2.5">Crítica</th>
+          <th scope="col" class="px-3 py-2.5">Estado</th>
+          <th scope="col" class="px-3 py-2.5"><span class="sr-only">Acciones</span></th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {puntos.map((p) => {
-          const info = sistemaInfo(p.sistema);
-          const faltaValor = p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto;
-          return (
-            <tr class={`align-top ${p.activo ? "" : "opacity-50"}`} data-fila={p.id}>
-              <td class="px-3 py-3 font-mono text-xs text-slate-400">{p.orden}</td>
-              <td class="px-3 py-3 whitespace-nowrap">
-                <span class="mr-1">{info.icono}</span>
-                <span class="text-xs text-slate-600">{SISTEMA_LABEL[p.sistema as Sistema] ?? p.sistema}</span>
-              </td>
-              <td class="px-3 py-3">
-                <div class="font-medium text-slate-800">{p.etiqueta}</div>
-                {p.fuente && <div class="mt-0.5 text-[11px] text-slate-400">{p.fuente}</div>}
-              </td>
-              <td class="px-3 py-3">
-                {p.requiereValor ? (
-                  <div class="flex items-center gap-1">
-                    <input class="input w-20 !py-1 !text-xs" type="number" step="any" data-min={p.id} value={p.minEsperado ?? ""} placeholder="mín" />
-                    <span class="text-slate-300">–</span>
-                    <input class="input w-20 !py-1 !text-xs" type="number" step="any" data-max={p.id} value={p.maxEsperado ?? ""} placeholder="máx" />
-                    {p.unidad && <span class="ml-1 text-[11px] text-slate-400">{p.unidad}</span>}
-                  </div>
-                ) : (
-                  <input class="input w-full !py-1 !text-xs" type="text" data-texto={p.id} value={p.valorEsperadoTexto ?? ""} placeholder="qué se considera conforme" />
-                )}
-                {faltaValor && <div class="mt-1 text-[10px] font-semibold text-amber-600">Sin valor normal: no puede avisar</div>}
-              </td>
-              <td class="px-3 py-3 whitespace-nowrap">
-                {p.aopProcedimientoId ? (
-                  <a href={`/procedimientos/${p.aopProcedimientoId}`} class="font-mono text-xs text-brand-700 hover:underline">
-                    {mapaAop.get(p.aopProcedimientoId) ?? "—"}
-                  </a>
-                ) : (
-                  <span class="badge bg-amber-100 text-amber-700">Sin AOP</span>
-                )}
-              </td>
-              <td class="px-3 py-3 text-center">
-                <input type="checkbox" data-critico={p.id} checked={p.critico} class="h-4 w-4 rounded border-slate-300" />
-              </td>
-              <td class="px-3 py-3 text-center">
-                <input type="checkbox" data-activo={p.id} checked={p.activo} class="h-4 w-4 rounded border-slate-300" />
-              </td>
-              <td class="px-3 py-3 text-right">
-                <button class="btn-secondary btn-sm" data-guardar={p.id}>Guardar</button>
-              </td>
-            </tr>
-          );
-        })}
+        {puntos.map((p, i) => (
+          <tr class={`align-top ${p.activo ? "" : "bg-slate-50 text-slate-500"}`} id={`parada-${p.id}`} data-parada={datosParada(p)}>
+            <td class="px-3 py-3 text-xs text-slate-500">{i + 1}</td>
+            <td class="px-3 py-3 text-xs text-slate-700">
+              <div class="whitespace-nowrap">{SISTEMA_LABEL[p.sistema as Sistema] ?? p.sistema}</div>
+              {p.lineaSop && <div class="mt-0.5 text-[11px] text-slate-500">Línea {p.lineaSop} del SOP</div>}
+            </td>
+            <td class="px-3 py-3">
+              <div class="font-semibold text-slate-900">{p.etiqueta}</div>
+              {p.instruccion && <div class="mt-0.5 line-clamp-2 text-xs text-slate-600">{p.instruccion}</div>}
+              {p.fuente && <div class="mt-0.5 text-[11px] text-slate-500">{p.fuente}</div>}
+            </td>
+            <td class="px-3 py-3 text-xs">
+              <div class="text-slate-800">{rangoNormal(p)}</div>
+              <div class="mt-0.5 text-[11px] text-slate-500">{p.requiereValor ? "Pide un número" : "Conforme o no conforme"}</div>
+              {faltaValorNormal(p) && <div class="mt-1 text-[11px] font-semibold text-amber-700">Sin valor normal: no puede avisar</div>}
+            </td>
+            <td class="px-3 py-3 whitespace-nowrap text-xs">
+              {p.aopProcedimientoId ? (
+                <a href={`/procedimientos/${p.aopProcedimientoId}`} class="font-semibold text-brand-700 hover:underline">{mapaAop.get(p.aopProcedimientoId) ?? "—"}</a>
+              ) : pideOrden(p) ? (
+                <span class="text-slate-500">Pide orden</span>
+              ) : (
+                <span class="badge text-amber-700">Sin AOP</span>
+              )}
+              {(p.minutosActuar || p.minutosEscalar) && <div class="mt-0.5 text-[11px] text-slate-500">Plazos propios</div>}
+            </td>
+            <td class="px-3 py-3 text-xs">{p.critico ? <span class="font-semibold text-slate-900">Crítica</span> : <span class="text-slate-500">No</span>}</td>
+            <td class="px-3 py-3 text-xs">{p.activo ? "Activa" : "Inactiva"}</td>
+            <td class="px-3 py-3">
+              <div class="flex justify-end gap-1.5">
+                <button type="button" class="btn-secondary btn-sm" data-accion="subir" data-id={p.id} disabled={i === 0} aria-label={`Subir «${p.etiqueta}»`}>Subir</button>
+                <button type="button" class="btn-secondary btn-sm" data-accion="bajar" data-id={p.id} disabled={i === puntos.length - 1} aria-label={`Bajar «${p.etiqueta}»`}>Bajar</button>
+                <button type="button" class="btn-primary btn-sm" data-accion="editar" data-id={p.id} aria-label={`Editar «${p.etiqueta}»`}>Editar</button>
+              </div>
+            </td>
+          </tr>
+        ))}
         {puntos.length === 0 && (
-          <tr><td colspan="8" class="px-3 py-8 text-center text-sm text-slate-400">Sin paradas configuradas.</td></tr>
+          <tr><td colspan="8" class="px-3 py-8 text-center text-sm text-slate-500">Sin paradas configuradas.</td></tr>
         )}
       </tbody>
     </table>
   </div>
+  <p class="mt-2 text-xs text-slate-500">Una parada no se borra: se desactiva. El libro de rondas guarda lo que decía el recorrido en cada turno.</p>
 
-  {/* ── Modal: parada nueva ── */}
-  <div id="modal-nueva" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/40 p-4">
-    <div class="card max-h-[90vh] w-full max-w-xl overflow-y-auto p-5">
-      <h2 class="text-lg font-bold text-slate-900">Agregar una parada</h2>
-      <p class="mt-1 text-sm text-slate-500">Se agrega al final del recorrido y entra en la ronda del próximo turno.</p>
+  {/* ── Ventana: editar o agregar una parada ── */}
+  <div id="modal-parada" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4" style="background:rgba(30,33,66,.6)">
+    <form id="form-parada" class="card my-6 w-full max-w-2xl p-5" role="dialog" aria-modal="true" aria-labelledby="parada-titulo" aria-describedby="parada-recorrido" novalidate>
+      <div class="etq" id="parada-recorrido">{esModelo ? "Modelo · lo usan todas las sedes sin recorrido propio" : nombreActual}</div>
+      <h2 id="parada-titulo" class="mt-1 text-lg font-bold text-slate-900">Editar parada</h2>
+      <p class="mt-1 text-xs text-slate-600">{CAMBIO}</p>
+      <div id="parada-error" role="alert" class="mt-3 hidden border-l-4 border-red-600 bg-slate-50 px-3 py-2 text-sm text-slate-900"></div>
+
       <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div class="sm:col-span-2">
-          <label class="label" for="n_etiqueta">Qué se verifica</label>
-          <input class="input" id="n_etiqueta" type="text" placeholder="Planta de emergencia · nivel de combustible" />
-        </div>
-        <div>
-          <label class="label" for="n_sistema">Familia</label>
-          <select class="input" id="n_sistema">
-            <option value="electrico">Energía</option>
-            <option value="hvac">Climatización crítica (HEPA)</option>
-            <option value="minisplit">Minisplit</option>
-            <option value="gases">Gases medicinales</option>
-            <option value="agua">Agua</option>
-            <option value="incendios">Protección contra incendios</option>
-            <option value="ascensores">Transporte vertical</option>
-            <option value="otro">Otro</option>
-          </select>
-        </div>
-        <div>
-          <label class="label" for="n_aop">AOP que la rige</label>
-          <select class="input" id="n_aop">
-            <option value="">— sin AOP (no abrirá episodio) —</option>
-            {aopsDisponibles.map((a) => <option value={a.id}>{a.codigo} · {a.titulo.slice(0, 48)}</option>)}
-          </select>
+          <label class="label" for="p_etiqueta">Qué se verifica</label>
+          <input class="input" id="p_etiqueta" type="text" maxlength="200" placeholder="Planta de emergencia · nivel de combustible" />
         </div>
         <div class="sm:col-span-2">
-          <label class="label" for="n_instruccion">Instrucción para el técnico</label>
-          <textarea class="input" id="n_instruccion" rows="2" placeholder="Qué hacer exactamente en la parada."></textarea>
+          <label class="label" for="p_instruccion">Instrucción para el técnico</label>
+          <textarea class="input" id="p_instruccion" rows="3" maxlength="1000" placeholder="Qué hacer exactamente en la parada."></textarea>
         </div>
-        <div class="sm:col-span-2 flex items-center gap-2">
-          <input type="checkbox" id="n_requiere" class="h-4 w-4 rounded border-slate-300" />
-          <label for="n_requiere" class="text-sm text-slate-700">Se anota un número (si no, es conforme / no conforme)</label>
+        <div>
+          <label class="label" for="p_sistema">Familia</label>
+          <select class="input" id="p_sistema">
+            <option value="">Elige la familia</option>
+            {FAMILIAS_RONDA.map((f) => <option value={f}>{SISTEMA_LABEL[f]}</option>)}
+          </select>
         </div>
-        <div id="caja-numero" class="hidden sm:col-span-2 grid grid-cols-3 gap-3">
-          <div><label class="label" for="n_min">Mínimo</label><input class="input" id="n_min" type="number" step="any" /></div>
-          <div><label class="label" for="n_max">Máximo</label><input class="input" id="n_max" type="number" step="any" /></div>
-          <div><label class="label" for="n_unidad">Unidad</label><input class="input" id="n_unidad" type="text" placeholder="°C, %, kPa" /></div>
+        <div>
+          <label class="label" for="p_aop">AOP que la rige</label>
+          <select class="input" id="p_aop" aria-describedby="p_aop_ayuda">
+            <option value="">Sin AOP: no abre episodio</option>
+            {aopsDisponibles.map((a) => <option value={a.id}>{a.codigo} · {a.titulo.slice(0, 48)}</option>)}
+          </select>
+          <p id="p_aop_ayuda" class="mt-1 text-[11px] text-slate-500">Las líneas {LINEAS_CON_ORDEN.join(", ")} del SOP no llevan AOP: piden una orden.</p>
+        </div>
+        <fieldset class="sm:col-span-2">
+          <legend class="label">Qué anota el técnico</legend>
+          <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-800">
+            <label class="flex items-center gap-2"><input type="radio" name="p_tipo" id="p_tipo_numero" value="numero" class="h-4 w-4" /> Un número, con su rango normal</label>
+            <label class="flex items-center gap-2"><input type="radio" name="p_tipo" id="p_tipo_conforme" value="conforme" class="h-4 w-4" /> Conforme o no conforme</label>
+          </div>
+        </fieldset>
+        <div id="caja-numero" class="grid grid-cols-3 gap-3 sm:col-span-2">
+          <div><label class="label" for="p_min">Mínimo</label><input class="input" id="p_min" type="number" step="any" inputmode="decimal" /></div>
+          <div><label class="label" for="p_max">Máximo</label><input class="input" id="p_max" type="number" step="any" inputmode="decimal" /></div>
+          <div><label class="label" for="p_unidad">Unidad</label><input class="input" id="p_unidad" type="text" maxlength="20" placeholder="°C, %, kPa" /></div>
+          <p class="col-span-3 text-[11px] text-slate-500">Deja vacío el lado que no tenga límite. Sin mínimo ni máximo, la parada no puede avisar.</p>
         </div>
         <div id="caja-texto" class="sm:col-span-2">
-          <label class="label" for="n_texto">Qué se considera conforme</label>
-          <input class="input" id="n_texto" type="text" placeholder="Selector en AUTO, sin alarmas" />
+          <label class="label" for="p_texto">Qué se considera conforme</label>
+          <input class="input" id="p_texto" type="text" maxlength="300" placeholder="Selector en AUTO, sin alarmas" />
         </div>
-        <div class="sm:col-span-2 flex items-center gap-2">
-          <input type="checkbox" id="n_critico" class="h-4 w-4 rounded border-slate-300" checked />
-          <label for="n_critico" class="text-sm text-slate-700">Crítica: la ronda no se cierra sin anotarla</label>
+        <div>
+          <label class="label" for="p_fuente">Fuente del valor normal</label>
+          <input class="input" id="p_fuente" type="text" maxlength="300" placeholder="SCP-HVAC-01 · ASHRAE 170" />
         </div>
+        <div>
+          <label class="label" for="p_linea">Línea del SOP</label>
+          <select class="input" id="p_linea">
+            <option value="">Sin línea</option>
+            {Array.from({ length: 11 }, (_, k) => <option value={k + 1}>Línea {k + 1}</option>)}
+          </select>
+        </div>
+        <label class="flex items-start gap-2 text-sm text-slate-800 sm:col-span-2">
+          <input type="checkbox" id="p_critico" class="mt-0.5 h-4 w-4" />
+          <span>Crítica: si no se puede verificar, se avisa a la jefatura</span>
+        </label>
+        <label class="flex items-start gap-2 text-sm text-slate-800 sm:col-span-2">
+          <input type="checkbox" id="p_activo" class="mt-0.5 h-4 w-4" />
+          <span>Activa: sale en la ronda. Si la desactivas, deja de salir y lo ya anotado se conserva.</span>
+        </label>
+        <details id="p_mas" class="border-t border-slate-200 pt-3 sm:col-span-2">
+          <summary class="cursor-pointer text-sm font-semibold text-brand-700">Más opciones</summary>
+          <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div><label class="label" for="p_actuar">Minutos para actuar</label><input class="input" id="p_actuar" type="number" min="1" step="1" inputmode="numeric" /></div>
+            <div><label class="label" for="p_escalar">Minutos para escalar</label><input class="input" id="p_escalar" type="number" min="1" step="1" inputmode="numeric" /></div>
+          </div>
+          <p id="p_plazos" class="mt-1 text-[11px] text-slate-500">Vacío: usa el plazo del AOP.</p>
+        </details>
       </div>
-      <div class="mt-5 flex justify-end gap-2">
-        <button class="btn-secondary btn-sm" id="nueva-cancelar">Cancelar</button>
-        <button class="btn-primary btn-sm" id="nueva-guardar">Agregar parada</button>
+
+      <div class="mt-5 flex flex-wrap justify-end gap-2">
+        <button type="button" class="btn-secondary btn-sm" id="parada-cancelar">Cancelar</button>
+        <button type="submit" class="btn-primary btn-sm" id="parada-guardar">Guardar cambios</button>
       </div>
-    </div>
+    </form>
   </div>
 </Layout>
 
-<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ rondaId: ronda?.id ?? null }) }}>
-  const { rondaId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
-  const num = (el) => (el && el.value.trim() !== "" ? Number(el.value) : null);
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ rondaId: ronda?.id ?? null, plazosAop }) }}>
+  const { rondaId, plazosAop } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  const $ = (id) => document.getElementById(id);
+  const API = "/api/ronda-turno/puntos";
+  const fecha = (f) => String(f).split("-").reverse().join("/");
 
-  const guardarSede = async (cuerpo) => {
-    const r = await fetch("/api/ronda-turno/puntos", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) { window.showToast?.(typeof d.error === "string" ? d.error : "No se pudo guardar", "error"); return; }
-    location.href = "/ronda/puntos?ronda=" + d.ronda.id;
+  // ── Hablar con el servidor: su error se muestra tal cual ──
+  const leer = async (r) => {
+    const texto = await r.text();
+    let datos = null;
+    try { datos = JSON.parse(texto); } catch { /* texto plano */ }
+    if (!r.ok) throw new Error(datos && typeof datos.error === "string" ? datos.error : texto.trim() || "El servidor no aceptó el cambio (" + r.status + ").");
+    return datos || {};
   };
-  document.querySelectorAll("[data-sede]").forEach((b) => b.addEventListener("click", () => guardarSede({ sucursalId: Number(b.getAttribute("data-sede")), activa: b.getAttribute("data-activa") === "true" })));
-  document.getElementById("s_guardar")?.addEventListener("click", (ev) => guardarSede({ sucursalId: Number(ev.currentTarget.getAttribute("data-sede-id")), turnos: document.getElementById("s_turnos").value.split(",").map((x) => x.trim()).filter(Boolean) }));
-
-  document.querySelectorAll("[data-guardar]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = Number(btn.getAttribute("data-guardar"));
-      const body = { id };
-      const min = document.querySelector('[data-min="' + id + '"]');
-      const max = document.querySelector('[data-max="' + id + '"]');
-      const texto = document.querySelector('[data-texto="' + id + '"]');
-      if (min) body.minEsperado = num(min);
-      if (max) body.maxEsperado = num(max);
-      if (texto) body.valorEsperadoTexto = texto.value.trim() || null;
-      body.critico = !!document.querySelector('[data-critico="' + id + '"]')?.checked;
-      body.activo = !!document.querySelector('[data-activo="' + id + '"]')?.checked;
-
-      btn.setAttribute("disabled", "true");
-      const original = btn.textContent;
-      btn.textContent = "…";
-      try {
-        const r = await fetch("/api/ronda-turno/puntos", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(typeof d.error === "string" ? d.error : "No se pudo guardar");
-        window.showToast?.("Parada actualizada", "success");
-        setTimeout(() => location.reload(), 600);
-      } catch (e) {
-        window.showToast?.(e instanceof Error ? e.message : "Error al guardar", "error");
-      } finally {
-        btn.removeAttribute("disabled");
-        btn.textContent = original;
-      }
-    });
-  });
-
-  // ── Modal de parada nueva ──
-  const modal = document.getElementById("modal-nueva");
-  const abrir = () => { modal?.classList.remove("hidden"); modal?.classList.add("flex"); };
-  const cerrar = () => { modal?.classList.add("hidden"); modal?.classList.remove("flex"); };
-  document.getElementById("btn-nueva")?.addEventListener("click", abrir);
-  document.getElementById("nueva-cancelar")?.addEventListener("click", cerrar);
-  modal?.addEventListener("click", (e) => { if (e.target === modal) cerrar(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrar(); });
-
-  const req = document.getElementById("n_requiere");
-  const cajaNum = document.getElementById("caja-numero");
-  const cajaTxt = document.getElementById("caja-texto");
-  req?.addEventListener("change", () => {
-    cajaNum?.classList.toggle("hidden", !req.checked);
-    cajaTxt?.classList.toggle("hidden", req.checked);
-  });
-
-  document.getElementById("nueva-guardar")?.addEventListener("click", async (ev) => {
-    const btn = ev.currentTarget;
-    const etiqueta = document.getElementById("n_etiqueta")?.value?.trim();
-    if (!etiqueta || etiqueta.length < 3) {
-      window.showToast?.("Escribe qué se verifica en la parada", "error");
-      return;
-    }
-    if (!rondaId) {
-      window.showToast?.("No hay una ronda activa a la que agregar la parada", "error");
-      return;
-    }
-    const requiere = !!req?.checked;
-    const payload = {
-      rondaId,
-      sistema: document.getElementById("n_sistema").value,
-      etiqueta,
-      instruccion: document.getElementById("n_instruccion")?.value?.trim() || null,
-      requiereValor: requiere,
-      unidad: requiere ? (document.getElementById("n_unidad")?.value?.trim() || null) : null,
-      minEsperado: requiere ? num(document.getElementById("n_min")) : null,
-      maxEsperado: requiere ? num(document.getElementById("n_max")) : null,
-      valorEsperadoTexto: requiere ? null : (document.getElementById("n_texto")?.value?.trim() || null),
-      aopProcedimientoId: Number(document.getElementById("n_aop").value) || null,
-      critico: !!document.getElementById("n_critico")?.checked,
-    };
-    btn.setAttribute("disabled", "true");
-    btn.textContent = "Agregando…";
+  const enviar = async (method, cuerpo) => {
+    let r;
     try {
-      const r = await fetch("/api/ronda-turno/puntos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(typeof d.error === "string" ? d.error : "No se pudo agregar");
-      window.showToast?.("Parada agregada", "success");
-      location.reload();
+      r = await fetch(API, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
+    } catch {
+      throw new Error("Sin conexión: no se guardó. Revisa la red e intenta de nuevo.");
+    }
+    return leer(r);
+  };
+  const avisoPagina = $("aviso-pagina");
+  const mostrarError = (caja, mensaje) => {
+    if (!caja) return;
+    caja.textContent = mensaje;
+    caja.classList.toggle("hidden", !mensaje);
+  };
+
+  // El servidor vuelve a pintar la página; solo se reemplazan las partes que cambiaron.
+  const refrescar = async (ids) => {
+    try {
+      const r = await fetch(location.href, { headers: { Accept: "text/html" }, cache: "no-store" });
+      const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+      let faltan = 0;
+      for (const id of ids) {
+        const nuevo = doc.getElementById(id), viejo = $(id);
+        if (nuevo && viejo) viejo.replaceWith(nuevo); else faltan++;
+      }
+      if (!r.ok || faltan) throw new Error();
+    } catch {
+      mostrarError(avisoPagina, "Se guardó, pero la tabla no se pudo actualizar: recarga la página para verla.");
+    }
+  };
+  const PARADAS = ["recorrido-resumen", "faltantes", "tabla-paradas"];
+
+  // ── La ventana de la parada ──
+  const modal = $("modal-parada");
+  const form = $("form-parada");
+  const errorParada = $("parada-error");
+  const campo = {
+    etiqueta: $("p_etiqueta"), instruccion: $("p_instruccion"), sistema: $("p_sistema"), aop: $("p_aop"),
+    numero: $("p_tipo_numero"), conforme: $("p_tipo_conforme"), min: $("p_min"), max: $("p_max"), unidad: $("p_unidad"),
+    texto: $("p_texto"), fuente: $("p_fuente"), linea: $("p_linea"), critico: $("p_critico"), activo: $("p_activo"),
+    actuar: $("p_actuar"), escalar: $("p_escalar"),
+  };
+  let actual = null; // la parada como la dio el servidor; null = parada nueva
+  let inicial = "";
+  let disparador = null;
+
+  const txt = (el) => el.value.trim() || null;
+  const num = (el, nombre) => {
+    if (el.validity && el.validity.badInput) throw new Error(nombre + " tiene que ser un número.");
+    return el.value.trim() === "" ? null : Number(el.value);
+  };
+  const leerFormulario = () => {
+    const requiereValor = campo.numero.checked;
+    return {
+      etiqueta: campo.etiqueta.value.trim(),
+      instruccion: txt(campo.instruccion),
+      sistema: campo.sistema.value,
+      requiereValor,
+      unidad: requiereValor ? txt(campo.unidad) : null,
+      minEsperado: requiereValor ? num(campo.min, "El mínimo") : null,
+      maxEsperado: requiereValor ? num(campo.max, "El máximo") : null,
+      valorEsperadoTexto: requiereValor ? null : txt(campo.texto),
+      aopProcedimientoId: campo.aop.value ? Number(campo.aop.value) : null,
+      critico: campo.critico.checked,
+      activo: campo.activo.checked,
+      fuente: txt(campo.fuente),
+      lineaSop: campo.linea.value ? Number(campo.linea.value) : null,
+      minutosActuar: num(campo.actuar, "Los minutos para actuar"),
+      minutosEscalar: num(campo.escalar, "Los minutos para escalar"),
+    };
+  };
+  const foto = () => { try { return JSON.stringify(leerFormulario()); } catch { return "?" + Math.random(); } };
+  const mostrarTipo = () => {
+    $("caja-numero").classList.toggle("hidden", !campo.numero.checked);
+    $("caja-texto").classList.toggle("hidden", campo.numero.checked);
+  };
+  const mostrarPlazos = () => {
+    const p = plazosAop[campo.aop.value];
+    const m = (v) => (v ? v + " min" : "sin plazo");
+    $("p_plazos").textContent = p
+      ? "Vacío: usa el plazo del AOP (actuar en " + m(p.actuar) + ", escalar en " + m(p.escalar) + ")."
+      : campo.aop.value ? "Vacío: usa el plazo del AOP." : "Sin AOP, la parada no abre episodio y estos plazos no corren.";
+  };
+  campo.numero.addEventListener("change", mostrarTipo);
+  campo.conforme.addEventListener("change", mostrarTipo);
+  campo.aop.addEventListener("change", mostrarPlazos);
+
+  const abrir = (p, boton) => {
+    actual = p;
+    disparador = boton || null;
+    const v = p || { etiqueta: "", instruccion: null, sistema: "", requiereValor: false, unidad: null, minEsperado: null, maxEsperado: null, valorEsperadoTexto: null, aopProcedimientoId: null, critico: true, activo: true, fuente: null, lineaSop: null, minutosActuar: null, minutosEscalar: null };
+    $("parada-titulo").textContent = p ? "Editar parada" : "Agregar una parada";
+    $("parada-guardar").textContent = p ? "Guardar cambios" : "Agregar al final del recorrido";
+    campo.etiqueta.value = v.etiqueta || "";
+    campo.instruccion.value = v.instruccion || "";
+    campo.sistema.value = v.sistema || "";
+    campo.aop.value = v.aopProcedimientoId ? String(v.aopProcedimientoId) : "";
+    campo.numero.checked = !!v.requiereValor;
+    campo.conforme.checked = !v.requiereValor;
+    campo.min.value = v.minEsperado ?? "";
+    campo.max.value = v.maxEsperado ?? "";
+    campo.unidad.value = v.unidad || "";
+    campo.texto.value = v.valorEsperadoTexto || "";
+    campo.fuente.value = v.fuente || "";
+    campo.linea.value = v.lineaSop ? String(v.lineaSop) : "";
+    campo.critico.checked = !!v.critico;
+    campo.activo.checked = !!v.activo;
+    campo.actuar.value = v.minutosActuar ?? "";
+    campo.escalar.value = v.minutosEscalar ?? "";
+    $("p_mas").open = !!(v.minutosActuar || v.minutosEscalar);
+    mostrarTipo();
+    mostrarPlazos();
+    mostrarError(errorParada, "");
+    inicial = foto();
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+    campo.etiqueta.focus();
+  };
+  const cerrar = () => {
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+    actual = null;
+    if (disparador && document.contains(disparador)) disparador.focus();
+  };
+  // Lo escrito no se pierde por un clic de más: si hay cambios sin guardar, se pregunta.
+  const pedirCerrar = async () => {
+    if (foto() === inicial) return cerrar();
+    const descartar = window.confirmAction
+      ? await window.confirmAction("Descartar los cambios", "Lo que escribiste en esta parada no se ha guardado.", { confirmLabel: "Descartar" })
+      : window.confirm("Lo que escribiste en esta parada no se ha guardado. ¿Descartarlo?");
+    if (descartar) cerrar();
+  };
+  $("parada-cancelar").addEventListener("click", pedirCerrar);
+  modal.addEventListener("click", (e) => { if (e.target === modal) pedirCerrar(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || modal.classList.contains("hidden")) return;
+    const confirmacion = $("confirmModal");
+    if (confirmacion && !confirmacion.classList.contains("hidden")) return;
+    e.preventDefault();
+    pedirCerrar();
+  });
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const boton = $("parada-guardar");
+    mostrarError(errorParada, "");
+    let datos;
+    try {
+      datos = leerFormulario();
+      if (datos.etiqueta.length < 3) throw new Error("Escribe qué se verifica: al menos 3 caracteres.");
+      if (!datos.sistema) throw new Error("Elige la familia de la parada.");
+      if (datos.minEsperado != null && datos.maxEsperado != null && datos.minEsperado > datos.maxEsperado) throw new Error("El mínimo no puede ser mayor que el máximo.");
     } catch (e) {
-      window.showToast?.(e instanceof Error ? e.message : "Error al agregar", "error");
+      mostrarError(errorParada, e.message);
+      return;
+    }
+    // Al editar se manda solo lo que cambió: otra persona pudo cambiar otro campo mientras tanto.
+    // Lo del otro tipo de parada no se manda; si cambia el tipo, el servidor lo limpia.
+    let cuerpo;
+    if (actual) {
+      cuerpo = { id: actual.id };
+      const ocultos = datos.requiereValor === actual.requiereValor ? (datos.requiereValor ? ["valorEsperadoTexto"] : ["unidad", "minEsperado", "maxEsperado"]) : [];
+      for (const k of Object.keys(datos)) {
+        if (ocultos.includes(k)) continue;
+        if (JSON.stringify(datos[k] ?? null) !== JSON.stringify(actual[k] ?? null)) cuerpo[k] = datos[k];
+      }
+      if (Object.keys(cuerpo).length === 1) { cerrar(); window.showToast?.("No había cambios que guardar.", "info"); return; }
+    } else {
+      cuerpo = { rondaId, ...datos };
+    }
+    boton.disabled = true;
+    const texto = boton.textContent;
+    boton.textContent = "Guardando…";
+    try {
+      const r = await enviar(actual ? "PATCH" : "POST", cuerpo);
+      const id = r.punto?.id;
+      cerrar();
+      await refrescar(PARADAS);
+      window.showToast?.(cuerpo.id ? "Parada guardada." : "Parada agregada al final del recorrido.", "success");
+      document.querySelector('[data-accion="editar"][data-id="' + id + '"]')?.focus();
+    } catch (e) {
+      mostrarError(errorParada, e.message);
     } finally {
-      btn.removeAttribute("disabled");
-      btn.textContent = "Agregar parada";
+      boton.disabled = false;
+      boton.textContent = texto;
+    }
+  });
+
+  // ── Turnos del recorrido ──
+  $("form-turnos")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = ev.currentTarget;
+    const boton = f.querySelector('button[type="submit"]');
+    const estado = $("turnos-estado");
+    mostrarError(avisoPagina, "");
+    boton.disabled = true;
+    try {
+      const turnos = $("r_turnos").value.split(/[,;\s]+/).map((t) => t.trim()).filter(Boolean);
+      const r = await enviar("PUT", { accion: "turnos", rondaId: Number(f.dataset.ronda), turnos });
+      const quedaron = JSON.parse(r.ronda.turnos || "[]");
+      $("r_turnos").value = quedaron.join(", ");
+      estado.textContent = r.aplicaDesde
+        ? "Guardado: " + quedaron.join(", ") + ". Entran desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + "; el turno de ahora sigue como estaba."
+        : "Sin cambios: los turnos ya eran " + quedaron.join(", ") + ".";
+      window.showToast?.("Turnos guardados.", "success");
+    } catch (e) {
+      mostrarError(avisoPagina, e.message);
+      estado.textContent = "";
+    } finally {
+      boton.disabled = false;
+    }
+  });
+
+  // ── Acciones de la tabla y de las sedes ──
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button[data-accion]");
+    if (!b || b.disabled) return;
+    const accion = b.dataset.accion;
+    if (accion === "nueva") return abrir(null, b);
+    if (accion === "editar") {
+      const fila = b.closest("[data-parada]");
+      if (fila) abrir(JSON.parse(fila.dataset.parada), b);
+      return;
+    }
+    mostrarError(avisoPagina, "");
+    if (accion === "subir" || accion === "bajar") {
+      const id = b.dataset.id;
+      b.disabled = true;
+      try {
+        await enviar("PATCH", { id: Number(id), mover: accion });
+        await refrescar(PARADAS);
+        const otro = document.querySelector('[data-accion="' + accion + '"][data-id="' + id + '"]');
+        (otro && !otro.disabled ? otro : document.querySelector('[data-accion="editar"][data-id="' + id + '"]'))?.focus();
+      } catch (e) {
+        mostrarError(avisoPagina, e.message);
+        b.disabled = false;
+      }
+      return;
+    }
+    if (accion === "hace-ronda") {
+      const hace = b.dataset.hace === "true";
+      const nombre = b.dataset.nombre;
+      const ok = window.confirmAction
+        ? await window.confirmAction(
+            hace ? nombre + " sí hace ronda" : nombre + " no hace ronda",
+            hace
+              ? "Desde el turno que todavía no empezó, la ronda vuelve a salir en el celular y se le exige en el tablero y en la revisión semanal."
+              : "Desde el turno que todavía no empezó, la ronda deja de salir en el celular y no se le exige en el tablero ni en la revisión semanal. La ronda que ya empezó se termina. No se copia ni se borra nada.",
+            { confirmLabel: hace ? "Sí hace ronda" : "No hace ronda", danger: false })
+        : true;
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        const r = await enviar("PUT", { accion: "hace_ronda", sucursalId: Number(b.dataset.sede), haceRonda: hace });
+        await refrescar(["panel-sedes", "recorrido-resumen"]);
+        window.showToast?.(r.aplicaDesde ? nombre + (hace ? " hace" : " no hace") + " ronda desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + "." : "Sin cambios.", "success");
+      } catch (e) {
+        mostrarError(avisoPagina, e.message);
+        b.disabled = false;
+      }
+      return;
+    }
+    if (accion === "crear-propio") {
+      const nombre = b.dataset.nombre;
+      const ok = window.confirmAction
+        ? await window.confirmAction(
+            "Crear el recorrido propio de " + nombre,
+            "Se copia el modelo tal como está hoy: sus paradas y sus turnos. Desde ese momento " + nombre + " ya no recibe cambios del modelo: sus paradas se editan aparte. Esto no se deshace desde esta pantalla. Si solo quieres que no haga ronda, usa «Esta sede no hace ronda».",
+            { confirmLabel: "Crear recorrido propio", danger: false })
+        : true;
+      if (!ok) return;
+      b.disabled = true;
+      try {
+        const r = await enviar("PUT", { accion: "crear_propio", sucursalId: Number(b.dataset.sede) });
+        location.href = "/ronda/puntos?ronda=" + r.ronda.id;
+      } catch (e) {
+        mostrarError(avisoPagina, e.message);
+        b.disabled = false;
+      }
     }
   });
 </script>

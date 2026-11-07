@@ -136,6 +136,8 @@ const rechazos = await db
     <ul class="divide-y divide-slate-100">
       {filasOrdenadas.map((f) => {
         const est = ESTADO_RONDA[f.estado];
+        // Una sede marcada «no hace ronda» lo dice así, no con un «No aplica» que no explica nada.
+        const etiqueta = f.estado === "no_aplica" && !f.haceRonda ? "No hace ronda" : est.label;
         return (
           <li class="flex flex-wrap items-center gap-3 px-5 py-3.5">
             <span class={`h-2.5 w-2.5 shrink-0 rounded-full ${est.punto}`}></span>
@@ -153,7 +155,7 @@ const rechazos = await db
             </div>
             {f.fuera > 0 && <span class="badge bg-orange-100 text-orange-700">{f.fuera} fuera de rango</span>}
             {f.sinVerificar > 0 && <span class="badge bg-slate-100 text-slate-600">{f.sinVerificar} sin verificar</span>}
-            <span class={`badge ${est.badge}`}>{est.label}</span>
+            <span class={`badge ${est.badge}`}>{etiqueta}</span>
             {f.ejecucionId
               ? <a class="btn-secondary btn-sm" href={`/ronda/${f.ejecucionId}`}>Ver</a>
               : f.estado === "sin_iniciar" && puedeEjecutarRonda(user.rol) && <a class="btn-primary btn-sm" href="/campo#ronda">Hacerla en Modo técnico</a>}

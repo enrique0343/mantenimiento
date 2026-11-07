@@ -1,5 +1,5 @@
 ---
-import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { fmtFechaCompacta, fmtFechaSoloCompacta } from "@/lib/datetime";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
@@ -10,11 +10,11 @@ import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
   TIPOS_OT, CLASES_PRIORIDAD, CLASE_PRIORIDAD_COLOR, CLASE_PRIORIDAD_LABEL,
   CLASE_PRIORIDAD_PLAZO, NIVEL_RIESGO_COLOR,
-  transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
+  transicionesPermitidas, puedeEditarEjecucion,
   parseChecklist, progresoChecklist, evaluarValorChecklist,
   PRERREQ_TIPOS, PRERREQ_LABEL, PRERREQ_ICONO, PRERREQ_REFERENCIA_HINT,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
-  liberacionTieneLectura, requiereCausaRaiz, causaRaizVencida,
+  liberacionTieneLectura, evaluarConformeLiberacion, requiereCausaRaiz, causaRaizVencida,
   tiemposEmergencia, fmtDuracionHoras, etiquetaMitigacion, isoALocalInput,
   puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ,
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
@@ -71,6 +71,14 @@ if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) re
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
+const esTecnico = user.rol === "tecnico";
+const esJefatura = user.rol === "admin" || user.rol === "jefe";
+// El técnico no ve tiempos de medición: cuándo inició, cuánto lleva o tardó,
+// horas trabajadas, minutos estimados ni las duraciones del EOP. Se siguen
+// registrando igual. Los plazos operativos (vence, clase P1) sí los ve.
+const verTiempos = !esTecnico;
+// Equipo y asignación solo cambian antes de enviar la orden a verificación.
+const ordenSinEnviar = estadoActual === "abierta" || estadoActual === "en_proceso" || estadoActual === "en_espera";
 const conjuntoOrigen = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
   ? await getConjuntoDeOrden(Astro, id) : null;
 
@@ -136,8 +144,10 @@ const itemsActivos = await db
 
 const itemsRepJson = JSON.stringify(itemsActivos);
 
-// Selectores en cascada: sucursal → ubicación → equipo
-const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol) && !conjuntoOrigen;
+// Selectores en cascada: sucursal → ubicación → equipo. Se ofrecen solo cuando
+// el servidor acepta el cambio: jefatura, orden sin enviar, fuera de un PM y
+// sin conjunto trazado. Al técnico se lo rechaza siempre.
+const puedeAsignarActivo = esJefatura && ordenSinEnviar && !o.planId && !conjuntoOrigen;
 const activosLista = puedeAsignarActivo
   ? await db
       .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
@@ -179,6 +189,7 @@ let liberaciones: any[] = [];
 let procedimientoRef: { id: number; codigoCorto: string; titulo: string; version: string | null; tipo: string; estado: string } | null = null;
 let accionesVinculadas: string[] = [];
 let etiquetaMit = etiquetaMitigacion(null);
+let etiquetaMitFicha: string | null = null;
 let fase47Error: string | null = null;
 try {
   const pr = await db
@@ -216,7 +227,8 @@ try {
       .from(eopFicha)
       .where(eq(eopFicha.procedimientoId, o.procedimientoId))
       .limit(1);
-    etiquetaMit = etiquetaMitigacion(fi?.etiqueta ?? null);
+    etiquetaMitFicha = fi?.etiqueta?.trim() || null;
+    etiquetaMit = etiquetaMitigacion(etiquetaMitFicha);
     // Las tres primeras acciones del EOP ya vinculado, para no obligar a nadie
     // a abrir otra pantalla cuando la orden es una emergencia.
     if (fi) accionesVinculadas = [fi.accion1, fi.accion2, fi.accion3].filter(Boolean) as string[];
@@ -260,28 +272,60 @@ const tipoDocRige = (docRige?.tipo ?? "eop") as TipoProc;
 const accionesRige = docEsVinculado
   ? (procedimientoRef!.tipo === "eop" ? accionesVinculadas : [])
   : rige?.documento?.tipo === "eop" ? rige.primerasAcciones : [];
+// Sin EOP vinculado, la hora intermedia se nombra como la nombra el EOP que
+// resolvió el sistema: es el mismo rótulo que ve el técnico en el celular.
+if (esEop && !docEsVinculado && rige?.documento?.tipo === "eop") {
+  try {
+    const [fi] = await db
+      .select({ etiqueta: eopFicha.etiquetaHoraMitigacion })
+      .from(eopFicha)
+      .where(eq(eopFicha.procedimientoId, rige.documento.id))
+      .limit(1);
+    etiquetaMitFicha = fi?.etiqueta?.trim() || null;
+    etiquetaMit = etiquetaMitigacion(etiquetaMitFicha);
+  } catch {}
+}
 
 const criticidadActivo = (row.activo as any)?.criticidadOperacional ?? null;
 const reqCausa = requiereCausaRaiz(o.tipo, criticidadActivo);
 const tiempos = tiemposEmergencia(o);
 const causaVencida = causaRaizVencida(o.causaRaizVencimiento, o.causaRaiz);
+// Causa raíz: la escribe la jefatura dentro de las 72 h, también con la orden
+// enviada, verificada o cerrada. Es obligatoria para verificar y cerrar cuando
+// el tipo la exige. El técnico escribe qué encontró y qué hizo, no la causa.
+const muestraSolucion = o.tipo === "correctivo" || esEop || esMop || reqCausa.requiere;
+const muestraCausa = muestraSolucion || !!o.causaRaiz?.trim();
+const puedeEscribirCausa = esJefatura && ["en_proceso", "en_espera", "completada", "verificada", "cerrada"].includes(estadoActual);
+const faltaCausa = reqCausa.requiere && (o.causaRaiz ?? "").trim().length < MIN_CAUSA_RAIZ;
+// Lo que el técnico ve de una emergencia: qué pasos quedaron registrados, sin
+// horas. El celular las fija al primer toque y la jefatura las corrige aquí.
+const hitosEop = [
+  { etiqueta: "Llegada al sitio", hecho: !!o.horaLlegada },
+  { etiqueta: etiquetaMitFicha ?? "Situación controlada", hecho: !!o.horaMitigacion },
+  { etiqueta: "Restablecimiento", hecho: !!o.horaRestablecimiento },
+];
 const bloqueoInicio = validarPrerrequisitosParaIniciar(o.tipo, prerrequisitos);
 const bloqueoCierre = validarLiberacionesParaCierre(o.tipo, liberaciones);
 const prerreqCumplidos = prerrequisitos.filter((p) => p.cumplido).length;
 const liberacionesConLectura = liberaciones.filter((l) => liberacionTieneLectura(l)).length;
 const liberacionesNoConformes = liberaciones.filter((l) => l.conforme === false).length;
-// Quién puede tocar las tarjetas del MOP/EOP: la jefatura siempre; el técnico
-// asignado mientras la OT no esté cerrada (en una emergencia actúa primero y
-// registra después, así que no exigimos que ya esté "en proceso").
+// Quién puede tocar las tarjetas del MOP/EOP: la jefatura mientras la OT no
+// esté cerrada; el técnico asignado mientras no la envíe a verificación (en una
+// emergencia actúa primero y registra después, así que no exigimos que ya esté
+// "en proceso"). Enviada, la corrige la jefatura o la devuelve.
 const otAbiertaParaRegistro = estadoActual !== "cerrada" && estadoActual !== "cancelada";
 const puedeRegistrarMop =
   otAbiertaParaRegistro &&
-  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && (esAsignado || estadoActual === "abierta")));
+  (esJefatura || (esTecnico && esAsignado && ordenSinEnviar));
 const puedeConfigurarMop = otAbiertaParaRegistro && (user.rol === "admin" || user.rol === "jefe");
 // Los tres tiempos del EOP se corrigen hacia atrás incluso con la orden ya
 // cerrada: de ellos salen los indicadores 5 y 7, y una hora mal escrita hay
 // que poder arreglarla. Queda en el audit log de la OT.
-const puedeEditarTiempos = user.rol === "admin" || user.rol === "jefe" || puedeRegistrarMop;
+// Al técnico no se le muestran: el celular las registra al primer toque.
+const puedeEditarTiempos = esJefatura;
+// El plan de reversa se guarda en la orden: del técnico, el servidor solo lo
+// acepta si la tiene asignada.
+const puedeGuardarReversa = puedeRegistrarMop;
 const muestraMop = esMop || prerrequisitos.length > 0 || liberaciones.length > 0 || !!o.planReversa;
 const muestraEop = esEop || !!o.horaAlarma || !!o.horaLlegada || !!o.horaMitigacion || !!o.horaRestablecimiento;
 
@@ -299,7 +343,10 @@ const roundsOrigins = await leerOrigenesRondaOrden(db, id);
 const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
 const esRevisor = esRevisorOrden(user, seguimiento.control);
 const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
-const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado)
+// El técnico solo mueve una orden suya o toma una abierta sin asignar: lo demás
+// el servidor se lo rechaza, así que no se le ofrece.
+const tecnicoMueve = !esTecnico || esAsignado || (estadoActual === "abierta" && !o.asignadoA);
+const proximas = (tecnicoMueve ? transicionesPermitidas(estadoActual, user.rol, esAsignado) : [])
   .filter((s) => !["verificada", "cerrada"].includes(s));
 if (["completada", "verificada"].includes(estadoActual) && puedeVerificar) proximas.push("verificada");
 if (["completada", "verificada", "cerrada"].includes(estadoActual) && esRevisor && !proximas.includes("en_proceso")) proximas.push("en_proceso");
@@ -312,16 +359,51 @@ const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
 // → Iniciar → trabajar → foto después. Bloqueadas solo en cerrada/cancelada.
 const puedeSubirAntes =
   estadoActual !== "cerrada" && estadoActual !== "cancelada" &&
-  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && esAsignado));
-const puedeAsignar = puedeAsignarse(user.rol);
+  (esJefatura || (esTecnico && (esAsignado || esRevisor))) &&
+  // Enviada a verificación, solo quien revisa agrega evidencia.
+  (ordenSinEnviar || esRevisor);
+// Retirar una foto: jefatura o técnico asignado, antes de enviar la orden.
+const puedeBorrarAntes = ordenSinEnviar && (esJefatura || (esTecnico && esAsignado));
+// La asignación la cambia la jefatura antes de enviar la orden. El técnico solo
+// puede tomar una orden abierta sin asignar.
+const puedeCambiarAsignacion = esJefatura && ordenSinEnviar;
+const puedeTomarOrden = esTecnico && estadoActual === "abierta" && !o.asignadoA;
+// Revertir un consumo devuelve stock: el servidor solo se lo deja a la jefatura.
+const puedeRevertirRepuesto = puedeEditar && esJefatura;
+// Lo que el servidor exige al MOP para enviarlo y verificarlo: las lecturas de
+// liberación obligatorias, medidas y dentro de rango. Con la reversa ejecutada
+// el sistema volvió a como estaba y no hay nada que liberar.
+const reversaHecha = !!o.reversaEjecutada;
+const faltanLecturas = esMop && !reversaHecha && bloqueoCierre.faltantes.length > 0;
+const lecturasFuera = esMop && !reversaHecha
+  ? liberaciones.filter((l) => l.obligatoria && evaluarConformeLiberacion(l.minAceptable, l.maxAceptable, l.valorMedido ?? null) === false)
+  : [];
+const envioBloqueado = faltanLecturas || lecturasFuera.length > 0;
+// Sin lectura (no fuera de rango), la jefatura lo envía a verificación con
+// motivo escrito. No lo cierra: queda pendiente de verificación.
+const puedeEnviarSinLectura = faltanLecturas && lecturasFuera.length === 0 && puedeCerrarSinLectura(user.rol) && estadoActual === "en_proceso";
+// Al verificar, el motivo ya registrado no se vuelve a pedir.
+const verifSinLectura: "registrado" | "pedir" | "bloqueada" | "fuera" | null =
+  lecturasFuera.length > 0 ? "fuera"
+  : !faltanLecturas ? null
+  : o.cierreSinLecturaMotivo?.trim() ? "registrado"
+  : puedeCerrarSinLectura(user.rol) ? "pedir" : "bloqueada";
+// Quien revisa sin ser jefatura no puede escribir la causa raíz que falta.
+const verifSinCausa = faltaCausa && !esJefatura;
 
 const ESTADO_PROGRESO: Record<EstadoOT, number> = {
   abierta: 1, en_proceso: 2, en_espera: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
 };
 const stepActual = ESTADO_PROGRESO[estadoActual];
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
+// Fechas DD/MM/AAAA en hora de El Salvador.
+const fmt = (s: string | null) => (s ? fmtFechaCompacta(s) : "-");
+const fmtDia = (s: string | null) =>
+  s ? new Date(s).toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/El_Salvador" }) : "-";
+// Un vencimiento guardado solo con fecha (AAAA-MM-DD) no pasa por Date: lo leería
+// como medianoche UTC y mostraría el día anterior.
+const fmtVence = (s: string | null) =>
+  !s ? "-" : /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? fmtFechaSoloCompacta(s) : fmtFechaCompacta(s);
 
 const adjsAntes = adjs.filter((a) => a.categoria === "antes");
 const adjsDespues = adjs.filter((a) => a.categoria === "despues");
@@ -343,7 +425,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <h2 class="font-semibold">Origen y trazabilidad de la orden</h2>
     {scheduledPM && <div class="mt-3 rounded bg-slate-50 p-3">
       <a class="font-medium text-brand-700 underline" href={areaHref(`/activos/${scheduledPM.activoId}#plan-${scheduledPM.id}`, area)}>PM programado #{scheduledPM.id} · {scheduledPM.titulo}</a>
-      <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {scheduledPM.proximaFecha}</p>
+      <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {fmtFechaSoloCompacta(scheduledPM.proximaFecha)}</p>
     </div>}
     {roundsOrigins.map(origin => <div class="mt-3 rounded bg-teal-50 p-3">
       <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de las {origin.turno} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
@@ -372,7 +454,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
       </div>
       <p class="mt-1 text-sm text-slate-500">
-        {etiquetaOT(o)} - creada {fmt(o.createdAt)}
+        {etiquetaOT(o)} - creada {verTiempos ? fmt(o.createdAt) : fmtDia(o.createdAt)}
         {procedimientoRef && (
           <span> · procedimiento <strong class="font-mono">{procedimientoRef.codigoCorto}</strong> v{procedimientoRef.version} — {procedimientoRef.titulo}</span>
         )}
@@ -520,7 +602,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   )}
   {estadoActual === "abierta" && (
     <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
-      <strong>OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
+      <strong>OT no iniciada.</strong> Verifica el lugar y los datos del equipo.
+      {verTiempos
+        ? <Fragment> Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.</Fragment>
+        : proximas.includes("en_proceso")
+          ? <Fragment> Cuando estés en sitio listo para trabajar, pulsa <strong>«Iniciar»</strong> para desbloquear los campos de ejecución.</Fragment>
+          : row.asignado ? <Fragment> Está asignada a {row.asignado.nombre}.</Fragment> : null}
     </div>
   )}
   {estadoActual === "en_espera" && (
@@ -547,7 +634,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <button id="guardarRevisor" type="button" class="btn-secondary">Guardar revisores</button>
     </div>}
     {seguimiento.eventos.length > 0 && <details class="mt-3"><summary class="cursor-pointer text-sm font-medium">Historial de ejecución, revisión y devoluciones ({seguimiento.eventos.length})</summary>
-      <ol class="mt-2 space-y-2 text-sm">{seguimiento.eventos.map(e => <li class="rounded border border-slate-200 p-2"><strong>{e.accion.replaceAll("_", " ")}</strong> · {e.actorNombre} · {fmt(e.ocurridoEn)}<p>{ESTADO_LABEL[e.estadoAntes as EstadoOT]} → {ESTADO_LABEL[e.estadoDespues as EstadoOT]} · Ciclo {e.ciclo}</p>{e.motivo && <p class="whitespace-pre-wrap">{e.motivo}</p>}</li>)}</ol>
+      <ol class="mt-2 space-y-2 text-sm">{seguimiento.eventos.map(e => <li class="rounded border border-slate-200 p-2"><strong>{e.accion.replaceAll("_", " ")}</strong> · {e.actorNombre} · {verTiempos ? fmt(e.ocurridoEn) : fmtDia(e.ocurridoEn)}<p>{ESTADO_LABEL[e.estadoAntes as EstadoOT]} → {ESTADO_LABEL[e.estadoDespues as EstadoOT]} · Ciclo {e.ciclo}</p>{e.motivo && <p class="whitespace-pre-wrap">{e.motivo}</p>}</li>)}</ol>
     </details>}
   </section>
 
@@ -571,18 +658,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {proximas.length > 0 && (
         <div class="mt-4 flex flex-wrap gap-2">
           {proximas.map((s) => {
-            // El MOP no deja empezar sin el permiso firmado: si quedan
-            // prerrequisitos obligatorios pendientes, "Iniciar" va bloqueado
-            // (la API lo rechaza igual, pero aquí se ve por qué).
-            const inicioBloqueado = s === "en_proceso" && esMop && bloqueoInicio.faltantes.length > 0;
+            // El MOP no deja empezar sin el permiso firmado ni enviarse sin sus
+            // lecturas de liberación: el botón va bloqueado (la API lo rechaza
+            // igual, pero aquí se ve por qué).
+            const inicioBloqueado = s === "en_proceso" && ["abierta", "en_espera"].includes(estadoActual) && esMop && bloqueoInicio.faltantes.length > 0;
+            const cierreBloqueado = s === "completada" && envioBloqueado;
+            const bloqueado = inicioBloqueado || cierreBloqueado;
             return (
             <button
               data-transition={s}
-              disabled={inicioBloqueado}
-              title={inicioBloqueado ? `Faltan prerrequisitos obligatorios: ${bloqueoInicio.faltantes.join(" · ")}` : undefined}
+              disabled={bloqueado}
+              title={inicioBloqueado ? `Faltan prerrequisitos obligatorios: ${bloqueoInicio.faltantes.join(" · ")}` : cierreBloqueado ? "Faltan lecturas de liberación o alguna quedó fuera de rango" : undefined}
               class:list={[
                 "rounded-md px-3 py-1.5 text-sm font-medium",
-                inicioBloqueado ? "cursor-not-allowed bg-slate-200 text-slate-500" :
+                bloqueado ? "cursor-not-allowed bg-slate-200 text-slate-500" :
                 s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
                 s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
                 s === "verificada" ? "bg-brand-600 text-white hover:bg-brand-800" :
@@ -597,11 +686,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                s === "verificada" ? "✓✓ Verificar y cerrar" :
                s === "cerrada" ? "Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
-              {inicioBloqueado && <span class="ml-1"></span>}
             </button>
             );
           })}
         </div>
+      )}
+      {proximas.includes("en_proceso") && ["abierta", "en_espera"].includes(estadoActual) && esMop && bloqueoInicio.faltantes.length > 0 && (
+        <p class="mt-2 text-xs text-slate-600">Para iniciar faltan prerrequisitos obligatorios: márcalos en «Prerrequisitos de la intervención».</p>
+      )}
+      {proximas.includes("completada") && envioBloqueado && (
+        <p class="mt-2 text-xs text-slate-600">Para enviar a verificación faltan lecturas de liberación o alguna quedó fuera de rango: revisa «Lecturas de liberación».</p>
       )}
     </div>
   )}
@@ -665,12 +759,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   aquí solo se dice que existen, no se repiten. */}
               {esMop && (
                 <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                  Por ser una intervención, no inicia sin sus <strong>{prerrequisitos.length} prerrequisito{prerrequisitos.length === 1 ? "" : "s"}</strong> ({prerreqCumplidos} cumplido{prerreqCumplidos === 1 ? "" : "s"}) ni cierra sin sus <strong>{liberaciones.length} lectura{liberaciones.length === 1 ? "" : "s"} de liberación</strong> ({liberacionesConLectura} medida{liberacionesConLectura === 1 ? "" : "s"}). Se registran más abajo, en esta misma ficha.
+                  Por ser una intervención, no inicia sin sus <strong>{prerrequisitos.length} prerrequisito{prerrequisitos.length === 1 ? "" : "s"}</strong> ({prerreqCumplidos} cumplido{prerreqCumplidos === 1 ? "" : "s"}) ni se envía a verificación sin sus <strong>{liberaciones.length} lectura{liberaciones.length === 1 ? "" : "s"} de liberación</strong> ({liberacionesConLectura} medida{liberacionesConLectura === 1 ? "" : "s"}). Se registran más abajo, en esta misma ficha.
                 </p>
               )}
               {esEop && (
                 <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                  Por ser una emergencia, los <strong>tres tiempos</strong> y la <strong>causa raíz</strong> se registran más abajo: de ahí salen los indicadores 5 y 7.
+                  {verTiempos
+                    ? <Fragment>Por ser una emergencia, los <strong>tres tiempos</strong> y la <strong>causa raíz</strong> se registran más abajo: de ahí salen los indicadores 5 y 7.</Fragment>
+                    : <Fragment>Por ser una emergencia, cada paso se registra desde tu celular, en «Hoy».</Fragment>}
                 </p>
               )}
 
@@ -718,7 +814,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <span id="clasifMsg" class="text-xs text-slate-400"></span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
-            El tipo decide qué exige la orden: una <strong>intervención (MOP)</strong> no inicia sin prerrequisitos ni cierra sin lecturas de liberación; una <strong>emergencia (EOP)</strong> no cierra sin causa raíz. La clase fija el compromiso de respuesta del plan maestro de 52 semanas.
+            El tipo decide qué exige la orden: una <strong>intervención (MOP)</strong> no inicia sin prerrequisitos ni se envía a verificación sin lecturas de liberación; una <strong>emergencia (EOP)</strong> no se verifica ni se cierra sin causa raíz. La clase fija el compromiso de respuesta del plan maestro de 52 semanas.
           </p>
           <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
@@ -758,9 +854,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraEop && (
         <div class="card p-5 border-l-4 border-red-500">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="font-semibold text-slate-900">Emergencia · los tres tiempos</h2>
+            <h2 class="font-semibold text-slate-900">{verTiempos ? "Emergencia · los tres tiempos" : "Emergencia · pasos registrados"}</h2>
             <span id="eopMsg" class="text-xs text-slate-400"></span>
           </div>
+          {verTiempos ? (
+          <Fragment>
           <p class="mt-1 text-xs text-slate-600">
             En una emergencia nadie abre una pantalla: se toma el EOP de la pared y se actúa. <strong>Estas horas se registran después y se pueden corregir hacia atrás</strong> — escribe la hora real, no la hora en que llenas el formulario.
           </p>
@@ -812,12 +910,30 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           {(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && (
             <p class="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
           )}
-          {o.causaRaizVencimiento && (
+          </Fragment>
+          ) : (
+            <Fragment>
+              {/* El técnico ve qué pasos quedaron registrados, no sus horas. */}
+              <ul class="mt-3 space-y-2 text-sm" aria-label="Pasos de la emergencia">
+                {hitosEop.map((h) => (
+                  <li class:list={["flex items-center justify-between gap-3 rounded-lg border p-3", h.hecho ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"]}>
+                    <span class="font-medium text-slate-900">{h.etiqueta}</span>
+                    <span class:list={["shrink-0 text-xs font-semibold", h.hecho ? "text-emerald-700" : "text-slate-500"]}>{h.hecho ? "Registrado" : "Pendiente"}</span>
+                  </li>
+                ))}
+              </ul>
+              {otAbiertaParaRegistro && (esAsignado || !o.asignadoA) && (
+                <p class="mt-3 text-xs text-slate-600">Cada paso se registra desde tu celular, en <a href="/campo" class="font-medium text-brand-700 underline">Hoy</a>, al tocarlo. Si alguno quedó mal, avisa a tu jefatura: ella lo corrige aquí.</p>
+              )}
+            </Fragment>
+          )}
+          {!esTecnico && o.causaRaizVencimiento && (
             <p class:list={["mt-3 rounded px-3 py-2 text-xs", causaVencida ? "bg-red-50 text-red-700 font-medium" : "bg-blue-50 text-blue-700"]}>
               Análisis de causa raíz: plazo de {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}.
               {causaVencida
                 ? " VENCIDO y sin causa raíz escrita. Documéntalo hoy e informa al Comité de Seguridad."
-                : o.causaRaiz ? " Ya hay causa raíz registrada." : " Escríbelo en «Ejecución del trabajo» antes del plazo."}
+                : o.causaRaiz ? " Ya hay causa raíz registrada."
+                : esJefatura ? " Escríbela en «Causa raíz», más abajo, antes del plazo." : " La escribe la jefatura antes del plazo."}
             </p>
           )}
         </div>
@@ -941,22 +1057,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-3 space-y-3 text-sm">
             <div>
               <label class="label text-xs" for="planReversa">Plan de reversa</label>
-              <textarea id="planReversa" class="input" rows="3" disabled={!puedeRegistrarMop}
+              <textarea id="planReversa" class="input" rows="3" disabled={!puedeGuardarReversa}
                         placeholder="Ej. Si la planta arranca pero la transferencia no retorna a normal: operar la retransferencia en manual según el SCP-ELE-01 con dos técnicos, mantener la planta hasta confirmar red estable y abrir orden correctiva.">{o.planReversa ?? ""}</textarea>
             </div>
             <label class:list={["flex items-start gap-2 rounded-lg p-2", o.reversaEjecutada ? "bg-amber-50" : ""]}>
-              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeRegistrarMop} />
+              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeGuardarReversa} />
               <span>
                 <span class="text-sm font-medium text-slate-900">Se ejecutó la reversa</span>
-                <span class="block text-xs text-slate-500">El sistema no volvió solo: hubo que revertir. Describe abajo qué se revirtió y cómo quedó.</span>
+                <span class="block text-xs text-slate-500">El sistema no volvió solo: hubo que revertir. Describe abajo qué se revirtió y cómo quedó. Con la reversa marcada no se exigen las lecturas de liberación: el sistema quedó como estaba.</span>
               </span>
             </label>
             <div>
               <label class="label text-xs" for="reversaNotas">Qué se revirtió y cómo quedó el sistema</label>
-              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeRegistrarMop}
+              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeGuardarReversa}
                         placeholder="Mínimo 10 caracteres. Ej. Retransferencia en manual con dos técnicos; planta sostenida hasta confirmar red estable; se abrió la orden correctiva OT-MG...">{o.reversaNotas ?? ""}</textarea>
             </div>
-            {puedeRegistrarMop && (
+            {puedeGuardarReversa && (
               <div class="flex justify-end">
                 <button id="reversaSave" type="button" class="btn-secondary text-xs">Guardar plan de reversa</button>
               </div>
@@ -1037,14 +1153,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
       )}
 
-      {!row.activo && puedeAsignarActivo && (
+      {/* Sin equipo, la tarjeta dice dónde es el trabajo. El botón solo sale a
+          quien el servidor le acepta el cambio. */}
+      {!row.activo && (puedeAsignarActivo || ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
         <div class="card p-5 border-l-4 border-slate-300">
           <div class="flex items-center justify-between">
             <div>
               <h2 class="font-semibold text-slate-900">Lugar a intervenir (sin equipo)</h2>
               <p class="text-xs text-slate-400 italic mt-0.5">Trabajo general — no asociado a un equipo registrado</p>
             </div>
-            <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+            {puedeAsignarActivo && (
+              <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+            )}
           </div>
           {(ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
             <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
@@ -1067,6 +1187,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               )}
             </div>
           )}
+          {puedeAsignarActivo && (
           <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
               <label class="label text-xs">1. Sucursal</label>
@@ -1093,6 +1214,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1110,7 +1232,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {adjsAntes.map((a) => (
               <div class="relative group rounded bg-slate-50 p-2 text-xs">
-                {puedeSubirAntes && (
+                {puedeBorrarAntes && (
                   <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-white text-red-600 border border-red-600 w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
                 )}
                 {a.contentType.startsWith("image/") && (
@@ -1136,28 +1258,32 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         )}
       </div>
 
-      <!-- Línea de tiempo de la OT -->
+      <!-- Línea de tiempo de la OT. Al técnico solo a quién está asignada y el plazo. -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">Tiempos</h2>
+        <h2 class="font-semibold text-slate-900">{verTiempos ? "Tiempos" : "Asignación y plazo"}</h2>
         <div class="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div>
             <div class="text-xs uppercase text-slate-500">Asignado</div>
             <div class="mt-0.5">{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div>
           </div>
           <div>
-            <div class="text-xs uppercase text-slate-500">Vencimiento</div>
-            <div class="mt-0.5">{fmtDate(o.vencimiento)}</div>
+            <div class="text-xs uppercase text-slate-500">Vence</div>
+            <div class="mt-0.5">{fmtVence(o.vencimiento)}</div>
           </div>
-          <div>
-            <div class="text-xs uppercase text-slate-500">Iniciada</div>
-            <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
-          </div>
-          <div>
-            <div class="text-xs uppercase text-slate-500">Completada</div>
-            <div class="mt-0.5">{fmt(o.completadaEn)}</div>
-          </div>
+          {verTiempos && (
+            <Fragment>
+              <div>
+                <div class="text-xs uppercase text-slate-500">Iniciada</div>
+                <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-slate-500">Completada</div>
+                <div class="mt-0.5">{fmt(o.completadaEn)}</div>
+              </div>
+            </Fragment>
+          )}
         </div>
-        {o.iniciadaEn && (
+        {verTiempos && o.iniciadaEn && (
           <div class:list={["mt-3 rounded px-3 py-2 text-xs", estadoActual === "en_espera" ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700"]}>
             {o.completadaEn ? (
               <>
@@ -1216,10 +1342,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">CRÍTICO</span>}
                     {it.texto}
                   </div>
-                  {(it.criterio || it.minutos || it.materiales) && (
+                  {(it.criterio || (verTiempos && it.minutos) || it.materiales) && (
                     <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                       {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">Criterio: {it.criterio}</span>}
-                      {it.minutos && <span class="text-slate-500">{it.minutos} min</span>}
+                      {verTiempos && it.minutos && <span class="text-slate-500">{it.minutos} min</span>}
                       {it.materiales && <span class="text-slate-500">{it.materiales}</span>}
                     </div>
                   )}
@@ -1314,27 +1440,37 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <span class="text-xs text-slate-500">
               {liberacionesConLectura} / {liberaciones.length} medidas
               {liberacionesNoConformes > 0 && <span class="ml-2 rounded bg-white text-red-600 border border-red-600 px-1.5 py-0.5 font-medium ">{liberacionesNoConformes} fuera de rango</span>}
-              {bloqueoCierre.faltantes.length > 0 && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">{bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el cierre</span>}
+              {faltanLecturas && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">{bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el envío</span>}
               <span id="liberMsg" class="ml-2 text-slate-400"></span>
             </span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
-            Es la sección de cierre del MOP: <strong>la orden no cierra sin la lectura de liberación</strong>. Al escribir el valor medido se calcula si quedó conforme contra el rango del SCP. Una lectura fuera de rango no libera el sistema: no se devuelve a servicio.
+            Es la sección de cierre del MOP: <strong>la orden no se envía a verificación sin la lectura de liberación</strong>. Al escribir el valor medido se calcula si quedó conforme contra el rango del SCP. Una lectura fuera de rango no libera el sistema: no se devuelve a servicio.
           </p>
-          {esMop && bloqueoCierre.faltantes.length > 0 && (
-            <div class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>Esta orden no se puede cerrar todavía.</strong> Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
-              <ul class="mt-1 list-disc pl-5">
-                {bloqueoCierre.faltantes.map((f) => <li>{f}</li>)}
-              </ul>
-              {puedeCerrarSinLectura(user.rol)
-                ? <p class="mt-2 text-xs">Si de verdad no se pudo medir, la jefatura puede cerrar con motivo escrito usando <strong>«Cerrar sin lectura»</strong>. Queda registrado con tu nombre.</p>
-                : <p class="mt-2 text-xs">Si no se pudo medir, pide a tu jefatura que la cierre con motivo escrito: tú no puedes saltarte la lectura.</p>}
+          {envioBloqueado && ordenSinEnviar && (
+            <div id="liberBloqueo" class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              <strong>Esta orden no se puede enviar a verificación todavía.</strong>
+              {faltanLecturas && (
+                <Fragment>
+                  {" "}Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
+                  <ul class="mt-1 list-disc pl-5">
+                    {bloqueoCierre.faltantes.map((f) => <li>{f}</li>)}
+                  </ul>
+                </Fragment>
+              )}
+              {lecturasFuera.length > 0 ? (
+                <Fragment>
+                  <p class="mt-1">Fuera de rango: {lecturasFuera.map((l) => l.etiqueta).join(" · ")}.</p>
+                  <p class="mt-2 text-xs">Una lectura fuera de rango no libera el sistema: repite la medición o, si revertiste el trabajo, marca la reversa.</p>
+                </Fragment>
+              ) : puedeCerrarSinLectura(user.rol)
+                ? <p class="mt-2 text-xs">Si de verdad no se pudo medir, la jefatura puede enviarla a verificación sin la lectura, con motivo escrito, usando <strong>«Enviar a verificación sin lectura»</strong>. La orden no se cierra: queda pendiente de verificación y el motivo queda registrado con tu nombre.</p>
+                : <p class="mt-2 text-xs">Si no se pudo medir, pide a tu jefatura que la envíe a verificación sin lectura, con motivo escrito: tú no puedes saltarte la lectura. Si revertiste el trabajo, marca la reversa.</p>}
             </div>
           )}
           {o.cierreSinLecturaMotivo && (
             <div class="mt-3 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>Cerrada sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}
+              <strong>Enviada a verificación sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}{(estadoActual === "completada" || estadoActual === "verificada") && " · Pendiente de verificación."}
               <p class="mt-1 whitespace-pre-wrap">{o.cierreSinLecturaMotivo}</p>
             </div>
           )}
@@ -1430,15 +1566,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </div>
             </div>
           )}
-          {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && bloqueoCierre.faltantes.length > 0 && (
+          {puedeEnviarSinLectura && (
             <div class="mt-3 flex justify-end">
-              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">Cerrar sin lectura (requiere motivo)</button>
+              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">Enviar a verificación sin lectura (requiere motivo)</button>
             </div>
           )}
         </div>
       )}
 
-      <!-- Trabajos realizados / causa raiz / solucion -->
+      <!-- Ejecución: qué se encontró y qué se hizo. La causa raíz va aparte: la escribe la jefatura. -->
       <div class="card p-5">
         <div class="flex items-center justify-between gap-2">
           <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
@@ -1446,35 +1582,25 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
         <div class="mt-3 space-y-3 text-sm">
           <div>
-            <label class="label">Trabajos realizados</label>
-            <textarea id="trabajosRealizados" class="input" rows="3" placeholder="Describe qué se hizo..." disabled={!puedeEditar}>{o.trabajosRealizados ?? ""}</textarea>
+            <label class="label" for="trabajosRealizados">Trabajos realizados</label>
+            <textarea id="trabajosRealizados" class="input" rows="3" placeholder="Qué encontraste y qué hiciste." disabled={!puedeEditar}>{o.trabajosRealizados ?? ""}</textarea>
           </div>
-          {(o.tipo === "correctivo" || esEop || esMop || reqCausa.requiere) && (
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label class="label">
-                  Causa raíz
-                  {reqCausa.requiere && <span class="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">OBLIGATORIA PARA CERRAR</span>}
-                </label>
-                <textarea id="causaRaiz" class:list={["input", reqCausa.requiere && !(o.causaRaiz ?? "").trim() && "border-red-300"]} rows={reqCausa.requiere ? 4 : 2} disabled={!puedeEditar}>{o.causaRaiz ?? ""}</textarea>
-                {reqCausa.requiere && (
-                  <p class:list={["mt-1 text-xs", causaVencida ? "text-red-700 font-medium" : "text-slate-500"]}>
-                    {reqCausa.motivo} Mínimo {MIN_CAUSA_RAIZ} caracteres.
-                    {o.causaRaizVencimiento && <> Plazo: {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}{causaVencida ? " (VENCIDO)" : ""}.</>}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label class="label">Solución aplicada</label>
-                <textarea id="solucionAplicada" class="input" rows="2" disabled={!puedeEditar}>{o.solucionAplicada ?? ""}</textarea>
-              </div>
+          {muestraSolucion && (
+            <div>
+              <label class="label" for="solucionAplicada">Solución aplicada</label>
+              <textarea id="solucionAplicada" class="input" rows="2" disabled={!puedeEditar}>{o.solucionAplicada ?? ""}</textarea>
             </div>
           )}
-          <div>
-            <label class="label">Horas trabajadas</label>
-            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
-            <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
-          </div>
+          {esTecnico && muestraCausa && (
+            <p class="rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">La causa raíz la escribe tu jefatura.</p>
+          )}
+          {verTiempos && (
+            <div>
+              <label class="label" for="horasTrabajadas">Horas trabajadas</label>
+              <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
+              <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
+            </div>
+          )}
           {puedeEditar && (
             <div class="flex items-center gap-2 flex-wrap">
               <p class="text-xs text-emerald-700 mr-auto">✓ Tus cambios se guardan automáticamente al escribir.</p>
@@ -1484,6 +1610,34 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <p id="ejecMsg" class="hidden text-xs"></p>
         </div>
       </div>
+
+      <!-- ══ Causa raíz · la escribe la jefatura, dentro de las 72 h ══ -->
+      {muestraCausa && !esTecnico && (
+        <div id="causaCard" class:list={["card p-5", reqCausa.requiere && "border-l-4", causaVencida ? "border-red-500" : "border-brand-500"]}>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="font-semibold text-slate-900"><label for="causaRaiz">Causa raíz · la escribe la jefatura</label></h2>
+            <span id="causaMsg" class="text-xs text-slate-400"></span>
+          </div>
+          <p class:list={["mt-1 text-xs", causaVencida ? "font-medium text-red-700" : "text-slate-600"]}>
+            {reqCausa.requiere
+              ? <Fragment><strong>Obligatoria para verificar y cerrar.</strong> {reqCausa.motivo}</Fragment>
+              : <Fragment>Opcional en esta orden.</Fragment>}
+            {o.causaRaizVencimiento
+              ? <Fragment> Plazo: {HORAS_CAUSA_RAIZ} h desde la alarma, vence {fmt(o.causaRaizVencimiento)}{causaVencida ? ". Vencido" : ""}.</Fragment>
+              : <Fragment> Se escribe dentro de las {HORAS_CAUSA_RAIZ} h.</Fragment>}
+          </p>
+          <textarea id="causaRaiz" class:list={["input mt-3", faltaCausa && "border-red-300"]} rows={reqCausa.requiere ? 4 : 2}
+                    disabled={!puedeEscribirCausa} placeholder="Por qué falló, no qué se hizo.">{o.causaRaiz ?? ""}</textarea>
+          {puedeEscribirCausa ? (
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <p class="mr-auto text-xs text-slate-500">Mínimo {MIN_CAUSA_RAIZ} caracteres. Se guarda sola al escribir{ordenSinEnviar ? "" : ", aunque la orden ya esté enviada o cerrada"}.</p>
+              <button id="causaSave" type="button" class="btn-secondary text-xs">Guardar causa raíz</button>
+            </div>
+          ) : esJefatura && (
+            <p class="mt-2 text-xs text-slate-500">{estadoActual === "abierta" ? "Se escribe una vez iniciada la orden." : "La orden está cancelada."}</p>
+          )}
+        </div>
+      )}
 
       <!-- Repuestos consumidos -->
       {(itemsActivos.length > 0 || repuestosRows.length > 0) && (
@@ -1505,7 +1659,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     <th class="px-3 py-1.5 text-right">Cant.</th>
                     <th class="px-3 py-1.5 text-right">P. unit.</th>
                     <th class="px-3 py-1.5 text-right">Subtotal</th>
-                    {puedeEditar && <th class="px-3 py-1.5"></th>}
+                    {puedeRevertirRepuesto && <th class="px-3 py-1.5"></th>}
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -1519,7 +1673,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                         <td class="px-3 py-1.5 text-right font-mono">{fmtCantidad(r.rep.cantidad, r.it?.unidad)}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{r.rep.precioUnitario != null ? `$${r.rep.precioUnitario.toFixed(2)}` : "—"}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{sub > 0 ? `$${sub.toFixed(2)}` : "—"}</td>
-                        {puedeEditar && (
+                        {puedeRevertirRepuesto && (
                           <td class="px-3 py-1.5 text-right">
                             <button class="rep-del-btn text-xs text-red-500 hover:underline" data-id={r.rep.id}>Revertir</button>
                           </td>
@@ -1657,7 +1811,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     <!-- Sidebar: Asignacion + Comentarios -->
     <div class="space-y-4">
-      {puedeAsignar && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+      {puedeTomarOrden && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Asignación</h2>
+          <p class="mt-2 text-sm text-slate-600">Esta orden no tiene técnico asignado.</p>
+          <button id="tomarOrdenBtn" type="button" class="btn-primary mt-3 w-full justify-center">Tomar esta orden</button>
+        </div>
+      )}
+      {puedeCambiarAsignacion && (
         <div class="card p-5">
           <h2 class="font-semibold text-slate-900">Asignación</h2>
           <div class="mt-3 space-y-2 text-sm">
@@ -1805,7 +1966,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
       <h2 class="font-semibold text-slate-900">Firmas digitales</h2>
-      <a href={`/ordenes/${o.id}/reporte`} class="btn-primary text-sm">Reporte de mantenimiento</a>
+      {/* El reporte trae los tiempos de medición: es de la jefatura. */}
+      {verTiempos && <a href={`/ordenes/${o.id}/reporte`} class="btn-primary text-sm">Reporte de mantenimiento</a>}
     </div>
     <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
       {(["tecnico", "jefe", "solicitante"] as const).map((rol) => {
@@ -1813,6 +1975,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const nombre = rol === "tecnico" ? o.firmaTecnicoNombre : rol === "jefe" ? o.firmaJefeNombre : o.firmaSolicitanteNombre;
         const fecha = rol === "tecnico" ? o.firmaTecnicoFecha : rol === "jefe" ? o.firmaJefeFecha : o.firmaSolicitanteFecha;
         const labels = { tecnico: "Técnico", jefe: "Jefe / Supervisor", solicitante: "Solicitante / Usuario" };
+        // La firma de la jefatura solo la pone la jefatura: el servidor se la rechaza a los demás.
+        const puedeFirmar = rol !== "jefe" || esJefatura;
         return (
           <div class="rounded-lg border border-slate-200 p-3">
             <div class="text-xs font-medium uppercase text-slate-500">{labels[rol]}</div>
@@ -1820,13 +1984,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <div class="mt-2">
                 <img src={`/api/firmas/${o.id}/${rol}`} alt={`Firma ${rol}`} class="h-20 w-full rounded bg-white object-contain" />
                 <div class="mt-1 text-xs text-slate-600"><strong>{nombre}</strong></div>
-                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es", { timeZone: "America/El_Salvador" }) : ""}</div>
-                <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>
+                <div class="text-[10px] text-slate-400">{fecha ? fmt(fecha) : ""}</div>
+                {puedeFirmar && <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>}
               </div>
-            ) : (
+            ) : puedeFirmar ? (
               <button class="firma-add-btn mt-2 w-full rounded border border-dashed border-slate-300 py-3 text-xs text-slate-500 hover:border-brand-500 hover:text-brand-700" data-rol={rol}>
                 + Agregar firma
               </button>
+            ) : (
+              <p class="mt-2 text-xs text-slate-400">Sin firma. La pone la jefatura.</p>
             )}
           </div>
         );
@@ -1850,18 +2016,41 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <!-- Modal verificacion (capturar notas) -->
+  <!-- Modal verificacion (capturar notas): solo para quien puede verificar -->
+  {proximas.includes("verificada") && (
   <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
     <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
       <h3 class="font-semibold text-slate-900">Verificar y cerrar orden</h3>
       <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. La OT pasará a <strong>cerrada</strong> y se enviará la encuesta de satisfacción al solicitante. Debes registrar qué evidencia comprobaste y el resultado. No puedes verificar tu propia ejecución.</p>
+      {verifSinLectura === "registrado" && (
+        <div id="verifSinLecturaRegistrado" class="mt-3 rounded border-l-4 border-amber-500 bg-amber-50 p-3 text-xs text-amber-900">
+          <strong>Enviada a verificación sin lectura de liberación.</strong> El motivo ya quedó registrado; no hace falta escribirlo otra vez.
+          <p class="mt-1 whitespace-pre-wrap">{o.cierreSinLecturaMotivo}</p>
+        </div>
+      )}
+      {verifSinLectura === "pedir" && (
+        <div class="mt-3">
+          <label class="label text-xs" for="verifSinLecturaMotivo">Faltan lecturas de liberación. Motivo para cerrar sin ellas (mínimo 20 caracteres)</label>
+          <textarea id="verifSinLecturaMotivo" class="input" rows="3"></textarea>
+        </div>
+      )}
+      {verifSinLectura === "bloqueada" && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Faltan lecturas de liberación obligatorias y solo la jefatura puede cerrar sin ellas. Devuelve la orden para que se midan.</p>
+      )}
+      {verifSinLectura === "fuera" && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Una lectura de liberación quedó fuera de rango: el sistema no se libera. Devuelve la orden para repetir la medición.</p>
+      )}
+      {verifSinCausa && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Falta la causa raíz. La escribe la jefatura: hasta entonces no se puede verificar.</p>
+      )}
       <textarea id="verifNotas" class="input mt-3" rows="3" minlength="10" required placeholder="Evidencia revisada, pruebas realizadas y resultado (obligatorio)"></textarea>
       <div class="mt-3 flex justify-end gap-2">
         <button id="verifCancel" class="btn-secondary">Cancelar</button>
-        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Verificar y cerrar</button>
+        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700" disabled={verifSinLectura === "bloqueada" || verifSinLectura === "fuera" || verifSinCausa}>Verificar y cerrar</button>
       </div>
     </div>
   </div>
+  )}
 
   <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({
     id,
@@ -1874,8 +2063,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     sucursalActualId: row.sucursal?.id ?? null,
     ubicacionActualId: row.ubicacion?.id ?? null,
     activoActualId: row.activo?.id ?? null,
+    usuarioId: user.id,
+    causaObligatoria: reqCausa.requiere,
+    minCausa: MIN_CAUSA_RAIZ,
   }) }}>
-    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId, usuarioId, causaObligatoria, minCausa } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
     // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
     // toda la página (botones incluidos). Ante error, se trata como vacío.
@@ -1985,7 +2177,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     document.querySelectorAll("[data-transition]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const estado = btn.dataset.transition;
+        // La causa raíz pendiente sale antes que cualquier cambio de estado.
+        const causaAlDia = await guardarCausa();
         if (estado === "verificada") {
+          if (!causaAlDia) { $("causaCard")?.scrollIntoView?.({ behavior: "smooth", block: "center" }); return; }
+          if (!causaLista()) return;
           $("verifModal").classList.remove("hidden");
           $("verifModal").classList.add("flex");
           return;
@@ -1994,11 +2190,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
         // Submit notes and checklist with completion in one atomic request.
         let evidencia = {};
-        if (estado === "completada") {
-          if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
-          if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
-          evidencia = { ...leerEjecPayload(), checklistEjecucion: JSON.stringify(checklist ?? []) };
-        }
+        if (estado === "completada") evidencia = evidenciaPendiente();
         let motivo;
         if (estado === "en_espera" || (estado === "en_proceso" && ["completada", "verificada", "cerrada"].includes(estadoActual))) {
           motivo = prompt(estado === "en_espera" ? "Motivo del bloqueo o espera:" : "Motivo de devolución o reapertura (mínimo 10 caracteres):");
@@ -2017,7 +2209,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     $("verifConfirm")?.addEventListener("click", async () => {
       const notas = $("verifNotas").value.trim();
       if (notas.length < 10) { alert("Describe la evidencia revisada y el resultado (mínimo 10 caracteres)."); return; }
-      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas });
+      // Un MOP enviado sin lectura ya trae su motivo: no se vuelve a pedir ni a
+      // mandar. Solo se escribe cuando faltan lecturas y nadie lo registró.
+      let sinLectura = null;
+      const pedido = $("verifSinLecturaMotivo");
+      if (pedido) {
+        sinLectura = pedido.value.trim();
+        if (sinLectura.length < 20) { alert("Explica por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres)."); pedido.focus(); return; }
+      }
+      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas, ...(sinLectura ? { cierreSinLecturaMotivo: sinLectura } : {}) });
       if (r) location.reload();
     });
 
@@ -2034,6 +2234,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const payload = { asignadoA: v ? Number(v) : null };
       if (motivo) payload.motivoReasignacion = motivo;
       const r = await patchOrden(payload);
+      if (r) location.reload();
+    });
+
+    // El técnico toma una orden abierta sin asignar.
+    $("tomarOrdenBtn")?.addEventListener("click", async () => {
+      const r = await patchOrden({ asignadoA: usuarioId });
       if (r) location.reload();
     });
 
@@ -2264,7 +2470,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
     const STORAGE_KEY = `ot-${id}-draft`;
-    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada"];
+    // La causa raíz no va aquí: la escribe la jefatura y se guarda aparte, para
+    // que lo que guarda el técnico nunca la borre.
+    const ejecFields = ["trabajosRealizados", "solucionAplicada"];
     const ejecIndicador = $("autosaveIndicador");
 
     function setIndicador(estado, texto) {
@@ -2283,12 +2491,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     function leerEjecPayload() {
       // horasTrabajadas se calcula en el servidor automaticamente al cerrar.
-      // No se envia desde el cliente.
-      return {
-        trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
-        causaRaiz: $("causaRaiz")?.value?.trim() || null,
-        solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
-      };
+      // No se envia desde el cliente. Solo viajan los campos que hay en pantalla
+      // y se pueden escribir: un campo ausente no se manda vacío.
+      const payload = {};
+      for (const campo of ejecFields) {
+        const el = $(campo);
+        if (el && !el.disabled) payload[campo] = el.value.trim() || null;
+      }
+      return payload;
     }
 
     function guardarLocal(payload) {
@@ -2360,22 +2570,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (!raw) return;
         const { payload, savedAt } = JSON.parse(raw);
         if (!payload) return;
-        // Comparar con valores actuales del DOM (que vienen del servidor)
-        const actualTrab = ($("trabajosRealizados")?.value || "").trim();
-        const actualCausa = ($("causaRaiz")?.value || "").trim();
-        const actualSol = ($("solucionAplicada")?.value || "").trim();
-        const cambios = (
-          (payload.trabajosRealizados ?? "") !== actualTrab ||
-          (payload.causaRaiz ?? "") !== actualCausa ||
-          (payload.solucionAplicada ?? "") !== actualSol
-        );
-        if (!cambios) { limpiarLocal(); return; }
-        const fechaSave = new Date(savedAt).toLocaleString("es", { timeZone: "America/El_Salvador" });
+        // Comparar con valores actuales del DOM (que vienen del servidor). Solo
+        // cuentan los campos que hoy se pueden escribir en pantalla.
+        const campos = ejecFields.filter((c) => $(c) && !$(c).disabled && payload[c] !== undefined);
+        if (!campos.length) return;
+        const cambios = campos.filter((c) => (payload[c] ?? "") !== ($(c).value || "").trim());
+        if (!cambios.length) { limpiarLocal(); return; }
+        const fechaSave = new Date(savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
         const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
         if (confirm(mensaje)) {
-          if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
-          if ($("causaRaiz") && payload.causaRaiz != null) $("causaRaiz").value = payload.causaRaiz;
-          if ($("solucionAplicada") && payload.solucionAplicada != null) $("solucionAplicada").value = payload.solucionAplicada;
+          for (const c of cambios) if (payload[c] != null) $(c).value = payload[c];
           // Disparar guardado inmediato al servidor
           ejecutarGuardado();
         } else {
@@ -2386,11 +2590,135 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
     window.addEventListener("beforeunload", (e) => {
-      if (debounceTimer || inFlight) {
+      if (debounceTimer || inFlight || causaTimer) {
         e.preventDefault();
         e.returnValue = "";
       }
     });
+
+    // Lo escrito y marcado que todavía no salió al servidor, para mandarlo
+    // junto con el envío a verificación (también el envío sin lectura).
+    function evidenciaPendiente() {
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      return { ...leerEjecPayload(), checklistEjecucion: JSON.stringify(checklist ?? []) };
+    }
+    window.otEvidenciaPendiente = evidenciaPendiente;
+
+    // ── Causa raíz: la escribe la jefatura, también con la orden enviada ──
+    // Viaja sola, nunca junto con lo que escribe el técnico.
+    const causaEl = $("causaRaiz");
+    const causaEditable = !!causaEl && !causaEl.disabled;
+    const CAUSA_KEY = `ot-${id}-causa`;
+    let causaTimer = null;
+    let causaGuardada = causaEl ? causaEl.value.trim() : "";
+
+    function avisoCausa(texto, color) {
+      const m = $("causaMsg");
+      if (m) { m.textContent = texto; m.className = "text-xs " + color; }
+    }
+
+    async function guardarCausa() {
+      if (causaTimer) { clearTimeout(causaTimer); causaTimer = null; }
+      if (!causaEditable) return true;
+      const valor = causaEl.value.trim();
+      if (valor === causaGuardada) return true;
+      avisoCausa("Guardando…", "text-amber-600");
+      try {
+        const res = await fetch(`/api/ordenes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ causaRaiz: valor || null }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          avisoCausa(typeof j.error === "string" ? `Sin guardar: ${j.error}` : "Sin guardar", "text-red-600");
+          return false;
+        }
+        causaGuardada = valor;
+        try { localStorage.removeItem(CAUSA_KEY); } catch {}
+        avisoCausa("Guardada", "text-emerald-600");
+        return true;
+      } catch {
+        avisoCausa("Sin conexión: queda guardada en este equipo", "text-amber-700");
+        return false;
+      }
+    }
+
+    // Verificar y cerrar exige la causa raíz cuando el tipo la pide.
+    function causaLista() {
+      if (!causaObligatoria || !causaEl) return true;
+      if (causaEl.value.trim().length >= minCausa) return true;
+      avisoCausa(`Falta la causa raíz: mínimo ${minCausa} caracteres.`, "text-red-600");
+      $("causaCard")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      if (causaEditable) causaEl.focus();
+      return false;
+    }
+
+    if (causaEditable) {
+      causaEl.addEventListener("input", () => {
+        try { localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: causaEl.value, savedAt: Date.now() })); } catch {}
+        avisoCausa("Editando…", "text-amber-600");
+        if (causaTimer) clearTimeout(causaTimer);
+        causaTimer = setTimeout(guardarCausa, 1500);
+      });
+      $("causaSave")?.addEventListener("click", () => { guardarCausa(); });
+      // Lo que quedó sin guardar (sin señal, pestaña cerrada) se ofrece al volver.
+      try {
+        const borrador = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null");
+        if (borrador && typeof borrador.valor === "string") {
+          if (borrador.valor.trim() === causaGuardada) localStorage.removeItem(CAUSA_KEY);
+          else {
+            const cuando = new Date(borrador.savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
+            if (confirm(`Tienes una causa raíz sin guardar del ${cuando}. ¿Recuperarla? (Cancelar = descartar)`)) {
+              causaEl.value = borrador.valor;
+              guardarCausa();
+            } else localStorage.removeItem(CAUSA_KEY);
+          }
+        }
+      } catch {}
+    }
+
+    // Lo que quedó escrito sin guardar sale al servidor aunque se cierre la
+    // pestaña o se cambie de página; el respaldo local queda por si no llega.
+    // Responde true si el servidor lo aceptó, false si lo rechazó, null sin señal.
+    function enviarAlSalir(payload, alTerminar) {
+      try {
+        fetch(`/api/ordenes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).then((res) => alTerminar(res.ok), () => alTerminar(null));
+      } catch { alTerminar(null); }
+    }
+    function guardarAlSalir() {
+      const payload = {};
+      const conTexto = !!debounceTimer, conPasos = !!ckSaveTimer;
+      if (conTexto) { clearTimeout(debounceTimer); debounceTimer = null; Object.assign(payload, leerEjecPayload()); }
+      if (conPasos) { clearTimeout(ckSaveTimer); ckSaveTimer = null; payload.checklistEjecucion = JSON.stringify(checklist); }
+      if (Object.keys(payload).length) enviarAlSalir(payload, (bien) => {
+        if (conTexto) {
+          if (bien) { limpiarLocal(); setIndicador("guardado", "✓ Guardado"); }
+          else setIndicador(bien === false ? "error" : "offline", bien === false ? "Sin guardar" : "Sin conexión — guardado localmente");
+        }
+        const ind = $("ckAutosave");
+        if (conPasos && ind) { ind.textContent = bien ? "✓ Guardado" : "Sin guardar"; ind.className = bien ? "text-emerald-600" : "text-red-600"; }
+      });
+      if (causaTimer) {
+        clearTimeout(causaTimer); causaTimer = null;
+        const valor = causaEl.value.trim();
+        if (valor !== causaGuardada) enviarAlSalir({ causaRaiz: valor || null }, (bien) => {
+          if (bien) {
+            causaGuardada = valor;
+            try { localStorage.removeItem(CAUSA_KEY); } catch {}
+            avisoCausa("Guardada", "text-emerald-600");
+          } else avisoCausa(bien === false ? "Sin guardar" : "Sin conexión: queda guardada en este equipo", bien === false ? "text-red-600" : "text-amber-700");
+        });
+      }
+    }
+    window.addEventListener("pagehide", guardarAlSalir);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") guardarAlSalir(); });
 
     // Comentarios
     $("comForm")?.addEventListener("submit", async (e) => {
@@ -2566,13 +2894,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     clearCanvas();
   </script>
 
-  <!-- Modal: cerrar un MOP sin la lectura de liberación (escape con motivo) -->
-  {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && (
+  <!-- Modal: enviar un MOP a verificación sin la lectura de liberación (escape con motivo) -->
+  {puedeEnviarSinLectura && (
     <div id="sinLecturaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5">
-        <h3 class="text-lg font-semibold text-slate-900">Cerrar sin lectura de liberación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Enviar a verificación sin lectura de liberación</h3>
         <p class="mt-1 text-sm text-slate-600">
-          El MOP exige medir antes de devolver el sistema a servicio. Este es el <strong>único escape</strong>, y queda registrado con tu nombre y la hora. Explica por qué no se pudo medir y con qué evidencia se libera el sistema.
+          El MOP exige medir antes de devolver el sistema a servicio. Este es el <strong>único escape</strong>, y queda registrado con tu nombre y la hora. <strong>La orden no se cierra:</strong> queda pendiente de verificación, y quien verifica ve este motivo. Explica por qué no se pudo medir y con qué evidencia se libera el sistema.
         </p>
         <div class="mt-3">
           <label class="label text-xs" for="sinLecturaMotivo">Motivo escrito (mínimo 20 caracteres)</label>
@@ -2581,15 +2909,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <p id="sinLecturaMsg" class="hidden mt-2 text-sm"></p>
         <div class="mt-5 flex justify-end gap-2">
           <button id="sinLecturaCancel" type="button" class="btn-secondary">Cancelar</button>
-          <button id="sinLecturaConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar la OT sin lectura</button>
+          <button id="sinLecturaConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Enviar a verificación sin lectura</button>
         </div>
       </div>
     </div>
   )}
 
   <!-- ══ MOP y EOP: prerrequisitos, liberaciones, horas y plan de reversa ══ -->
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
-    const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id, motivoPrevio: o.cierreSinLecturaMotivo ?? "" }) }}>
+    const { otId, motivoPrevio } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const g = (x) => document.getElementById(x);
 
     function aviso(el, texto, ok) {
@@ -2838,7 +3166,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         sinLecturaModal.classList.remove("flex");
       };
       sinLecturaBtn.addEventListener("click", () => {
-        g("sinLecturaMotivo").value = "";
+        // Si ya se envió una vez sin lectura y volvió, se parte del mismo motivo.
+        g("sinLecturaMotivo").value = motivoPrevio;
         g("sinLecturaMsg").classList.add("hidden");
         sinLecturaModal.classList.remove("hidden");
         sinLecturaModal.classList.add("flex");
@@ -2857,17 +3186,19 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         const btn = g("sinLecturaConfirm");
         btn.disabled = true;
+        // Lo escrito y marcado que aún no salió va en el mismo envío.
         const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
+          ...(window.otEvidenciaPendiente?.() ?? {}),
           estado: "completada",
           cierreSinLecturaMotivo: motivo,
         });
         btn.disabled = false;
         if (r.ok) {
-          window.showToast?.("OT cerrada sin lectura de liberación. Queda registrado con tu nombre.", "success");
+          window.showToast?.("Enviada a verificación sin lectura de liberación. Queda pendiente de verificación y registrada con tu nombre.", "success");
           location.reload();
           return;
         }
-        msg.textContent = r.error || "No se pudo cerrar.";
+        msg.textContent = r.error || "No se pudo enviar a verificación.";
         msg.className = "mt-2 text-sm text-red-600";
         msg.classList.remove("hidden");
       });

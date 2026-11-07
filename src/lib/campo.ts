@@ -5,18 +5,21 @@
 // capturó: si se corta la señal, se guarda en el teléfono y llega cuando vuelva,
 // con su hora verdadera y sin aplicarse dos veces.
 //
-// Nada de esto relaja las reglas: cada operación sobre una orden pasa por
-// aplicarCambioOrden, el mismo camino de la ficha completa.
+// Nada de esto relaja las reglas: cada operación sobre una orden pasa por el
+// mismo camino de la ficha completa: aplicarCambioOrden para la orden y
+// src/lib/mop.ts para los prerrequisitos y las lecturas de liberación.
 import type { APIContext } from "astro";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   activos, aopAcciones, aopEventos, aopUmbrales, campoOperaciones, checklistPlantillaItems, checklistPlantillas,
-  eopFicha, ordenPasoMarcas, ordenVerificacion, ordenVerificacionEventos, ordenes, planesMantenimiento, procedimientos, rondaEjecuciones,
+  eopFicha, ordenLiberaciones, ordenPasoMarcas, ordenPrerrequisitos, ordenVerificacion, ordenVerificacionEventos, ordenes, planesMantenimiento, procedimientos, rondaEjecuciones,
   rondaLecturas, sucursales, tickets, ubicaciones, usuarios,
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
-import { MIN_CAUSA_RAIZ, minutosEstimadosChecklist, parseChecklist, requiereCausaRaiz, validarAreaTrabajo, vencimientoCausaRaiz } from "@/lib/ordenes";
+import { minutosEstimadosChecklist, parseChecklist, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
+import { checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
+import { cambiarPrerrequisito, lecturaEscrita, liberacionParaCampo, mopDeOrdenes, prerrequisitoParaCampo, RechazoMop, registrarLiberacion } from "@/lib/mop";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
@@ -77,16 +80,41 @@ type FilaOrden = {
 };
 type MapaUbicaciones = Map<number, { nombre: string; sucursalId: number }>;
 
-/** Lo que tiene riesgo propio se trabaja en la ficha completa: permisos, liberaciones y tiempos del EOP. */
-const tipoEnFicha = (tipo: string) => tipo === "intervencion" || tipo === "emergencia";
+/**
+ * Todo se trabaja en el celular, una cosa por pantalla: los pasos de un
+ * preventivo o correctivo, la emergencia (EOP) con sus tres toques y la
+ * intervención (MOP) con prerrequisitos, liberaciones y reversa. La ficha
+ * completa queda para la jefatura.
+ */
+export const modoDeOrden = (tipo: string): "pasos" | "emergencia" | "intervencion" =>
+  tipo === "emergencia" ? "emergencia" : tipo === "intervencion" ? "intervencion" : "pasos";
 
-function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<number, string>, extra: { devuelta?: string | null; motivoPausa?: string | null; ultimas?: Record<string, string> } = {}) {
-  const { o, a } = fila;
-  const ubId = a?.ubicacionId ?? o.ubicacionId ?? null;
+type ExtraOrden = {
+  devuelta?: string | null;
+  motivoPausa?: string | null;
+  ultimas?: Record<string, string>;
+  eop?: EopDeOrden;
+  prerrequisitos?: Array<typeof ordenPrerrequisitos.$inferSelect>;
+  liberaciones?: Array<typeof ordenLiberaciones.$inferSelect>;
+};
+
+/** La sede de la orden: la de la ubicación de su equipo, la de su ubicación o la suya. */
+function lugarDeFila(fila: FilaOrden, ubis: MapaUbicaciones) {
+  const ubId = fila.a?.ubicacionId ?? fila.o.ubicacionId ?? null;
   const ub = ubId ? ubis.get(ubId) : undefined;
-  const sedeId = ub?.sucursalId ?? o.sucursalId ?? null;
-  const pasos = parseChecklist(o.checklistEjecucion);
-  return {
+  return { ubId, ub, sedeId: ub?.sucursalId ?? fila.o.sucursalId ?? null };
+}
+
+function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<number, string>, extra: ExtraOrden = {}) {
+  const { o, a } = fila;
+  const { ubId, ub, sedeId } = lugarDeFila(fila, ubis);
+  const modo = modoDeOrden(o.tipo);
+  // Una emergencia sin pasos propios trabaja con las acciones de su EOP. Se
+  // guardan en la orden con el primer toque (orden.iniciar u orden.paso).
+  const pasos: ChecklistItem[] = modo === "emergencia" && checklistVacio(o.checklistEjecucion)
+    ? pasosDeAcciones(extra.eop?.acciones ?? [])
+    : parseChecklist(o.checklistEjecucion);
+  const base = {
     id: o.id,
     rubro: o.rubro,
     codigo: o.codigo ?? null,
@@ -103,10 +131,8 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
     planId: o.planId ?? null,
     descripcion: o.descripcion ?? null,
     trabajos: o.trabajosRealizados ?? null,
-    causaRaiz: o.causaRaiz ?? null,
-    pideCausaRaiz: requiereCausaRaiz(o.tipo, a?.criticidad).requiere,
-    minCausaRaiz: MIN_CAUSA_RAIZ,
-    modo: tipoEnFicha(o.tipo) ? "ficha" : "pasos",
+    // La causa raíz la escribe la jefatura dentro de las 72 h: el celular ni la pide ni la muestra.
+    modo,
     devuelta: extra.devuelta ?? null,
     motivoPausa: extra.motivoPausa ?? null,
     activo: a ? { id: a.id, codigo: a.codigo, nombre: a.nombre, marca: a.marca, modelo: a.modelo } : null,
@@ -134,6 +160,39 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
       ultima: extra.ultimas?.[p.texto] ?? null,
     })),
   };
+  // Las horas de la emergencia se registran pero no viajan: el celular solo sabe qué toques ya se dieron.
+  if (modo === "emergencia") {
+    const eop = extra.eop ?? SIN_EOP;
+    return {
+      ...base,
+      eop: { codigo: eop.codigo, titulo: eop.titulo, etiquetaMitigacion: eop.etiquetaMitigacion },
+      hitos: { llegada: !!o.horaLlegada, mitigacion: !!o.horaMitigacion, restablecimiento: !!o.horaRestablecimiento },
+    };
+  }
+  if (modo === "intervencion") {
+    return {
+      ...base,
+      prerrequisitos: (extra.prerrequisitos ?? []).map(prerrequisitoParaCampo),
+      liberaciones: (extra.liberaciones ?? []).map(liberacionParaCampo),
+      reversa: { plan: o.planReversa ?? null, ejecutada: !!o.reversaEjecutada },
+    };
+  }
+  return base;
+}
+
+// Búsquedas del EOP por equipo en un paquete: cada una son varias consultas y D1 corta a 50.
+const MAX_EOP_POR_EQUIPO = 2;
+
+/** Lo que una emergencia o una intervención trae además de sus pasos, para varias órdenes a la vez. */
+async function extrasDeCampo(db: Db, filas: FilaOrden[], ubis: MapaUbicaciones, opciones: { conocidas?: Map<number, FichaEop>; maxResolver?: number } = {}) {
+  // Si hay tope de búsquedas, primero las que todavía no tienen pasos: a esas el EOP les da el trabajo.
+  const emergencias = filas.filter((f) => f.o.tipo === "emergencia")
+    .sort((x, y) => Number(!checklistVacio(x.o.checklistEjecucion)) - Number(!checklistVacio(y.o.checklistEjecucion)));
+  const eops = emergencias.length
+    ? await eopsDeOrdenes(db, emergencias.map((f) => ({ id: f.o.id, procedimientoId: f.o.procedimientoId ?? null, activoId: f.o.activoId ?? null, sedeId: lugarDeFila(f, ubis).sedeId })), opciones)
+    : new Map<number, EopDeOrden>();
+  const mop = await mopDeOrdenes(db, filas.filter((f) => f.o.tipo === "intervencion").map((f) => f.o.id));
+  return (id: number): ExtraOrden => ({ eop: eops.get(id), prerrequisitos: mop.prerrequisitos.get(id) ?? [], liberaciones: mop.liberaciones.get(id) ?? [] });
 }
 
 /** Lo último que se leyó en cada línea del plan, para tener contra qué comparar. */
@@ -311,14 +370,25 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     for (const p of parseChecklist(fila.checklist)) if (p.requiereValor && p.valorMedido) valores[p.texto] = p.valorMedido;
     ultimasPorPlan.set(fila.planId, valores);
   }
-  const armar = async (f: FilaOrden) => {
+  // Los EOP viajan con el paquete: una emergencia no espera a que vuelva la señal.
+  const eops = await db
+    .select({
+      id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema, tipo: procedimientos.tipo,
+      a1: eopFicha.accion1, a2: eopFicha.accion2, a3: eopFicha.accion3, etiqueta: eopFicha.etiquetaHoraMitigacion,
+    })
+    .from(procedimientos)
+    .innerJoin(eopFicha, eq(eopFicha.procedimientoId, procedimientos.id))
+    .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
+    .orderBy(asc(procedimientos.codigoCorto));
+  const fichas = eops.map(fichaEop);
+  // Prerrequisitos y liberaciones de las intervenciones, y el EOP de cada emergencia, sin una consulta por orden.
+  const extras = await extrasDeCampo(db, [...mias, ...libres], ubis, { conocidas: new Map(fichas.map((e) => [e.id, e])), maxResolver: MAX_EOP_POR_EQUIPO });
+  const armar = (f: FilaOrden) => {
     const ultimas = (f.o.planId && ultimasPorPlan.get(f.o.planId)) || {};
-    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas });
+    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas, ...extras(f.o.id) });
   };
-  const ordenesVista = [];
-  for (const f of mias) ordenesVista.push(await armar(f));
-  const libresVista = [];
-  for (const f of libres) libresVista.push(await armar(f));
+  const ordenesVista = mias.map(armar);
+  const libresVista = libres.map(armar);
 
   const misTickets = await db
     .select({ id: tickets.id, asunto: tickets.asunto, estado: tickets.estado, prioridad: tickets.prioridad, solicitante: tickets.solicitanteNombre, sede: sucursales.nombre })
@@ -359,14 +429,6 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     .orderBy(desc(ordenes.completadaEn))
     .limit(30);
 
-  // Los EOP viajan con el paquete: una emergencia no espera a que vuelva la señal.
-  const eops = await db
-    .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema, a1: eopFicha.accion1, a2: eopFicha.accion2, a3: eopFicha.accion3 })
-    .from(procedimientos)
-    .innerJoin(eopFicha, eq(eopFicha.procedimientoId, procedimientos.id))
-    .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
-    .orderBy(asc(procedimientos.codigoCorto));
-
   return {
     generadoEn: new Date().toISOString(),
     usuario: { id: user.id, nombre: user.nombre, rol: user.rol, sucursalId: yo?.sucursalId ?? null },
@@ -380,7 +442,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     desviaciones,
     porVerificar,
     hechasHoy,
-    emergencias: eops.map((e) => ({ id: e.id, codigo: e.codigo, titulo: e.titulo, sistema: e.sistema, acciones: [e.a1, e.a2, e.a3].filter(Boolean) })),
+    emergencias: eops.map((e, i) => ({ id: e.id, codigo: e.codigo, titulo: e.titulo, sistema: e.sistema, acciones: fichas[i].acciones, etiquetaMitigacion: fichas[i].etiquetaMitigacion })),
   };
 }
 
@@ -579,7 +641,9 @@ export async function ordenCampoPorId(db: Db, id: number, user: Usuario) {
   if (!f) return null;
   if (user.rol === "tecnico" && f.o.asignadoA && f.o.asignadoA !== user.id) return null;
   const ultimas = f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
-  return ordenParaCampo(f, new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }])), new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas });
+  const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
+  const extras = await extrasDeCampo(db, [f], ubis);
+  return ordenParaCampo(f, ubis, new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas, ...extras(f.o.id) });
 }
 
 // ── Las operaciones ─────────────────────────────────────────────────────────
@@ -616,8 +680,34 @@ async function ordenDeOp(db: Db, op: OperacionCampo) {
   return o;
 }
 
+const esJefatura = (user: Usuario) => user.rol === "admin" || user.rol === "jefe";
+const EN_CURSO = ["abierta", "en_proceso", "en_espera"];
+const yaNoEnCurso = (estado: string) =>
+  estado === "cancelada" ? "La orden fue cancelada." : estado === "cerrada" ? "La orden ya está cerrada." : "La orden ya se envió a verificación.";
+
+/**
+ * Las reglas de la ficha, revisadas antes de tocar nada: solo el técnico
+ * asignado o la jefatura. Una orden libre y abierta la toma quien empieza a
+ * trabajarla; devuelve true cuando hay que tomarla.
+ */
+function exigirEjecutor(user: Usuario, o: typeof ordenes.$inferSelect, { tomarLibre = false } = {}): boolean {
+  if (esJefatura(user) || o.asignadoA === user.id) return false;
+  if (tomarLibre && user.rol === "tecnico" && !o.asignadoA && o.estado === "abierta") return true;
+  throw new RechazoCampo(o.asignadoA ? "Esta orden está asignada a otra persona." : "Empieza la orden antes de registrar en ella: así queda a tu nombre.", 403);
+}
+
+/** Los rechazos del MOP son rechazos del celular: se guardan y se le muestran al técnico. */
+async function enMop<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) { if (e instanceof RechazoMop) throw new RechazoCampo(e.message, e.status); throw e; }
+}
+
+type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
+
 /** Trabajos realizados, escritos a partir de lo que el técnico ya marcó. */
-export function textoDeTrabajos(checklist: string | null | undefined, titulo: string, nota?: string | null) {
+export function textoDeTrabajos(
+  checklist: string | null | undefined, titulo: string, nota?: string | null,
+  extra: { liberaciones?: LecturaLiberacion[]; reversa?: string | null; causaTecnico?: string | null } = {},
+) {
   const pasos = parseChecklist(checklist);
   const limpio = titulo.replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+\S+$/, "").trim() || "Mantenimiento";
   const partes: string[] = [];
@@ -630,7 +720,13 @@ export function textoDeTrabajos(checklist: string | null | undefined, titulo: st
     if (lect.length) partes.push(`Lecturas: ${lect.join("; ")}.`);
     for (const n of nov) if (n.notas) partes.push(`Novedad en «${n.texto}»: ${n.notas.replace(/\.+\s*$/, "")}.`);
   }
+  const liberadas = (extra.liberaciones ?? [])
+    .filter((l) => l.valorMedido != null || l.valorMedidoTexto?.trim())
+    .map((l) => `${l.etiqueta}: ${l.valorMedido != null ? `${l.valorMedido}${l.unidad ? ` ${l.unidad}` : ""}` : l.valorMedidoTexto!.trim()}`);
+  if (liberadas.length) partes.push(`Lecturas de liberación: ${liberadas.join("; ")}.`);
+  if (extra.reversa?.trim()) partes.push(`Reversa ejecutada: ${extra.reversa.trim().replace(/\.+\s*$/, "")}.`);
   if (nota?.trim()) partes.push(nota.trim());
+  if (extra.causaTecnico?.trim()) partes.push(`Causa probable según el técnico: ${extra.causaTecnico.trim()}`);
   return partes.join(" ");
 }
 
@@ -710,7 +806,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
     case "orden.iniciar": {
       const o = await ordenDeOp(db, op);
       const m = momentoCapturado(op.at);
-      if (o.estado !== "en_proceso") await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
+      if (o.estado !== "en_proceso") {
+        exigirEjecutor(user, o, { tomarLibre: true });
+        // Una emergencia sin pasos guarda primero las acciones de su EOP: las que ya vio el técnico.
+        await sembrarAccionesEop(ctx, db, o);
+        await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
+      }
       return { ordenId: o.id, m };
     }
     case "orden.pausar": {
@@ -728,11 +829,13 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "orden.paso": {
-      const o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const idx = Number(op.idx);
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
+      exigirEjecutor(user, o);
+      o = await sembrarAccionesEop(ctx, db, o);
       let lista: any[];
       try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
       if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
@@ -759,10 +862,73 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const m = momentoCapturado(op.at, ultima?.en ?? o.iniciadaEn);
       if (!["completada", "verificada", "cerrada"].includes(o.estado)) {
         const nota = typeof op.nota === "string" ? op.nota : null;
-        const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota) || o.trabajosRealizados || "";
+        // La causa raíz la escribe la jefatura. Si un celular viejo la manda, lo que el técnico vio queda en los trabajos.
         const causa = typeof op.causaRaiz === "string" ? op.causaRaiz.trim() : "";
-        await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa ? { causaRaiz: causa } : {}) }, m.iso);
+        const liberaciones = o.tipo === "intervencion"
+          ? await db.select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
+              .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, o.id)).orderBy(asc(ordenLiberaciones.orden), asc(ordenLiberaciones.id))
+          : [];
+        const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota, {
+          liberaciones, reversa: o.reversaEjecutada ? o.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa,
+        }) || o.trabajosRealizados || "";
+        await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}) }, m.iso);
       }
+      return { ordenId: o.id, m };
+    }
+    case "emergencia.hito": {
+      const o = await ordenDeOp(db, op);
+      if (o.tipo !== "emergencia") throw new RechazoCampo("Esta orden no es una emergencia.");
+      if (!esHitoEop(op.hito)) throw new RechazoCampo("Ese registro de la emergencia no existe.");
+      const campo = HITOS_EOP[op.hito];
+      const m = momentoCapturado(op.at, minimoDeHito(o, op.hito));
+      const tomar = exigirEjecutor(user, o, { tomarLibre: true });
+      // El primer toque manda: una hora ya registrada no se mueve. La jefatura la corrige en la ficha.
+      if (o[campo]) return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+      if (!EN_CURSO.includes(o.estado)) throw new RechazoCampo(`${yaNoEnCurso(o.estado)} Esa hora la registra la jefatura en la ficha.`, 409);
+      // «Llegué» no inicia la orden: el celular manda también orden.iniciar.
+      await cambiarOrden(ctx, user, o.id, { [campo]: m.iso, ...(tomar ? { asignadoA: user.id } : {}) }, m.iso);
+      return { ordenId: o.id, m };
+    }
+    case "mop.prerrequisito": {
+      let o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at);
+      const itemId = Number(op.prerrequisitoId);
+      if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Prerrequisito inválido.");
+      const referencia = typeof op.referencia === "string" ? op.referencia.trim() : "";
+      if (referencia.length < 2) throw new RechazoCampo("Escribe la referencia antes de marcarlo cumplido (n.º de permiso, clase de la ICRA, id del candado, hora del aviso…).");
+      if (exigirEjecutor(user, o, { tomarLibre: true })) {
+        // Una intervención libre la toma quien empieza por sus prerrequisitos.
+        const [existe] = await db.select({ id: ordenPrerrequisitos.id }).from(ordenPrerrequisitos).where(and(eq(ordenPrerrequisitos.id, itemId), eq(ordenPrerrequisitos.ordenId, o.id))).limit(1);
+        if (!existe) throw new RechazoCampo("Prerrequisito no encontrado en esta orden.", 404);
+        await cambiarOrden(ctx, user, o.id, { asignadoA: user.id }, m.iso);
+        o = { ...o, asignadoA: user.id };
+      }
+      await enMop(() => cambiarPrerrequisito(ctx, db, o, user, { itemId, cumplido: true, referencia }, m.iso));
+      return { ordenId: o.id, m };
+    }
+    case "mop.liberacion": {
+      const o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at, o.iniciadaEn);
+      const itemId = Number(op.liberacionId);
+      if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Lectura inválida.");
+      const lectura = lecturaEscrita(op.valor);
+      if (lectura.valorMedido === null && lectura.valorMedidoTexto === null) throw new RechazoCampo("Escribe la lectura que mediste.");
+      const row = await enMop(() => registrarLiberacion(ctx, db, o, user, { itemId, ...lectura }, m.iso));
+      return { ordenId: o.id, m, datos: { conforme: row.conforme ?? null } };
+    }
+    case "mop.reversa": {
+      const o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at, o.iniciadaEn);
+      const notas = typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) : "";
+      if (notas.length < 10) throw new RechazoCampo("Describe qué se revirtió y cómo quedó el sistema (mínimo 10 letras).");
+      exigirEjecutor(user, o);
+      if (o.reversaEjecutada && (o.reversaNotas ?? "").trim() === notas) return { ordenId: o.id, m };
+      if (!["en_proceso", "en_espera"].includes(o.estado)) {
+        throw new RechazoCampo(o.estado === "abierta" ? "La reversa se marca después de empezar la intervención." : `${yaNoEnCurso(o.estado)} La reversa la registra la jefatura en la ficha.`, 409);
+      }
+      await cambiarOrden(ctx, user, o.id, { reversaEjecutada: true, reversaNotas: notas }, m.iso);
+      // «Cualquier reversa se informa a la jefatura antes de cerrar».
+      await avisarJefatura(ctx, db, `Reversa ejecutada en ${etiquetaOT(o)}`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
       return { ordenId: o.id, m };
     }
     case "emergencia.abrir":

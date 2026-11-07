@@ -3,7 +3,8 @@
 // Solo atiende /campo y sus archivos. El resto de la aplicación y toda la API
 // pasan directo a la red: aquí no se guarda ningún dato de negocio. Los datos sin
 // enviar viven en IndexedDB y los maneja la página.
-const CACHE = "campo-v1";
+// Sube con cada cambio de la pantalla del técnico: la copia anterior se borra al activarse.
+const CACHE = "campo-v2";
 const PANTALLA = "/campo";
 const ARCHIVOS = ["/_astro/", "/fonts/", "/icons/", "/brand/"];
 

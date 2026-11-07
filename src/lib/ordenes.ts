@@ -499,8 +499,67 @@ export function evaluarConformeLiberacion(
   return (!tieneMin || v >= Number(min)) && (!tieneMax || v <= Number(max));
 }
 
+// Texto del rango normal de una liberación: «8 a 12 A», «≥ 8 A», «≤ 12 A».
+export function rangoLiberacionTexto(
+  min: number | null | undefined,
+  max: number | null | undefined,
+  unidad?: string | null
+): string | null {
+  const u = unidad ? ` ${unidad}` : "";
+  const tieneMin = min !== null && min !== undefined;
+  const tieneMax = max !== null && max !== undefined;
+  if (tieneMin && tieneMax) return `${min} a ${max}${u}`;
+  if (tieneMin) return `≥ ${min}${u}`;
+  if (tieneMax) return `≤ ${max}${u}`;
+  return null;
+}
+
+export type LiberacionConRango = LiberacionLike & {
+  minAceptable?: number | null;
+  maxAceptable?: number | null;
+};
+
+// El número de una lectura: el valor medido o, si se escribió como texto
+// («14,5 A»), el número con que empieza. Una unidad escrita al lado no esconde
+// una lectura fuera de rango.
+export function numeroDeLectura(valorMedido: number | null | undefined, valorMedidoTexto?: string | null): number | null {
+  if (valorMedido !== null && valorMedido !== undefined && Number.isFinite(Number(valorMedido))) return Number(valorMedido);
+  const m = String(valorMedidoTexto ?? "").match(/^\s*([-+]?\d+(?:[.,]\d+)?)/);
+  return m ? Number(m[1].replace(",", ".")) : null;
+}
+
+// Lecturas obligatorias con número fuera del rango aceptable. Se calcula con el
+// valor y el rango, no con la columna «conforme», para que nadie la esquive.
+export function liberacionesFueraDeRango<T extends LiberacionConRango>(liberaciones: T[]): T[] {
+  return liberaciones.filter(
+    (l) => l.obligatoria && evaluarConformeLiberacion(l.minAceptable, l.maxAceptable, numeroDeLectura(l.valorMedido, l.valorMedidoTexto)) === false
+  );
+}
+
+// Regla dura del MOP: una lectura obligatoria fuera de rango no libera el
+// sistema. Solo la reversa ejecutada (el sistema volvió a como estaba) la salva;
+// quien llama lo revisa antes.
+export function validarLiberacionesEnRango(
+  tipo: string | null | undefined,
+  liberaciones: LiberacionConRango[]
+): { ok: boolean; error?: string; fuera: string[] } {
+  if (tipo !== "intervencion") return { ok: true, fuera: [] };
+  const fuera = liberacionesFueraDeRango(liberaciones).map((l) => {
+    const leido = l.valorMedido != null ? `${l.valorMedido}${l.unidad ? ` ${l.unidad}` : ""}` : String(l.valorMedidoTexto ?? "").trim();
+    const rango = rangoLiberacionTexto(l.minAceptable, l.maxAceptable, l.unidad);
+    return `${l.etiqueta}: leído ${leido}${rango ? `, normal ${rango}` : ""}`;
+  });
+  if (fuera.length === 0) return { ok: true, fuera: [] };
+  return {
+    ok: false,
+    fuera,
+    error: `No puedes enviar a verificación: ${fuera.length === 1 ? "una lectura de liberación quedó" : `${fuera.length} lecturas de liberación quedaron`} fuera de rango:\n· ${fuera.join("\n· ")}\nEl sistema no se libera así. Repite la medición o, si revertiste el trabajo, marca la reversa.`,
+  };
+}
+
 // Regla dura del MOP: no se cierra sin la lectura de liberación.
 // El único escape es el cierre sin lectura con motivo escrito (admin o jefe).
+// Con la reversa ejecutada no hay nada que liberar: quien llama lo revisa antes.
 export function validarLiberacionesParaCierre(
   tipo: string | null | undefined,
   liberaciones: LiberacionLike[]
@@ -513,7 +572,7 @@ export function validarLiberacionesParaCierre(
   return {
     ok: false,
     faltantes,
-    error: `No puedes cerrar esta intervención (MOP): falta${faltantes.length === 1 ? "" : "n"} ${faltantes.length} lectura${faltantes.length === 1 ? "" : "s"} de liberación obligatoria${faltantes.length === 1 ? "" : "s"}:\n· ${faltantes.join("\n· ")}\nRegistra el valor medido. Si de verdad no se pudo medir, la jefatura debe cerrar con motivo escrito (cierre sin lectura).`,
+    error: `Falta${faltantes.length === 1 ? "" : "n"} ${faltantes.length} lectura${faltantes.length === 1 ? "" : "s"} de liberación obligatoria${faltantes.length === 1 ? "" : "s"}:\n· ${faltantes.join("\n· ")}\nRegistra el valor medido. Si revertiste el trabajo, marca la reversa. Si de verdad no se pudo medir, la jefatura la envía a verificación sin lectura, con el motivo escrito.`,
   };
 }
 
@@ -601,6 +660,8 @@ export function causaRaizVencida(vencimiento: string | null | undefined, causaRa
 //   · toda orden de emergencia (EOP);
 //   · toda OT correctiva sobre un activo de criticidad alta (clase A): «toda OT
 //     correctiva sobre activo clase A genera un análisis breve de causa raíz».
+// La escribe la jefatura dentro de las 72 h, no el técnico: se exige al
+// verificar o cerrar, nunca al enviar a verificación.
 export function requiereCausaRaiz(
   tipo: string | null | undefined,
   criticidadActivo: string | null | undefined
@@ -627,7 +688,7 @@ export function validarCausaRaizParaCierre(
   if (txt.length >= MIN_CAUSA_RAIZ) return { ok: true };
   return {
     ok: false,
-    error: `No puedes cerrar sin análisis de causa raíz. ${r.motivo} Escribe al menos ${MIN_CAUSA_RAIZ} caracteres en el campo «Causa raíz» (plazo: ${HORAS_CAUSA_RAIZ} h desde la hora de alarma).`,
+    error: `Falta la causa raíz para verificar. ${r.motivo} La causa raíz la escribe la jefatura dentro de las ${HORAS_CAUSA_RAIZ} h (mínimo ${MIN_CAUSA_RAIZ} letras).`,
   };
 }
 

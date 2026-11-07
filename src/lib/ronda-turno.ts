@@ -8,9 +8,9 @@
 //
 //   RONDA (SOP) → lectura fuera de rango → AOP con reloj → EOP si ya falló
 //                                                        → MOP si hay que intervenir
-import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { ahoraSV, parsearTurnos, sumarDias, turnoActual, etiquetaTurno } from "./turnos";
+import { TURNOS_DEFECTO, ahoraSV, parsearTurnos, sumarDias, turnoActual, etiquetaTurno } from "./turnos";
 import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre, registrarAccion } from "./aop";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import {
@@ -24,6 +24,7 @@ import {
   rondaMarcas,
   rondaPuntos,
   rondaRevisiones,
+  rondaVigencias,
   rondas,
   sucursales,
   variablesPredictivas,
@@ -47,16 +48,76 @@ export type Ronda = typeof rondas.$inferSelect;
 export type RondaPunto = typeof rondaPuntos.$inferSelect;
 export type RondaEjecucion = typeof rondaEjecuciones.$inferSelect;
 export type RondaLectura = typeof rondaLecturas.$inferSelect;
+export type RondaVigencia = typeof rondaVigencias.$inferSelect;
 
-/** La ronda propia de la sede si existe; si no, la ronda modelo. */
-export async function rondaDeSede(db: Db, sucursalId: number): Promise<Ronda | null> {
-  const filas = await db
-    .select()
-    .from(rondas)
-    .where(or(eq(rondas.sucursalId, sucursalId), isNull(rondas.sucursalId)));
-  const propia = filas.find((r: Ronda) => r.sucursalId === sucursalId);
+/** Las familias de una parada, en el orden de la pantalla. */
+export const FAMILIAS_RONDA = ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"] as const;
+
+/** El recorrido que usa la sede: el propio si existe; si no, el modelo. No mira si la sede hace ronda. */
+export function recorridoDeSede<T extends Pick<Ronda, "sucursalId" | "activa">>(filas: T[], sucursalId: number): T | null {
+  const propia = filas.find((r) => r.sucursalId === sucursalId);
   if (propia) return propia.activa ? propia : null;
-  return filas.find((r: Ronda) => r.sucursalId == null && r.activa) ?? null;
+  return filas.find((r) => r.sucursalId == null && r.activa) ?? null;
+}
+
+/** Cómo se llama en pantalla y en la auditoría. */
+export const nombreRecorrido = (ronda: Pick<Ronda, "sucursalId">, sede?: string | null) =>
+  ronda.sucursalId == null ? "Modelo" : `Recorrido propio de ${sede ?? `la sede ${ronda.sucursalId}`}`;
+
+// ── Lo que regía cuando empezó cada turno ───────────────────────────────────
+/** Hora de inicio de un turno. Un turno se juzga con lo que regía en ese momento. */
+export const inicioTurno = (fecha: string, turno: string) => Date.parse(`${fecha}T${turno}:00-06:00`);
+
+/**
+ * Lo que regía al empezar un turno. Cada cambio guarda lo que había antes y
+ * cuándo cambió: rige lo de antes del primer cambio hecho después de ese
+ * inicio. Sin cambios posteriores, rige lo de hoy. Así un cambio entra en la
+ * ronda del turno que todavía no empezó y no reescribe los que ya empezaron.
+ */
+export function vigenteAl<T>(cambios: ReadonlyArray<{ hasta: string; antes: T }>, actual: T, inicioMs: number): T {
+  let primero: { ms: number; antes: T } | null = null;
+  for (const c of cambios) {
+    const ms = Date.parse(c.hasta);
+    if (ms > inicioMs && (!primero || ms < primero.ms)) primero = { ms, antes: c.antes };
+  }
+  return primero ? primero.antes : actual;
+}
+
+/** Los cambios de turnos de un recorrido. */
+export const cambiosDeTurnos = (vigencias: RondaVigencia[], rondaId: number) =>
+  vigencias.filter((v) => v.rondaId === rondaId && v.turnosAntes != null).map((v) => ({ hasta: v.hasta, antes: parsearTurnos(v.turnosAntes) }));
+
+/** Los cambios de «esta sede no hace ronda». */
+export const cambiosDeSede = (vigencias: RondaVigencia[], sucursalId: number) =>
+  vigencias.filter((v) => v.sucursalId === sucursalId && v.haceRondaAntes != null).map((v) => ({ hasta: v.hasta, antes: !!v.haceRondaAntes }));
+
+/** El primer turno que empieza desde este momento: ahí entra un cambio hecho ahora. */
+export function siguienteTurno(turnos: string[], ref = Date.now()): { fecha: string; turno: string } {
+  const lista = turnos.length ? [...turnos].sort() : TURNOS_DEFECTO;
+  const hoy = ahoraSV(new Date(ref)).fecha;
+  for (let d = -1; d <= 2; d++) {
+    const fecha = sumarDias(hoy, d);
+    for (const turno of lista) if (inicioTurno(fecha, turno) >= ref) return { fecha, turno };
+  }
+  return { fecha: sumarDias(hoy, 1), turno: lista[0] };
+}
+
+/**
+ * El recorrido de la sede, si la sede hace ronda en ese turno; sin turno, en
+ * el que corre. La marca entra en el turno que todavía no empezó: la sede que
+ * deja de hacer ronda termina la del turno que ya empezó.
+ */
+export async function rondaDeSede(db: Db, sucursalId: number, turno?: { fecha: string; turno: string }): Promise<Ronda | null> {
+  const [filas, sede, vigencias] = await db.batch([
+    db.select().from(rondas).where(or(eq(rondas.sucursalId, sucursalId), isNull(rondas.sucursalId))).orderBy(asc(rondas.id)),
+    db.select({ haceRonda: sucursales.haceRonda }).from(sucursales).where(eq(sucursales.id, sucursalId)).limit(1),
+    db.select().from(rondaVigencias).where(eq(rondaVigencias.sucursalId, sucursalId)),
+  ]);
+  const recorrido = recorridoDeSede(filas, sucursalId);
+  if (!recorrido) return null;
+  const t = turno ?? turnoActual(parsearTurnos(recorrido.turnos));
+  const hace = vigenteAl(cambiosDeSede(vigencias, sucursalId), sede[0]?.haceRonda ?? true, inicioTurno(t.fecha, t.turno));
+  return hace ? recorrido : null;
 }
 
 export async function puntosDeRonda(db: Db, rondaId: number): Promise<RondaPunto[]> {
@@ -68,7 +129,7 @@ export async function puntosDeRonda(db: Db, rondaId: number): Promise<RondaPunto
 }
 
 // ── La foto del recorrido ───────────────────────────────────────────────────
-/** Lo que decía el recorrido cuando se abrió el turno. Un cambio aplica desde el turno siguiente. */
+/** Lo que decía el recorrido cuando se abrió la ronda. La ronda que ya empezó conserva lo que decía al abrir. */
 export function recorridoDe(ejec: Pick<RondaEjecucion, "recorridoJson">): RondaPunto[] | null {
   if (!ejec.recorridoJson) return null;
   try {
@@ -394,6 +455,8 @@ export interface FilaTablero {
   iniciadaEn: string | null;
   completadaEn: string | null;
   firma: string | null;
+  /** Si la sede hacía ronda cuando empezó este turno. */
+  haceRonda: boolean;
 }
 
 export const ESTADO_RONDA: Record<EstadoFila, { label: string; badge: string; punto: string }> = {
@@ -421,35 +484,49 @@ export function estadoDeFila(e: FilaEjec | null | undefined, opts: { aplica: boo
   return e.puntosFuera > 0 || e.puntosNoVerificados > 0 ? "con_novedad" : "completa";
 }
 
-const valorMs = (fecha: string, turno: string) => Date.parse(`${fecha}T${turno}:00-06:00`);
+const valorMs = inicioTurno;
+
+/** ¿Se le exigía ronda a la sede en ese turno? Con lo que regía cuando empezó, no con lo de hoy. */
+function exigida(
+  ronda: Pick<Ronda, "id" | "turnos" | "vigenteDesde"> | null,
+  sede: { id: number; haceRonda: boolean },
+  vigencias: RondaVigencia[],
+  fecha: string,
+  turno: string,
+): { aplica: boolean; haceRonda: boolean } {
+  const inicio = inicioTurno(fecha, turno);
+  const haceRonda = vigenteAl(cambiosDeSede(vigencias, sede.id), sede.haceRonda, inicio);
+  if (!ronda || !haceRonda) return { aplica: false, haceRonda };
+  if (ronda.vigenteDesde && fecha < ronda.vigenteDesde) return { aplica: false, haceRonda };
+  return { aplica: vigenteAl(cambiosDeTurnos(vigencias, ronda.id), parsearTurnos(ronda.turnos), inicio).includes(turno), haceRonda };
+}
 
 /**
  * Estado de la ronda en todas las sedes. Sin fecha ni turno, cada sede muestra
- * su turno vigente. Dos lecturas en un batch, sin importar cuántas sedes haya.
+ * su turno vigente. Cuatro lecturas en un batch, sin importar cuántas sedes haya.
  */
 export async function tableroRondas(db: Db, pedido?: { fecha: string; turno: string }): Promise<FilaTablero[]> {
   const hoy = ahoraSV().fecha;
   const fechas = pedido ? [pedido.fecha] : [hoy, sumarDias(hoy, -1)];
-  const [sedes, todas, ejecuciones] = await db.batch([
-    db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre)),
+  const [sedes, todas, ejecuciones, vigencias] = await db.batch([
+    db.select({ id: sucursales.id, nombre: sucursales.nombre, haceRonda: sucursales.haceRonda }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre)),
     db.select({
       id: rondas.id, nombre: rondas.nombre, sucursalId: rondas.sucursalId, activa: rondas.activa, turnos: rondas.turnos, vigenteDesde: rondas.vigenteDesde,
       // Texto literal: Drizzle no califica la columna y dentro de la subconsulta «id» sería el de la parada.
       paradas: sql<number>`(SELECT count(*) FROM ronda_puntos p WHERE p.ronda_id = rondas.id AND p.activo = 1)`,
-    }).from(rondas),
+    }).from(rondas).orderBy(asc(rondas.id)),
     db.select(COLUMNAS_FILA).from(rondaEjecuciones).where(inArray(rondaEjecuciones.fecha, fechas)),
+    db.select().from(rondaVigencias),
   ]);
-  const modelo = todas.find((r) => r.sucursalId == null && r.activa) ?? null;
   const ahora = Date.now();
   return sedes.map((s) => {
-    const propia = todas.find((r) => r.sucursalId === s.id);
-    const ronda = propia ? (propia.activa ? propia : null) : modelo;
+    const ronda = recorridoDeSede(todas, s.id);
     const turnos = ronda ? parsearTurnos(ronda.turnos) : [];
     const vigente = turnoActual(turnos);
     const fecha = pedido?.fecha ?? vigente.fecha;
     const turno = pedido?.turno ?? vigente.turno;
     const e = ejecuciones.find((x) => x.sucursalId === s.id && x.fecha === fecha && x.turno === turno) ?? null;
-    const aplica = !!ronda && turnos.includes(turno) && (!ronda.vigenteDesde || fecha >= ronda.vigenteDesde);
+    const { aplica, haceRonda } = exigida(ronda, s, vigencias, fecha, turno);
     // Un turno terminó cuando ya empezó el siguiente.
     const pasado = valorMs(fecha, turno) < valorMs(vigente.fecha, vigente.turno) && valorMs(fecha, turno) < ahora;
     const total = e?.puntosTotal || (ronda?.paradas ?? 0);
@@ -460,6 +537,7 @@ export async function tableroRondas(db: Db, pedido?: { fecha: string; turno: str
       puntosTotal: total, anotados, fuera: e?.puntosFuera ?? 0, sinVerificar: e?.puntosNoVerificados ?? 0,
       pct: total > 0 ? Math.round((anotados / total) * 100) : 0,
       iniciadaEn: e?.iniciadaEn ?? null, completadaEn: e?.completadaEn ?? null, firma: e?.firmaNombre ?? null,
+      haceRonda,
     };
   });
 }
@@ -495,21 +573,37 @@ export interface ResumenSemana {
   sucursalId: number; lunes: string; domingo: string; turnos: string[]; celdas: CeldaSemana[];
   esperadas: number; completas: number; conNovedad: number; incompletas: number; noHechas: number;
   terminada: boolean; excepciones: boolean;
+  /** Si hoy la sede hace ronda. Cada celda se juzga con lo que regía cuando empezó su turno. */
+  haceRonda: boolean;
 }
 
 export async function resumenSemana(db: Db, sucursalId: number, lunes: string): Promise<ResumenSemana> {
   const domingo = sumarDias(lunes, 6);
-  const ronda = await rondaDeSede(db, sucursalId);
-  const turnos = ronda ? parsearTurnos(ronda.turnos) : [];
-  const filas = await db.select(COLUMNAS_FILA).from(rondaEjecuciones).where(and(eq(rondaEjecuciones.sucursalId, sucursalId), gte(rondaEjecuciones.fecha, lunes), lte(rondaEjecuciones.fecha, domingo)));
-  const hoy = ahoraSV().fecha;
-  const vigente = turnoActual(turnos);
+  const [todas, sede, filas, vigencias] = await db.batch([
+    db.select().from(rondas).where(or(eq(rondas.sucursalId, sucursalId), isNull(rondas.sucursalId))).orderBy(asc(rondas.id)),
+    db.select({ haceRonda: sucursales.haceRonda }).from(sucursales).where(eq(sucursales.id, sucursalId)).limit(1),
+    db.select(COLUMNAS_FILA).from(rondaEjecuciones).where(and(eq(rondaEjecuciones.sucursalId, sucursalId), gte(rondaEjecuciones.fecha, lunes), lte(rondaEjecuciones.fecha, domingo))),
+    db.select().from(rondaVigencias).where(or(eq(rondaVigencias.sucursalId, sucursalId), isNotNull(rondaVigencias.rondaId))),
+  ]);
+  const ronda = recorridoDeSede(todas, sucursalId);
+  const haceRonda = sede[0]?.haceRonda ?? true;
+  const turnosHoy = ronda ? parsearTurnos(ronda.turnos) : [];
+  const dias = Array.from({ length: 7 }, (_, d) => sumarDias(lunes, d));
+  const hecha = (fecha: string, turno: string) => filas.find((f) => f.fecha === fecha && f.turno === turno) ?? null;
+  const seExigia = (fecha: string, turno: string) => exigida(ronda, { id: sucursalId, haceRonda }, vigencias, fecha, turno).aplica;
+  // Una fila por turno que se exigió algún día de esa semana o que tuvo ronda: nada hecho desaparece
+  // y un turno que se agregó después no aparece como «no se hizo» en los días de antes.
+  const candidatos = new Set(turnosHoy);
+  const desde = inicioTurno(lunes, "00:00");
+  if (ronda) for (const c of cambiosDeTurnos(vigencias, ronda.id)) if (Date.parse(c.hasta) > desde) c.antes.forEach((t) => candidatos.add(t));
+  for (const f of filas) candidatos.add(f.turno);
+  const turnos = [...candidatos].sort().filter((t) => dias.some((fecha) => hecha(fecha, t) || seExigia(fecha, t)));
+  const vigente = turnoActual(turnosHoy);
   const celdas: CeldaSemana[] = [];
-  for (let d = 0; d < 7; d++) {
-    const fecha = sumarDias(lunes, d);
+  for (const fecha of dias) {
     for (const turno of turnos) {
-      const e = filas.find((f) => f.fecha === fecha && f.turno === turno) ?? null;
-      const aplica = !!e || (!ronda?.vigenteDesde || fecha >= ronda.vigenteDesde);
+      const e = hecha(fecha, turno);
+      const aplica = !!e || seExigia(fecha, turno);
       const futuro = valorMs(fecha, turno) > valorMs(vigente.fecha, vigente.turno);
       const pasado = valorMs(fecha, turno) < valorMs(vigente.fecha, vigente.turno);
       celdas.push({ fecha, turno, estado: futuro && !e ? "no_aplica" : estadoDeFila(e, { aplica, pasado }), ejecucionId: e?.id ?? null });
@@ -520,7 +614,8 @@ export async function resumenSemana(db: Db, sucursalId: number, lunes: string): 
   const r = {
     sucursalId, lunes, domingo, turnos, celdas,
     esperadas: contadas, completas: n("completa"), conNovedad: n("con_novedad"), incompletas: n("incompleta"), noHechas: n("no_se_hizo"),
-    terminada: domingo < hoy, excepciones: false,
+    // Termina cuando termina su último turno: el lunes de madrugada todavía corre el del domingo.
+    terminada: vigente.fecha > domingo, excepciones: false, haceRonda,
   };
   r.excepciones = r.conNovedad + r.incompletas + r.noHechas > 0;
   return r;

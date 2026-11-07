@@ -1,6 +1,11 @@
 // Modo técnico: lo que el celular envía llega una sola vez, con su hora real y
 // bajo las mismas reglas de la ficha completa. Rutas reales, migraciones reales.
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 import { fijarReloj } from './test-support/reloj.mjs';
 
@@ -13,6 +18,7 @@ const beforeMigration = (db, nombre) => {
 const fixture = await setupConjuntos({ beforeMigration, modules: {
   hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', buscar: 'pages/api/campo/buscar', equipo: 'pages/api/campo/equipo/[id]',
   resolver: 'lib/resolver', crear: 'pages/api/campo/ordenes', foto: 'pages/api/campo/foto', campo: 'lib/campo', reporte: 'lib/reporte-mantenimiento', config: 'lib/campo-config', csv: 'pages/api/reportes/[tipo]', database: 'lib/db',
+  reglas: 'lib/ordenes', eop: 'lib/eop',
 } });
 const { app, sqlite, faults, call, close } = fixture;
 const one = (q, ...a) => sqlite.prepare(q).get(...a);
@@ -418,6 +424,344 @@ try {
   c = await crear({ activoId: 2, planId: 90 });
   igual(c.status, 409);
   igual(c.body.error, `Este plan ya tiene la ${codigoDe(9100)} esperando verificación.`);
+
+  // ══ La emergencia (EOP) y la intervención (MOP) también se trabajan en el celular ══
+  // El paquete trae cómo se trabaja cada orden; nunca las horas de los hitos ni duraciones.
+  const vistaDe = async (id) => { const pq = (await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body; return pq.ordenes.concat(pq.libres).find((x) => x.id === id); };
+  const sinHoras = (x) => !/hora_?(llegada|mitigacion|restablecimiento|alarma)|horasTrabajadas|duracion|tiempos/i.test(JSON.stringify(x));
+  const llaves = (x) => Object.keys(x).sort().join();
+  const eopEle = one("SELECT p.id, p.titulo, f.accion_1 a1, f.accion_2 a2, f.accion_3 a3, f.etiqueta_hora_mitigacion e FROM procedimientos p JOIN eop_ficha f ON f.procedimiento_id=p.id WHERE p.codigo_corto='EOP-ELE-01'");
+  const emergencia = (id, extra = {}) => {
+    seed(id, { tipo: 'emergencia', titulo: '[Emergencia] Falla de energía - AC-01', checklist: null, ...extra });
+    sqlite.prepare("UPDATE ordenes SET procedimiento_id=?, hora_alarma=?, clase_prioridad='P1' WHERE id=?").run(extra.eop === undefined ? eopEle.id : extra.eop, hace(40), id);
+  };
+
+  // ── Emergencia: el EOP vinculado, tres pasos y tres toques ───────────────
+  emergencia(9201);
+  let v = await vistaDe(9201);
+  igual(v.modo, 'emergencia');
+  igual(llaves(v.eop), 'codigo,etiquetaMitigacion,titulo', 'El EOP viaja con lo justo');
+  igual(v.eop.codigo, 'EOP-ELE-01');
+  igual(v.eop.titulo, eopEle.titulo);
+  igual(v.eop.etiquetaMitigacion, eopEle.e, 'El rótulo del toque intermedio sale de la ficha del EOP');
+  igual(JSON.stringify(v.hitos), JSON.stringify({ llegada: false, mitigacion: false, restablecimiento: false }));
+  igual(v.pasos.map((x) => x.texto).join('|'), [eopEle.a1, eopEle.a2, eopEle.a3].join('|'), 'Las tres primeras acciones del EOP, como pasos');
+  ok(v.pasos.every((x, i) => x.idx === i && x.estado === 'pendiente' && x.critico === false && x.nota === null && x.pideValor === false));
+  ok(sinHoras(v), JSON.stringify(v));
+  ok(!('pideCausaRaiz' in v) && !('causaRaiz' in v), 'El celular ni pide ni muestra la causa raíz');
+  igual(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9201').c, null, 'Ver el paquete no escribe nada');
+
+  // Sin vínculo, el EOP sale del equipo; sin equipo ni vínculo, no hay EOP.
+  emergencia(9202, { activo: 2, eop: null });
+  const eopMsp = one("SELECT p.titulo, f.accion_1 a1, f.etiqueta_hora_mitigacion e FROM procedimientos p JOIN eop_ficha f ON f.procedimiento_id=p.id WHERE p.codigo_corto='EOP-MSP-01'");
+  v = await vistaDe(9202);
+  igual(v.eop.codigo, 'EOP-MSP-01', JSON.stringify(v.eop));
+  igual(v.eop.etiquetaMitigacion, eopMsp.e);
+  igual(v.pasos[0].texto, eopMsp.a1);
+  emergencia(9203, { activo: null, eop: null });
+  v = await vistaDe(9203);
+  igual(JSON.stringify(v.eop), JSON.stringify({ codigo: null, titulo: null, etiquetaMitigacion: 'Situación controlada' }));
+  igual(v.pasos.length, 0);
+
+  // «Llegué»: la hora del toque, sin iniciar la orden. El primer toque manda.
+  const llegue = op('emergencia.hito', hace(20), { ordenId: 9201, hito: 'llegada' });
+  [r] = await enviar([llegue]);
+  ok(r.ok, JSON.stringify(r));
+  let e = one('SELECT * FROM ordenes WHERE id=9201');
+  igual(e.hora_llegada, hace(20), 'La hora es la del toque');
+  igual(e.estado, 'abierta', '«Llegué» no inicia la orden');
+  [r] = await enviar([llegue]);
+  ok(r.ok && r.repetida, 'El reintento no se aplica dos veces');
+  [r] = await enviar([op('emergencia.hito', hace(5), { ordenId: 9201, hito: 'llegada' })]);
+  ok(r.ok && r.datos?.yaRegistrada, JSON.stringify(r));
+  igual(one('SELECT hora_llegada h FROM ordenes WHERE id=9201').h, hace(20), 'Un segundo toque no mueve la hora');
+  [r] = await enviar([op('emergencia.hito', hace(1), { ordenId: 9201, hito: 'otro' })]);
+  ok(!r.ok, 'Solo existen los tres toques');
+  [r] = await enviar([op('emergencia.hito', hace(1), { ordenId: 3, hito: 'llegada' })]);
+  ok(!r.ok && /no es una emergencia/.test(r.error), JSON.stringify(r));
+
+  // Iniciar guarda las acciones del EOP como checklist, una sola vez.
+  [r] = await enviar([op('orden.iniciar', hace(19), { ordenId: 9201 })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9201');
+  igual(e.estado, 'en_proceso');
+  const sembrado = JSON.parse(e.checklist_ejecucion);
+  igual(sembrado.map((x) => x.texto).join('|'), [eopEle.a1, eopEle.a2, eopEle.a3].join('|'), 'Los mismos textos que mandó el paquete');
+  ok(sembrado.every((x) => x.estado === 'pendiente'));
+  [r] = await enviar([op('orden.paso', hace(18), { ordenId: 9201, idx: 0, texto: eopEle.a1, estado: 'ok' })]);
+  ok(r.ok, JSON.stringify(r));
+  [r] = await enviar([op('orden.iniciar', hace(17), { ordenId: 9201 })]);
+  ok(r.ok, JSON.stringify(r));
+  const despues = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9201').c);
+  igual(despues.length, 3, 'No se vuelve a sembrar');
+  igual(despues[0].estado, 'ok', 'Lo marcado se conserva');
+  // Sembrar es una sola vez, también si dos operaciones llegan a la vez con la orden vieja en la mano.
+  const dbPrueba = app.database.getDb(fixture.ctx('/x'));
+  const fila9201 = await dbPrueba.query.ordenes.findFirst({ where: (t, { eq }) => eq(t.id, 9201) });
+  const antesDeSembrar = fixture.queries.length;
+  igual(await app.eop.sembrarAccionesEop(fixture.ctx('/x'), dbPrueba, fila9201), fila9201, 'Con pasos no se siembra');
+  igual(fixture.queries.length, antesDeSembrar, 'Ni se consulta nada');
+  const tarde = await app.eop.sembrarAccionesEop(fixture.ctx('/x'), dbPrueba, { ...fila9201, checklistEjecucion: null });
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9201').c)[0].estado, 'ok', 'La que llega tarde no pisa lo marcado');
+  igual(tarde.checklistEjecucion, one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9201').c, 'Y sigue con lo que quedó guardado');
+  // Situación controlada antes de la llegada no puede ser: queda en la hora de llegada.
+  [r] = await enviar([op('emergencia.hito', hace(25), { ordenId: 9201, hito: 'mitigacion' })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT hora_mitigacion h FROM ordenes WHERE id=9201').h, hace(20), 'Un hito no queda antes del anterior');
+  v = await vistaDe(9201);
+  igual(JSON.stringify(v.hitos), JSON.stringify({ llegada: true, mitigacion: true, restablecimiento: false }));
+  igual(v.pasos[0].estado, 'ok');
+  ok(sinHoras(v), 'Con horas registradas, el paquete tampoco las trae');
+  // Terminar sin causa raíz: la escribe la jefatura dentro de las 72 h.
+  await enviar([
+    op('orden.paso', hace(12), { ordenId: 9201, idx: 1, texto: eopEle.a2, estado: 'na', nota: 'La transferencia pasó la carga sola.' }),
+    op('orden.paso', hace(11), { ordenId: 9201, idx: 2, texto: eopEle.a3, estado: 'ok' }),
+    op('emergencia.hito', hace(10), { ordenId: 9201, hito: 'restablecimiento' }),
+  ]);
+  igual(one('SELECT hora_restablecimiento h FROM ordenes WHERE id=9201').h, hace(10));
+  [r] = await enviar([op('orden.terminar', hace(9), { ordenId: 9201, nota: 'Encontré la planta sin arrancar; la arranqué en manual y se restableció la red.' })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9201');
+  igual(e.estado, 'completada', 'Se envía a verificación sin causa raíz');
+  igual(e.causa_raiz, null);
+  ok(e.trabajos_realizados.includes('Encontré la planta sin arrancar'), e.trabajos_realizados);
+  // Ya enviada, la hora la corrige la jefatura en la ficha.
+  emergencia(9206, { estado: 'completada' });
+  [r] = await enviar([op('emergencia.hito', hace(3), { ordenId: 9206, hito: 'llegada' })]);
+  ok(!r.ok && /verificación/.test(r.error), JSON.stringify(r));
+  const tardias = await enviar([op('orden.iniciar', hace(3), { ordenId: 9206 }), op('orden.paso', hace(3), { ordenId: 9206, idx: 0, texto: eopEle.a1, estado: 'ok' })]);
+  ok(tardias.every((x) => !x.ok), JSON.stringify(tardias));
+  igual(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9206').c, null, 'Enviada a verificación, ya no se le siembran pasos');
+  const fila9206 = await dbPrueba.query.ordenes.findFirst({ where: (t, { eq }) => eq(t.id, 9206) });
+  const antes9206 = fixture.queries.length;
+  igual(await app.eop.sembrarAccionesEop(fixture.ctx('/x'), dbPrueba, fila9206), fila9206);
+  igual(fixture.queries.length, antes9206, 'Ni lo intenta');
+  await app.eop.sembrarAccionesEop(fixture.ctx('/x'), dbPrueba, { ...fila9206, estado: 'en_proceso' });
+  igual(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9206').c, null, 'Con la orden vieja en la mano, tampoco');
+
+  // Una emergencia que se empezó en la ficha recibe sus pasos con el primer paso marcado.
+  sqlite.prepare("UPDATE ordenes SET estado='en_proceso', iniciada_en=? WHERE id=9202").run(hace(30));
+  const pasosMsp = (await vistaDe(9202)).pasos;
+  [r] = await enviar([op('orden.paso', hace(8), { ordenId: 9202, idx: 1, texto: 'Otro texto', estado: 'ok' })]);
+  ok(!r.ok && /cambi/i.test(r.error), 'Si el EOP cambió, no se marca el paso equivocado');
+  [r] = await enviar([op('orden.paso', hace(7), { ordenId: 9202, idx: 1, texto: pasosMsp[1].texto, estado: 'ok' })]);
+  ok(r.ok, JSON.stringify(r));
+  const msp = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9202').c);
+  igual(msp.map((x) => x.texto).join('|'), pasosMsp.map((x) => x.texto).join('|'));
+  igual(msp.map((x) => x.estado).join(), 'pendiente,ok,pendiente');
+  igual(one('SELECT count(*) c FROM orden_paso_marcas WHERE orden_id=9202').c, 1);
+  // Un celular viejo que todavía manda causa raíz: lo que vio el técnico queda en los trabajos.
+  await enviar([0, 2].map((i) => op('orden.paso', hace(6), { ordenId: 9202, idx: i, texto: pasosMsp[i].texto, estado: 'ok' })));
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9202, nota: 'Unidad sin energía, área segura.', causaRaiz: 'Capacitor del compresor inflado' })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9202');
+  igual(e.causa_raiz, null, 'La causa raíz no la escribe el técnico');
+  ok(e.trabajos_realizados.includes('Causa probable según el técnico: Capacitor del compresor inflado'), e.trabajos_realizados);
+
+  // Permisos: solo el técnico asignado o la jefatura. Una emergencia libre la toma quien llega.
+  emergencia(9204, { asignado: 20 });
+  [r] = await enviar([op('emergencia.hito', hace(4), { ordenId: 9204, hito: 'llegada' })]);
+  ok(!r.ok && /otra persona/.test(r.error), JSON.stringify(r));
+  igual(one('SELECT hora_llegada h FROM ordenes WHERE id=9204').h, null);
+  [r] = await enviar([op('orden.iniciar', hace(4), { ordenId: 9204 })]);
+  ok(!r.ok);
+  igual(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9204').c, null, 'Una operación rechazada no siembra nada');
+  [r] = await enviar([op('emergencia.hito', hace(4), { ordenId: 9204, hito: 'llegada' })], 'jefe');
+  ok(r.ok, 'La jefatura sí puede');
+  igual(one('SELECT hora_llegada h FROM ordenes WHERE id=9204').h, hace(4));
+  emergencia(9205, { asignado: null });
+  ok((await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.libres.some((x) => x.id === 9205 && x.modo === 'emergencia'));
+  [r] = await enviar([op('emergencia.hito', hace(3), { ordenId: 9205, hito: 'llegada' })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9205');
+  igual(e.asignado_a, 3, 'Quien llega la toma');
+  igual(e.estado, 'abierta');
+
+  // ── Intervención: prerrequisitos, liberaciones y reversa ─────────────────
+  const intervencion = (id, extra = {}) => {
+    seed(id, { tipo: 'intervencion', titulo: '[Intervención] Cambio de compresor - AC-01', checklist: null, ...extra });
+    sqlite.prepare("UPDATE ordenes SET plan_reversa='Si el equipo nuevo no arranca, reinstalar el compresor original.' WHERE id=?").run(id);
+    sqlite.prepare("INSERT INTO orden_prerrequisitos(orden_id,texto,tipo,obligatorio,orden) VALUES(?,?,?,?,1),(?,?,?,?,2)").run(id, 'Permiso de trabajo firmado', 'permiso_trabajo', 1, id, 'Aviso a enfermería', 'notificacion', 0);
+    sqlite.prepare("INSERT INTO orden_liberaciones(orden_id,etiqueta,unidad,valor_esperado,min_aceptable,max_aceptable,obligatoria,orden) VALUES(?,?,?,?,?,?,?,1),(?,?,?,?,?,?,?,2)")
+      .run(id, 'Corriente de arranque', 'A', '8 a 12 A', 8, 12, 1, id, 'Fugas en uniones', null, 'Sin fugas', null, null, 1);
+    const ids = all('SELECT id FROM orden_prerrequisitos WHERE orden_id=? ORDER BY orden', id).map((x) => x.id);
+    const libs = all('SELECT id FROM orden_liberaciones WHERE orden_id=? ORDER BY orden', id).map((x) => x.id);
+    return { permiso: ids[0], aviso: ids[1], corriente: libs[0], fugas: libs[1] };
+  };
+  const mop = intervencion(9301);
+  v = await vistaDe(9301);
+  igual(v.modo, 'intervencion');
+  igual(v.prerrequisitos.length, 2);
+  igual(llaves(v.prerrequisitos[0]), 'cumplido,id,obligatorio,pista,referencia,texto,tipo');
+  igual(JSON.stringify(v.prerrequisitos[0]), JSON.stringify({ id: mop.permiso, texto: 'Permiso de trabajo firmado', tipo: 'permiso_trabajo', obligatorio: true, cumplido: false, referencia: null, pista: app.reglas.PRERREQ_REFERENCIA_HINT.permiso_trabajo }));
+  igual(v.prerrequisitos[1].obligatorio, false);
+  igual(llaves(v.liberaciones[0]), 'conforme,esperado,etiqueta,id,max,medida,min,obligatoria,unidad,valor');
+  igual(JSON.stringify(v.liberaciones[0]), JSON.stringify({ id: mop.corriente, etiqueta: 'Corriente de arranque', unidad: 'A', esperado: '8 a 12 A', min: 8, max: 12, obligatoria: true, medida: false, valor: null, conforme: null }));
+  igual(JSON.stringify(v.reversa), JSON.stringify({ plan: 'Si el equipo nuevo no arranca, reinstalar el compresor original.', ejecutada: false }));
+  igual(v.pasos.length, 0);
+  ok(sinHoras(v));
+
+  // No arranca sin el permiso; el permiso se marca con su referencia y su hora.
+  [r] = await enviar([op('orden.iniciar', hace(16), { ordenId: 9301 })]);
+  ok(!r.ok && /prerrequisito/.test(r.error), JSON.stringify(r));
+  [r] = await enviar([op('mop.prerrequisito', hace(16), { ordenId: 9301, prerrequisitoId: mop.permiso, referencia: 'x' })]);
+  ok(!r.ok && /referencia/.test(r.error), JSON.stringify(r));
+  const permiso = op('mop.prerrequisito', hace(15), { ordenId: 9301, prerrequisitoId: mop.permiso, referencia: 'PT-0457, lo emitió J. Pérez' });
+  [r] = await enviar([permiso]);
+  ok(r.ok, JSON.stringify(r));
+  let pre = one('SELECT * FROM orden_prerrequisitos WHERE id=?', mop.permiso);
+  igual(pre.cumplido, 1);
+  igual(pre.cumplido_por, 3);
+  igual(pre.cumplido_en, hace(15), 'La hora es la del toque, no la de la señal');
+  igual(pre.referencia, 'PT-0457, lo emitió J. Pérez');
+  [r] = await enviar([permiso]);
+  ok(r.repetida);
+  [r] = await enviar([op('mop.prerrequisito', hace(15), { ordenId: 9301, prerrequisitoId: 999999, referencia: 'PT-1' })]);
+  ok(!r.ok && /no encontrado/.test(r.error), JSON.stringify(r));
+  [r] = await enviar([op('orden.iniciar', hace(14), { ordenId: 9301 })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9301').estado, 'en_proceso');
+
+  // La lectura: número con coma o texto, con su hora y si quedó en rango.
+  [r] = await enviar([op('mop.liberacion', hace(10), { ordenId: 9301, liberacionId: mop.corriente, valor: '14,5' })]);
+  ok(r.ok && r.datos?.conforme === false, JSON.stringify(r));
+  let lib = one('SELECT * FROM orden_liberaciones WHERE id=?', mop.corriente);
+  igual(lib.valor_medido, 14.5);
+  igual(lib.conforme, 0);
+  igual(lib.medido_en, hace(10));
+  igual(lib.medido_por, 3);
+  [r] = await enviar([op('mop.liberacion', hace(9), { ordenId: 9301, liberacionId: mop.fugas, valor: 'Sin fugas con espuma' })]);
+  ok(r.ok, JSON.stringify(r));
+  lib = one('SELECT * FROM orden_liberaciones WHERE id=?', mop.fugas);
+  igual(lib.valor_medido_texto, 'Sin fugas con espuma');
+  igual(lib.valor_medido, null);
+  igual(lib.conforme, null, 'Sin rango no se juzga');
+  [r] = await enviar([op('mop.liberacion', hace(9), { ordenId: 9301, liberacionId: mop.fugas, valor: '  ' })]);
+  ok(!r.ok, 'Una lectura vacía no borra la anterior');
+  igual(one('SELECT valor_medido_texto t FROM orden_liberaciones WHERE id=?', mop.fugas).t, 'Sin fugas con espuma');
+  v = await vistaDe(9301);
+  igual(JSON.stringify(v.liberaciones.map((x) => [x.medida, x.valor, x.conforme])), JSON.stringify([[true, 14.5, false], [true, 'Sin fugas con espuma', null]]));
+
+  // Fuera de rango no se envía a verificación; con la reversa ejecutada, sí.
+  [r] = await enviar([op('orden.terminar', hace(8), { ordenId: 9301, nota: 'Compresor nuevo instalado.' })]);
+  ok(!r.ok && /fuera de rango/.test(r.error) && /reversa/.test(r.error), JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9301').estado, 'en_proceso');
+  [r] = await enviar([op('mop.reversa', hace(7), { ordenId: 9301, notas: 'corto' })]);
+  ok(!r.ok && /10/.test(r.error), JSON.stringify(r));
+  const reversa = op('mop.reversa', hace(6), { ordenId: 9301, notas: 'Se reinstaló el compresor original; el equipo quedó como estaba.' });
+  [r] = await enviar([reversa]);
+  ok(r.ok, JSON.stringify(r));
+  [r] = await enviar([reversa]);
+  ok(r.repetida);
+  e = one('SELECT * FROM ordenes WHERE id=9301');
+  igual(e.reversa_ejecutada, 1);
+  igual(e.reversa_notas, 'Se reinstaló el compresor original; el equipo quedó como estaba.');
+  igual((await vistaDe(9301)).reversa.ejecutada, true);
+  [r] = await enviar([op('orden.terminar', hace(4), { ordenId: 9301, nota: 'Se revirtió: arranque fuera de rango.' })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9301');
+  igual(e.estado, 'completada');
+  ok(e.trabajos_realizados.includes('Lecturas de liberación: Corriente de arranque: 14.5 A; Fugas en uniones: Sin fugas con espuma.'), e.trabajos_realizados);
+  ok(e.trabajos_realizados.includes('Reversa ejecutada: Se reinstaló el compresor original; el equipo quedó como estaba.'), e.trabajos_realizados);
+  [r] = await enviar([op('mop.liberacion', hace(3), { ordenId: 9301, liberacionId: mop.corriente, valor: '10' })]);
+  ok(!r.ok && /verificación/.test(r.error), 'Enviada a verificación, el técnico ya no cambia lecturas');
+
+  // Dentro de rango se envía; sin la lectura obligatoria, no.
+  const enRango = intervencion(9304);
+  await enviar([
+    op('mop.prerrequisito', hace(30), { ordenId: 9304, prerrequisitoId: enRango.permiso, referencia: 'PT-0458' }),
+    op('orden.iniciar', hace(29), { ordenId: 9304 }),
+    op('mop.liberacion', hace(20), { ordenId: 9304, liberacionId: enRango.fugas, valor: 'Sin fugas' }),
+  ]);
+  [r] = await enviar([op('orden.terminar', hace(19), { ordenId: 9304, nota: 'Compresor cambiado.' })]);
+  ok(!r.ok && /lectura/.test(r.error), JSON.stringify(r));
+  // Escrita con su unidad, la lectura se juzga igual por su número.
+  [r] = await enviar([op('mop.liberacion', hace(18.5), { ordenId: 9304, liberacionId: enRango.corriente, valor: '13 A' })]);
+  ok(r.ok && r.datos?.conforme === false, JSON.stringify(r));
+  [r] = await enviar([op('orden.terminar', hace(18.4), { ordenId: 9304, nota: 'Compresor cambiado.' })]);
+  ok(!r.ok && /fuera de rango/.test(r.error) && /13 A/.test(r.error), JSON.stringify(r));
+  await enviar([op('mop.liberacion', hace(18), { ordenId: 9304, liberacionId: enRango.corriente, valor: 10.2 })]);
+  lib = one('SELECT * FROM orden_liberaciones WHERE id=?', enRango.corriente);
+  ok(lib.valor_medido === 10.2 && lib.valor_medido_texto === null && lib.conforme === 1, 'Una lectura nueva reemplaza la anterior');
+  [r] = await enviar([op('orden.terminar', hace(17), { ordenId: 9304, nota: 'Compresor cambiado.' })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9304').estado, 'completada');
+
+  // Permisos: la intervención de otro no se toca; una libre la toma quien empieza.
+  const ajena = intervencion(9302, { asignado: 20 });
+  [r] = await enviar([op('mop.prerrequisito', hace(2), { ordenId: 9302, prerrequisitoId: ajena.permiso, referencia: 'PT-0459' })]);
+  ok(!r.ok && /otra persona/.test(r.error), JSON.stringify(r));
+  igual(one('SELECT cumplido FROM orden_prerrequisitos WHERE id=?', ajena.permiso).cumplido, 0);
+  [r] = await enviar([op('mop.liberacion', hace(2), { ordenId: 9302, liberacionId: ajena.corriente, valor: '10' })]);
+  ok(!r.ok && /asignada a ti/.test(r.error), JSON.stringify(r));
+  igual(one('SELECT valor_medido v FROM orden_liberaciones WHERE id=?', ajena.corriente).v, null);
+  [r] = await enviar([op('mop.reversa', hace(2), { ordenId: 9302, notas: 'Intento revertir una orden ajena.' })]);
+  ok(!r.ok);
+  igual(one('SELECT reversa_ejecutada x FROM ordenes WHERE id=9302').x, 0);
+  [r] = await enviar([op('mop.prerrequisito', hace(2), { ordenId: 9302, prerrequisitoId: ajena.permiso, referencia: 'PT-0459' })], 'jefe');
+  ok(r.ok, 'La jefatura sí puede');
+  const libre = intervencion(9303, { asignado: null });
+  [r] = await enviar([op('mop.prerrequisito', hace(1), { ordenId: 9303, prerrequisitoId: libre.permiso, referencia: 'PT-0460' })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT asignado_a a FROM ordenes WHERE id=9303').a, 3, 'Una intervención libre la toma quien empieza por sus prerrequisitos');
+  igual(one('SELECT cumplido_por p FROM orden_prerrequisitos WHERE id=?', libre.permiso).p, 3);
+
+  // ── El aviso o el correo lleva al técnico al celular, con cualquier tipo de orden ──
+  const middleware = await (async () => {
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mantenimiento-middleware-'));
+    const salida = path.join(dir, 'middleware.mjs');
+    try {
+      await build({ entryPoints: [path.join(raiz, 'src/middleware.ts')], outfile: salida, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent',
+        plugins: [{ name: 'astro-virtual', setup(b) {
+          b.onResolve({ filter: /^astro:middleware$/ }, () => ({ path: 'astro:middleware', namespace: 'virtual' }));
+          b.onLoad({ filter: /.*/, namespace: 'virtual' }, () => ({ contents: 'export const defineMiddleware = (fn) => fn;', loader: 'js' }));
+        } }] });
+      return (await import(pathToFileURL(salida).href)).onRequest;
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  })();
+  const abrir = async (url, rol = 'tecnico') => {
+    const contexto = fixture.ctx(url, { rol });
+    contexto.redirect = (destino) => new Response(null, { status: 302, headers: { location: destino } });
+    const res = await middleware(contexto, async () => new Response('ficha', { status: 200 }));
+    return res.status === 302 ? res.headers.get('location') : 'ficha';
+  };
+  sqlite.prepare("UPDATE ordenes SET estado='en_proceso' WHERE id=9205").run();
+  igual(await abrir('/ordenes/9205'), '/campo#orden-9205', 'Emergencia en curso');
+  igual(await abrir('/ordenes/9303'), '/campo#orden-9303', 'Intervención abierta');
+  igual(await abrir('/ordenes/9302'), 'ficha', 'La de otra persona no');
+  igual(await abrir('/ordenes/9205?completa=1'), 'ficha', '?completa=1 abre la ficha');
+  igual(await abrir('/ordenes/9205', 'jefe'), 'ficha', 'La jefatura trabaja en la ficha');
+  igual(await abrir('/ordenes/9201'), 'ficha', 'Enviada a verificación, la ficha');
+  igual(await abrir('/ordenes/9001'), '/campo#orden-9001', 'Preventivo, como antes');
+
+  // ── D1 corta a 50 consultas por solicitud: el paquete, con todo esto, cabe ──
+  // Tres emergencias sin EOP vinculado, en tres equipos: el paquete busca el EOP de dos, y primero las que no tienen pasos.
+  emergencia(9207, { activo: 1, eop: null });
+  emergencia(9208, { activo: 5, eop: null, checklist: CHECKLIST });
+  emergencia(9209, { activo: 4, eop: null });
+  const antes = fixture.queries.length;
+  const pqGrande = await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' });
+  const consultas = fixture.queries.length - antes;
+  igual(pqGrande.status, 200);
+  ok(consultas <= 45, `El paquete hizo ${consultas} consultas`);
+  ok(pqGrande.body.ordenes.filter((x) => x.modo === 'emergencia').length >= 4 && pqGrande.body.ordenes.some((x) => x.modo === 'intervencion'));
+  ok(pqGrande.body.emergencias.every((x) => typeof x.etiquetaMitigacion === 'string' && x.etiquetaMitigacion.length > 0));
+  const enPaquete = (id) => pqGrande.body.ordenes.find((x) => x.id === id);
+  igual(enPaquete(9207).eop.codigo, 'EOP-HVAC-01');
+  igual(enPaquete(9209).eop.codigo, 'EOP-MSP-01', 'La que no tiene pasos va antes');
+  igual(enPaquete(9209).pasos.length, 3);
+  igual(enPaquete(9208).eop.codigo, null, 'Pasado el tope, la que ya tiene pasos espera a abrirse sola');
+  igual(enPaquete(9208).pasos.length, 3, 'Sus pasos son los de su checklist');
+  igual((await call(app.crear.GET, '/api/campo/ordenes?id=9208', { rol: 'tecnico' })).body.orden.eop.codigo, 'EOP-HVAC-01');
+  // La orden abierta suelta trae lo mismo que el paquete.
+  const suelta = await call(app.crear.GET, '/api/campo/ordenes?id=9301', { rol: 'tecnico' });
+  igual(suelta.status, 200);
+  igual(suelta.body.orden.modo, 'intervencion');
+  igual(suelta.body.orden.liberaciones.length, 2);
+  const sueltaEop = await call(app.crear.GET, '/api/campo/ordenes?id=9207', { rol: 'tecnico' });
+  igual(sueltaEop.body.orden.eop.codigo, 'EOP-HVAC-01', 'En quirófano manda el EOP de climatización crítica');
+  ok(sinHoras(sueltaEop.body.orden));
 
   console.log(`PASS test-campo: ${verificaciones} verificaciones; rutas y migraciones reales, sin red.`);
 } finally {

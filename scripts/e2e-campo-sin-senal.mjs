@@ -55,6 +55,7 @@ try {
   doc.querySelector('[data-a="elegirSede"][data-id="8"]').click();
   await hasta(() => /Lo primero del turno/.test(texto()), 'la ronda es lo primero');
   ok(/Ronda de las 06:00/.test(texto()));
+  ok(/\d+ paradas/.test(texto()) && !/estimado/.test(texto()), 'La ronda dice cuántas paradas, no cuánto se estima: ' + texto().slice(0, 160));
   const paquete = await (await w.fetch('/api/campo/hoy?sede=8')).json();
   const n = paquete.ronda.puntos.length;
   const idDe = (re) => paquete.ronda.puntos.find((p) => re.test(p.texto)).id;
@@ -64,6 +65,7 @@ try {
   enLinea = false; w.dispatchEvent(new w.Event('offline'));
   await clic('ronda');
   ok(/Parada 1 de/.test(texto()), texto().slice(0, 100));
+  ok(!doc.querySelector('#reloj') && !/\d{2}:\d{2}:\d{2}|≈/.test(doc.querySelector('.paso-cab').textContent), 'La cabecera de la parada no lleva reloj');
   ok(/llegan cuando vuelva/.test(texto()), 'Sin señal, la línea 1 no afirma que no hay entrega ni desviaciones');
   let vistas = 0, tempEn = 0;
   while (/Parada \d+ de/.test(texto()) && vistas < 40) {
@@ -118,6 +120,7 @@ try {
   igual(vistas, n, 'Una parada por pantalla, todas');
   ok(/paradas verificadas/.test(texto()), texto().slice(0, 200));
   ok(/Sin verificar/.test(texto()));
+  ok(!/Quién y cuándo/.test(texto()) && !/\b\d{2}:\d{2} a \d{2}:\d{2}\b/.test(texto()), 'El cierre de la ronda no dice cuándo empezó ni cuánto duró: ' + texto().slice(0, 300));
   igual(one('SELECT COUNT(*) n FROM campo_operaciones').n, 0, 'Nada ha llegado al servidor');
   ok(/Quedan abiertas/.test(doc.querySelector('#entrega').value), 'La entrega ya viene escrita');
   doc.querySelector('#entrega').value = '';
@@ -165,7 +168,9 @@ try {
   ok(one('SELECT orden_id o FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, CUARTOS).o, 'El correctivo queda ligado a su parada');
   const r14 = one("SELECT * FROM ronda_ejecuciones WHERE turno='14:00' AND sucursal_id=8");
   igual(r14.estado, 'en_curso'); igual(r14.iniciada_en, new RealDate(enSV('14:20')).toISOString());
-  await hasta(() => /Emergencia abierta/.test(texto()), 'la emergencia pasa delante de la ronda');
+  await hasta(() => /Atender la emergencia/.test(texto()), 'la emergencia pasa delante de la ronda');
+  ok(!doc.querySelector('.ahora a[href^="/ordenes/"]') && !/ficha/i.test(doc.querySelector('.ahora').textContent), 'La emergencia se atiende en el celular, no en la ficha');
+  ok(doc.querySelector('.ahora [data-a="ir"]').dataset.h.startsWith('#orden-'), 'El botón de la emergencia lleva a su pantalla en el celular');
   igual(one("SELECT COUNT(*) n FROM campo_operaciones WHERE resultado='rechazada'").n, 0, 'Sin rechazos');
   // Atendida la emergencia, Hoy vuelve a la ronda de este turno donde quedó.
   sqlite.exec("UPDATE ordenes SET estado='completada' WHERE tipo='emergencia'");

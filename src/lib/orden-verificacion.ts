@@ -3,7 +3,7 @@ import { ordenes, usuarios, adjuntos, planesMantenimiento, actividades, activos,
 import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';
 import {
   parseChecklist, validarChecklistParaCierre, validarLecturasChecklistParaCierre, transicionesPermitidas,
-  validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarCausaRaizParaCierre, puedeCerrarSinLectura,
+  validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarLiberacionesEnRango, validarCausaRaizParaCierre, puedeCerrarSinLectura,
   type EstadoOT,
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
@@ -46,6 +46,8 @@ function validarEvidencia(order: Orden, input: Record<string, any>) {
  * liberación. En una emergencia [...] obliga a cerrar con un análisis de causa
  * raíz.» Aplican a todos los roles: son la evidencia de FMS.10.00 y FMS.08.01.
  * El único escape es el cierre sin lectura de un MOP, con motivo y por jefatura.
+ * La causa raíz la escribe la jefatura dentro de las 72 h: se exige al
+ * verificar o cerrar, no al técnico cuando envía a verificación.
  */
 async function validarInicioDocumental(db: DB, order: Orden, input: Record<string, any>) {
   const tipo = (input.tipo ?? order.tipo) as string;
@@ -56,7 +58,7 @@ async function validarInicioDocumental(db: DB, order: Orden, input: Record<strin
   const v = validarPrerrequisitosParaIniciar(tipo, prerreqs);
   if (!v.ok) deny(v.error!, 400);
 }
-async function validarCierreDocumental(db: DB, order: Orden, user: User, input: Record<string, any>, data: Record<string, any>, now: string, motivoSinLectura?: string | null) {
+async function validarCierreDocumental(db: DB, order: Orden, user: User, input: Record<string, any>, data: Record<string, any>, now: string, motivoSinLectura: string | null | undefined, etapa: 'envio' | 'verificacion') {
   const tipo = (input.tipo ?? order.tipo) as string;
   // Una OT que nunca se inició no tiene lecturas que exigir: el cierre
   // administrativo de registros viejos sigue siendo posible.
@@ -65,19 +67,32 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
     const lect = validarLecturasChecklistParaCierre(parseChecklist(raw));
     if (!lect.ok) deny(lect.error!, 400);
   }
-  if (tipo === 'intervencion') {
+  // Con la reversa ejecutada el sistema volvió a como estaba: no hay nada que liberar.
+  const reversa = (input.reversaEjecutada !== undefined ? input.reversaEjecutada : order.reversaEjecutada) === true;
+  if (tipo === 'intervencion' && !reversa) {
     const libs = await db
-      .select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, obligatoria: ordenLiberaciones.obligatoria, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
+      .select({
+        etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, obligatoria: ordenLiberaciones.obligatoria, valorMedido: ordenLiberaciones.valorMedido,
+        valorMedidoTexto: ordenLiberaciones.valorMedidoTexto, minAceptable: ordenLiberaciones.minAceptable, maxAceptable: ordenLiberaciones.maxAceptable,
+      })
       .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, order.id));
     const v = validarLiberacionesParaCierre(tipo, libs);
     if (!v.ok) {
       const motivo = (motivoSinLectura ?? '').trim();
-      if (!motivo) deny(v.error!, 400);
-      if (!puedeCerrarSinLectura(user.rol as any)) deny('Solo la jefatura (admin o jefe) puede cerrar un MOP sin la lectura de liberación. Pide a tu jefatura que lo cierre con el motivo escrito.');
-      if (motivo.length < 20) deny('El motivo del cierre sin lectura tiene que explicar por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres).', 400);
-      Object.assign(data, { cierreSinLecturaPor: user.id, cierreSinLecturaEn: now, cierreSinLecturaMotivo: motivo });
+      // La jefatura ya cerró sin lectura y dejó su motivo: la verificación no lo vuelve a pedir.
+      const yaCerradaSinLectura = !motivo && etapa === 'verificacion' && !!order.cierreSinLecturaMotivo?.trim();
+      if (!yaCerradaSinLectura) {
+        if (!motivo) deny(v.error!, 400);
+        if (!puedeCerrarSinLectura(user.rol as any)) deny('Solo la jefatura (admin o jefe) puede enviar un MOP a verificación sin la lectura de liberación. Pídeselo a tu jefatura con el motivo.');
+        if (motivo.length < 20) deny('El motivo del envío sin lectura tiene que explicar por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres).', 400);
+        Object.assign(data, { cierreSinLecturaPor: user.id, cierreSinLecturaEn: now, cierreSinLecturaMotivo: motivo });
+      }
     }
+    // Una lectura obligatoria fuera de rango no libera el sistema; el cierre sin lectura no la salva.
+    const rango = validarLiberacionesEnRango(tipo, libs);
+    if (!rango.ok) deny(rango.error!, 400);
   }
+  if (etapa !== 'verificacion') return;
   let criticidad: string | null = null;
   const activoFinal = input.activoId !== undefined ? input.activoId : order.activoId;
   if (activoFinal) {
@@ -109,15 +124,21 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     (['completada', 'verificada', 'cerrada'].includes(order.estado) && ['en_proceso', 'abierta'].includes(destination));
   const isReview = !isReturn && ['verificada', 'cerrada'].includes(destination) && destination !== order.estado;
   const isComplete = destination === 'completada' && destination !== order.estado;
-  const editsExecution = executionFields.some((key) => input[key] !== undefined && input[key] !== (order as any)[key]);
+  const changes = (key: string) => input[key] !== undefined && input[key] !== (order as any)[key];
+  // La causa raíz la escribe la jefatura, también con la orden ya enviada a
+  // verificación o cerrada. Es análisis, no ejecución: no la vuelve ejecutora
+  // (podrá verificar) ni obliga a devolver la orden.
+  const causaDeJefatura = changes('causaRaiz') && manager(user) && !['abierta', 'cancelada'].includes(order.estado);
+  const editsExecution = executionFields.some((key) => changes(key) && !(key === 'causaRaiz' && causaDeJefatura));
   const editsMetadata = ['titulo', 'descripcion', 'tipo', 'prioridad', 'activoId', 'vencimiento'].some((key) => input[key] !== undefined && input[key] !== (order as any)[key]);
   const editsAssignment = input.asignadoA !== undefined && input.asignadoA !== order.asignadoA;
   const onlySelfAssignment = user.rol === 'tecnico' && order.estado === 'abierta' && !order.asignadoA && input.asignadoA === user.id;
   if (!manager(user) && !onlySelfAssignment && editsAssignment) deny('Solo la jefatura puede cambiar la asignación.');
   if (editsMetadata && !manager(user)) deny('Solo la jefatura puede modificar los datos de la orden.');
+  if (user.rol === 'tecnico' && changes('causaRaiz') && ['completada', 'verificada', 'cerrada'].includes(order.estado)) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
   if (user.rol === 'tecnico' && !isReview && !isReturn && !onlySelfAssignment && order.asignadoA !== user.id && !(order.estado === 'abierta' && !order.asignadoA && destination === 'en_proceso')) deny('La orden debe estar asignada a ti para registrar ejecución o cambiar su estado.');
   if (editsExecution && !(manager(user) || (user.rol === 'tecnico' && order.asignadoA === user.id))) deny('No puedes registrar ejecución en esta orden.');
-  if (editsExecution && !['en_proceso', 'en_espera'].includes(order.estado)) deny('Devuelve o reabre la orden antes de cambiar evidencia de ejecución.', 409);
+  if (editsExecution && !['en_proceso', 'en_espera'].includes(order.estado)) deny(order.estado === 'abierta' ? 'Inicia la orden antes de registrar su ejecución.' : 'Devuelve o reabre la orden antes de cambiar evidencia de ejecución.', 409);
   if ((isReturn || isReview) && (editsExecution || editsAssignment || editsMetadata)) deny('La revisión o devolución debe enviarse separada de cambios de ejecución, equipo o asignación.', 400);
   if (input.verificacionNotas !== undefined && !isReview) deny('Las notas de verificación solo se registran al verificar.', 400);
   if (!manager(user) && !['tecnico'].includes(user.rol) && !isReturn && !isReview) deny('No tienes permisos para modificar órdenes.');
@@ -163,7 +184,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     if (!state.ejecutadoPor || !order.completadaEn) deny('No hay un ejecutor trazable. Devuelve la orden para documentar la ejecución; el historial anterior se conserva.', 409);
     if (!input.verificacionNotas?.trim() || input.verificacionNotas.trim().length < 10) deny('Describe la evidencia revisada y el resultado de la verificación (al menos 10 caracteres).', 400);
     validarEvidencia(order, {});
-    await validarCierreDocumental(db, order, user, {}, data, now, cierreSinLecturaMotivo);
+    await validarCierreDocumental(db, order, user, causaDeJefatura ? { causaRaiz: input.causaRaiz } : {}, data, now, cierreSinLecturaMotivo, 'verificacion');
     destination = 'cerrada'; eventAction = 'verificacion_cierre';
     Object.assign(data, { estado: destination, verificadoPor: user.id, verificadoEn: now, verificacionNotas: input.verificacionNotas.trim(), cerradoPor: user.id, cerradoEn: now });
   } else if (destination !== order.estado) {
@@ -184,7 +205,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     }
     if (isComplete) {
       validarEvidencia(order, input);
-      await validarCierreDocumental(db, order, user, input, data, now, cierreSinLecturaMotivo);
+      await validarCierreDocumental(db, order, user, input, data, now, cierreSinLecturaMotivo, 'envio');
       data.completadaEn = now; eventAction = 'ejecucion_completada';
       Object.assign(data, { verificadoPor: null, verificadoEn: null, verificacionNotas: null, cerradoPor: null, cerradoEn: null });
       stateData.ejecutadoPor = user.id;
@@ -193,6 +214,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   }
   if (editsExecution || isComplete) stateData.executoresJson = JSON.stringify([...new Set([...ejecutoresDeOrden(state), user.id])]);
   if (editsExecution && eventAction === 'edicion') eventAction = 'ejecucion';
+  if (causaDeJefatura && eventAction === 'edicion') eventAction = 'causa_raiz';
   if (input.vencimiento !== undefined && input.vencimiento !== order.vencimiento) eventAction = 'reprogramacion';
   if (reprogramarPreventivos !== undefined) {
     if (!(manager(user) || (user.rol === 'tecnico' && order.asignadoA === user.id)) || !['en_proceso','en_espera'].includes(order.estado)) deny('No puedes cambiar la decisión de reprogramación preventiva en este estado.');

@@ -243,8 +243,9 @@ export async function aplicarCambioOrden(
     } catch {}
   }
 
-  // Notifica al tecnico cuando se le asigna o reasigna una OT
-  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
+  // Notifica al tecnico cuando se le asigna o reasigna una OT. Quien toma una
+  // orden libre desde el celular no necesita un correo que se lo cuente.
+  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA && parsed.data.asignadoA !== user.id) {
     try {
       const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
