@@ -17,6 +17,7 @@ export type TipoProc = "scp" | "sop" | "mop" | "eop" | "aop";
 export type SistemaProc =
   | "electrico"
   | "hvac"
+  | "minisplit"
   | "gases"
   | "agua"
   | "incendios"
@@ -29,6 +30,7 @@ export const TIPOS_PROC = ["scp", "sop", "mop", "eop", "aop"] as const;
 export const SISTEMAS_PROC = [
   "electrico",
   "hvac",
+  "minisplit",
   "gases",
   "agua",
   "incendios",
@@ -114,7 +116,8 @@ export interface SistemaInfo {
 
 export const SISTEMAS: SistemaInfo[] = [
   { value: "electrico", label: "Energía eléctrica", icono: "", color: "bg-yellow-100 text-yellow-800" },
-  { value: "hvac", label: "Climatización", icono: "", color: "bg-cyan-100 text-cyan-800" },
+  { value: "hvac", label: "Climatización crítica (HEPA)", icono: "", color: "bg-cyan-100 text-cyan-800" },
+  { value: "minisplit", label: "Minisplit", icono: "", color: "bg-cyan-100 text-cyan-800" },
   { value: "gases", label: "Gases medicinales", icono: "", color: "bg-indigo-100 text-indigo-800" },
   { value: "agua", label: "Agua", icono: "", color: "bg-blue-100 text-blue-800" },
   { value: "incendios", label: "Protección contra incendios", icono: "", color: "bg-red-100 text-red-800" },

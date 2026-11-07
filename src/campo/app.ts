@@ -4,6 +4,7 @@
 import * as cola from "./cola";
 import type { Op } from "./cola";
 import { comprimir, peso } from "./foto";
+import { turnoActual } from "../lib/turnos";
 
 const TZ = "America/El_Salvador";
 const cuerpo = document.body.dataset;
@@ -79,7 +80,7 @@ const rangoDe = (p: Any) => {
   return "";
 };
 const fueraDe = (p: Any, v: number) => (p.min != null && v < p.min) || (p.max != null && v > p.max);
-const SISTEMAS: Record<string, string> = { electrico: "Sistema eléctrico", hvac: "Climatización", gases: "Gases medicinales", agua: "Agua", incendios: "Incendios", ascensores: "Ascensores", otro: "Otros" };
+const SISTEMAS: Record<string, string> = { electrico: "Sistema eléctrico", hvac: "Climatización crítica", minisplit: "Minisplit", gases: "Gases medicinales", agua: "Agua", incendios: "Incendios", ascensores: "Ascensores", otro: "Otros" };
 const limpiarTitulo = (t: string) => String(t ?? "").replace(/^\[[^\]]+\]\s*/, "");
 const tituloOrden = (o: Any) => o.activo?.nombre || limpiarTitulo(o.titulo);
 const subOrden = (o: Any) => [o.activo?.codigo, o.lugar?.ubicacion].filter(Boolean).join(" · ");
@@ -134,22 +135,34 @@ function aplicarLocal(p: Any, op: Op) {
       if (o) o.fotos = (o.fotos ?? 0) + 1;
       break;
     case "ronda.iniciar":
-      if (p.ronda && p.ronda.estado === "sin_iniciar") { p.ronda.estado = "en_curso"; p.ronda.iniciadaEn = op.at; }
+      if (esDeEstaRonda(p, op) && p.ronda.estado === "sin_iniciar") { p.ronda.estado = "en_curso"; p.ronda.iniciadaEn = op.at; }
       break;
     case "ronda.lectura":
-      if (p.ronda) {
+      if (esDeEstaRonda(p, op)) {
         p.ronda.lecturas[op.puntoId as number] = { resultado: op.resultado, valor: op.valor ?? null, nota: op.nota ?? null };
         if (p.ronda.estado === "sin_iniciar") { p.ronda.estado = "en_curso"; p.ronda.iniciadaEn = op.at; }
       }
       break;
     case "ronda.cerrar":
-      if (p.ronda) p.ronda.estado = "completada";
+      if (esDeEstaRonda(p, op)) p.ronda.estado = "completada";
       break;
     case "emergencia.abrir":
     case "correctivo.abrir":
       p.locales = [...(p.locales ?? []), { opId: op.opId, tipo: op.tipo, titulo: op.titulo ?? "Orden por enviar" }];
       break;
   }
+}
+const esDeEstaRonda = (p: Any, op: Any) => !!p.ronda && op.fecha === p.ronda.fecha && op.turno === p.ronda.turno;
+/** Sin señal al cambiar de turno: la misma lista, una ronda nueva. A media ronda se termina con su turno. */
+function rodarTurno(): boolean {
+  if (E.flujo?.tipo === "ronda") return false;
+  const r = E.base?.ronda;
+  if (!r?.turnos?.length) return false;
+  const t = turnoActual(r.turnos);
+  if (t.fecha === r.fecha && t.turno === r.turno) return false;
+  E.base.ronda = { ...r, fecha: t.fecha, turno: t.turno, etiqueta: t.etiqueta, estado: "sin_iniciar", ejecucionId: null, iniciadaEn: null, lecturas: {}, entregaAnterior: null };
+  rebase();
+  return true;
 }
 function rebase() {
   if (!E.base) { E.p = null; return; }
@@ -269,6 +282,9 @@ async function refrescarHoy() {
     if (r.status === 401) { E.sesionVencida = true; E.cargando = false; repintarSiEsSeguro(); return; }
     if (!r.ok) throw new Error(String(r.status));
     const j: Any = await r.json();
+    // A media ronda el paquete no le cambia el turno bajo los pies al técnico.
+    const enCursoAqui = E.flujo?.tipo === "ronda" ? E.base?.ronda : null;
+    if (enCursoAqui && (j.ronda?.fecha !== enCursoAqui.fecha || j.ronda?.turno !== enCursoAqui.turno)) j.ronda = enCursoAqui;
     E.base = j;
     E.sesionVencida = false;
     E.enLinea = true;
@@ -367,6 +383,7 @@ function grupoHtml(clave: string, titulo: string, cuenta: string, filas: string,
 }
 
 function vHoy() {
+  rodarTurno();
   const p = E.p;
   if (!p) {
     if (E.cargando) return `<div class="simple"><p>Cargando tu día…</p></div>`;
@@ -389,7 +406,6 @@ function vHoy() {
   }
   if (p.tickets?.length) filas += grupoHtml("tickets", "Reportes asignados", `${p.tickets.length} por atender`, p.tickets.map((t: Any) => `<a class="fila sub" href="/tickets/${t.id}" data-fuera><span class="txt"><strong>${esc(t.asunto)}</strong><small>${esc([t.solicitante, t.sede].filter(Boolean).join(" · "))}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.libres?.length) filas += grupoHtml("libres", "Sin asignar en esta sede", `${p.libres.length} para tomar`, p.libres.map(filaOrden).join(""), abierto);
-  if (p.rondasAsignadas?.length) filas += grupoHtml("rondas", "Rondas de jefatura", `${p.rondasAsignadas.length} asignadas`, p.rondasAsignadas.map((r: Any) => `<a class="fila sub" href="/rondas?execution=${r.id}" data-fuera><span class="txt"><strong>${esc(r.name)}</strong><small>${fecha(r.fecha)}${r.turno ? ` · ${esc(r.turno)}` : ""}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.porVerificar?.length) filas += grupoHtml("verificar", "Por verificar", `${p.porVerificar.length} te tocan`, p.porVerificar.map((o: Any) => `<a class="fila sub" href="/ordenes/${o.id}?completa=1" data-fuera><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>Orden #${o.id}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.hechasHoy?.length) filas += grupoHtml("hechas", "Terminadas hoy", String(p.hechasHoy.length), p.hechasHoy.map((o: Any) => `<div class="fila sub"><span class="marca si">${ico.check}</span><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>${o.completadaEn ? hora(o.completadaEn) : ""}</small></span></div>`).join(""), abierto);
 
@@ -472,6 +488,14 @@ function lecturaHtml(p: Any, previo: unknown) {
     + `<div class="lect-estado" id="lect-estado" aria-live="polite"></div>`;
 }
 
+/** La línea 1 del SOP: lo que dejó el turno anterior y lo que sigue abierto en esta sede. */
+function bitacoraHtml(r: Any) {
+  const e = r.entregaAnterior;
+  const abiertas = E.p?.desviaciones?.length ?? 0;
+  const dejo = e ? `Dejó ${esc(e.firma ?? "el turno anterior")} a las ${hora(e.en)}: ${esc(String(e.notas ?? "sin novedades").slice(0, 200))}` : "Sin entrega registrada.";
+  return `<p class="ayuda">${dejo} ${abiertas ? `${abiertas} desviación${abiertas === 1 ? "" : "es"} abierta${abiertas === 1 ? "" : "s"} en esta sede.` : "Sin desviaciones abiertas en esta sede."}</p>`;
+}
+
 function vPaso() {
   const f = E.flujo;
   if (!f) return vHoy();
@@ -486,6 +510,7 @@ function vPaso() {
   const hecho = (k: number) => (esRonda ? !!r.lecturas[lista[k].id] : lista[k].estado !== "pendiente");
   const segs = lista.map((_, k) => `<i class="${k === f.i ? "a" : hecho(k) ? "h" : ""}"></i>`).join("");
   const texto = String(p.texto ?? "").replace(/ · /g, ": ");
+  const entrega = esRonda && p.linea === 1 ? bitacoraHtml(r) : "";
   const ayuda = esRonda ? [p.ayuda, p.esperado ? `Debe verse: ${p.esperado}` : ""].filter(Boolean).join(" ") : p.criterio ?? "";
   const lect = p.pideValor ? lecturaHtml(p, esRonda ? previo?.valor : previo?.valor) : "";
   const materiales = !esRonda && p.materiales ? `<p class="ayuda">Materiales: ${esc(p.materiales)}</p>` : "";
@@ -508,7 +533,7 @@ function vPaso() {
     + `<div class="segs">${segs}</div>`
     + `<div class="paso-cuerpo" data-k="${f.i}"><div class="paso-meta"><span class="etq">${esRonda ? "Parada" : "Paso"} ${f.i + 1} de ${n}</span>`
     + `${p.critico ? '<span class="critico">CRÍTICO</span>' : ""}${!esRonda && p.minutos ? `<span class="min">≈ ${p.minutos} min</span>` : ""}</div>`
-    + `<h1 class="${texto.length > 70 ? "largo" : ""}">${esc(texto)}</h1>${ayuda ? `<p class="ayuda">${esc(ayuda)}</p>` : ""}${materiales}${lect}${nota}`
+    + `<h1 class="${texto.length > 70 ? "largo" : ""}">${esc(texto)}</h1>${entrega}${ayuda ? `<p class="ayuda">${esc(ayuda)}</p>` : ""}${materiales}${lect}${nota}`
     + `${f.i > 0 ? `<button class="link" data-a="anterior" style="align-self:flex-start">Volver al paso anterior</button>` : ""}</div>`
     + `<div class="paso-pie">${pie}</div></div>`;
 }
@@ -559,10 +584,10 @@ function marcarPaso(estado: string, extra: Record<string, unknown> = {}) {
   zumbar();
   avanzar();
 }
-function marcarParada(resultado: string, extra: Record<string, unknown> = {}) {
+function marcarParada(resultado: string, extra: Record<string, unknown> = {}, at?: string) {
   const r = E.p.ronda;
   const f = E.flujo as Flujo;
-  void despachar({ tipo: "ronda.lectura", rondaId: r.rondaId, sucursalId: r.sucursalId, fecha: r.fecha, turno: r.turno, puntoId: r.puntos[f.i].id, resultado, ...extra });
+  void despachar({ tipo: "ronda.lectura", rondaId: r.rondaId, sucursalId: r.sucursalId, fecha: r.fecha, turno: r.turno, puntoId: r.puntos[f.i].id, resultado, ...extra }, at);
   zumbar();
 }
 
@@ -576,8 +601,7 @@ function guardarLectura() {
     const pt = r.puntos[f.i];
     if (v == null) { aviso("Escribe la lectura para seguir."); l.focus(); return; }
     if (!fueraDe(pt, v)) { marcarParada("ok", { valor: v }); avanzar(); return; }
-    marcarParada("fuera", { valor: v });
-    abrirHojaDeDesviacion(pt, `Lectura ${v}${pt.unidad ? ` ${pt.unidad}` : ""} · normal ${rangoDe(pt)}`);
+    abrirHoja({ tipo: "novedad", valor: v, at: new Date().toISOString(), opcional: true, foco: false, valorTxt: `Lectura ${v}${pt.unidad ? ` ${pt.unidad}` : ""} · normal ${rangoDe(pt)}` });
     return;
   }
   const p = ordenDe(f.ordenId as number).pasos[f.i];
@@ -588,11 +612,22 @@ function guardarLectura() {
   abrirHoja({ tipo: "problema", valor: String(v), valorTxt: `Lectura ${v}${p.unidad ? ` ${p.unidad}` : ""} · normal ${rangoDe(p)}` });
 }
 
-function abrirHojaDeDesviacion(pt: Any, valorTxt: string) {
+function abrirHojaDeDesviacion(pt: Any, valorTxt: string, at: string, nota: string) {
   const doc = pt.aop ? E.p.ronda.docs?.[pt.aop] : null;
-  if (!doc) { aviso("Anotado. Este punto todavía no tiene un AOP que lo rija."); avanzar(); return; }
-  abrirHoja({ tipo: "aop", doc, valorTxt, seguir: true });
+  if (!doc) {
+    if (pt.pideOrden) { abrirHoja({ tipo: "pideOrden", valorTxt, nota }); return; }
+    aviso("Anotado. Este punto todavía no tiene un AOP que lo rija."); avanzar(); return;
+  }
+  // El reloj de la parada manda sobre el del documento cuando la guía distingue condiciones.
+  abrirHoja({ tipo: "aop", doc: { ...doc, actuarMin: pt.actuarMin ?? doc.actuarMin, escalarMin: pt.escalarMin ?? doc.escalarMin }, valorTxt, seguir: true, at, nota, pideOrden: !!pt.pideOrden });
 }
+/** «Actuar antes de las 08:12» desde la hora capturada; un plazo de un día o más se dice en horas. */
+const limite = (at: string | undefined, m: number | null | undefined) => (m == null ? "Sin plazo" : !at || m >= 720 ? plazo(m) : hora(Date.parse(at) + m * 60000));
+const origenRonda = () => {
+  if (E.flujo?.tipo !== "ronda") return {};
+  const r = E.p.ronda;
+  return { fecha: r.fecha, turno: r.turno, puntoId: r.puntos[(E.flujo as Flujo).i].id };
+};
 
 // ── Fin ─────────────────────────────────────────────────────────────────────
 function trabajosEscritos(o: Any) {
@@ -611,15 +646,21 @@ function fotoCampo(id: string, texto: string, categoria: string) {
 function vFinRonda() {
   const r = E.p.ronda;
   const lect = r.puntos.map((pt: Any) => ({ pt, l: r.lecturas[pt.id] })).filter((x: Any) => x.l);
-  const nov = lect.filter((x: Any) => x.l.resultado === "no_verificado").length;
-  const fuera = lect.filter((x: Any) => x.l.resultado === "fuera").length;
+  const nov = lect.filter((x: Any) => x.l.resultado === "no_verificado");
+  const fuera = lect.filter((x: Any) => x.l.resultado === "fuera");
   const lecturas = lect.filter((x: Any) => x.l.valor != null).map((x: Any) => `${x.pt.texto}: ${x.l.valor}${x.pt.unidad ? ` ${x.pt.unidad}` : ""}`);
-  return `<div class="final"><span class="etq">Ronda de las ${esc(r.turno)}</span><h1>${lect.length - nov} de ${r.puntos.length} paradas verificadas</h1>`
-    + `<div class="dato"><span class="etq">Desviaciones abiertas</span><b>${fuera ? `${fuera} con su reloj corriendo. Tu jefatura ya las ve.` : "Ninguna"}</b></div>`
-    + (nov ? `<div class="dato"><span class="etq">Sin verificar</span><b>${nov}, con su razón escrita.</b></div>` : "")
+  // La entrega de turno ya viene escrita con lo que quedó abierto; el técnico solo la ajusta.
+  const clave = `entrega:${r.fecha}:${r.turno}`;
+  const nombres = (l: Any[]) => l.map((x: Any) => String(x.pt.texto).split(" · ")[0]).join(", ");
+  const sugerida = [fuera.length ? `Quedan abiertas: ${nombres(fuera)}.` : "", nov.length ? `Sin verificar: ${nombres(nov)}.` : ""].filter(Boolean).join(" ");
+  const entrega = E.notas[clave] ?? sugerida;
+  return `<div class="final"><span class="etq">Ronda de las ${esc(r.turno)}</span><h1>${lect.length - nov.length} de ${r.puntos.length} paradas verificadas</h1>`
+    + `<div class="dato"><span class="etq">Desviaciones abiertas</span><b>${fuera.length ? `${fuera.length} con su reloj corriendo. ${E.enLinea ? "Tu jefatura ya las ve." : "Tu jefatura las ve cuando vuelva la señal."}` : "Ninguna"}</b></div>`
+    + (nov.length ? `<div class="dato"><span class="etq">Sin verificar</span><b>${nov.length}, con su razón escrita.</b></div>` : "")
     + (lecturas.length ? `<div class="dato"><span class="etq">Lecturas</span><b>${esc(lecturas.slice(0, 4).join(" · "))}${lecturas.length > 4 ? ` y ${lecturas.length - 4} más` : ""}</b></div>` : "")
     + `<div class="dato"><span class="etq">Quién y cuándo</span><b>${esc(primerNombre(NOMBRE))} · ${r.iniciadaEn ? `${hora(r.iniciadaEn)} a ` : ""}${hora(Date.now())}</b></div>`
-    + `<div class="empuja"><button class="b1" data-a="cerrarRonda">Cerrar la ronda</button><button class="link" data-a="anterior" style="justify-content:center">Volver a la última parada</button></div></div>`;
+    + `<label class="etq" for="entrega">Novedades para quien entra</label><textarea id="entrega" data-nota="${esc(clave)}" placeholder="Si no hay, déjalo en blanco.">${esc(entrega)}</textarea><p class="err" id="err-entrega" hidden>Hay novedades abiertas: escribe qué le dejas a quien entra.</p>`
+    + `<div class="empuja"><button class="b1" data-a="cerrarRonda">Firmar y cerrar la ronda</button><button class="link" data-a="anterior" style="justify-content:center">Volver a la última parada</button></div></div>`;
 }
 function vFin() {
   const f = E.flujo;
@@ -850,12 +891,13 @@ function vHoja() {
     case "aop": {
       const d = h.doc;
       return `<div class="hoja-caja"><span class="etq">${esc(h.valorTxt || "Fuera de lo normal")}</span><h2>Se rige por <span class="codigo">${esc(d.codigo)}</span></h2><p class="ayuda">${esc(d.titulo)}</p>${d.aviso ? `<p class="ayuda">${esc(d.aviso)}</p>` : ""}`
-        + `<div class="relojes"><div><span class="etq">Actuar antes de</span><b>${plazo(d.actuarMin)}</b></div><div><span class="etq">Escalar antes de</span><b>${plazo(d.escalarMin)}</b></div></div>`
+        + `<div class="relojes"><div><span class="etq">Actuar antes de</span><b>${limite(h.at, d.actuarMin)}</b></div><div><span class="etq">Escalar antes de</span><b>${limite(h.at, d.escalarMin)}</b></div></div>`
         + (d.acciones?.length ? `<ol class="acc">${d.acciones.map((a: string) => `<li><span>${esc(a)}</span></li>`).join("")}</ol>` : "")
-        + (h.seguir ? `<p class="ayuda">La desviación ya quedó abierta y tu jefatura la ve con su reloj.</p>` : "")
+        + (h.seguir ? `<p class="ayuda">${E.enLinea ? "La desviación ya quedó abierta y tu jefatura la ve con su reloj." : "Su reloj ya corre desde esta hora. Tu jefatura la ve cuando vuelva la señal."}</p>` : "")
         + (h.seguir
           ? `<button class="b1" data-a="aopSeguir">Seguir con la ronda</button>`
           : `<label class="etq" for="valor-desv">Valor medido (opcional)</label><div class="lect-caja mini"><input id="valor-desv" inputmode="decimal" autocomplete="off"></div><label class="oculto" for="nota-desv">Qué viste</label><textarea id="nota-desv" placeholder="Qué viste"></textarea><button class="b1" data-a="abrirDesviacion">Abrir la desviación</button>`)
+        + (h.pideOrden ? `<button class="b2" data-a="correctivoDeParada">Abrir la orden correctiva</button>` : "")
         + (d.eop ? `<button class="b2" data-a="aEop">Ya falló: pasar a emergencia</button>` : "")
         + (h.seguir ? "" : `<button class="link" data-a="cerrarHoja">Cancelar</button>`)
         + `</div>`;
@@ -866,6 +908,16 @@ function vHoja() {
         + (d.acciones?.length ? `<ol class="acc">${d.acciones.map((a: string) => `<li><span>${esc(a)}</span></li>`).join("")}</ol>` : "")
         + `<button class="b1 alerta" data-a="abrirEmergencia">Abrir orden de emergencia</button>`
         + `<button class="link" data-a="cerrarEop">Cerrar</button></div>`;
+    }
+    case "novedad": {
+      const pt = E.p?.ronda?.puntos[f?.i as number];
+      return `<div class="hoja-caja"><span class="etq">${esc(h.valorTxt || pt?.texto || "")}</span><h2>${h.opcional ? "¿Dónde? Sala o zona" : "¿Qué viste?"}</h2><label class="oculto" for="nota-novedad">Qué viste</label><textarea id="nota-novedad" placeholder="${h.opcional ? "Por ejemplo: quirófano 2." : "Por ejemplo: alarma de presión baja en la zona 2."}"></textarea>`
+        + `<p class="err" id="err-novedad" hidden>Escríbelo: queda en la ronda y le llega a tu jefatura.</p>`
+        + `<button class="b1" data-a="novedadSeguir">Anotar y seguir</button><button class="link" data-a="cerrarHoja">${h.opcional ? "Corregir la lectura" : "Cancelar"}</button></div>`;
+    }
+    case "pideOrden": {
+      return `<div class="hoja-caja"><span class="etq">${esc(h.valorTxt || "No conforme")}</span><h2>Esto pide una orden</h2><p class="ayuda">${esc(h.nota || "")}</p>`
+        + `<button class="b1" data-a="correctivoDeParada">Abrir la orden y seguir</button><button class="link" data-a="aopSeguir">Seguir sin orden</button></div>`;
     }
     case "noverif": {
       const pt = E.p?.ronda?.puntos[f?.i as number];
@@ -880,7 +932,7 @@ function vHoja() {
     case "noProg": {
       const pl = E.b.ficha?.plantillas ?? [];
       return `<div class="hoja-caja"><span class="etq">Mantenimiento no programado</span><h2>¿Qué le vas a hacer?</h2><label class="oculto" for="nota-noprog">Qué le vas a hacer</label><textarea id="nota-noprog" placeholder="Usa el micrófono del teclado para dictarlo."></textarea>`
-        + (pl.length ? `<label class="etq" for="plantilla">Lista de pasos (opcional)</label><select class="campo" id="plantilla"><option value="">Sin lista de pasos</option>${pl.map((x: Any) => `<option value="${x.id}">${esc(x.nombre)}</option>`).join("")}</select>` : "")
+        + (pl.length ? `<label class="etq" for="plantilla">Lista de pasos (opcional)</label><select class="campo" id="plantilla"><option value="">Sin lista de pasos</option>${pl.map((x: Any) => `<option value="${x.id}"${x.id === E.b.ficha?.plantillaSugerida ? " selected" : ""}>${esc(x.nombre)}</option>`).join("")}</select>` : "")
         + `<p class="err" id="err-crear" hidden></p><button class="b1" data-a="empezarNoProgramado">${ico.play}Empezar</button><button class="link" data-a="cerrarHoja">Cancelar</button></div>`;
     }
     case "falla": {
@@ -1155,12 +1207,24 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     pintar();
   },
   noconf() {
-    const f = E.flujo as Flujo;
-    const pt = E.p.ronda.puntos[f.i];
     const l = $<HTMLInputElement>("#lectura");
-    const v = l ? num(l.value) : null;
-    marcarParada("fuera", v != null ? { valor: v } : {});
-    abrirHojaDeDesviacion(pt, pt.pideValor ? "Hay una alarma" : "No conforme");
+    abrirHoja({ tipo: "novedad", valor: l ? num(l.value) : null, at: new Date().toISOString() });
+  },
+  novedadSeguir() {
+    const h = E.hoja;
+    const t = $<HTMLTextAreaElement>("#nota-novedad");
+    const nota = t?.value.trim() ?? "";
+    if (!h.opcional && nota.length < 3) { const e = $("#err-novedad"); if (e) e.hidden = false; t?.focus(); return; }
+    const pt = E.p.ronda.puntos[(E.flujo as Flujo).i];
+    marcarParada("fuera", { ...(h.valor != null ? { valor: h.valor } : {}), ...(nota ? { nota } : {}) }, h.at);
+    abrirHojaDeDesviacion(pt, h.valorTxt || (pt.pideValor ? "Hay una alarma" : "No conforme"), h.at, nota);
+  },
+  correctivoDeParada() {
+    const r = E.p.ronda;
+    const pt = r.puntos[(E.flujo as Flujo).i];
+    const nota = [String(pt.texto).replace(/ · /g, ": "), E.hoja?.nota].filter(Boolean).join(". ");
+    abrirFalla("correctivo.abrir", { sucursalId: r.sucursalId, rubro: pt.sistema === "hvac" || pt.sistema === "minisplit" ? "aires" : "infraestructura", nota, ...origenRonda() }, `Correctivo: ${pt.texto}`);
+    avanzar();
   },
   noverif() { abrirHoja({ tipo: "noverif" }); },
   noverifSeguir() {
@@ -1183,7 +1247,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const d = E.hoja?.doc;
     const fi = E.b.ficha;
     const activo = E.vista === "falla" ? fi?.activo : null;
-    abrirFalla("emergencia.abrir", { eop: d?.codigo, activoId: activo?.id ?? null, ubicacionId: activo?.ubicacionId ?? null, sucursalId: activo?.sedeId ?? E.sede }, `Emergencia: ${d?.titulo ?? ""}`);
+    abrirFalla("emergencia.abrir", { eop: d?.codigo, activoId: activo?.id ?? null, ubicacionId: activo?.ubicacionId ?? null, sucursalId: activo?.sedeId ?? E.sede, ...origenRonda() }, `Emergencia: ${d?.titulo ?? ""}`);
     if (E.flujo?.tipo === "ronda") { avanzar(); return; }
     soltarHistorialDeHoja();
     ir("#hoy", true);
@@ -1237,7 +1301,12 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   },
   cerrarRonda() {
     const r = E.p.ronda;
-    void despachar({ tipo: "ronda.cerrar", rondaId: r.rondaId, sucursalId: r.sucursalId, fecha: r.fecha, turno: r.turno });
+    const t = $<HTMLTextAreaElement>("#entrega");
+    const notas = t?.value.trim() ?? "";
+    const hayNovedad = Object.values(r.lecturas).some((l: Any) => l.resultado !== "ok");
+    if (hayNovedad && notas.length < 3) { const e = $("#err-entrega"); if (e) e.hidden = false; t?.focus(); return; }
+    void despachar({ tipo: "ronda.cerrar", rondaId: r.rondaId, sucursalId: r.sucursalId, fecha: r.fecha, turno: r.turno, firma: true, notas });
+    delete E.notas[`entrega:${r.fecha}:${r.turno}`];
     zumbar();
     soltarPantalla();
     E.flujo = null;
@@ -1325,7 +1394,7 @@ movil.addEventListener("click", (ev) => {
   }
   const fuera = t.closest<HTMLAnchorElement>("a[data-fuera]");
   if (fuera && !navigator.onLine) { ev.preventDefault(); aviso("Eso necesita señal. Tu trabajo aquí sigue guardándose."); return; }
-  if (t === $("#hoja") && E.hoja && E.hoja.tipo !== "aop" && E.hoja.tipo !== "eop") cerrarHoja();
+  if (t === $("#hoja") && E.hoja && E.hoja.tipo !== "aop" && E.hoja.tipo !== "eop" && E.hoja.tipo !== "pideOrden") cerrarHoja();
 });
 movil.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
@@ -1367,10 +1436,15 @@ window.addEventListener("offline", () => { E.enLinea = false; refrescarPill(); }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (E.flujo) mantenerPantalla();
+  if (rodarTurno()) repintarSiEsSeguro();
   void drenar();
   if (Date.now() - E.ultimoFetch > 60000) void refrescarHoy();
 });
-setInterval(() => { if (document.visibilityState === "visible") void drenar(); }, 30000);
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  if (rodarTurno()) repintarSiEsSeguro();
+  void drenar();
+}, 30000);
 window.addEventListener("beforeinstallprompt", (ev) => { ev.preventDefault(); E.instalar = ev; });
 
 // El teclado no debe tapar el botón de guardar: en iPhone la página no se encoge sola.

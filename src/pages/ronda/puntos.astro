@@ -11,16 +11,21 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { asc, eq, inArray } from "drizzle-orm";
 import { puedeConfigurarRondas, rangoNormal } from "@/lib/ronda-turno";
+import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
 import { sistemaInfo } from "@/lib/procedimientos";
-import { procedimientos, rondaPuntos, rondas } from "@/lib/schema";
+import { procedimientos, rondaPuntos, rondas, sucursales } from "@/lib/schema";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (!puedeConfigurarRondas(user.rol)) return Astro.redirect("/ronda");
 
 const db = getDb(Astro);
-const [ronda] = await db.select().from(rondas).where(eq(rondas.activa, true)).orderBy(asc(rondas.id)).limit(1);
+// El modelo o el recorrido propio de una sede. Sin recorrido propio, la sede hereda el modelo.
+const rondasTodas = await db.select().from(rondas).orderBy(asc(rondas.id));
+const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
+const pedida = Number(new URL(Astro.request.url).searchParams.get("ronda"));
+const ronda = rondasTodas.find((r) => r.id === pedida) ?? rondasTodas.find((r) => r.sucursalId == null) ?? rondasTodas[0];
 const puntos = ronda
   ? await db.select().from(rondaPuntos).where(eq(rondaPuntos.rondaId, ronda.id)).orderBy(asc(rondaPuntos.orden))
   : [];
@@ -45,7 +50,9 @@ const aopsDisponibles = await db
 const sinValorNormal = puntos.filter(
   (p) => p.activo && (p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto),
 );
-const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId);
+// Bitácora y cuartos técnicos no llevan AOP: la guía les pide una orden.
+const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId && !LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0));
+const provisionales = puntos.filter((p) => p.activo && /^Provisional/.test(p.fuente ?? ""));
 ---
 
 <Layout title="Paradas del recorrido">
@@ -60,7 +67,27 @@ const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId);
     <button class="btn-primary btn-sm" id="btn-nueva">+ Agregar parada</button>
   </div>
 
-  {(sinValorNormal.length > 0 || sinAop.length > 0) && (
+  <div class="card mt-4 p-4 text-sm">
+    <div class="flex flex-wrap items-center gap-2">
+      <a class={`btn-sm ${ronda?.sucursalId == null ? "btn-primary" : "btn-secondary"}`} href="/ronda/puntos">Modelo (todas las sedes)</a>
+      {sedes.map((s) => {
+        const propia = rondasTodas.find((r) => r.sucursalId === s.id);
+        return propia
+          ? <a class={`btn-sm ${ronda?.id === propia.id ? "btn-primary" : "btn-secondary"}`} href={`/ronda/puntos?ronda=${propia.id}`}>{s.nombre}{propia.activa ? "" : " · no hace ronda"}</a>
+          : <button class="btn-secondary btn-sm" data-sede={s.id} data-activa="true">{s.nombre} · crear recorrido propio</button>;
+      })}
+    </div>
+    {ronda?.sucursalId != null && (
+      <div class="mt-3 flex flex-wrap items-end gap-2">
+        <div><label class="label" for="s_turnos">Turnos de esta sede</label><input class="input" id="s_turnos" value={JSON.parse(ronda.turnos).join(", ")} /></div>
+        <button class="btn-secondary btn-sm" id="s_guardar" data-sede-id={ronda.sucursalId}>Guardar turnos</button>
+        <button class="btn-secondary btn-sm" data-sede={ronda.sucursalId} data-activa={ronda.activa ? "false" : "true"}>{ronda.activa ? "Esta sede no hace ronda" : "Esta sede sí hace ronda"}</button>
+      </div>
+    )}
+    <p class="mt-2 text-xs text-slate-400">Un cambio aplica desde el turno siguiente: la ronda ya abierta conserva lo que decía al abrir.</p>
+  </div>
+
+  {(sinValorNormal.length > 0 || sinAop.length > 0 || provisionales.length > 0) && (
     <div class="card mt-4 border-l-4 border-amber-400 p-4">
       <h2 class="text-sm font-bold text-amber-800">Lo que falta para que la ronda avise sola</h2>
       <ul class="mt-2 space-y-1 text-xs text-slate-700">
@@ -68,6 +95,12 @@ const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId);
           <li>
             <span class="font-semibold text-amber-700">{sinValorNormal.length} parada(s) sin valor normal.</span>{" "}
             Mientras estén así, el técnico anota el número pero el sistema no puede decir si está fuera de rango.
+          </li>
+        )}
+        {provisionales.length > 0 && (
+          <li>
+            <span class="font-semibold text-amber-700">{provisionales.length} valor(es) provisional(es).</span>{" "}
+            No salen de la guía: {provisionales.map((p) => p.etiqueta.split(" · ")[0]).join(", ")}. Hay que fijarlos en el SCP de cada sede.
           </li>
         )}
         {sinAop.length > 0 && (
@@ -164,7 +197,8 @@ const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId);
           <label class="label" for="n_sistema">Familia</label>
           <select class="input" id="n_sistema">
             <option value="electrico">Energía</option>
-            <option value="hvac">Climatización</option>
+            <option value="hvac">Climatización crítica (HEPA)</option>
+            <option value="minisplit">Minisplit</option>
             <option value="gases">Gases medicinales</option>
             <option value="agua">Agua</option>
             <option value="incendios">Protección contra incendios</option>
@@ -212,6 +246,15 @@ const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId);
 <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ rondaId: ronda?.id ?? null }) }}>
   const { rondaId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const num = (el) => (el && el.value.trim() !== "" ? Number(el.value) : null);
+
+  const guardarSede = async (cuerpo) => {
+    const r = await fetch("/api/ronda-turno/puntos", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { window.showToast?.(typeof d.error === "string" ? d.error : "No se pudo guardar", "error"); return; }
+    location.href = "/ronda/puntos?ronda=" + d.ronda.id;
+  };
+  document.querySelectorAll("[data-sede]").forEach((b) => b.addEventListener("click", () => guardarSede({ sucursalId: Number(b.getAttribute("data-sede")), activa: b.getAttribute("data-activa") === "true" })));
+  document.getElementById("s_guardar")?.addEventListener("click", (ev) => guardarSede({ sucursalId: Number(ev.currentTarget.getAttribute("data-sede-id")), turnos: document.getElementById("s_turnos").value.split(",").map((x) => x.trim()).filter(Boolean) }));
 
   document.querySelectorAll("[data-guardar]").forEach((btn) => {
     btn.addEventListener("click", async () => {

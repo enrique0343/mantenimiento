@@ -8,9 +8,10 @@
 //
 //   RONDA (SOP) → lectura fuera de rango → AOP con reloj → EOP si ya falló
 //                                                        → MOP si hay que intervenir
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre } from "./aop";
+import { ahoraSV, parsearTurnos, sumarDias, turnoActual, etiquetaTurno } from "./turnos";
+import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre, registrarAccion } from "./aop";
 import {
   aopEventos,
   aopUmbrales,
@@ -18,7 +19,9 @@ import {
   procedimientos,
   rondaEjecuciones,
   rondaLecturas,
+  rondaMarcas,
   rondaPuntos,
+  rondaRevisiones,
   rondas,
   sucursales,
   variablesPredictivas,
@@ -29,80 +32,13 @@ type Db = ReturnType<typeof getDb>;
 // ── Permisos ────────────────────────────────────────────────────────────────
 /** La ronda la ejecuta quien está de turno. */
 export const puedeEjecutarRonda = (rol: string) => ["admin", "jefe", "tecnico"].includes(rol);
-/** El tablero de rondas lo ve también quien solo supervisa. */
+/** El tablero de rondas es de quien supervisa; el técnico trabaja en /campo. */
 export const puedeVerRondas = (rol: string) =>
-  ["admin", "jefe", "tecnico", "visualizador"].includes(rol);
+  ["admin", "jefe", "visualizador"].includes(rol);
 /** Cambiar los puntos del recorrido y sus valores normales. */
 export const puedeConfigurarRondas = (rol: string) => ["admin", "jefe"].includes(rol);
 
-// ── Turnos ──────────────────────────────────────────────────────────────────
-export const TURNOS_DEFECTO = ["06:00", "14:00", "22:00"];
-
-export interface TurnoInfo {
-  /** Hora de inicio, "06:00" */
-  turno: string;
-  /** Fecha del turno en El Salvador, "AAAA-MM-DD". Puede ser ayer en la madrugada. */
-  fecha: string;
-  etiqueta: string;
-}
-
-/** Fecha y hora de El Salvador (UTC-6) sin depender del TZ del runtime. */
-export function ahoraSV(ref?: Date): { fecha: string; hora: string; minutos: number } {
-  const ms = (ref ? ref.getTime() : Date.now()) - 6 * 60 * 60 * 1000;
-  const iso = new Date(ms).toISOString();
-  const fecha = iso.slice(0, 10);
-  const hora = iso.slice(11, 16);
-  const [h, m] = hora.split(":").map(Number);
-  return { fecha, hora, minutos: h * 60 + m };
-}
-
-const aMinutos = (hhmm: string): number => {
-  const [h, m] = hhmm.split(":").map(Number);
-  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
-};
-
-/** Resta un día a "AAAA-MM-DD" sin pasar por Date (que desfasa en UTC-6). */
-export function diaAnterior(fecha: string): string {
-  const ms = Date.parse(`${fecha.slice(0, 10)}T12:00:00Z`) - 86_400_000;
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-export const etiquetaTurno = (turno: string): string => {
-  const m = aMinutos(turno);
-  if (m < 12 * 60) return `Turno ${turno} · mañana`;
-  if (m < 18 * 60) return `Turno ${turno} · tarde`;
-  return `Turno ${turno} · noche`;
-};
-
-export function parsearTurnos(json: string | null | undefined): string[] {
-  if (!json) return TURNOS_DEFECTO;
-  try {
-    const v = JSON.parse(json);
-    const arr = Array.isArray(v) ? v.filter((x) => typeof x === "string" && /^\d{2}:\d{2}$/.test(x)) : [];
-    return arr.length ? arr.sort((a, b) => aMinutos(a) - aMinutos(b)) : TURNOS_DEFECTO;
-  } catch {
-    return TURNOS_DEFECTO;
-  }
-}
-
-/**
- * El turno que está corriendo ahora. Antes del primer turno del día, el turno
- * vigente es el último de ayer: la ronda de la noche se cierra de madrugada.
- */
-export function turnoActual(turnos: string[], ref?: Date): TurnoInfo {
-  const lista = turnos.length ? turnos : TURNOS_DEFECTO;
-  const { fecha, minutos } = ahoraSV(ref);
-  let elegido = lista[0];
-  let fechaTurno = fecha;
-  const anteriores = lista.filter((t) => aMinutos(t) <= minutos);
-  if (anteriores.length) {
-    elegido = anteriores[anteriores.length - 1];
-  } else {
-    elegido = lista[lista.length - 1];
-    fechaTurno = diaAnterior(fecha);
-  }
-  return { turno: elegido, fecha: fechaTurno, etiqueta: etiquetaTurno(elegido) };
-}
+export * from "./turnos";
 
 // ── La ronda que aplica a una sede ──────────────────────────────────────────
 export type Ronda = typeof rondas.$inferSelect;
@@ -115,8 +51,10 @@ export async function rondaDeSede(db: Db, sucursalId: number): Promise<Ronda | n
   const filas = await db
     .select()
     .from(rondas)
-    .where(and(eq(rondas.activa, true), or(eq(rondas.sucursalId, sucursalId), isNull(rondas.sucursalId))));
-  return filas.find((r: Ronda) => r.sucursalId === sucursalId) ?? filas.find((r: Ronda) => r.sucursalId == null) ?? null;
+    .where(or(eq(rondas.sucursalId, sucursalId), isNull(rondas.sucursalId)));
+  const propia = filas.find((r: Ronda) => r.sucursalId === sucursalId);
+  if (propia) return propia.activa ? propia : null;
+  return filas.find((r: Ronda) => r.sucursalId == null && r.activa) ?? null;
 }
 
 export async function puntosDeRonda(db: Db, rondaId: number): Promise<RondaPunto[]> {
@@ -127,11 +65,27 @@ export async function puntosDeRonda(db: Db, rondaId: number): Promise<RondaPunto
     .orderBy(asc(rondaPuntos.orden), asc(rondaPuntos.id));
 }
 
+// ── La foto del recorrido ───────────────────────────────────────────────────
+/** Lo que decía el recorrido cuando se abrió el turno. Un cambio aplica desde el turno siguiente. */
+export function recorridoDe(ejec: Pick<RondaEjecucion, "recorridoJson">): RondaPunto[] | null {
+  if (!ejec.recorridoJson) return null;
+  try {
+    const v = JSON.parse(ejec.recorridoJson);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function paradasDeEjecucion(db: Db, ejec: RondaEjecucion): Promise<RondaPunto[]> {
+  return recorridoDe(ejec) ?? puntosDeRonda(db, ejec.rondaId);
+}
+
 // ── Abrir la ronda del turno ────────────────────────────────────────────────
 /**
- * Devuelve la ejecución del turno, creándola si no existe. La UNIQUE
- * (ronda, sede, fecha, turno) garantiza una sola ronda por turno aunque dos
- * técnicos la abran a la vez.
+ * Devuelve la ejecución del turno, creándola si no existe. El índice único
+ * (sede, fecha, turno) garantiza una sola ronda por turno aunque dos técnicos
+ * la abran a la vez o la sede cambie de recorrido a mitad del turno.
  */
 export async function abrirEjecucion(
   db: Db,
@@ -140,7 +94,7 @@ export async function abrirEjecucion(
   const existente = await buscarEjecucion(db, input);
   if (existente) return { ejecucion: existente, yaExistia: true };
 
-  const total = (await puntosDeRonda(db, input.rondaId)).length;
+  const puntos = await puntosDeRonda(db, input.rondaId);
   try {
     const [row] = await db
       .insert(rondaEjecuciones)
@@ -152,8 +106,8 @@ export async function abrirEjecucion(
         estado: "en_curso",
         iniciadaEn: input.momento ?? ahoraISO(),
         iniciadaPor: input.usuarioId ?? null,
-        puntosTotal: total,
-        puntosNoVerificados: total,
+        puntosTotal: puntos.length,
+        recorridoJson: JSON.stringify(puntos),
       })
       .returning();
     return { ejecucion: row, yaExistia: false };
@@ -167,14 +121,13 @@ export async function abrirEjecucion(
 
 export async function buscarEjecucion(
   db: Db,
-  input: { rondaId: number; sucursalId: number; fecha: string; turno: string },
+  input: { sucursalId: number; fecha: string; turno: string },
 ): Promise<RondaEjecucion | null> {
   const [row] = await db
     .select()
     .from(rondaEjecuciones)
     .where(
       and(
-        eq(rondaEjecuciones.rondaId, input.rondaId),
         eq(rondaEjecuciones.sucursalId, input.sucursalId),
         eq(rondaEjecuciones.fecha, input.fecha),
         eq(rondaEjecuciones.turno, input.turno),
@@ -186,20 +139,17 @@ export async function buscarEjecucion(
 
 // ── Registrar la lectura de un punto ────────────────────────────────────────
 export interface ResultadoLectura {
-  lectura: RondaLectura;
   /** Episodio AOP abierto (o ya abierto) por esta lectura. */
   eventoId: number | null;
-  /** Código del AOP que rige el punto, para decirlo en pantalla. */
-  aopCodigo: string | null;
-  aopTitulo: string | null;
-  minutosParaActuar: number | null;
-  minutosParaEscalar: number | null;
+  /** true si esta lectura lo abrió: es cuando se avisa a la jefatura. */
+  eventoNuevo: boolean;
   fuera: boolean;
-  mensaje: string;
+  /** Llegó con la ronda ya firmada: solo quedó en el libro. */
+  tardia: boolean;
 }
 
 /** ¿La lectura numérica se sale del valor normal del punto? */
-export function fueraDeRango(punto: RondaPunto, valor: number | null): boolean {
+export function fueraDeRango(punto: Pick<RondaPunto, "minEsperado" | "maxEsperado">, valor: number | null): boolean {
   if (valor == null) return false;
   if (punto.minEsperado != null && valor < punto.minEsperado) return true;
   if (punto.maxEsperado != null && valor > punto.maxEsperado) return true;
@@ -220,31 +170,28 @@ export function rangoNormal(punto: RondaPunto): string {
 }
 
 /**
- * Anota un punto de la ronda. Si el resultado es "fuera" (o el número se sale
- * del rango) abre el episodio del AOP que rige el punto, con los minutos que
- * declara su umbral. Idempotente por (ejecución, punto): reanotar corrige.
+ * Anota un punto. Si sale fuera abre el episodio del AOP que rige la parada.
+ * Dos cosas distintas: la marca guarda todo lo que pasó; la lectura guarda lo
+ * vigente, y manda la hora capturada más reciente, no la última en llegar. Una
+ * lectura que llega con la ronda ya firmada no la toca: queda en el libro y, si
+ * salió fuera, abre su AOP igual, porque el problema existe aunque la ronda ya cerró.
  */
 export async function registrarLectura(
   db: Db,
+  ejec: RondaEjecucion,
+  punto: RondaPunto,
   input: {
-    ejecucionId: number;
-    puntoId: number;
     resultado: "ok" | "fuera" | "no_verificado";
     valor?: number | null;
-    valorTexto?: string | null;
     nota?: string | null;
     usuarioId?: number | null;
-    /** Hora real en el celular; sin ella manda el reloj del servidor. */
-    momento?: string;
+    momento: { iso: string; recibido: string; sinSenal: boolean; ajustado: boolean };
+    opId?: string | null;
   },
 ): Promise<ResultadoLectura> {
-  const [punto] = await db.select().from(rondaPuntos).where(eq(rondaPuntos.id, input.puntoId)).limit(1);
-  if (!punto) throw new Error("El punto no existe en esta ronda");
-  const [ejec] = await db.select().from(rondaEjecuciones).where(eq(rondaEjecuciones.id, input.ejecucionId)).limit(1);
-  if (!ejec) throw new Error("La ronda no existe");
-
   const valor = input.valor ?? null;
-  const momento = input.momento ?? ahoraISO();
+  const nota = input.nota ?? null;
+  const momento = input.momento.iso;
   // Un número fuera del rango normal manda sobre lo que marcó el botón.
   const fuera = input.resultado === "fuera" || (input.resultado === "ok" && fueraDeRango(punto, valor));
   const resultado: "ok" | "fuera" | "no_verificado" = input.resultado === "no_verificado" ? "no_verificado" : fuera ? "fuera" : "ok";
@@ -252,129 +199,93 @@ export async function registrarLectura(
   // La lectura numérica también queda como medición del activo, para la curva.
   let medicionId: number | null = null;
   if (valor != null && punto.variableId) {
-    const [v] = await db
-      .select()
-      .from(variablesPredictivas)
-      .where(eq(variablesPredictivas.id, punto.variableId))
-      .limit(1);
+    const [v] = await db.select().from(variablesPredictivas).where(eq(variablesPredictivas.id, punto.variableId)).limit(1);
     const ev = evaluarLectura(v ?? null, valor);
     const [m] = await db
       .insert(mediciones)
-      .values({
-        variableId: punto.variableId,
-        valor,
-        fecha: momento,
-        estadoAlerta: ev.banda,
-        usuarioId: input.usuarioId ?? null,
-        origen: "ronda",
-        ubicacionId: punto.ubicacionId ?? null,
-        notas: input.nota ?? null,
-      })
+      .values({ variableId: punto.variableId, valor, fecha: momento, estadoAlerta: ev.banda, usuarioId: input.usuarioId ?? null, origen: "ronda", ubicacionId: punto.ubicacionId ?? null, notas: nota })
       .returning();
     medicionId = m?.id ?? null;
   }
 
-  // ── El AOP que rige el punto ──
-  let aopCodigo: string | null = null;
-  let aopTitulo: string | null = null;
-  let minActuar: number | null = null;
-  let minEscalar: number | null = null;
-  let umbralId: number | null = null;
-  if (punto.aopProcedimientoId) {
-    const [p] = await db
-      .select({ codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo })
-      .from(procedimientos)
-      .where(eq(procedimientos.id, punto.aopProcedimientoId))
-      .limit(1);
-    aopCodigo = p?.codigo ?? null;
-    aopTitulo = p?.titulo ?? null;
+  // El episodio va antes del batch. Si el batch falla, el reintento lo encuentra por el antiduplicado.
+  let eventoId: number | null = null;
+  let eventoNuevo = false;
+  if (resultado === "fuera" && punto.aopProcedimientoId) {
     const [u] = await db
       .select()
       .from(aopUmbrales)
       .where(and(eq(aopUmbrales.procedimientoId, punto.aopProcedimientoId), eq(aopUmbrales.activo, true)))
       .limit(1);
-    if (u) {
-      umbralId = u.id;
-      minActuar = u.minutosParaActuar ?? null;
-      minEscalar = u.minutosParaEscalar ?? null;
-    }
-  }
-
-  let eventoId: number | null = null;
-  if (resultado === "fuera" && punto.aopProcedimientoId) {
-    const { evento } = await abrirEvento(db, {
+    const { evento, yaExistia } = await abrirEvento(db, {
       procedimientoId: punto.aopProcedimientoId,
-      umbralId,
+      umbralId: u?.id ?? null,
       variableId: punto.variableId ?? null,
       activoId: punto.activoId ?? null,
       ubicacionId: punto.ubicacionId ?? null,
       sucursalId: ejec.sucursalId,
+      rondaPuntoId: punto.id,
       valorDetectado: valor,
       unidad: punto.unidad ?? null,
       detectadoEn: momento,
       detectadoPor: input.usuarioId ?? null,
       origen: "ronda",
       medicionId,
-      minutosParaActuar: minActuar,
-      minutosParaEscalar: minEscalar,
+      minutosParaActuar: punto.minutosActuar ?? u?.minutosParaActuar ?? null,
+      minutosParaEscalar: punto.minutosEscalar ?? u?.minutosParaEscalar ?? null,
     });
     eventoId = evento.id;
+    // Un reintento con la misma captura cuenta como nuevo: el aviso anterior pudo no salir.
+    eventoNuevo = !yaExistia || evento.detectadoEn === momento;
   }
 
-  const valores = {
-    resultado,
-    valor,
-    valorTexto: input.valorTexto ?? null,
-    nota: input.nota ?? null,
-    medicionId,
-    aopEventoId: eventoId,
-    registradoPor: input.usuarioId ?? null,
-    registradoEn: momento,
-  };
-  const [lectura] = await db
-    .insert(rondaLecturas)
-    .values({ ejecucionId: input.ejecucionId, puntoId: input.puntoId, ...valores })
-    .onConflictDoUpdate({
-      target: [rondaLecturas.ejecucionId, rondaLecturas.puntoId],
-      set: valores,
-    })
-    .returning();
+  const marca = db.insert(rondaMarcas).values({
+    ejecucionId: ejec.id, puntoId: punto.id, resultado, valor, nota, aopEventoId: eventoId,
+    ocurridoEn: momento, recibidoEn: input.momento.recibido, sinSenal: input.momento.sinSenal, ajustado: input.momento.ajustado,
+    usuarioId: input.usuarioId ?? null, opId: input.opId ?? null,
+  }).onConflictDoNothing();
 
-  if (eventoId) {
-    await db.update(aopEventos).set({ rondaLecturaId: lectura.id }).where(eq(aopEventos.id, eventoId));
+  if (ejec.estado === "completada") {
+    await marca;
+    return { eventoId, eventoNuevo, fuera: resultado === "fuera", tardia: true };
   }
 
-  await recontarEjecucion(db, input.ejecucionId);
+  const cuenta = (r: string) => sql`(SELECT count(*) FROM ronda_lecturas l WHERE l.ejecucion_id = ${ejec.id} AND l.resultado = ${r})`;
+  const [filas] = await db.batch([
+    db.insert(rondaLecturas)
+      .values({
+        ejecucionId: ejec.id, puntoId: punto.id, resultado, valor, nota, medicionId,
+        aopEventoId: eventoId, registradoPor: input.usuarioId ?? null, registradoEn: momento,
+      })
+      .onConflictDoUpdate({
+        target: [rondaLecturas.ejecucionId, rondaLecturas.puntoId],
+        set: {
+          resultado, valor, nota, medicionId,
+          // Corregir a «en rango» no desliga el episodio: sigue abierto hasta que alguien lo normalice.
+          aopEventoId: sql`COALESCE(${eventoId}, ${rondaLecturas.aopEventoId})`,
+          registradoPor: input.usuarioId ?? null, registradoEn: momento,
+        },
+        setWhere: sql`${momento} >= ${rondaLecturas.registradoEn}`,
+      })
+      .returning({ id: rondaLecturas.id, aopEventoId: rondaLecturas.aopEventoId }),
+    marca,
+    db.update(rondaEjecuciones)
+      .set({
+        puntosOk: cuenta("ok"),
+        puntosFuera: cuenta("fuera"),
+        puntosNoVerificados: cuenta("no_verificado"),
+        // El inicio es la primera hora real capturada, llegue cuando llegue.
+        iniciadaEn: sql`MIN(COALESCE(${rondaEjecuciones.iniciadaEn}, ${momento}), ${momento})`,
+      })
+      .where(eq(rondaEjecuciones.id, ejec.id)),
+  ]);
+  const lectura = (filas as Array<{ id: number; aopEventoId: number | null }>)[0];
 
-  const mensaje =
-    resultado === "fuera"
-      ? aopCodigo
-        ? `Fuera de rango. Se rige por ${aopCodigo}; el reloj ya está corriendo.`
-        : "Fuera de rango. Este punto todavía no tiene un AOP que lo rija."
-      : resultado === "no_verificado"
-        ? "Punto marcado como no verificado."
-        : "En rango.";
-
-  return { lectura, eventoId, aopCodigo, aopTitulo, minutosParaActuar: minActuar, minutosParaEscalar: minEscalar, fuera: resultado === "fuera", mensaje };
-}
-
-/** Recalcula los contadores de la ejecución desde las lecturas. */
-export async function recontarEjecucion(db: Db, ejecucionId: number): Promise<void> {
-  const [ejec] = await db.select().from(rondaEjecuciones).where(eq(rondaEjecuciones.id, ejecucionId)).limit(1);
-  if (!ejec) return;
-  const total = (await puntosDeRonda(db, ejec.rondaId)).length;
-  const lecturas = await db.select().from(rondaLecturas).where(eq(rondaLecturas.ejecucionId, ejecucionId));
-  const ok = lecturas.filter((l: RondaLectura) => l.resultado === "ok").length;
-  const fuera = lecturas.filter((l: RondaLectura) => l.resultado === "fuera").length;
-  await db
-    .update(rondaEjecuciones)
-    .set({
-      puntosTotal: total,
-      puntosOk: ok,
-      puntosFuera: fuera,
-      puntosNoVerificados: Math.max(0, total - ok - fuera),
-    })
-    .where(eq(rondaEjecuciones.id, ejecucionId));
+  if (eventoNuevo && eventoId && lectura) await db.update(aopEventos).set({ rondaLecturaId: lectura.id }).where(eq(aopEventos.id, eventoId));
+  if (lectura?.aopEventoId && resultado !== "fuera") {
+    await registrarAccion(db, lectura.aopEventoId, "Lectura corregida en la ronda", valor != null ? `Nueva lectura: ${valor}${punto.unidad ? ` ${punto.unidad}` : ""}` : "Marcada sin desviación", input.usuarioId ?? null);
+  }
+  return { eventoId, eventoNuevo, fuera: resultado === "fuera", tardia: false };
 }
 
 // ── Cerrar la ronda ─────────────────────────────────────────────────────────
@@ -382,128 +293,258 @@ export interface ResultadoCierre {
   ok: boolean;
   error?: string;
   faltantes?: string[];
+  fuera?: number;
+  sinVerificar?: number;
 }
 
 /**
- * Regla dura: una ronda no se cierra con un punto crítico sin anotar. Si el
- * técnico no pudo verificarlo, lo marca "no verificado" con su razón — queda
- * escrito, que es distinto de quedar en blanco.
+ * Regla dura: una ronda no se firma con una parada en blanco. Si el técnico no
+ * pudo verificarla, la marca «no verificado» con su razón: queda escrito, que
+ * es distinto de quedar en blanco.
  */
 export async function cerrarEjecucion(
   db: Db,
-  ejecucionId: number,
-  usuarioId: number | null,
-  notas?: string | null,
-  momento?: string,
+  ejec: RondaEjecucion,
+  usuario: { id: number; nombre: string },
+  notas: string | null,
+  momento: { iso: string; recibido: string },
 ): Promise<ResultadoCierre> {
-  const [ejec] = await db.select().from(rondaEjecuciones).where(eq(rondaEjecuciones.id, ejecucionId)).limit(1);
-  if (!ejec) return { ok: false, error: "La ronda no existe" };
   if (ejec.estado === "completada") return { ok: true };
-
-  const puntos = await puntosDeRonda(db, ejec.rondaId);
-  const lecturas = await db.select().from(rondaLecturas).where(eq(rondaLecturas.ejecucionId, ejecucionId));
-  const anotados = new Set(lecturas.map((l: RondaLectura) => l.puntoId));
-  const faltantes = puntos.filter((p) => p.critico && !anotados.has(p.id)).map((p) => p.etiqueta);
+  const puntos = await paradasDeEjecucion(db, ejec);
+  const lecturas = await db.select({ puntoId: rondaLecturas.puntoId, resultado: rondaLecturas.resultado }).from(rondaLecturas).where(eq(rondaLecturas.ejecucionId, ejec.id));
+  const anotados = new Set(lecturas.map((l) => l.puntoId));
+  const faltantes = puntos.filter((p) => !anotados.has(p.id)).map((p) => p.etiqueta);
   if (faltantes.length) {
     return {
       ok: false,
-      error: `Faltan ${faltantes.length} punto(s) crítico(s) sin anotar. Si no se pudieron verificar, márcalos como «no verificado» con la razón.`,
+      error: `Faltan ${faltantes.length} parada(s) sin anotar. Si no se pudieron verificar, márcalas como «no verificado» con la razón.`,
       faltantes,
     };
   }
-
-  const ahora = momento ?? ahoraISO();
-  await recontarEjecucion(db, ejecucionId);
+  const fuera = lecturas.filter((l) => l.resultado === "fuera").length;
+  const sinVerificar = lecturas.filter((l) => l.resultado === "no_verificado").length;
+  if ((fuera || sinVerificar) && (notas?.length ?? 0) < 3) {
+    return { ok: false, error: "Hay novedades abiertas: escribe qué le dejas a quien entra." };
+  }
+  const iniciada = ejec.iniciadaEn && ejec.iniciadaEn < momento.iso ? ejec.iniciadaEn : momento.iso;
   await db
     .update(rondaEjecuciones)
     .set({
       estado: "completada",
-      completadaEn: ahora,
-      completadaPor: usuarioId,
-      minutosRonda: ejec.iniciadaEn ? Math.max(0, minutosEntre(ejec.iniciadaEn, ahora)) : null,
-      ...(notas != null ? { notas } : {}),
+      completadaEn: momento.iso,
+      completadaPor: usuario.id,
+      firmaNombre: usuario.nombre,
+      recibidaEn: momento.recibido,
+      minutosRonda: Math.max(0, minutosEntre(iniciada, momento.iso)),
+      notas: notas ?? null,
     })
-    .where(eq(rondaEjecuciones.id, ejecucionId));
-  return { ok: true };
+    .where(eq(rondaEjecuciones.id, ejec.id));
+  return { ok: true, fuera, sinVerificar };
+}
+
+/** La falla o la emergencia que abrió una parada queda ligada a su lectura y a su episodio. */
+export async function ligarOrdenALectura(
+  db: Db,
+  clave: { sucursalId: number; fecha: string; turno: string; puntoId: number },
+  ordenId: number,
+  emergencia: boolean,
+  momento: string,
+  usuarioId: number,
+): Promise<void> {
+  const ejec = await buscarEjecucion(db, clave);
+  if (!ejec) return;
+  const [lectura] = await db
+    .update(rondaLecturas)
+    .set({ ordenId })
+    .where(and(eq(rondaLecturas.ejecucionId, ejec.id), eq(rondaLecturas.puntoId, clave.puntoId)))
+    .returning({ aopEventoId: rondaLecturas.aopEventoId });
+  if (!lectura?.aopEventoId) return;
+  await db
+    .update(aopEventos)
+    .set({ ordenId, ...(emergencia ? { estado: "paso_a_eop" as const, escaladoEn: momento } : {}) })
+    .where(eq(aopEventos.id, lectura.aopEventoId));
+  if (emergencia) await registrarAccion(db, lectura.aopEventoId, "Pasó a EOP desde la ronda", `Orden #${ordenId}`, usuarioId);
 }
 
 // ── El tablero ──────────────────────────────────────────────────────────────
+export type EstadoFila = "no_aplica" | "sin_iniciar" | "no_se_hizo" | "en_curso" | "incompleta" | "con_novedad" | "completa";
+
 export interface FilaTablero {
   sucursalId: number;
   sucursal: string;
   rondaId: number | null;
   rondaNombre: string | null;
-  ejecucion: RondaEjecucion | null;
-  estado: "sin_iniciar" | "en_curso" | "completada" | "sin_ronda";
+  ejecucionId: number | null;
+  fecha: string;
+  turno: string;
+  estado: EstadoFila;
   puntosTotal: number;
   anotados: number;
   fuera: number;
+  sinVerificar: number;
   pct: number;
+  iniciadaEn: string | null;
+  completadaEn: string | null;
+  firma: string | null;
 }
 
-export const ESTADO_RONDA: Record<FilaTablero["estado"], { label: string; badge: string; punto: string }> = {
+export const ESTADO_RONDA: Record<EstadoFila, { label: string; badge: string; punto: string }> = {
+  no_aplica: { label: "No aplica", badge: "bg-slate-100 text-slate-500", punto: "bg-slate-400" },
   sin_iniciar: { label: "Sin iniciar", badge: "bg-red-100 text-red-700", punto: "bg-red-500" },
+  no_se_hizo: { label: "No se hizo", badge: "bg-red-100 text-red-700", punto: "bg-red-500" },
   en_curso: { label: "En curso", badge: "bg-amber-100 text-amber-700", punto: "bg-amber-500" },
-  completada: { label: "Completada", badge: "bg-emerald-100 text-emerald-700", punto: "bg-emerald-500" },
-  sin_ronda: { label: "Sin ronda configurada", badge: "bg-slate-100 text-slate-500", punto: "bg-slate-400" },
+  incompleta: { label: "Incompleta", badge: "bg-red-100 text-red-700", punto: "bg-red-500" },
+  con_novedad: { label: "Completa con novedades", badge: "bg-amber-100 text-amber-700", punto: "bg-amber-500" },
+  completa: { label: "Completa", badge: "bg-emerald-100 text-emerald-700", punto: "bg-emerald-500" },
 };
 
-/**
- * Estado de la ronda de un turno en todas las sedes. Es la primera cosa que
- * mira el jefe: si la ronda de las 06:00 no se hizo, nada de lo demás es
- * confiable.
- */
-export async function tableroRondas(db: Db, fecha: string, turno: string): Promise<FilaTablero[]> {
-  const sedes = await db
-    .select({ id: sucursales.id, nombre: sucursales.nombre })
-    .from(sucursales)
-    .where(eq(sucursales.activa, true))
-    .orderBy(asc(sucursales.nombre));
+type FilaEjec = Pick<RondaEjecucion, "id" | "sucursalId" | "fecha" | "turno" | "estado" | "puntosTotal" | "puntosOk" | "puntosFuera" | "puntosNoVerificados" | "iniciadaEn" | "completadaEn" | "firmaNombre">;
+const COLUMNAS_FILA = {
+  id: rondaEjecuciones.id, sucursalId: rondaEjecuciones.sucursalId, fecha: rondaEjecuciones.fecha, turno: rondaEjecuciones.turno, estado: rondaEjecuciones.estado,
+  puntosTotal: rondaEjecuciones.puntosTotal, puntosOk: rondaEjecuciones.puntosOk, puntosFuera: rondaEjecuciones.puntosFuera, puntosNoVerificados: rondaEjecuciones.puntosNoVerificados,
+  iniciadaEn: rondaEjecuciones.iniciadaEn, completadaEn: rondaEjecuciones.completadaEn, firmaNombre: rondaEjecuciones.firmaNombre,
+};
 
-  const out: FilaTablero[] = [];
-  for (const s of sedes) {
-    const ronda = await rondaDeSede(db, s.id);
-    if (!ronda) {
-      out.push({
-        sucursalId: s.id, sucursal: s.nombre, rondaId: null, rondaNombre: null,
-        ejecucion: null, estado: "sin_ronda", puntosTotal: 0, anotados: 0, fuera: 0, pct: 0,
-      });
-      continue;
-    }
-    const ejec = await buscarEjecucion(db, { rondaId: ronda.id, sucursalId: s.id, fecha, turno });
-    const total = ejec?.puntosTotal || (await puntosDeRonda(db, ronda.id)).length;
-    // «Anotado» es todo lo que dejó de estar en blanco: en rango, fuera de
-    // rango o declarado no verificado con su razón.
-    const anotados = ejec ? Math.max(0, total - ejec.puntosNoVerificados) : 0;
-    out.push({
-      sucursalId: s.id,
-      sucursal: s.nombre,
-      rondaId: ronda.id,
-      rondaNombre: ronda.nombre,
-      ejecucion: ejec,
-      estado: !ejec ? "sin_iniciar" : ejec.estado === "completada" ? "completada" : "en_curso",
-      puntosTotal: total,
-      anotados,
-      fuera: ejec?.puntosFuera ?? 0,
-      pct: total > 0 ? Math.round((anotados / total) * 100) : 0,
-    });
-  }
-  return out;
+/** El estado de una sede en un turno. Verde solo si todo se verificó y nada salió de rango. */
+export function estadoDeFila(e: FilaEjec | null | undefined, opts: { aplica: boolean; pasado: boolean }): EstadoFila {
+  if (!opts.aplica) return "no_aplica";
+  if (!e) return opts.pasado ? "no_se_hizo" : "sin_iniciar";
+  if (e.estado !== "completada") return opts.pasado ? "incompleta" : "en_curso";
+  return e.puntosFuera > 0 || e.puntosNoVerificados > 0 ? "con_novedad" : "completa";
 }
 
-/** Resumen de una línea para el panel: "2 de 4 sedes hicieron la ronda". */
-export function resumenTablero(filas: FilaTablero[]): {
-  sedes: number; completadas: number; enCurso: number; sinIniciar: number; fuera: number; todoListo: boolean;
-} {
-  const conRonda = filas.filter((f) => f.estado !== "sin_ronda");
-  const completadas = conRonda.filter((f) => f.estado === "completada").length;
-  const enCurso = conRonda.filter((f) => f.estado === "en_curso").length;
+const valorMs = (fecha: string, turno: string) => Date.parse(`${fecha}T${turno}:00-06:00`);
+
+/**
+ * Estado de la ronda en todas las sedes. Sin fecha ni turno, cada sede muestra
+ * su turno vigente. Dos lecturas en un batch, sin importar cuántas sedes haya.
+ */
+export async function tableroRondas(db: Db, pedido?: { fecha: string; turno: string }): Promise<FilaTablero[]> {
+  const hoy = ahoraSV().fecha;
+  const fechas = pedido ? [pedido.fecha] : [hoy, sumarDias(hoy, -1)];
+  const [sedes, todas, ejecuciones] = await db.batch([
+    db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre)),
+    db.select({
+      id: rondas.id, nombre: rondas.nombre, sucursalId: rondas.sucursalId, activa: rondas.activa, turnos: rondas.turnos, vigenteDesde: rondas.vigenteDesde,
+      // Texto literal: Drizzle no califica la columna y dentro de la subconsulta «id» sería el de la parada.
+      paradas: sql<number>`(SELECT count(*) FROM ronda_puntos p WHERE p.ronda_id = rondas.id AND p.activo = 1)`,
+    }).from(rondas),
+    db.select(COLUMNAS_FILA).from(rondaEjecuciones).where(inArray(rondaEjecuciones.fecha, fechas)),
+  ]);
+  const modelo = todas.find((r) => r.sucursalId == null && r.activa) ?? null;
+  const ahora = Date.now();
+  return sedes.map((s) => {
+    const propia = todas.find((r) => r.sucursalId === s.id);
+    const ronda = propia ? (propia.activa ? propia : null) : modelo;
+    const turnos = ronda ? parsearTurnos(ronda.turnos) : [];
+    const vigente = turnoActual(turnos);
+    const fecha = pedido?.fecha ?? vigente.fecha;
+    const turno = pedido?.turno ?? vigente.turno;
+    const e = ejecuciones.find((x) => x.sucursalId === s.id && x.fecha === fecha && x.turno === turno) ?? null;
+    const aplica = !!ronda && turnos.includes(turno) && (!ronda.vigenteDesde || fecha >= ronda.vigenteDesde);
+    // Un turno terminó cuando ya empezó el siguiente.
+    const pasado = valorMs(fecha, turno) < valorMs(vigente.fecha, vigente.turno) && valorMs(fecha, turno) < ahora;
+    const total = e?.puntosTotal || (ronda?.paradas ?? 0);
+    const anotados = e ? e.puntosOk + e.puntosFuera + e.puntosNoVerificados : 0;
+    return {
+      sucursalId: s.id, sucursal: s.nombre, rondaId: ronda?.id ?? null, rondaNombre: ronda?.nombre ?? null, ejecucionId: e?.id ?? null,
+      fecha, turno, estado: estadoDeFila(e, { aplica: aplica || !!e, pasado }),
+      puntosTotal: total, anotados, fuera: e?.puntosFuera ?? 0, sinVerificar: e?.puntosNoVerificados ?? 0,
+      pct: total > 0 ? Math.round((anotados / total) * 100) : 0,
+      iniciadaEn: e?.iniciadaEn ?? null, completadaEn: e?.completadaEn ?? null, firma: e?.firmaNombre ?? null,
+    };
+  });
+}
+
+/** Resumen de una línea para el panel. Verde solo con todas las sedes completas sin novedades. */
+export function resumenTablero(filas: FilaTablero[]) {
+  const con = filas.filter((f) => f.estado !== "no_aplica");
+  const n = (e: EstadoFila) => con.filter((f) => f.estado === e).length;
+  const completas = n("completa");
   return {
-    sedes: conRonda.length,
-    completadas,
-    enCurso,
-    sinIniciar: conRonda.filter((f) => f.estado === "sin_iniciar").length,
-    fuera: conRonda.reduce((s, f) => s + f.fuera, 0),
-    todoListo: conRonda.length > 0 && completadas === conRonda.length,
+    sedes: con.length,
+    completas,
+    conNovedad: n("con_novedad"),
+    enCurso: n("en_curso"),
+    sinIniciar: n("sin_iniciar"),
+    noSeHizo: n("no_se_hizo"),
+    incompletas: n("incompleta"),
+    fuera: con.reduce((s, f) => s + f.fuera, 0),
+    sinVerificar: con.reduce((s, f) => s + f.sinVerificar, 0),
+    todoListo: con.length > 0 && completas === con.length,
   };
+}
+
+/** La lista de turnos para el filtro del tablero: la unión de los recorridos activos. */
+export async function turnosDeTablero(db: Db): Promise<string[]> {
+  const filas = await db.select({ turnos: rondas.turnos }).from(rondas).where(eq(rondas.activa, true));
+  return [...new Set(filas.flatMap((f) => parsearTurnos(f.turnos)))].sort();
+}
+
+// ── La revisión semanal ─────────────────────────────────────────────────────
+export interface CeldaSemana { fecha: string; turno: string; estado: EstadoFila; ejecucionId: number | null }
+export interface ResumenSemana {
+  sucursalId: number; lunes: string; domingo: string; turnos: string[]; celdas: CeldaSemana[];
+  esperadas: number; completas: number; conNovedad: number; incompletas: number; noHechas: number;
+  terminada: boolean; excepciones: boolean;
+}
+
+export async function resumenSemana(db: Db, sucursalId: number, lunes: string): Promise<ResumenSemana> {
+  const domingo = sumarDias(lunes, 6);
+  const ronda = await rondaDeSede(db, sucursalId);
+  const turnos = ronda ? parsearTurnos(ronda.turnos) : [];
+  const filas = await db.select(COLUMNAS_FILA).from(rondaEjecuciones).where(and(eq(rondaEjecuciones.sucursalId, sucursalId), gte(rondaEjecuciones.fecha, lunes), lte(rondaEjecuciones.fecha, domingo)));
+  const hoy = ahoraSV().fecha;
+  const vigente = turnoActual(turnos);
+  const celdas: CeldaSemana[] = [];
+  for (let d = 0; d < 7; d++) {
+    const fecha = sumarDias(lunes, d);
+    for (const turno of turnos) {
+      const e = filas.find((f) => f.fecha === fecha && f.turno === turno) ?? null;
+      const aplica = !!e || (!ronda?.vigenteDesde || fecha >= ronda.vigenteDesde);
+      const futuro = valorMs(fecha, turno) > valorMs(vigente.fecha, vigente.turno);
+      const pasado = valorMs(fecha, turno) < valorMs(vigente.fecha, vigente.turno);
+      celdas.push({ fecha, turno, estado: futuro && !e ? "no_aplica" : estadoDeFila(e, { aplica, pasado }), ejecucionId: e?.id ?? null });
+    }
+  }
+  const n = (x: EstadoFila) => celdas.filter((c) => c.estado === x).length;
+  const contadas = celdas.filter((c) => c.estado !== "no_aplica" && c.estado !== "sin_iniciar" && c.estado !== "en_curso").length;
+  const r = {
+    sucursalId, lunes, domingo, turnos, celdas,
+    esperadas: contadas, completas: n("completa"), conNovedad: n("con_novedad"), incompletas: n("incompleta"), noHechas: n("no_se_hizo"),
+    terminada: domingo < hoy, excepciones: false,
+  };
+  r.excepciones = r.conNovedad + r.incompletas + r.noHechas > 0;
+  return r;
+}
+
+export type ResultadoRevision = { ok: true; id: number } | { ok: false; status: number; error: string };
+
+/** Firma la semana de una sede. Quien hizo rondas esa semana en esa sede no la revisa. */
+export async function firmarRevision(db: Db, usuario: { id: number; nombre: string }, sucursalId: number, lunes: string, observaciones: string | null): Promise<ResultadoRevision> {
+  const r = await resumenSemana(db, sucursalId, lunes);
+  if (!r.terminada) return { ok: false, status: 409, error: "La semana todavía no termina." };
+  if (r.excepciones && (observaciones?.length ?? 0) < 3) return { ok: false, status: 400, error: "Hubo excepciones: escribe qué revisaste y qué se hizo." };
+  const [propia] = await db
+    .select({ id: rondaMarcas.id })
+    .from(rondaMarcas)
+    .innerJoin(rondaEjecuciones, eq(rondaEjecuciones.id, rondaMarcas.ejecucionId))
+    .where(and(eq(rondaEjecuciones.sucursalId, sucursalId), gte(rondaEjecuciones.fecha, r.lunes), lte(rondaEjecuciones.fecha, r.domingo), eq(rondaMarcas.usuarioId, usuario.id)))
+    .limit(1);
+  const [firmo] = await db
+    .select({ id: rondaEjecuciones.id })
+    .from(rondaEjecuciones)
+    .where(and(eq(rondaEjecuciones.sucursalId, sucursalId), gte(rondaEjecuciones.fecha, r.lunes), lte(rondaEjecuciones.fecha, r.domingo), eq(rondaEjecuciones.completadaPor, usuario.id)))
+    .limit(1);
+  if (propia || firmo) return { ok: false, status: 403, error: "Hiciste rondas esa semana en esta sede: la revisa otra persona." };
+  const [fila] = await db
+    .insert(rondaRevisiones)
+    .values({
+      sucursalId, semana: r.lunes, esperadas: r.esperadas, completas: r.completas, conNovedad: r.conNovedad, incompletas: r.incompletas, noHechas: r.noHechas,
+      observaciones, revisadaPor: usuario.id, revisadaNombre: usuario.nombre, revisadaEn: new Date().toISOString(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: rondaRevisiones.id });
+  if (!fila) return { ok: false, status: 409, error: "Esa semana ya está revisada." };
+  return { ok: true, id: fila.id };
 }

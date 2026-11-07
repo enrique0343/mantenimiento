@@ -3,80 +3,53 @@
 //
 // La cadena del volumen GO-GUI-011-2026 no arranca en el documento, arranca
 // aquí: alguien recorre los sistemas críticos al empezar su turno y anota lo
-// que ve. Todo lo demás cuelga de eso. Si la ronda de las 06:00 no se hizo,
-// ningún tablero del sistema es confiable, y eso es lo primero que esta
-// pantalla dice.
+// que ve. Esta pantalla es de quien supervisa; la ronda se hace en Modo técnico.
 //
 // Lo que contesta de un vistazo:
 //   ¿se hizo la ronda de este turno, en qué sede no, y qué salió fuera de rango?
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like } from "drizzle-orm";
 import {
   ESTADO_RONDA,
-  parsearTurnos,
   puedeEjecutarRonda,
   puedeVerRondas,
+  puedeConfigurarRondas,
   resumenTablero,
   tableroRondas,
-  turnoActual,
+  turnosDeTablero,
   etiquetaTurno,
+  turnoActual,
   type FilaTablero,
 } from "@/lib/ronda-turno";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
-import { SISTEMA_LABEL } from "@/lib/resolver";
-import { rondaEjecuciones, rondas, rondaPuntos, sucursales, usuarios, aopEventos, procedimientos, ubicaciones } from "@/lib/schema";
-import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { aopEventos, campoOperaciones, procedimientos, rondaEjecuciones, sucursales, ubicaciones, usuarios } from "@/lib/schema";
+import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (!puedeVerRondas(user.rol)) return Astro.redirect("/");
-const puedeEjecutar = puedeEjecutarRonda(user.rol);
+if (!puedeVerRondas(user.rol)) return Astro.redirect(user.rol === "tecnico" ? "/campo" : "/");
 
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 
-// ── El turno vigente ────────────────────────────────────────────────────────
-const [rondaBase] = await db.select().from(rondas).where(eq(rondas.activa, true)).limit(1);
-const turnos = parsearTurnos(rondaBase?.turnos);
+// Sin filtro, cada sede muestra su turno vigente; con filtro, el turno pedido.
+const turnos = await turnosDeTablero(db);
+const pedidoFecha = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("fecha") ?? "") ? url.searchParams.get("fecha")! : null;
+const pedidoTurno = turnos.includes(url.searchParams.get("turno") ?? "") ? url.searchParams.get("turno")! : null;
+const pedido = pedidoFecha && pedidoTurno ? { fecha: pedidoFecha, turno: pedidoTurno } : undefined;
 const t = turnoActual(turnos);
-const fecha = url.searchParams.get("fecha") ?? t.fecha;
-const turno = turnos.includes(url.searchParams.get("turno") ?? "") ? url.searchParams.get("turno")! : t.turno;
-const esTurnoVigente = fecha === t.fecha && turno === t.turno;
+const fecha = pedido?.fecha ?? t.fecha;
+const turno = pedido?.turno ?? t.turno;
 
-const filas: FilaTablero[] = await tableroRondas(db, fecha, turno);
+const filas: FilaTablero[] = await tableroRondas(db, pedido);
 const resumen = resumenTablero(filas);
+const PESO: Record<FilaTablero["estado"], number> = { sin_iniciar: 0, no_se_hizo: 0, incompleta: 1, en_curso: 2, con_novedad: 3, completa: 4, no_aplica: 5 };
+const filasOrdenadas = [...filas].sort((a, b) => PESO[a.estado] - PESO[b.estado] || a.sucursal.localeCompare(b.sucursal, "es"));
+const faltan = resumen.sinIniciar + resumen.noSeHizo + resumen.incompletas;
 
-// ── La sede del usuario: para que su botón sea el primero ───────────────────
-const [yo] = await db.select({ sucursalId: usuarios.sucursalId }).from(usuarios).where(eq(usuarios.id, user.id)).limit(1);
-const miSede = yo?.sucursalId ?? null;
-const filasOrdenadas = [...filas].sort((a, b) => {
-  if (a.sucursalId === miSede) return -1;
-  if (b.sucursalId === miSede) return 1;
-  const peso = { sin_iniciar: 0, en_curso: 1, completada: 2, sin_ronda: 3 } as const;
-  return peso[a.estado] - peso[b.estado] || a.sucursal.localeCompare(b.sucursal, "es");
-});
-
-// ── Puntos del recorrido, agrupados por familia (para el pie de página) ─────
-const puntos = rondaBase
-  ? await db
-      .select({ sistema: rondaPuntos.sistema, etiqueta: rondaPuntos.etiqueta, critico: rondaPuntos.critico })
-      .from(rondaPuntos)
-      .where(eq(rondaPuntos.rondaId, rondaBase.id))
-      .orderBy(asc(rondaPuntos.orden))
-  : [];
-const porFamilia = new Map<string, number>();
-for (const p of puntos) porFamilia.set(p.sistema, (porFamilia.get(p.sistema) ?? 0) + 1);
-
-// ── Lo que la ronda ya destapó: desviaciones abiertas ───────────────────────
 const desviaciones = await db
-  .select({
-    e: aopEventos,
-    codigo: procedimientos.codigoCorto,
-    titulo: procedimientos.titulo,
-    sala: ubicaciones.nombre,
-    sede: sucursales.nombre,
-  })
+  .select({ e: aopEventos, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sala: ubicaciones.nombre, sede: sucursales.nombre })
   .from(aopEventos)
   .leftJoin(procedimientos, eq(procedimientos.id, aopEventos.procedimientoId))
   .leftJoin(ubicaciones, eq(ubicaciones.id, aopEventos.ubicacionId))
@@ -84,22 +57,24 @@ const desviaciones = await db
   .where(inArray(aopEventos.estado, ESTADOS_AOP_ABIERTOS))
   .orderBy(desc(aopEventos.detectadoEn))
   .limit(8);
-const desvConReloj = desviaciones
-  .map((d) => ({ ...d, cron: cronometro(d.e) }))
-  .sort((a, b) => a.cron.urgencia - b.cron.urgencia);
+const desvConReloj = desviaciones.map((d) => ({ ...d, cron: cronometro(d.e) })).sort((a, b) => a.cron.urgencia - b.cron.urgencia);
 
-// ── Últimas rondas cerradas, para saber que esto sí corre ───────────────────
 const historial = await db
-  .select({
-    e: rondaEjecuciones,
-    sede: sucursales.nombre,
-    quien: usuarios.nombre,
-  })
+  .select({ id: rondaEjecuciones.id, fecha: rondaEjecuciones.fecha, turno: rondaEjecuciones.turno, estado: rondaEjecuciones.estado, puntosFuera: rondaEjecuciones.puntosFuera, puntosNoVerificados: rondaEjecuciones.puntosNoVerificados, firma: rondaEjecuciones.firmaNombre, sede: sucursales.nombre })
   .from(rondaEjecuciones)
   .leftJoin(sucursales, eq(sucursales.id, rondaEjecuciones.sucursalId))
-  .leftJoin(usuarios, eq(usuarios.id, rondaEjecuciones.completadaPor))
   .orderBy(desc(rondaEjecuciones.fecha), desc(rondaEjecuciones.turno))
   .limit(8);
+
+// Lo que el servidor no aceptó en los últimos 14 días. Nada de lo capturado se pierde.
+const desde = new Date(Date.now() - 14 * 86_400_000).toISOString();
+const rechazos = await db
+  .select({ opId: campoOperaciones.opId, tipo: campoOperaciones.tipo, capturadoEn: campoOperaciones.capturadoEn, recibidoEn: campoOperaciones.recibidoEn, detalle: campoOperaciones.detalle, quien: usuarios.nombre })
+  .from(campoOperaciones)
+  .leftJoin(usuarios, eq(usuarios.id, campoOperaciones.usuarioId))
+  .where(and(eq(campoOperaciones.resultado, "rechazada"), gte(campoOperaciones.recibidoEn, desde), like(campoOperaciones.tipo, "ronda.%")))
+  .orderBy(desc(campoOperaciones.recibidoEn))
+  .limit(10);
 ---
 
 <Layout title="Ronda de turno">
@@ -109,9 +84,7 @@ const historial = await db
         <h1 class="text-2xl font-bold text-slate-900">Ronda de turno</h1>
         <span class="badge bg-emerald-100 text-emerald-700">Paso 1 de la cadena</span>
       </div>
-      <p class="mt-1 text-sm text-slate-500">
-        Lo primero del turno. Una lectura fuera de rango abre sola la desviación con el AOP que la rige.
-      </p>
+      <p class="mt-1 text-sm text-slate-500">Lo primero del turno. Una lectura fuera de rango abre sola la desviación con el AOP que la rige.</p>
     </div>
     <form method="get" class="flex items-end gap-2">
       <div>
@@ -125,50 +98,40 @@ const historial = await db
         </select>
       </div>
       <button class="btn-secondary btn-sm" type="submit">Ver</button>
-      {!esTurnoVigente && <a class="btn-secondary btn-sm" href="/ronda">Turno actual</a>}
+      {pedido && <a class="btn-secondary btn-sm" href="/ronda">Turno actual</a>}
     </form>
   </div>
 
-  {/* ── La franja que contesta la pregunta ── */}
-  <div class={`card mt-5 border-l-4 p-5 ${resumen.sinIniciar > 0 ? "border-red-500" : resumen.enCurso > 0 ? "border-amber-400" : "border-emerald-500"}`}>
+  <div class={`card mt-5 border-l-4 p-5 ${faltan > 0 ? "border-red-500" : resumen.todoListo ? "border-emerald-500" : "border-amber-400"}`}>
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          {fmtFechaSoloCompacta(fecha)} · {etiquetaTurno(turno)}
-        </div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">{pedido ? `${fmtFechaSoloCompacta(fecha)} · ${etiquetaTurno(turno)}` : "Turno vigente de cada sede"}</div>
         <div class="mt-1 text-xl font-bold text-slate-900">
           {resumen.sedes === 0
             ? "Ninguna sede tiene ronda configurada"
-            : resumen.todoListo
-              ? `Las ${resumen.sedes} sedes hicieron su ronda`
-              : `${resumen.completadas} de ${resumen.sedes} sedes hicieron su ronda`}
+            : `${resumen.completas + resumen.conNovedad} de ${resumen.sedes} sedes cerraron su ronda`}
         </div>
         <div class="mt-1 text-sm text-slate-500">
-          {resumen.sinIniciar > 0 && <span class="font-semibold text-red-600">{resumen.sinIniciar} sin iniciar</span>}
-          {resumen.sinIniciar > 0 && resumen.enCurso > 0 && " · "}
-          {resumen.enCurso > 0 && <span class="font-semibold text-amber-600">{resumen.enCurso} en curso</span>}
-          {(resumen.sinIniciar > 0 || resumen.enCurso > 0) && resumen.fuera > 0 && " · "}
-          {resumen.fuera > 0 && <span class="font-semibold text-orange-600">{resumen.fuera} punto(s) fuera de rango</span>}
-          {resumen.sinIniciar === 0 && resumen.enCurso === 0 && resumen.fuera === 0 && resumen.sedes > 0 && "Sin desviaciones en este turno."}
+          {[
+            resumen.sinIniciar > 0 && `${resumen.sinIniciar} sin iniciar`,
+            resumen.noSeHizo > 0 && `${resumen.noSeHizo} no se hizo`,
+            resumen.incompletas > 0 && `${resumen.incompletas} incompleta`,
+            resumen.enCurso > 0 && `${resumen.enCurso} en curso`,
+            resumen.fuera > 0 && `${resumen.fuera} fuera de rango`,
+            resumen.sinVerificar > 0 && `${resumen.sinVerificar} sin verificar`,
+          ].filter(Boolean).join(" · ") || (resumen.todoListo ? "Todo verificado y sin desviaciones." : "")}
         </div>
+        <p class="mt-1 text-[11px] text-slate-400">Un celular sin señal envía su ronda cuando vuelve la señal: lo que hoy se ve «sin iniciar» puede estar hecho. La cifra definitiva es la de la revisión semanal.</p>
       </div>
-      {(user.rol === "admin" || user.rol === "jefe") && (
-        <a class="btn-secondary btn-sm" href="/ronda/puntos">Paradas del recorrido</a>
-      )}
-      {puedeEjecutar && miSede && esTurnoVigente && (
-        <button class="btn-primary" data-abrir={miSede}>
-          {filas.find((f) => f.sucursalId === miSede)?.estado === "completada" ? "Ver mi ronda" : "Iniciar mi ronda"}
-        </button>
-      )}
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary btn-sm" href="/ronda/semana">Revisión de la semana</a>
+        {puedeConfigurarRondas(user.rol) && <a class="btn-secondary btn-sm" href="/ronda/puntos">Paradas del recorrido</a>}
+      </div>
     </div>
   </div>
 
-  {/* ── Sede por sede ── */}
   <div class="card mt-4 overflow-hidden">
-    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-      <h2 class="font-semibold text-slate-800">Por sede</h2>
-      <span class="text-xs text-slate-400">{puntos.length} paradas en el recorrido</span>
-    </div>
+    <div class="border-b border-slate-100 px-5 py-3"><h2 class="font-semibold text-slate-800">Por sede</h2></div>
     <ul class="divide-y divide-slate-100">
       {filasOrdenadas.map((f) => {
         const est = ESTADO_RONDA[f.estado];
@@ -176,52 +139,48 @@ const historial = await db
           <li class="flex flex-wrap items-center gap-3 px-5 py-3.5">
             <span class={`h-2.5 w-2.5 shrink-0 rounded-full ${est.punto}`}></span>
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate font-medium text-slate-800">{f.sucursal}</span>
-                {f.sucursalId === miSede && <span class="badge bg-brand-50 text-brand-700">Mi sede</span>}
-              </div>
-              {f.estado !== "sin_ronda" && (
+              <span class="truncate font-medium text-slate-800">{f.sucursal}</span>
+              <span class="ml-2 text-[11px] text-slate-400">turno {f.turno}</span>
+              {f.estado !== "no_aplica" && (
                 <div class="mt-1 flex items-center gap-2">
                   <div class="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
-                    <div class={`h-full rounded-full ${f.fuera > 0 ? "bg-orange-400" : "bg-emerald-500"}`} style={`width:${f.pct}%`}></div>
+                    <div class={`h-full rounded-full ${f.fuera + f.sinVerificar > 0 ? "bg-orange-400" : "bg-emerald-500"}`} style={`width:${f.pct}%`}></div>
                   </div>
-                  <span class="text-[11px] text-slate-400">
-                    {f.ejecucion ? `${f.puntosTotal - f.ejecucion.puntosNoVerificados} de ${f.puntosTotal} puntos` : `${f.puntosTotal} puntos pendientes`}
-                  </span>
+                  <span class="text-[11px] text-slate-400">{f.anotados} de {f.puntosTotal} paradas{f.iniciadaEn ? ` · inició ${fmtHora(f.iniciadaEn)}` : ""}{f.firma ? ` · firmó ${f.firma}` : ""}</span>
                 </div>
               )}
             </div>
             {f.fuera > 0 && <span class="badge bg-orange-100 text-orange-700">{f.fuera} fuera de rango</span>}
+            {f.sinVerificar > 0 && <span class="badge bg-slate-100 text-slate-600">{f.sinVerificar} sin verificar</span>}
             <span class={`badge ${est.badge}`}>{est.label}</span>
-            {f.estado === "sin_ronda" ? (
-              <span class="text-xs text-slate-400">Hereda la ronda modelo al configurarla</span>
-            ) : f.ejecucion ? (
-              <a class="btn-secondary btn-sm" href={`/ronda/${f.ejecucion.id}`}>
-                {f.estado === "completada" ? "Ver" : "Continuar"}
-              </a>
-            ) : puedeEjecutar && esTurnoVigente ? (
-              <button class="btn-primary btn-sm" data-abrir={f.sucursalId}>Iniciar</button>
-            ) : (
-              <span class="text-xs text-slate-400">No se hizo</span>
-            )}
+            {f.ejecucionId
+              ? <a class="btn-secondary btn-sm" href={`/ronda/${f.ejecucionId}`}>Ver</a>
+              : f.estado === "sin_iniciar" && puedeEjecutarRonda(user.rol) && <a class="btn-primary btn-sm" href="/campo#ronda">Hacerla en Modo técnico</a>}
           </li>
         );
       })}
     </ul>
   </div>
 
+  {rechazos.length > 0 && (
+    <div class="card mt-4 border-l-4 border-red-500 p-5">
+      <h2 class="font-semibold text-slate-800">Registros del celular sin aceptar</h2>
+      <p class="mb-3 text-xs text-slate-400">Últimos 14 días. Lo capturado se conserva; hay que revisarlo con quien lo envió.</p>
+      <ul class="space-y-1.5 text-xs">
+        {rechazos.map((r) => <li class="rounded-lg bg-slate-50 px-3 py-2"><span class="font-semibold text-slate-700">{r.quien ?? "—"}</span> · {r.tipo} · capturado {r.capturadoEn.slice(0, 16).replace("T", " ")} UTC · <span class="text-red-700">{r.detalle}</span></li>)}
+      </ul>
+    </div>
+  )}
+
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-    {/* ── Lo que la ronda destapó ── */}
     <div class="card p-5">
       <div class="mb-1 flex items-center justify-between">
         <h2 class="font-semibold text-slate-800">Desviaciones con el reloj corriendo</h2>
         <a href="/aop" class="text-xs font-medium text-brand-600 hover:underline">Ver todas →</a>
       </div>
-      <p class="mb-3 text-xs text-slate-400">Abiertas por una lectura fuera de rango. Lo más vencido, arriba.</p>
+      <p class="mb-3 text-xs text-slate-400">Lo más vencido, arriba.</p>
       {desvConReloj.length === 0 ? (
-        <div class="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-4 text-xs text-emerald-700">
-          <span class="text-base">✓</span> Ninguna desviación abierta.
-        </div>
+        <div class="rounded-lg bg-emerald-50 px-3 py-4 text-xs text-emerald-700">Ninguna desviación abierta.</div>
       ) : (
         <ul class="space-y-2">
           {desvConReloj.map((d) => {
@@ -230,104 +189,31 @@ const historial = await db
               <li class={`rounded-lg border-l-4 bg-slate-50 px-3 py-2.5 ${r.borde}`}>
                 <div class="flex items-start justify-between gap-2">
                   <a href={`/aop/${d.e.id}`} class="min-w-0 flex-1 hover:underline">
-                    <div class="text-sm font-medium text-slate-800">
-                      {d.codigo ? <span class="mr-1.5 font-mono text-[10px] text-slate-500">{d.codigo}</span> : null}
-                      {d.titulo ?? "Desviación"}
-                    </div>
-                    <div class="mt-0.5 truncate text-[11px] text-slate-500">
-                      {d.sede ?? "Sin sede"}{d.sala ? ` · ${d.sala}` : ""}
-                      {d.e.valorDetectado != null ? ` · leído ${d.e.valorDetectado}${d.e.unidad ? ` ${d.e.unidad}` : ""}` : ""}
-                    </div>
+                    <div class="text-sm font-medium text-slate-800">{d.codigo ? <span class="mr-1.5 font-mono text-[10px] text-slate-500">{d.codigo}</span> : null}{d.titulo ?? "Desviación"}</div>
+                    <div class="mt-0.5 truncate text-[11px] text-slate-500">{d.sede ?? "Sin sede"}{d.sala ? ` · ${d.sala}` : ""}{d.e.valorDetectado != null ? ` · leído ${d.e.valorDetectado}${d.e.unidad ? ` ${d.e.unidad}` : ""}` : ""}</div>
                   </a>
                   <span class={`badge shrink-0 ${r.badge}`}>{r.label}</span>
                 </div>
-                <div class={`mt-1 text-[11px] font-medium ${r.texto}`}>
-                  Actuar: {fmtCuentaRegresiva(d.cron.minutosParaActuar)} · Escalar: {fmtCuentaRegresiva(d.cron.minutosParaEscalar)}
-                </div>
+                <div class={`mt-1 text-[11px] font-medium ${r.texto}`}>Actuar: {fmtCuentaRegresiva(d.cron.minutosParaActuar)} · Escalar: {fmtCuentaRegresiva(d.cron.minutosParaEscalar)}</div>
               </li>
             );
           })}
         </ul>
       )}
     </div>
-
-    {/* ── El recorrido y las últimas rondas ── */}
     <div class="card p-5">
-      <h2 class="mb-1 font-semibold text-slate-800">Qué cubre el recorrido</h2>
-      <p class="mb-3 text-xs text-slate-400">
-        {rondaBase?.nombre ?? "Sin ronda configurada"}
-        {rondaBase?.minutosEstimados ? ` · ${rondaBase.minutosEstimados} min estimados` : ""}
-      </p>
-      <ul class="space-y-1.5 text-sm">
-        {[...porFamilia.entries()].map(([sis, n]) => (
-          <li class="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-            <span class="text-slate-700">{SISTEMA_LABEL[sis as keyof typeof SISTEMA_LABEL] ?? sis}</span>
-            <span class="badge bg-slate-100 text-slate-600">{n} {n === 1 ? "parada" : "paradas"}</span>
-          </li>
-        ))}
-        {porFamilia.size === 0 && <li class="py-2 text-xs text-slate-400">Sin paradas configuradas.</li>}
-      </ul>
-
-      <h3 class="mb-2 mt-5 border-t border-slate-100 pt-4 text-sm font-semibold text-slate-700">Últimas rondas</h3>
+      <h2 class="mb-2 font-semibold text-slate-800">Últimas rondas</h2>
       <ul class="space-y-1 text-xs">
-        {historial.length === 0 && <li class="text-slate-400">Todavía no se ha cerrado ninguna ronda.</li>}
+        {historial.length === 0 && <li class="text-slate-400">Todavía no hay rondas registradas.</li>}
         {historial.map((h) => (
           <li class="flex items-center justify-between gap-2 py-1">
-            <a href={`/ronda/${h.e.id}`} class="min-w-0 flex-1 truncate text-slate-600 hover:text-brand-700">
-              {fmtFechaSoloCompacta(h.e.fecha)} · {h.e.turno} · {h.sede ?? "—"}
-              {h.quien ? <span class="text-slate-400"> · {h.quien}</span> : null}
-            </a>
-            <span class={`badge shrink-0 ${h.e.estado === "completada" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-              {h.e.estado === "completada" ? `${h.e.puntosFuera} fuera` : "en curso"}
+            <a href={`/ronda/${h.id}`} class="min-w-0 flex-1 truncate text-slate-600 hover:text-brand-700">{fmtFechaSoloCompacta(h.fecha)} · {h.turno} · {h.sede ?? "—"}{h.firma ? <span class="text-slate-400"> · {h.firma}</span> : null}</a>
+            <span class={`badge shrink-0 ${h.estado !== "completada" ? "bg-amber-100 text-amber-700" : h.puntosFuera + h.puntosNoVerificados > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {h.estado !== "completada" ? "sin cerrar" : h.puntosFuera + h.puntosNoVerificados > 0 ? "con novedades" : "completa"}
             </span>
           </li>
         ))}
       </ul>
     </div>
   </div>
-
-  {/* ── La cadena, para que nadie tenga que explicarla ── */}
-  <div class="card mt-4 p-5">
-    <h2 class="font-semibold text-slate-800">Dónde encaja la ronda</h2>
-    <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-5">
-      {[
-        { c: "SCP", t: "Configuración", d: "El valor normal contra el que se compara cada lectura.", on: false },
-        { c: "SOP", t: "Ronda de turno", d: "Esto. Se recorre y se anota.", on: true },
-        { c: "AOP", t: "Desviación", d: "Lectura fuera de rango: reloj para actuar y escalar.", on: false },
-        { c: "EOP", t: "Emergencia", d: "Ya falló: tres primeras acciones de memoria.", on: false },
-        { c: "MOP", t: "Intervención", d: "Se interviene con permiso, bloqueo y liberación medida.", on: false },
-      ].map((p) => (
-        <div class={`rounded-xl border p-3 ${p.on ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white"}`}>
-          <div class={`font-mono text-xs font-bold ${p.on ? "text-emerald-700" : "text-slate-400"}`}>{p.c}</div>
-          <div class="mt-0.5 text-sm font-semibold text-slate-800">{p.t}</div>
-          <div class="mt-1 text-[11px] leading-snug text-slate-500">{p.d}</div>
-        </div>
-      ))}
-    </div>
-  </div>
 </Layout>
-
-<script>
-  document.querySelectorAll("[data-abrir]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const sucursalId = Number(btn.getAttribute("data-abrir"));
-      const original = btn.textContent;
-      btn.setAttribute("disabled", "true");
-      btn.textContent = "Abriendo…";
-      try {
-        const r = await fetch("/api/ronda-turno", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sucursalId }),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(typeof d.error === "string" ? d.error : "No se pudo abrir la ronda");
-        location.href = d.url;
-      } catch (e) {
-        btn.removeAttribute("disabled");
-        btn.textContent = original;
-        window.showToast?.(e instanceof Error ? e.message : "Error al abrir la ronda", "error");
-      }
-    });
-  });
-</script>

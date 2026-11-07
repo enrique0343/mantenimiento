@@ -14,12 +14,13 @@
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { activos, procedimientos, procedimientoSistemas, aopFicha, eopFicha, aopUmbrales, ubicaciones } from "@/lib/schema";
 
-export type Sistema = "electrico" | "hvac" | "gases" | "agua" | "incendios" | "ascensores" | "otro";
+export type Sistema = "electrico" | "hvac" | "minisplit" | "gases" | "agua" | "incendios" | "ascensores" | "otro";
 export type Situacion = "falla" | "desviacion" | "preventivo" | "intervencion";
 
 export const SISTEMA_LABEL: Record<Sistema, string> = {
   electrico: "Energía",
-  hvac: "Climatización",
+  hvac: "Climatización crítica (HEPA)",
+  minisplit: "Minisplit",
   gases: "Gases medicinales",
   agua: "Agua",
   incendios: "Protección contra incendios",
@@ -37,7 +38,9 @@ export const DOC_DE_SITUACION: Record<Situacion, "eop" | "aop" | "sop" | "mop"> 
 
 const PALABRAS: Array<[Sistema, RegExp]> = [
   ["electrico",  /planta el[eé]ctr|generador|tablero|transferencia|\bats\b|\bups\b|subestaci[oó]n|transformador|acometida/i],
-  ["hvac",       /aire acond|minisplit|mini split|\bsplit\b|chiller|manejadora|\buma\b|fan ?coil|extractor|clima/i],
+  // Lo central va primero: «Aire acondicionado central» no es un minisplit.
+  ["hvac",       /chiller|manejadora|\buma\b|fan ?coil|extractor|hepa|clima|unidad central|aire acondicionado central|\bvrf\b|\bvrv\b/i],
+  ["minisplit",  /mini ?-?split|\bsplit\b|cassette|casete|piso ?techo|aires? acond/i],
   ["gases",      /ox[ií]geno|manifold|vac[ií]o|aire medicinal|criog[eé]nic|[oó]xido nitroso/i],
   ["agua",       /cisterna|tanque de agua|hidroneum|bomba de agua|ablandador|[oó]smosis|potabl/i],
   ["incendios",  /extintor|rociador|sprinkler|alarma de incend|bomba contra incend|detector de humo|hidrante/i],
@@ -46,17 +49,27 @@ const PALABRAS: Array<[Sistema, RegExp]> = [
 
 /** Mapea el dominio del plan maestro al sistema critico, como ultimo recurso. */
 const POR_RUBRO: Record<string, Sistema> = {
-  aires: "hvac",
+  aires: "minisplit",
   infraestructura: "otro",
   equipo_general: "otro",
   biomedico: "otro",
 };
 
-/** Infiere el sistema por el nombre y la categoria del equipo. */
-export function inferirSistema(nombre?: string | null, categoria?: string | null, rubro?: string | null): Sistema {
+/** Áreas donde el aire es de climatización crítica: manejadoras con filtro HEPA, presión y renovaciones. */
+const AREA_CRITICA = /quir[oó]fano|\buci\b|\bucin\b|intensiv|aislamiento|est[eé]ril|ceye|cirug[ií]a|neonat|perioperator|\brecuperaci/i;
+
+/**
+ * Infiere el sistema por el nombre y la categoria del equipo. Un minisplit no
+ * se rige igual en todas partes: dentro de un área crítica manda la familia de
+ * climatización crítica, y por eso importa la ubicación.
+ */
+export function inferirSistema(nombre?: string | null, categoria?: string | null, rubro?: string | null, ubicacion?: string | null): Sistema {
   const txt = `${nombre ?? ""} ${categoria ?? ""}`;
-  for (const [sis, re] of PALABRAS) if (re.test(txt)) return sis;
-  return (rubro && POR_RUBRO[rubro]) || "otro";
+  let sistema: Sistema = (rubro && POR_RUBRO[rubro]) || "otro";
+  for (const [sis, re] of PALABRAS) {
+    if (re.test(txt)) { sistema = sis; break; }
+  }
+  return sistema === "minisplit" && ubicacion && AREA_CRITICA.test(ubicacion) ? "hvac" : sistema;
 }
 
 type ActivoMin = {
@@ -95,7 +108,15 @@ export async function sistemaDeActivo(
     if (p.sistema) return { sistema: p.sistema as Sistema, origen: "heredado", desdeActivoId: p.id };
     padreId = p.padreId;
   }
-  return { sistema: inferirSistema(activo.nombre, activo.categoria, activo.rubro), origen: "inferido" };
+  const sugerido = inferirSistema(activo.nombre, activo.categoria, activo.rubro);
+  if (sugerido !== "minisplit") return { sistema: sugerido, origen: "inferido" };
+  const [lugar] = await db
+    .select({ nombre: ubicaciones.nombre })
+    .from(activos)
+    .innerJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+    .where(eq(activos.id, activo.id))
+    .limit(1);
+  return { sistema: inferirSistema(activo.nombre, activo.categoria, activo.rubro, lugar?.nombre), origen: "inferido" };
 }
 
 export interface ProcedimientoRige {
@@ -187,7 +208,6 @@ export async function queRigeEsteActivo(db: any, activoId: number, sucursalId?: 
 }
 
 const DOC_DE_AREA_CRITICA = /quir[oó]fano|[aá]reas? cr[ií]ticas?|aislamiento|almac[eé]n est[eé]ril|cirug[ií]a/i;
-const AREA_CRITICA = /quir[oó]fano|\buci\b|\bucin\b|intensiv|aislamiento|est[eé]ril|ceye|cirug[ií]a|neonat/i;
 
 export interface QueSigue {
   /** El documento no se escribió para el lugar donde está este equipo. */
@@ -243,8 +263,8 @@ export async function queSigue(
   if (doc.estado !== "vigente") {
     out.aviso = `Atención: ${doc.codigoCorto} está en estado "${doc.estado}", todavía no aprobado.`;
   }
-  // Todos los aires comparten los mismos documentos, pero varios se escribieron
-  // para áreas críticas. Fuera de ellas se muestran como guía y se dice por qué.
+  // Una manejadora o un chiller fuera de un área crítica comparte familia, pero
+  // varios documentos se escribieron para esas áreas. Se muestran como guía y se dice por qué.
   if (DOC_DE_AREA_CRITICA.test(doc.titulo)) {
     const [lugar] = await db
       .select({ nombre: ubicaciones.nombre })
@@ -284,8 +304,10 @@ export async function cobertura(db: any) {
       sistema: activos.sistema,
       criticidad: activos.criticidadOperacional,
       estado: activos.estado,
+      ubicacion: ubicaciones.nombre,
     })
-    .from(activos);
+    .from(activos)
+    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId));
   const procs = await db
     .select({ sistema: procedimientos.sistema, tipo: procedimientos.tipo })
     .from(procedimientos)
@@ -299,7 +321,7 @@ export async function cobertura(db: any) {
   return todos
     .filter((a: any) => a.estado !== "baja")
     .map((a: any) => {
-      const sis = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro);
+      const sis = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro, a.ubicacion);
       const tipos = porSistema.get(sis) ?? new Set<string>();
       return {
         ...a,
@@ -399,7 +421,7 @@ export async function juegoDeFamilia(db: any, sistema: Sistema, sucursalId?: num
 
 /** El juego de todas las familias: el tablero de qué parte de la operación está gobernada. */
 export async function juegosDeTodasLasFamilias(db: any, sucursalId?: number | null): Promise<JuegoFamilia[]> {
-  const sistemas: Sistema[] = ["electrico", "hvac", "gases", "agua", "incendios", "ascensores"];
+  const sistemas: Sistema[] = ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores"];
   const out: JuegoFamilia[] = [];
   for (const s of sistemas) out.push(await juegoDeFamilia(db, s, sucursalId));
   return out.sort((a, b) => a.cubiertos - b.cubiertos || a.label.localeCompare(b.label, "es"));
@@ -415,12 +437,14 @@ export async function equiposPorFamilia(db: any): Promise<Record<string, { total
       sistema: activos.sistema,
       criticidad: activos.criticidadOperacional,
       estado: activos.estado,
+      ubicacion: ubicaciones.nombre,
     })
-    .from(activos);
+    .from(activos)
+    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId));
   const acc: Record<string, { total: number; criticos: number }> = {};
   for (const a of todos) {
     if (a.estado === "baja") continue;
-    const sis = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro);
+    const sis = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro, a.ubicacion);
     const e = acc[sis] ?? { total: 0, criticos: 0 };
     e.total++;
     if (a.criticidad === "alta") e.criticos++;

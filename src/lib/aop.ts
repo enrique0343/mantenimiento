@@ -263,6 +263,8 @@ export interface AbrirEventoInput {
   /** Sobrescriben los minutos del umbral si se pasan. */
   minutosParaActuar?: number | null;
   minutosParaEscalar?: number | null;
+  /** La parada de la ronda que lo abrió: cada parada lleva su propio episodio. */
+  rondaPuntoId?: number | null;
 }
 
 /**
@@ -295,6 +297,8 @@ export async function abrirEvento(
     else cond.push(eq(aopEventos.procedimientoId, procedimientoId!));
     if (ubicacionId != null) cond.push(eq(aopEventos.ubicacionId, ubicacionId));
     else if (activoId != null) cond.push(eq(aopEventos.activoId, activoId));
+    else if (input.sucursalId != null) cond.push(eq(aopEventos.sucursalId, input.sucursalId));
+    if (input.rondaPuntoId != null) cond.push(eq(aopEventos.rondaPuntoId, input.rondaPuntoId));
     const [abierto] = await db
       .select()
       .from(aopEventos)
@@ -336,6 +340,7 @@ export async function abrirEvento(
       origen: input.origen ?? "ronda",
       medicionId: input.medicionId ?? null,
       ordenId: input.ordenId ?? null,
+      rondaPuntoId: input.rondaPuntoId ?? null,
       estado: "abierto",
       actuarAntesDe: minActuar != null ? sumarMinutos(detectadoEn, minActuar) : null,
       escalarAntesDe: minEscalar != null ? sumarMinutos(detectadoEn, minEscalar) : null,

@@ -3,7 +3,7 @@
 // volumen los deja "en azul": esto es donde la jefatura los fija.
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
@@ -20,11 +20,21 @@ const editarSchema = z.object({
   instruccion: z.string().max(1000).nullable().optional(),
   critico: z.boolean().optional(),
   activo: z.boolean().optional(),
+  lineaSop: z.number().int().min(1).max(11).nullable().optional(),
+  minutosActuar: z.number().int().positive().nullable().optional(),
+  minutosEscalar: z.number().int().positive().nullable().optional(),
+});
+
+/** Recorrido propio de una sede: copia del modelo, sus turnos, o «esta sede no hace ronda». */
+const sedeSchema = z.object({
+  sucursalId: z.number().int().positive(),
+  activa: z.boolean().optional(),
+  turnos: z.array(z.string().regex(/^\d{2}:\d{2}$/)).min(1).max(6).optional(),
 });
 
 const crearSchema = z.object({
   rondaId: z.number().int().positive(),
-  sistema: z.enum(["electrico", "hvac", "gases", "agua", "incendios", "ascensores", "otro"]),
+  sistema: z.enum(["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"]),
   etiqueta: z.string().min(3).max(200),
   instruccion: z.string().max(1000).nullable().optional(),
   requiereValor: z.boolean().default(false),
@@ -34,6 +44,7 @@ const crearSchema = z.object({
   valorEsperadoTexto: z.string().max(300).nullable().optional(),
   aopProcedimientoId: z.number().int().positive().nullable().optional(),
   critico: z.boolean().default(false),
+  lineaSop: z.number().int().min(1).max(11).nullable().optional(),
 });
 
 /** Cambia el valor normal de una parada. */
@@ -115,6 +126,7 @@ export const POST: APIRoute = async (ctx) => {
       valorEsperadoTexto: d.valorEsperadoTexto ?? null,
       aopProcedimientoId: d.aopProcedimientoId ?? null,
       critico: d.critico,
+      lineaSop: d.lineaSop ?? null,
     })
     .returning();
 
@@ -123,6 +135,33 @@ export const POST: APIRoute = async (ctx) => {
     resumen: `Parada agregada al recorrido: «${row.etiqueta}»`,
   });
   return Response.json({ ok: true, punto: row });
+};
+
+/** Crea o ajusta el recorrido propio de una sede. La primera vez copia las paradas del modelo. */
+export const PUT: APIRoute = async (ctx) => {
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  if (!user) return response;
+  const parsed = sedeSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return Response.json({ error: "Datos inválidos" }, { status: 400 });
+  const { sucursalId, activa, turnos } = parsed.data;
+  const db = getDb(ctx);
+  const [modelo] = await db.select().from(rondas).where(isNull(rondas.sucursalId)).orderBy(asc(rondas.id)).limit(1);
+  if (!modelo) return Response.json({ error: "No hay ronda modelo" }, { status: 409 });
+  let [propia] = await db.select().from(rondas).where(eq(rondas.sucursalId, sucursalId)).limit(1);
+  if (!propia) {
+    [propia] = await db.insert(rondas).values({
+      codigo: `RONDA-TURNO-S${sucursalId}`, nombre: modelo.nombre, descripcion: modelo.descripcion, procedimientoId: modelo.procedimientoId, sucursalId,
+      turnos: modelo.turnos, minutosEstimados: modelo.minutosEstimados, activa: true, creadoPor: user.id, vigenteDesde: modelo.vigenteDesde,
+    }).returning();
+    await db.run(sql`INSERT INTO ronda_puntos (ronda_id, orden, linea_sop, sistema, etiqueta, instruccion, activo_id, ubicacion_id, variable_id, requiere_valor, unidad, min_esperado, max_esperado, valor_esperado_texto, fuente, aop_procedimiento_id, critico, activo, minutos_actuar, minutos_escalar)
+      SELECT ${propia.id}, orden, linea_sop, sistema, etiqueta, instruccion, activo_id, ubicacion_id, variable_id, requiere_valor, unidad, min_esperado, max_esperado, valor_esperado_texto, fuente, aop_procedimiento_id, critico, activo, minutos_actuar, minutos_escalar FROM ronda_puntos WHERE ronda_id = ${modelo.id}`);
+  }
+  const data: Record<string, unknown> = {};
+  if (activa !== undefined) data.activa = activa;
+  if (turnos) data.turnos = JSON.stringify([...new Set(turnos)].sort());
+  if (Object.keys(data).length) [propia] = await db.update(rondas).set(data).where(eq(rondas.id, propia.id)).returning();
+  await logAudit(ctx, { entidad: "ronda", entidadId: propia.id, accion: "update", resumen: `Recorrido de la sede ${sucursalId} ajustado`, cambios: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, { antes: null, despues: v }])) });
+  return Response.json({ ok: true, ronda: propia });
 };
 
 /** Listado para la pantalla de configuración. */

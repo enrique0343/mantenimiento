@@ -9,7 +9,7 @@ const beforeMigration = (db, nombre) => {
 };
 const fixture = await setupConjuntos({ beforeMigration, modules: {
   hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', buscar: 'pages/api/campo/buscar', equipo: 'pages/api/campo/equipo/[id]',
-  crear: 'pages/api/campo/ordenes', foto: 'pages/api/campo/foto', campo: 'lib/campo', reporte: 'lib/reporte-mantenimiento', config: 'lib/campo-config', csv: 'pages/api/reportes/[tipo]', database: 'lib/db',
+  resolver: 'lib/resolver', crear: 'pages/api/campo/ordenes', foto: 'pages/api/campo/foto', campo: 'lib/campo', reporte: 'lib/reporte-mantenimiento', config: 'lib/campo-config', csv: 'pages/api/reportes/[tipo]', database: 'lib/db',
 } });
 const { app, sqlite, faults, call, close } = fixture;
 const one = (q, ...a) => sqlite.prepare(q).get(...a);
@@ -18,10 +18,19 @@ const AHORA = Date.now();
 const hace = (min) => new Date(AHORA - min * 60000).toISOString();
 let n = 0;
 const op = (tipo, at, extra = {}) => ({ opId: `prueba-${++n}-${tipo}`, tipo, at, ...extra });
+// Como el celular: lo que no cupo en el presupuesto de una solicitud sale en la siguiente.
 const enviar = async (ops, rol = 'tecnico', extra = {}) => {
-  const r = await call(app.sync.POST, '/api/campo/sync', { method: 'POST', data: { ops, ...extra }, rol });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  return r.body.resultados;
+  const salida = [];
+  let resto = ops;
+  while (resto.length) {
+    const r = await call(app.sync.POST, '/api/campo/sync', { method: 'POST', data: { ops: resto, ...extra }, rol });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    salida.push(...r.body.resultados);
+    if (r.body.detenido) break;
+    assert.ok(r.body.resultados.length >= 1, 'Cada vuelta avanza');
+    resto = resto.slice(r.body.resultados.length);
+  }
+  return salida;
 };
 const CHECKLIST = JSON.stringify([
   { texto: 'Apagar y bloquear', bloqueante: true, minutos: 5, estado: 'pendiente' },
@@ -38,8 +47,8 @@ try {
   faults.enforceColumnLimit = true; // D1 corta a 100 columnas: ninguna consulta de esta pantalla puede pasarse.
   sqlite.exec(`
     INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede prueba',1),(2,'Otra sede',1);
-    INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo,activa) VALUES(1,1,'Quirófano 2','area',1),(2,1,'Habitación 307','area',1);
-    INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,estado) VALUES(1,'AC-01','Minisplit quirófano','general','aires',1,'operativo'),(2,'AC-02','Minisplit habitación','general','aires',2,'operativo'),(3,'AC-03','Minisplit de baja','general','aires',2,'baja'),(4,'AC-04','Sin lugar','general','aires',NULL,'operativo');
+    INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo,activa) VALUES(1,1,'Quirófano 2','area',1),(2,1,'Habitación 307','area',1),(3,2,'Azotea','area',1);
+    INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,estado) VALUES(1,'AC-01','Minisplit quirófano','general','aires',1,'operativo'),(2,'AC-02','Minisplit habitación','general','aires',2,'operativo'),(3,'AC-03','Minisplit de baja','general','aires',2,'baja'),(4,'AC-04','Sin lugar','general','aires',NULL,'operativo'),(5,'CH-01','Chiller del edificio','general','aires',3,'operativo');
     INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,checklist) VALUES(1,2,'Trimestral','trimestral','2026-01-15','${CHECKLIST}');
     INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(20,'Otro Técnico','otro@example.invalid','x','tecnico');
   `);
@@ -169,7 +178,7 @@ try {
   igual(hoy.status, 200, JSON.stringify(hoy.body));
   const p = hoy.body;
   ok(p.ronda, 'La sede tiene su ronda');
-  igual(p.ronda.puntos.length, 19);
+  igual(p.ronda.puntos.length, 21);
   ok(p.emergencias.length >= 6, 'Los EOP viajan con el paquete, para usarlos sin señal');
   ok(p.emergencias.every((e) => e.acciones.length > 0));
   ok(p.ordenes.some((x) => x.id === 3 && x.pasos.length === 3));
@@ -182,15 +191,15 @@ try {
   ok(r.ok, JSON.stringify(r));
   igual(one('SELECT iniciada_en i FROM ronda_ejecuciones').i, hace(45));
   const conAop = p.ronda.puntos.find((x) => x.aop && x.critico);
-  [r] = await enviar([op('ronda.lectura', hace(44), { ...clave, puntoId: conAop.id, resultado: 'fuera' })]);
+  [r] = await enviar([op('ronda.lectura', hace(44), { ...clave, puntoId: conAop.id, resultado: 'fuera', nota: 'Alarma en el panel' })]);
   ok(r.ok && r.datos.eventoId, JSON.stringify(r));
   const evento = one('SELECT * FROM aop_eventos WHERE id=?', r.datos.eventoId);
   igual(evento.detectado_en, hace(44), 'El reloj del AOP corre desde que se detectó, no desde que hubo señal');
-  [r] = await enviar([op('ronda.cerrar', hace(43), clave)]);
-  ok(!r.ok && /cr[ií]tico/i.test(r.error), JSON.stringify(r));
+  [r] = await enviar([op('ronda.cerrar', hace(43), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
+  ok(!r.ok && /sin anotar/i.test(r.error), JSON.stringify(r));
   const opsRonda = p.ronda.puntos.filter((x) => x.id !== conAop.id).map((x, i) => op('ronda.lectura', hace(42 - i * 0.1), { ...clave, puntoId: x.id, resultado: 'ok', valor: x.pideValor ? (x.min ?? x.max ?? 1) : null }));
   for (let i = 0; i < opsRonda.length; i += 10) await enviar(opsRonda.slice(i, i + 10));
-  [r] = await enviar([op('ronda.cerrar', hace(30), clave)]);
+  [r] = await enviar([op('ronda.cerrar', hace(30), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
   ok(r.ok, JSON.stringify(r));
   const ej = one('SELECT * FROM ronda_ejecuciones');
   igual(ej.estado, 'completada');
@@ -215,10 +224,47 @@ try {
   igual(fichaR.status, 200, JSON.stringify(fichaR.body));
   igual(fichaR.body.planes[0].pasos, 3);
   igual(fichaR.body.planes[0].estimadoMin, 20);
-  // Los documentos de aires se escribieron para áreas críticas: en una habitación se dice.
-  ok(fichaR.body.falla?.fueraDeAlcance, JSON.stringify(fichaR.body.falla));
+  // Cada aire con su familia: el minisplit de una habitación tiene sus propios cinco documentos.
+  igual(fichaR.body.falla?.codigo, 'EOP-MSP-01', JSON.stringify(fichaR.body.falla));
+  igual(fichaR.body.falla?.fueraDeAlcance, false);
+  igual(fichaR.body.desviacion?.codigo, 'AOP-MSP-01');
+  igual(fichaR.body.desviacion?.actuarMin, 240);
+  const plantillaMsp = one("SELECT t.id FROM checklist_plantillas t JOIN procedimientos p ON p.id=t.procedimiento_id WHERE p.codigo_corto='SOP-MG-06'");
+  igual(fichaR.body.plantillaSugerida, plantillaMsp.id, 'La rutina de su familia ya viene elegida');
+  igual(all('SELECT id FROM checklist_plantilla_items WHERE plantilla_id=?', plantillaMsp.id).length, 12);
+  igual(all("SELECT codigo_corto FROM procedimientos WHERE sistema='minisplit' ORDER BY codigo_corto").map((d) => d.codigo_corto).join(), 'AOP-MSP-01,EOP-MSP-01,MOP-MSP-01,SCP-MSP-01,SOP-MG-06');
+  igual(all("SELECT procedimiento_id FROM procedimiento_sistemas WHERE sistema='minisplit'").length, 5);
+  // En quirófano o UCI el aire es de climatización crítica, aunque el equipo se llame minisplit.
   const quirofano = await call(app.equipo.GET, '/api/campo/equipo/1', { method: 'GET', id: 1, rol: 'tecnico' });
+  igual(quirofano.body.falla?.codigo, 'EOP-HVAC-01');
   igual(quirofano.body.falla?.fueraDeAlcance, false, 'En el quirófano el documento aplica de lleno');
+  ok(quirofano.body.plantillaSugerida !== plantillaMsp.id, 'En quirófano no se sugiere la rutina de minisplit');
+  // Un chiller sigue en climatización crítica; el documento avisa que se escribió para otra área.
+  const chiller = await call(app.equipo.GET, '/api/campo/equipo/5', { method: 'GET', id: 5, rol: 'tecnico' });
+  igual(chiller.body.falla?.codigo, 'EOP-HVAC-01');
+  ok(chiller.body.falla?.fueraDeAlcance, JSON.stringify(chiller.body.falla));
+  // Lo declarado en la ficha manda sobre lo que se infiere.
+  sqlite.prepare("UPDATE activos SET sistema='hvac' WHERE id=4").run();
+  igual((await call(app.equipo.GET, '/api/campo/equipo/4', { method: 'GET', id: 4, rol: 'tecnico' })).body.falla?.codigo, 'EOP-HVAC-01');
+  sqlite.prepare("UPDATE activos SET sistema=NULL WHERE id=4").run();
+  igual((await call(app.equipo.GET, '/api/campo/equipo/4', { method: 'GET', id: 4, rol: 'tecnico' })).body.falla?.codigo, 'EOP-MSP-01');
+  const { inferirSistema } = app.resolver;
+  for (const [nombre, categoria, rubro, lugar, esperado] of [
+    ['Minisplit habitación', null, 'aires', 'Habitación 307', 'minisplit'],
+    ['Minisplit quirófano', null, 'aires', 'QUIROFANO SUNSHINE', 'hvac'],
+    ['AC-12', 'Cassette', 'aires', 'UCI Adultos', 'hvac'],
+    ['AC-12', 'Cassette', 'aires', 'Consultorio 4', 'minisplit'],
+    ['AC-13', 'Piso techo', 'aires', null, 'minisplit'],
+    ['AC-14', 'Ventana', 'aires', 'Oficina', 'minisplit'],
+    ['AC-15', 'Otros aires acondicionados', 'aires', 'RECUPERACION', 'hvac'],
+    ['Chiller 1', 'Chiller', 'aires', 'Azotea', 'hvac'],
+    ['UMA-2', 'Manejadora de aire', 'aires', 'Cuarto técnico', 'hvac'],
+    ['Unidad', 'VRF / VRV', 'aires', 'Oficina', 'hvac'],
+    ['Aire acondicionado central', null, null, null, 'hvac'],
+    ['Aire acondicionado de oficina', null, null, null, 'minisplit'],
+    ['Central de aire medicinal', null, null, null, 'gases'],
+    ['Puerta de vidrio', 'Puertas y ventanas', 'infraestructura', null, 'otro'],
+  ]) igual(inferirSistema(nombre, categoria, rubro, lugar), esperado, `${nombre} / ${categoria} / ${lugar}`);
 
   // ── Mantenimiento fuera de la lista ──────────────────────────────────────
   const crear = (data, rol = 'tecnico') => call(app.crear.POST, '/api/campo/ordenes', { method: 'POST', data, rol });

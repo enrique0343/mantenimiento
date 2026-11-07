@@ -17,14 +17,7 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva } from "./aop";
 import { inferirSistema, SISTEMA_LABEL, type Sistema } from "./resolver";
-import {
-  parsearTurnos,
-  resumenTablero,
-  tableroRondas,
-  turnoActual,
-  etiquetaTurno,
-  type FilaTablero,
-} from "./ronda-turno";
+import { resumenTablero, tableroRondas } from "./ronda-turno";
 import {
   activos,
   aopEventos,
@@ -32,7 +25,6 @@ import {
   ordenPrerrequisitos,
   ordenes,
   procedimientos,
-  rondas,
   sucursales,
   ubicaciones,
 } from "./schema";
@@ -84,7 +76,7 @@ export interface OpcionesAhora {
 /** La cadena completa, lista para pintar. */
 export async function estadoAhora(db: Db, opts: OpcionesAhora): Promise<BloqueAhora[]> {
   const bloques: BloqueAhora[] = [];
-  bloques.push(await bloqueRonda(db, opts));
+  bloques.push(await bloqueRonda(db));
   bloques.push(await bloqueDesviaciones(db, opts));
   bloques.push(await bloqueEmergencias(db, opts));
   bloques.push(await bloqueIntervenciones(db, opts));
@@ -117,29 +109,9 @@ export function tituloAhora(bloques: BloqueAhora[]): { texto: string; tono: Tono
 }
 
 // ── SOP · la ronda del turno ────────────────────────────────────────────────
-export interface InfoRonda {
-  fecha: string;
-  turno: string;
-  etiqueta: string;
-  filas: FilaTablero[];
-  miFila: FilaTablero | null;
-}
-
-export async function infoRonda(db: Db, sucursalId?: number | null): Promise<InfoRonda> {
-  const [base] = await db.select().from(rondas).where(eq(rondas.activa, true)).limit(1);
-  const t = turnoActual(parsearTurnos(base?.turnos));
-  const filas = await tableroRondas(db, t.fecha, t.turno);
-  return {
-    fecha: t.fecha,
-    turno: t.turno,
-    etiqueta: t.etiqueta,
-    filas,
-    miFila: sucursalId ? (filas.find((f) => f.sucursalId === sucursalId) ?? null) : null,
-  };
-}
-
-async function bloqueRonda(db: Db, opts: OpcionesAhora): Promise<BloqueAhora> {
-  const info = await infoRonda(db, opts.sucursalId);
+/** ¿Se hizo la ronda? Cada sede responde por su turno vigente. Nunca verde con algo sin verificar. */
+export async function bloqueRonda(db: Db): Promise<BloqueAhora> {
+  const filas = await tableroRondas(db);
   const base = {
     doc: "SOP" as const,
     icono: "",
@@ -147,66 +119,41 @@ async function bloqueRonda(db: Db, opts: OpcionesAhora): Promise<BloqueAhora> {
     pregunta: "¿Se hizo la ronda de este turno?",
     href: "/ronda",
   };
-
-  // Para el técnico, su sede. Para la jefatura, todas.
-  if (opts.sucursalId && info.miFila) {
-    const f = info.miFila;
-    if (f.estado === "sin_ronda") {
-      return { ...base, tono: "vacio", numero: null, etiquetaNumero: "—",
-        detalle: "Tu sede todavía no tiene una ronda configurada.", accion: "Ver rondas", items: [] };
-    }
-    const pendientes = f.ejecucion ? f.ejecucion.puntosNoVerificados : f.puntosTotal;
-    if (f.estado === "completada") {
-      return { ...base, tono: f.fuera > 0 ? "atencion" : "ok", numero: f.puntosTotal, etiquetaNumero: `${f.puntosTotal} paradas`,
-        detalle: f.fuera > 0
-          ? `Ronda del ${info.turno} hecha, con ${f.fuera} punto(s) fuera de rango.`
-          : `Ronda del ${info.turno} hecha y sin desviaciones.`,
-        accion: "Ver la ronda", href: f.ejecucion ? `/ronda/${f.ejecucion.id}` : "/ronda", items: [] };
-    }
-    if (f.estado === "en_curso") {
-      return { ...base, tono: "atencion", numero: pendientes, etiquetaNumero: `${pendientes} sin anotar`,
-        detalle: `Ronda del ${info.turno} en curso: ${pendientes} de ${f.puntosTotal} paradas sin anotar.`,
-        accion: "Continuar la ronda", href: f.ejecucion ? `/ronda/${f.ejecucion.id}` : "/ronda", items: [] };
-    }
-    return { ...base, tono: "urgente", numero: f.puntosTotal, etiquetaNumero: `${f.puntosTotal} paradas`,
-      detalle: `La ronda del ${info.turno} no se ha iniciado. Es el primer paso del turno.`,
-      accion: "Iniciar mi ronda", items: [] };
-  }
-
-  const r = resumenTablero(info.filas);
+  const r = resumenTablero(filas);
   if (r.sedes === 0) {
     return { ...base, tono: "vacio", numero: null, etiquetaNumero: "—",
       detalle: "Ninguna sede tiene ronda configurada todavía.", accion: "Configurar", items: [] };
   }
-  const items: ItemAhora[] = info.filas
-    .filter((f) => f.estado === "sin_iniciar" || f.estado === "en_curso" || f.fuera > 0)
+  const items: ItemAhora[] = filas
+    .filter((f) => !["no_aplica", "completa"].includes(f.estado))
     .slice(0, 5)
     .map((f) => ({
       texto: f.sucursal,
       meta: f.estado === "sin_iniciar"
-        ? "sin iniciar"
-        : f.fuera > 0
-          ? `${f.fuera} fuera de rango`
-          : `${f.puntosTotal - (f.ejecucion?.puntosNoVerificados ?? 0)} de ${f.puntosTotal} paradas`,
-      href: f.ejecucion ? `/ronda/${f.ejecucion.id}` : "/ronda",
+        ? `sin iniciar · turno ${f.turno}`
+        : f.estado === "con_novedad"
+          ? `${f.fuera} fuera de rango · ${f.sinVerificar} sin verificar`
+          : `${f.anotados} de ${f.puntosTotal} paradas`,
+      href: f.ejecucionId ? `/ronda/${f.ejecucionId}` : "/ronda",
       tono: f.estado === "sin_iniciar" ? "urgente" : "atencion",
     }));
 
   if (r.sinIniciar > 0) {
     return { ...base, tono: "urgente", numero: r.sinIniciar, etiquetaNumero: `${r.sinIniciar} sin iniciar`,
-      detalle: `${r.sinIniciar} de ${r.sedes} sedes no han iniciado la ronda del ${info.turno}.`,
+      detalle: `${r.sinIniciar} de ${r.sedes} sedes no han iniciado la ronda de este turno.`,
       accion: "Ver el tablero", items };
   }
-  if (r.enCurso > 0 || r.fuera > 0) {
-    return { ...base, tono: "atencion", numero: r.fuera > 0 ? r.fuera : r.enCurso,
-      etiquetaNumero: r.fuera > 0 ? `${r.fuera} fuera de rango` : `${r.enCurso} en curso`,
-      detalle: r.fuera > 0
-        ? `La ronda del ${info.turno} destapó ${r.fuera} punto(s) fuera de rango.`
-        : `${r.enCurso} sede(s) con la ronda del ${info.turno} en curso.`,
+  if (r.conNovedad > 0 || r.enCurso > 0) {
+    const novedades = r.fuera + r.sinVerificar;
+    return { ...base, tono: "atencion", numero: novedades > 0 ? novedades : r.enCurso,
+      etiquetaNumero: novedades > 0 ? `${novedades} con novedad` : `${r.enCurso} en curso`,
+      detalle: novedades > 0
+        ? `La ronda de este turno dejó ${r.fuera} fuera de rango y ${r.sinVerificar} sin verificar.`
+        : `${r.enCurso} sede(s) con la ronda de este turno en curso.`,
       accion: "Ver el tablero", items };
   }
   return { ...base, tono: "ok", numero: r.sedes, etiquetaNumero: `${r.sedes} de ${r.sedes}`,
-    detalle: `Las ${r.sedes} sedes hicieron la ronda del ${info.turno}, sin desviaciones.`,
+    detalle: `Las ${r.sedes} sedes hicieron la ronda de este turno, sin novedades.`,
     accion: "Ver el tablero", items: [] };
 }
 
@@ -437,12 +384,13 @@ async function bloqueCobertura(db: Db): Promise<BloqueAhora> {
 /** Familias con equipos, para la línea de contexto de los paneles. */
 export async function familiasConEquipos(db: Db): Promise<Array<{ sistema: Sistema; label: string; n: number }>> {
   const filas = await db
-    .select({ sistema: activos.sistema, nombre: activos.nombre, categoria: activos.categoria, rubro: activos.rubro, estado: activos.estado })
-    .from(activos);
+    .select({ sistema: activos.sistema, nombre: activos.nombre, categoria: activos.categoria, rubro: activos.rubro, estado: activos.estado, ubicacion: ubicaciones.nombre })
+    .from(activos)
+    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId));
   const acc = new Map<Sistema, number>();
   for (const a of filas) {
     if (a.estado === "baja") continue;
-    const s = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro);
+    const s = (a.sistema as Sistema) || inferirSistema(a.nombre, a.categoria, a.rubro, a.ubicacion);
     acc.set(s, (acc.get(s) ?? 0) + 1);
   }
   return [...acc.entries()]

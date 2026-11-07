@@ -172,7 +172,7 @@ export const activos = sqliteTable("activos", {
   padreId: integer("padre_id"),
   nivelJerarquia: text("nivel_jerarquia", { enum: ["sistema", "subsistema", "componente"] }).notNull().default("componente"),
   // A que sistema critico pertenece: la llave para resolver que documento lo rige
-  sistema: text("sistema", { enum: ["electrico", "hvac", "gases", "agua", "incendios", "ascensores", "otro"] }),
+  sistema: text("sistema", { enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"] }),
   scpProcedimientoId: integer("scp_procedimiento_id"),
   scpVersionRef: text("scp_version_ref"),
 });
@@ -1288,7 +1288,7 @@ export const procedimientos = sqliteTable("procedimientos", {
   codigoInstitucional: text("codigo_institucional"),
   tipo: text("tipo", { enum: ["scp", "sop", "mop", "eop", "aop"] }).notNull(),
   sistema: text("sistema", {
-    enum: ["electrico", "hvac", "gases", "agua", "incendios", "ascensores", "otro"],
+    enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"],
   }).notNull(),
   dominio: text("dominio"),
   titulo: text("titulo").notNull(),
@@ -1437,6 +1437,8 @@ export const aopEventos = sqliteTable("aop_eventos", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   // De qué lectura de ronda salió la desviación (fase 52)
   rondaLecturaId: integer("ronda_lectura_id"),
+  // De qué parada salió: un episodio por sede y parada, no por documento (fase 55)
+  rondaPuntoId: integer("ronda_punto_id"),
 });
 
 export const aopEventoAcciones = sqliteTable("aop_evento_acciones", {
@@ -1590,6 +1592,7 @@ export const rondas = sqliteTable("rondas", {
   activa: integer("activa", { mode: "boolean" }).notNull().default(true),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  vigenteDesde: text("vigente_desde"),
 });
 
 export const rondaPuntos = sqliteTable("ronda_puntos", {
@@ -1611,6 +1614,9 @@ export const rondaPuntos = sqliteTable("ronda_puntos", {
   aopProcedimientoId: integer("aop_procedimiento_id").references(() => procedimientos.id),
   critico: integer("critico", { mode: "boolean" }).notNull().default(false),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  lineaSop: integer("linea_sop"),
+  minutosActuar: integer("minutos_actuar"),
+  minutosEscalar: integer("minutos_escalar"),
 });
 
 export const rondaEjecuciones = sqliteTable("ronda_ejecuciones", {
@@ -1631,6 +1637,9 @@ export const rondaEjecuciones = sqliteTable("ronda_ejecuciones", {
   puntosNoVerificados: integer("puntos_no_verificados").notNull().default(0),
   notas: text("notas"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  recorridoJson: text("recorrido_json"),
+  firmaNombre: text("firma_nombre"),
+  recibidaEn: text("recibida_en"),
 });
 
 // La UNIQUE (ejecucion_id, punto_id) vive en la migración 0052: reanotar un
@@ -1647,6 +1656,40 @@ export const rondaLecturas = sqliteTable("ronda_lecturas", {
   aopEventoId: integer("aop_evento_id").references(() => aopEventos.id),
   registradoPor: integer("registrado_por").references(() => usuarios.id),
   registradoEn: text("registrado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+  ordenId: integer("orden_id"),
+});
+
+// El libro de la ronda: cada toque con su hora real y su hora de llegada. No se edita ni se borra.
+export const rondaMarcas = sqliteTable("ronda_marcas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ejecucionId: integer("ejecucion_id").notNull().references(() => rondaEjecuciones.id),
+  puntoId: integer("punto_id").notNull().references(() => rondaPuntos.id),
+  resultado: text("resultado", { enum: ["ok", "fuera", "no_verificado"] }).notNull(),
+  valor: real("valor"),
+  nota: text("nota"),
+  aopEventoId: integer("aop_evento_id"),
+  ocurridoEn: text("ocurrido_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  sinSenal: integer("sin_senal", { mode: "boolean" }).notNull().default(false),
+  ajustado: integer("ajustado", { mode: "boolean" }).notNull().default(false),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  opId: text("op_id"),
+});
+
+// La revisión semanal de la jefatura: congela los números de la semana. No se edita ni se borra.
+export const rondaRevisiones = sqliteTable("ronda_revisiones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  semana: text("semana").notNull(),
+  esperadas: integer("esperadas").notNull(),
+  completas: integer("completas").notNull(),
+  conNovedad: integer("con_novedad").notNull(),
+  incompletas: integer("incompletas").notNull(),
+  noHechas: integer("no_hechas").notNull(),
+  observaciones: text("observaciones"),
+  revisadaPor: integer("revisada_por").notNull().references(() => usuarios.id),
+  revisadaNombre: text("revisada_nombre").notNull(),
+  revisadaEn: text("revisada_en").notNull(),
 });
 
 // ─── Modo técnico (Fase 54) ──────────────────────────────────────────────────

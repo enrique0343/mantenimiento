@@ -21,9 +21,10 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { queSigue } from "@/lib/resolver";
 import {
-  abrirEjecucion, buscarEjecucion, cerrarEjecucion, parsearTurnos, puntosDeRonda, registrarLectura,
-  rondaDeSede, turnoActual, etiquetaTurno,
+  abrirEjecucion, buscarEjecucion, cerrarEjecucion, ligarOrdenALectura, paradasDeEjecucion, parsearTurnos, puntosDeRonda, recorridoDe, registrarLectura,
+  rondaDeSede, turnoActual, etiquetaTurno, type RondaEjecucion,
 } from "@/lib/ronda-turno";
+import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
 
 type Db = ReturnType<typeof getDb>;
@@ -177,8 +178,15 @@ async function rondaParaSede(db: Db, sedeId: number) {
   const ronda = await rondaDeSede(db, sedeId);
   if (!ronda) return null;
   const t = turnoActual(parsearTurnos(ronda.turnos));
-  const ejec = await buscarEjecucion(db, { rondaId: ronda.id, sucursalId: sedeId, fecha: t.fecha, turno: t.turno });
-  const puntos = await puntosDeRonda(db, ronda.id);
+  const ejec = await buscarEjecucion(db, { sucursalId: sedeId, fecha: t.fecha, turno: t.turno });
+  const puntos = ejec ? await paradasDeEjecucion(db, ejec) : await puntosDeRonda(db, ronda.id);
+  // Lo que dejó el turno anterior: la línea 1 del SOP empieza por aquí.
+  const [anterior] = await db
+    .select({ fecha: rondaEjecuciones.fecha, turno: rondaEjecuciones.turno, notas: rondaEjecuciones.notas, firma: rondaEjecuciones.firmaNombre, en: rondaEjecuciones.completadaEn })
+    .from(rondaEjecuciones)
+    .where(and(eq(rondaEjecuciones.sucursalId, sedeId), eq(rondaEjecuciones.estado, "completada"), ejec ? ne(rondaEjecuciones.id, ejec.id) : undefined))
+    .orderBy(desc(rondaEjecuciones.completadaEn))
+    .limit(1);
   const idsAop = [...new Set(puntos.map((p) => p.aopProcedimientoId).filter((x): x is number => x != null))];
   const docs = await documentosAop(db, idsAop);
   const codigoDe = new Map(Object.values(docs).map((d: any) => [d.id, d.codigo]));
@@ -199,6 +207,8 @@ async function rondaParaSede(db: Db, sedeId: number) {
     fecha: t.fecha,
     turno: t.turno,
     etiqueta: etiquetaTurno(t.turno),
+    turnos: parsearTurnos(ronda.turnos),
+    entregaAnterior: anterior ?? null,
     minutos: ronda.minutosEstimados ?? null,
     estado: ejec ? ejec.estado : "sin_iniciar",
     ejecucionId: ejec?.id ?? null,
@@ -216,6 +226,10 @@ async function rondaParaSede(db: Db, sedeId: number) {
       esperado: p.valorEsperadoTexto ?? null,
       critico: !!p.critico,
       aop: p.aopProcedimientoId ? codigoDe.get(p.aopProcedimientoId) ?? null : null,
+      linea: p.lineaSop ?? null,
+      pideOrden: LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0),
+      actuarMin: p.minutosActuar ?? null,
+      escalarMin: p.minutosEscalar ?? null,
       ultima: ultimas.has(p.id) ? String(ultimas.get(p.id)) : null,
     })),
     lecturas: Object.fromEntries(lecturas.map((l) => [l.puntoId, { resultado: l.resultado, valor: l.valor, nota: l.nota }])),
@@ -310,18 +324,6 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     .orderBy(desc(aopEventos.detectadoEn))
     .limit(15);
 
-  // Rondas programadas por jefatura en /rondas, cuando las tiene a su cargo.
-  let rondasAsignadas: any[] = [];
-  try {
-    rondasAsignadas = (await db.all(sql`
-      SELECT id, name, scheduled_date AS fecha, shift AS turno, due_at AS vence, status AS estado
-      FROM rondas_executions
-      WHERE (owner_id = ${user.id} OR backup_id = ${user.id}) AND status IN ('pendiente','en_curso','devuelta')
-      ORDER BY due_at LIMIT 12`)) as any[];
-  } catch {
-    rondasAsignadas = [];
-  }
-
   // Si jefatura le pidió verificar a este técnico, también le toca verlo aquí.
   const porVerificar = await db
     .select({ id: ordenes.id, titulo: ordenes.titulo, completadaEn: ordenes.completadaEn })
@@ -353,8 +355,8 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     usuario: { id: user.id, nombre: user.nombre, rol: user.rol, sucursalId: yo?.sucursalId ?? null },
     sedes: sedesFilas,
     sedeId,
-    ronda: sedeId ? await rondaParaSede(db, sedeId) : null,
-    rondasAsignadas,
+    // Un fallo de la ronda no debe tumbar el paquete del día.
+    ronda: sedeId ? await rondaParaSede(db, sedeId).catch((e) => { console.error("campo_ronda", e); return null; }) : null,
     ordenes: ordenesVista,
     libres: libresVista,
     tickets: misTickets,
@@ -431,7 +433,16 @@ export async function fichaEquipo(db: Db, activoId: number, user: Usuario) {
   const itemsPlantilla = idsPlantilla.length
     ? await db.select({ plantillaId: checklistPlantillaItems.plantillaId, minutos: checklistPlantillaItems.minutosEstimados }).from(checklistPlantillaItems).where(inArray(checklistPlantillaItems.plantillaId, idsPlantilla))
     : [];
-  const plantillas = await db.select({ id: checklistPlantillas.id, nombre: checklistPlantillas.nombre, tipo: checklistPlantillas.tipoDocumento }).from(checklistPlantillas).where(and(eq(checklistPlantillas.activa, true), ne(checklistPlantillas.tipoDocumento, "mop"))).orderBy(asc(checklistPlantillas.nombre)).limit(40);
+  const plantillas = await db
+    .select({ id: checklistPlantillas.id, nombre: checklistPlantillas.nombre, tipo: checklistPlantillas.tipoDocumento, familia: procedimientos.sistema, tipoDoc: procedimientos.tipo })
+    .from(checklistPlantillas)
+    .leftJoin(procedimientos, eq(procedimientos.id, checklistPlantillas.procedimientoId))
+    .where(and(eq(checklistPlantillas.activa, true), ne(checklistPlantillas.tipoDocumento, "mop")))
+    .orderBy(asc(checklistPlantillas.nombre))
+    .limit(40);
+  // La rutina de su familia ya viene elegida: el técnico no tiene que buscarla.
+  const familia = falla.documento?.sistema ?? desv.documento?.sistema ?? null;
+  const plantillaSugerida = familia ? plantillas.find((p) => p.familia === familia && p.tipoDoc === "sop")?.id ?? null : null;
   return {
     activo: a,
     planes: planes.map((p) => {
@@ -443,7 +454,8 @@ export async function fichaEquipo(db: Db, activoId: number, user: Usuario) {
     abiertas: abiertas.map((o) => ({ ...o, mia: o.asignadoA === user.id, libre: !o.asignadoA })),
     falla: falla.documento ? { id: falla.documento.id, codigo: falla.documento.codigoCorto, titulo: falla.documento.titulo, acciones: falla.primerasAcciones, fueraDeAlcance: !!falla.fueraDeAlcance, aviso: falla.fueraDeAlcance ? falla.aviso : null } : null,
     desviacion: desv.documento ? { id: desv.documento.id, codigo: desv.documento.codigoCorto, titulo: desv.documento.titulo, actuarMin: desv.minutosParaActuar ?? null, escalarMin: desv.minutosParaEscalar ?? null, acciones: accionesAop, fueraDeAlcance: !!desv.fueraDeAlcance, aviso: desv.fueraDeAlcance ? desv.aviso : null } : null,
-    plantillas,
+    plantillas: plantillas.map(({ id, nombre, tipo }) => ({ id, nombre, tipo })),
+    plantillaSugerida,
   };
 }
 
@@ -605,7 +617,7 @@ export function textoDeTrabajos(checklist: string | null | undefined, titulo: st
   return partes.join(" ");
 }
 
-const SISTEMA_A_AREA: Record<string, "aires" | "infraestructura"> = { hvac: "aires" };
+const SISTEMA_A_AREA: Record<string, "aires" | "infraestructura"> = { hvac: "aires", minisplit: "aires" };
 
 async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo, m: Momento) {
   const emergencia = op.tipo === "emergencia.abrir";
@@ -646,16 +658,35 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
     ...(emergencia ? { clasePrioridad: "P1" as const, horaAlarma: m.iso, causaRaizVencimiento: vencimientoCausaRaiz(m.iso) } : {}),
   }).returning({ id: ordenes.id });
   await logAudit(ctx, { entidad: "orden", entidadId: orden.id, accion: "create", resumen: `Reportada desde el celular: "${titulo}"` });
+  if (Number.isInteger(Number(op.puntoId)) && Number(op.puntoId) > 0) await ligarOrdenALectura(db, { ...claveRonda(op), puntoId: Number(op.puntoId) }, orden.id, emergencia, m.iso, user.id);
   await avisarJefatura(ctx, db, emergencia ? `Emergencia: ${base}` : `Falla reportada: ${base}`, `${user.nombre}${etiqueta ? ` · ${etiqueta}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/ordenes/${orden.id}`);
   return { ordenId: orden.id };
 }
 
 const claveRonda = (op: OperacionCampo) => {
-  const rondaId = Number(op.rondaId), sucursalId = Number(op.sucursalId);
+  const sucursalId = Number(op.sucursalId);
   const fecha = String(op.fecha ?? ""), turno = String(op.turno ?? "");
-  if (!Number.isInteger(rondaId) || !Number.isInteger(sucursalId) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !/^\d{2}:\d{2}$/.test(turno)) throw new RechazoCampo("Ronda inválida.");
-  return { rondaId, sucursalId, fecha, turno };
+  if (!Number.isInteger(sucursalId) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !/^\d{2}:\d{2}$/.test(turno)) throw new RechazoCampo("Ronda inválida.");
+  return { sucursalId, fecha, turno };
 };
+
+/** La ronda del turno que trae la operación. Sin señal no hay id: se reconoce por sede, fecha y turno. */
+async function ejecucionDeOp(db: Db, op: OperacionCampo, user: Usuario, m: Momento): Promise<RondaEjecucion> {
+  const clave = claveRonda(op);
+  const existente = await buscarEjecucion(db, clave);
+  if (existente) return existente;
+  const ronda = await rondaDeSede(db, clave.sucursalId);
+  if (!ronda) throw new RechazoCampo("Esta sede no tiene ronda configurada.");
+  const [sede] = await db.select({ activa: sucursales.activa }).from(sucursales).where(eq(sucursales.id, clave.sucursalId)).limit(1);
+  if (!sede?.activa) throw new RechazoCampo("Esa sede no está activa.");
+  const inicio = Date.parse(`${clave.fecha}T${clave.turno}:00-06:00`);
+  const hecho = Date.parse(m.iso);
+  if (!parsearTurnos(ronda.turnos).includes(clave.turno) || !Number.isFinite(inicio) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
+    throw new RechazoCampo("La fecha o el turno de esta ronda no cuadran con la hora en que se capturó.");
+  }
+  const { ejecucion } = await abrirEjecucion(db, { rondaId: ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
+  return ejecucion;
+}
 
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
   switch (op.tipo) {
@@ -748,42 +779,48 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { datos: { eventoId: r.evento.id, yaExistia: r.yaExistia }, m };
     }
     case "ronda.iniciar": {
-      const clave = claveRonda(op);
       const m = momentoCapturado(op.at);
-      const { ejecucion } = await abrirEjecucion(db, { ...clave, usuarioId: user.id, momento: m.iso });
+      const ejecucion = await ejecucionDeOp(db, op, user, m);
       return { datos: { ejecucionId: ejecucion.id }, m };
     }
     case "ronda.lectura": {
-      const clave = claveRonda(op);
       const m = momentoCapturado(op.at);
-      const { ejecucion } = await abrirEjecucion(db, { ...clave, usuarioId: user.id, momento: m.iso });
-      if (ejecucion.estado === "completada") throw new RechazoCampo("Esa ronda ya estaba cerrada.", 409);
+      const ejecucion = await ejecucionDeOp(db, op, user, m);
       const puntoId = Number(op.puntoId);
-      const puntos = await puntosDeRonda(db, clave.rondaId);
-      if (!puntos.some((p) => p.id === puntoId)) throw new RechazoCampo("Esa parada ya no está en el recorrido.");
+      const punto = recorridoDe(ejecucion)?.find((p) => p.id === puntoId) ?? (await paradasDeEjecucion(db, ejecucion)).find((p) => p.id === puntoId);
+      if (!punto) throw new RechazoCampo("Esa parada ya no está en el recorrido.");
       const resultado = String(op.resultado ?? "");
       if (!["ok", "fuera", "no_verificado"].includes(resultado)) throw new RechazoCampo("Resultado inválido.");
       const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : Number(op.valor);
-      const r = await registrarLectura(db, {
-        ejecucionId: ejecucion.id, puntoId, resultado: resultado as any,
-        valor: valor !== null && Number.isFinite(valor) ? valor : null,
-        nota: typeof op.nota === "string" ? op.nota.trim() || null : null,
-        usuarioId: user.id, momento: m.iso,
-      });
-      return { datos: { ejecucionId: ejecucion.id, eventoId: r.eventoId }, m };
+      const valido = valor !== null && Number.isFinite(valor) ? valor : null;
+      const nota = typeof op.nota === "string" ? op.nota.trim() || null : null;
+      if (resultado === "no_verificado" && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe por qué no se pudo verificar.");
+      if (resultado === "ok" && punto.requiereValor && valido === null) throw new RechazoCampo("Falta la lectura de esta parada.");
+      if (resultado === "fuera" && valido === null && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe qué viste.");
+      const r = await registrarLectura(db, ejecucion, punto, { resultado: resultado as any, valor: valido, nota, usuarioId: user.id, momento: m, opId: op.opId });
+      if (r.eventoId && r.eventoNuevo) await avisarJefatura(ctx, db, `Desviación en ronda: ${punto.etiqueta}`, `${user.nombre}${valido !== null ? ` · leído ${valido}${punto.unidad ? ` ${punto.unidad}` : ""}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/aop/${r.eventoId}`);
+      else if (resultado === "no_verificado" && punto.critico) await avisarJefatura(ctx, db, `Parada crítica sin verificar: ${punto.etiqueta}`, `${user.nombre} · ${nota}`, `/ronda/${ejecucion.id}`);
+      return { datos: { ejecucionId: ejecucion.id, eventoId: r.eventoId, ...(r.tardia ? { tardia: true } : {}) }, m };
     }
     case "ronda.cerrar": {
       const clave = claveRonda(op);
-      const m = momentoCapturado(op.at);
-      const { ejecucion } = await abrirEjecucion(db, { ...clave, usuarioId: user.id, momento: m.iso });
-      const r = await cerrarEjecucion(db, ejecucion.id, user.id, typeof op.notas === "string" ? op.notas.trim() || null : null, m.iso);
+      const ejecucion = await buscarEjecucion(db, clave);
+      if (!ejecucion) throw new RechazoCampo("Esa ronda no se había iniciado.");
+      const m = momentoCapturado(op.at, ejecucion.iniciadaEn);
+      if (ejecucion.estado === "completada") return { datos: { ejecucionId: ejecucion.id, yaCerrada: true }, m };
+      if (op.firma !== true) throw new RechazoCampo("La ronda no se cierra sin firma.");
+      const r = await cerrarEjecucion(db, ejecucion, user, typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) || null : null, m);
       if (!r.ok) throw new RechazoCampo(r.error ?? "No se pudo cerrar la ronda.");
+      if (r.fuera || r.sinVerificar) await avisarJefatura(ctx, db, `Ronda de las ${clave.turno} cerrada con novedades`, `${user.nombre} · ${r.fuera ?? 0} fuera de rango · ${r.sinVerificar ?? 0} sin verificar`, `/ronda/${ejecucion.id}`);
       return { datos: { ejecucionId: ejecucion.id }, m };
     }
     default:
       throw new RechazoCampo(`Operación desconocida: ${op.tipo}`);
   }
 }
+
+/** Un error de datos se repetiría igual en cada reintento y bloquearía toda la cola del celular. */
+const esErrorDeDatos = (e: unknown) => /constraint|no se edita|no se borra/i.test(String((e as Error)?.message ?? e));
 
 /**
  * Aplica una operación una sola vez. Un rechazo por regla de negocio queda
@@ -804,9 +841,11 @@ export async function aplicarOperacion(ctx: APIContext, db: Db, user: Usuario, o
     await db.insert(campoOperaciones).values({ opId: op.opId, usuarioId: user.id, tipo: op.tipo, ordenId: r.ordenId ?? null, capturadoEn: r.m.iso, recibidoEn: r.m.recibido, resultado: "ok", detalle: r.datos ? JSON.stringify(r.datos) : null }).onConflictDoNothing();
     return { opId: op.opId, ok: true, datos: r.datos };
   } catch (e) {
-    if (e instanceof RechazoCampo) {
-      await db.insert(campoOperaciones).values({ opId: op.opId, usuarioId: user.id, tipo: op.tipo, ordenId: Number(op.ordenId) || null, capturadoEn: capturado, recibidoEn: recibido, resultado: "rechazada", detalle: e.message.slice(0, 1000), payload: JSON.stringify(op).slice(0, 4000) }).onConflictDoNothing();
-      return { opId: op.opId, ok: false, error: e.message };
+    if (e instanceof RechazoCampo || esErrorDeDatos(e)) {
+      const motivo = e instanceof RechazoCampo ? e.message : "El servidor no pudo guardar este registro. Quedó guardado para que tu jefatura lo revise.";
+      if (!(e instanceof RechazoCampo)) console.error("campo_op_rechazada", op.tipo, e);
+      await db.insert(campoOperaciones).values({ opId: op.opId, usuarioId: user.id, tipo: op.tipo, ordenId: Number(op.ordenId) || null, capturadoEn: capturado, recibidoEn: recibido, resultado: "rechazada", detalle: motivo.slice(0, 1000), payload: JSON.stringify(op).slice(0, 4000) }).onConflictDoNothing();
+      return { opId: op.opId, ok: false, error: motivo };
     }
     throw e;
   }

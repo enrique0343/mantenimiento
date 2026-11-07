@@ -6,7 +6,7 @@ import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento,
 
 import { requireUser } from "@/lib/auth";
 import { vencimientoCausaRaiz, type EstadoOT } from "@/lib/ordenes";
-import { actualizarOrdenConVerificacion, leerVerificacionOrden, leerOrigenesRondaOrden, ErrorVerificacion } from "@/lib/orden-verificacion";
+import { actualizarOrdenConVerificacion, leerVerificacionOrden, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { sendMail, emailLayout } from "@/lib/email";
 import { disparadorOT } from "@/lib/notificaciones";
 import { sendTelegram } from "@/lib/telegram";

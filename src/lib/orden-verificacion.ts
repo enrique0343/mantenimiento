@@ -274,26 +274,18 @@ export async function devolverOrdenDesdeTicket(db: DB, order: Orden, ticket: { i
   if (!results[1].length) deny('La orden cambió durante la devolución. Actualiza e inténtalo de nuevo.', 409);
 }
 
-/** Read-only bidirectional origin references. Labels come from the frozen round
- * configuration, never from today's editable template or inferred OT text. */
+/** La parada de ronda de la que nació la orden. Los textos salen de la foto del recorrido de ese turno. */
 export async function leerOrigenesRondaOrden(db: DB, id: number) {
   const rows = await db.all(sql`
-    SELECT l.execution_id AS executionId,l.point_id AS pointId,l.proposal_id AS proposalId,
-      e.name AS roundName,e.template_version AS templateVersion,e.scheduled_date AS scheduledDate,
-      e.shift,e.status AS roundStatus,e.location_id AS locationId,z.nombre AS zoneName,
-      e.site_id AS siteId,s.nombre AS siteName,e.snapshot_json AS snapshotJson,
-      p.kind,p.reason,p.executor_type AS executorType,p.provider_id AS providerId,
-      v.nombre AS providerName,p.assigned_to AS coordinatorId,u.nombre AS coordinatorName
-    FROM rondas_order_links l JOIN rondas_executions e ON e.id=l.execution_id
-    JOIN rondas_proposals p ON p.id=l.proposal_id
-    LEFT JOIN ubicaciones z ON z.id=e.location_id LEFT JOIN sucursales s ON s.id=e.site_id
-    LEFT JOIN proveedores v ON v.id=p.provider_id LEFT JOIN usuarios u ON u.id=p.assigned_to
-    WHERE l.order_id=${id} ORDER BY e.scheduled_date,e.id,l.point_id,l.proposal_id
+    SELECT e.id AS ejecucionId,l.punto_id AS puntoId,e.fecha,e.turno,s.nombre AS sede,l.resultado,l.valor,l.nota,
+      l.registrado_en AS registradoEn,e.recorrido_json AS recorridoJson,p.etiqueta AS etiquetaActual,u.nombre AS registradoPor
+    FROM ronda_lecturas l JOIN ronda_ejecuciones e ON e.id=l.ejecucion_id JOIN ronda_puntos p ON p.id=l.punto_id
+    LEFT JOIN sucursales s ON s.id=e.sucursal_id LEFT JOIN usuarios u ON u.id=l.registrado_por
+    WHERE l.orden_id=${id} ORDER BY e.fecha,e.turno,l.punto_id
   `) as any[];
-  return rows.map(({ snapshotJson, ...row }) => {
-    let point: any = null;
-    try { point = JSON.parse(snapshotJson)?.points?.find((p: any) => p.code === row.pointId || p.id === row.pointId); } catch { /* retain usable IDs if old configuration is unreadable */ }
-    return { ...row, pointLabel: point?.label ?? row.pointId, pointCriterion: point?.criterion ?? null,
-      href: `/rondas?execution=${row.executionId}` };
+  return rows.map(({ recorridoJson, etiquetaActual, ...row }) => {
+    let punto: any = null;
+    try { punto = (JSON.parse(recorridoJson) as any[])?.find((p) => p.id === row.puntoId); } catch { /* sin foto: se usa el texto actual */ }
+    return { ...row, etiqueta: punto?.etiqueta ?? etiquetaActual, href: `/ronda/${row.ejecucionId}` };
   });
 }

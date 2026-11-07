@@ -8,7 +8,7 @@ export type Entidad =
   | "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto" | "contrato"
   // Fase 52: las paradas de la ronda de turno también se auditan, porque
   // cambiar el valor normal de un punto cambia cuándo el sistema avisa.
-  | "ronda_punto";
+  | "ronda_punto" | "ronda";
 
 export interface DiffEntry {
   antes: unknown;

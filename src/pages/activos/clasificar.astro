@@ -45,6 +45,7 @@ for (const j of juegos) juegoDe[j.sistema] = j;
 const SIS_ICONO: Record<string, string> = {
   electrico: "",
   hvac: "",
+  minisplit: "",
   gases: "",
   agua: "",
   incendios: "",
@@ -67,7 +68,7 @@ const notaJuego = (k: string) => {
 // nombre sugiere (suposición, hay que confirmarla), o ninguna.
 const filas = rows.map((r) => {
   const declarado = (r.a.sistema ?? "") as Sistema | "";
-  const sugerido = inferirSistema(r.a.nombre, r.a.categoria, r.a.rubro);
+  const sugerido = inferirSistema(r.a.nombre, r.a.categoria, r.a.rubro, r.ub?.nombre);
   const estadoFam: "declarado" | "inferido" | "sinresolver" = declarado
     ? "declarado"
     : sugerido === "otro"

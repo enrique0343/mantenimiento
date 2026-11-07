@@ -7,6 +7,10 @@ import { aplicarOperacion, puedeUsarCampo, type OperacionCampo } from "@/lib/cam
 export const prerender = false;
 
 const MAX_OPS = 25;
+// D1 permite 50 consultas por invocación en el plan gratuito (un batch cuenta como una).
+// Lo que no cabe se queda en la cola del celular y sale en la siguiente vuelta, en orden.
+const PRESUPUESTO = 45;
+const peso = (op: OperacionCampo) => (op?.tipo === "ronda.lectura" ? (op.resultado === "fuera" ? 15 : op.resultado === "no_verificado" ? 10 : 4) : 15);
 
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
@@ -27,7 +31,10 @@ export const POST: APIRoute = async (ctx) => {
   }
   const db = getDb(ctx);
   const resultados = [];
+  let gastado = 3; // sesión y arranque
   for (const op of ops) {
+    gastado += peso(op);
+    if (resultados.length && gastado > PRESUPUESTO) break;
     try {
       resultados.push(await aplicarOperacion(ctx, db, user, op));
     } catch (e) {
