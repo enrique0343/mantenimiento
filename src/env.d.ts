@@ -13,7 +13,6 @@ interface Env {
   CRON_SECRET: string;
   APP_NAME: string;
   // Opt-in scheduler; notifications still dry-run.
-  RONDAS_SCHEDULER_ENABLED?: string;
   // Private SGO connector; absent/false keeps the entire integration disabled.
   SGO_INTEGRATION_ENABLED?: string;
   SGO_AUTH_DIAGNOSTICS_ENABLED?: string;

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, planesMantenimiento, activos, usuarios } from "@/lib/schema";
 import { eq, and, gte, lte, isNotNull } from "drizzle-orm";
 import { ESTADO_COLOR, TIPO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
 export const prerender = false;
 
@@ -30,7 +31,8 @@ const db = getDb(Astro);
 
 // OTs con vencimiento en el mes
 const otRows = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { id: activos.id }, u: { id: usuarios.id, nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -131,13 +133,13 @@ const dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
             {c.planes.slice(0, 3).map((p) => (
               <a href={areaHref(`/activos/${p.a?.id}`, area ?? p.a?.rubro)} title={`Plan: ${p.p.titulo}`}
                  class="block truncate rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200">
-                🛡 {p.p.titulo}
+                {p.p.titulo}
               </a>
             ))}
             {c.ots.slice(0, 3).map((r) => (
               <a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} title={r.o.titulo}
                  class:list={["block truncate rounded px-1.5 py-0.5 text-[10px] font-medium hover:opacity-80", ESTADO_COLOR[r.o.estado as EstadoOT]]}>
-                #{r.o.id} {r.o.titulo}
+                {etiquetaOT(r.o)} {r.o.titulo}
               </a>
             ))}
             {(c.ots.length + c.planes.length) > 6 && (

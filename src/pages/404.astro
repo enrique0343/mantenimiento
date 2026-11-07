@@ -1,0 +1,15 @@
+---
+import Layout from "@/layouts/Layout.astro";
+export const prerender = false;
+---
+<Layout title="Página no encontrada" hideNav>
+  <div class="mx-auto mt-6 max-w-md sm:mt-10">
+    <div class="card p-6">
+      <img src="/brand/avante-logo.png" alt="Avante Complejo Hospitalario" style="height:48px;width:auto;margin-bottom:14px" />
+      <span class="etq">Error 404</span>
+      <h1 class="mt-1 text-2xl font-semibold">No encontramos esa página</h1>
+      <p class="mt-2 text-sm text-slate-600">Puede que el enlace esté viejo o que el registro ya no exista.</p>
+      <a class="btn-primary mt-4" href="/">Ir al inicio</a>
+    </div>
+  </div>
+</Layout>

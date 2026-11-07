@@ -7,6 +7,8 @@ import { enviarDigestDiario } from "@/lib/daily-digest";
 
 import { rubroDeActivo } from "@/lib/rubros";
 import { areaDeActividad } from "@/lib/actividades";
+import { crearNotificacion } from "@/lib/notif-app";
+import { sendTelegram } from "@/lib/telegram";
 export const prerender = false;
 
 // Endpoint llamado por el Cron Worker. Protegido por header X-Cron-Secret.
@@ -88,6 +90,15 @@ export const POST: APIRoute = async (ctx) => {
       .update(planesMantenimiento)
       .set({ ultimaGeneracion: now })
       .where(eq(planesMantenimiento.id, p.id));
+
+    // Aparece sola en la lista del técnico; este aviso es para que lo sepa antes de abrirla.
+    if (p.asignadoA) {
+      try {
+        await crearNotificacion(ctx, { usuarioId: p.asignadoA, tipo: "ot_asignada", titulo: `Preventivo nuevo: ${codigoActivo}`, mensaje: p.titulo, link: `/ordenes/${orden.id}` });
+        const [persona] = await db.select({ chat: usuarios.telegramChatId }).from(usuarios).where(eq(usuarios.id, p.asignadoA)).limit(1);
+        if (persona?.chat) await sendTelegram(getEnv(ctx), persona.chat, `<b>Preventivo nuevo</b>\n${titulo}`, { linkUrl: `${getEnv(ctx).APP_URL || "https://mantenimiento.complejoavante.dev"}/ordenes/${orden.id}`, linkLabel: "Abrir" });
+      } catch {}
+    }
 
     creadas++;
     detalles.push({ origen: "equipo", refId: p.id, ordenId: orden.id, descripcion: codigoActivo });

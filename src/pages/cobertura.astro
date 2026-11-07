@@ -1,0 +1,437 @@
+---
+// Cobertura documental · EL TABLERO DE FAMILIAS
+//
+// «Todos los aires acondicionados deben aplicarse los mismos 5 documentos o
+// pasos. Así sucesivos con los demás equipos relacionados.»
+//
+// Esa frase es el diseño de esta pantalla. El juego de documentos no se arma
+// equipo por equipo: se define UNA VEZ por familia —el sistema crítico— y
+// todos los equipos de esa familia lo heredan. Por eso el primer nivel ya no
+// es el equipo, es la familia; y lo que se mira de un vistazo es la cadena de
+// los cinco: SCP → SOP → AOP → EOP → MOP. Verde si rige un documento vigente,
+// ámbar si solo hay borrador, rojo si falta.
+//
+// La pregunta que esta página contesta en cinco segundos:
+//   ¿qué parte de mi operación todavía no está gobernada por un procedimiento?
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, sucursales } from "@/lib/schema";
+import { asc, eq } from "drizzle-orm";
+import {
+  cobertura,
+  equiposPorFamilia,
+  juegoDeFamilia,
+  juegosDeTodasLasFamilias,
+  LOS_CINCO,
+  SISTEMA_LABEL,
+  type JuegoFamilia,
+  type Sistema,
+  type SlotJuego,
+} from "@/lib/resolver";
+import { TIPO_PROC, estadoInfo, sistemaInfo } from "@/lib/procedimientos";
+import { CRITICIDAD_COLOR, CRITICIDAD_LABEL, type CriticidadOperacional } from "@/lib/inventario-jci";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+
+// ── Sede ────────────────────────────────────────────────────────────────────
+// El volumen entra como modelo (sucursalId NULL) y cada sede lo hereda con sus
+// propios valores (cap. 8.3). Sin sede elegida se cuentan solo los modelo; con
+// una sede, los modelo MÁS los propios de esa sede: exactamente lo que hace el
+// resolver cuando responde por un equipo de esa sede.
+const sedes: Array<{ id: number; nombre: string }> = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+const sedePedida = Number(url.searchParams.get("sede") ?? "");
+const sedeId = sedes.some((s) => s.id === sedePedida) ? sedePedida : null;
+const sedeNombre = sedes.find((s) => s.id === sedeId)?.nombre ?? null;
+
+// ── El tablero: un juego por familia, la peor cobertura arriba ──────────────
+const juegos = await juegosDeTodasLasFamilias(db, sedeId);
+const pesoFamilia = await equiposPorFamilia(db);
+// «Otro» no es una familia crítica: es la bolsa de los equipos que nadie
+// clasificó. Se mira aparte porque su arreglo es distinto (declarar sistema).
+const juegoOtro = await juegoDeFamilia(db, "otro", sedeId);
+
+// ── Los equipos, con el mismo criterio con que se contaron las familias ─────
+// cobertura() y equiposPorFamilia() resuelven igual (lo declarado, si no el
+// nombre), así que el número del encabezado y la lista desplegada coinciden
+// siempre. La herencia del activo padre se calcula aparte: no cambia el grupo,
+// pero sí lo que la ficha del equipo responderá, y eso hay que poder decirlo.
+const jerarquia: Array<{ id: number; sistema: string | null; padreId: number | null }> = await db
+  .select({ id: activos.id, sistema: activos.sistema, padreId: activos.padreId })
+  .from(activos);
+const porId = new Map(jerarquia.map((r) => [r.id, r]));
+function sistemaHeredado(id: number): Sistema | null {
+  let padreId = porId.get(id)?.padreId ?? null;
+  for (let i = 0; i < 3 && padreId; i++) {
+    const p = porId.get(padreId);
+    if (!p) break;
+    if (p.sistema) return p.sistema as Sistema;
+    padreId = p.padreId;
+  }
+  return null;
+}
+
+type Origen = "declarado" | "heredado" | "inferido";
+const ORIGEN: Record<Origen, { label: string; color: string; ayuda: string }> = {
+  declarado: { label: "Declarado", color: "bg-emerald-100 text-emerald-700", ayuda: "Fijado en la ficha del equipo: es un dato." },
+  heredado: { label: "Heredado", color: "bg-sky-100 text-sky-700", ayuda: "Tomado del activo padre que contiene este componente." },
+  inferido: { label: "Sistema inferido", color: "bg-amber-100 text-amber-700", ayuda: "Nadie lo declaró: se deduce del nombre del equipo. Es una suposición; corrígela en la ficha." },
+};
+
+interface EquipoFila {
+  id: number;
+  codigo: string;
+  nombre: string;
+  estado: string;
+  criticidad: CriticidadOperacional;
+  familia: Sistema;
+  origen: Origen;
+  familiaFicha: Sistema;
+}
+
+const equipos: EquipoFila[] = (await cobertura(db)).map((e: any) => {
+  const heredado = e.declarado ? null : sistemaHeredado(e.id);
+  return {
+    id: e.id,
+    codigo: e.codigo,
+    nombre: e.nombre,
+    estado: e.estado,
+    criticidad: (e.criticidad ?? "media") as CriticidadOperacional,
+    familia: e.sistemaResuelto as Sistema,
+    origen: e.declarado ? "declarado" : heredado ? "heredado" : "inferido",
+    familiaFicha: (heredado ?? e.sistemaResuelto) as Sistema,
+  };
+});
+
+const CRIT_ORDEN: Record<CriticidadOperacional, number> = { alta: 0, media: 1, baja: 2 };
+const porFamilia = new Map<string, EquipoFila[]>();
+for (const e of equipos) {
+  const lista = porFamilia.get(e.familia) ?? [];
+  lista.push(e);
+  porFamilia.set(e.familia, lista);
+}
+for (const lista of porFamilia.values()) {
+  lista.sort((a, b) => CRIT_ORDEN[a.criticidad] - CRIT_ORDEN[b.criticidad] || a.codigo.localeCompare(b.codigo, "es"));
+}
+
+// ── Los tres números ────────────────────────────────────────────────────────
+const slotEop = (j: JuegoFamilia) => j.slots.find((s) => s.tipo === "eop")!;
+const familiasCompletas = juegos.filter((j) => j.completo).length;
+const criticosSinEop =
+  juegos.filter((j) => !slotEop(j).cubierto).reduce((n, j) => n + (pesoFamilia[j.sistema]?.criticos ?? 0), 0) +
+  (slotEop(juegoOtro).cubierto ? 0 : pesoFamilia.otro?.criticos ?? 0);
+const soloInferido = equipos.filter((e) => e.origen === "inferido").length;
+const sinFamilia = pesoFamilia.otro ?? { total: 0, criticos: 0 };
+
+// ── Pintado de la cadena ────────────────────────────────────────────────────
+function tono(s: SlotJuego) {
+  if (!s.cubierto) return { caja: "border-red-300 bg-red-50 hover:border-red-500", texto: "text-red-700", pie: "text-red-600" };
+  if (!s.vigente) return { caja: "border-amber-300 bg-amber-50 hover:border-amber-500", texto: "text-amber-800", pie: "text-amber-700" };
+  return { caja: "border-emerald-300 bg-emerald-50 hover:border-emerald-500", texto: "text-emerald-800", pie: "text-emerald-700" };
+}
+/** El documento que se muestra en el eslabón: manda el vigente sobre el borrador. */
+const docDelSlot = (s: SlotJuego) => s.documentos.find((d) => d.estado === "vigente") ?? s.documentos[0] ?? null;
+const crearHref = (tipo: string, sistema: string) => `/procedimientos?nuevo=1&tipo=${tipo}&sistema=${sistema}`;
+const colorContador = (n: number) => (n === 5 ? "text-emerald-700" : n >= 3 ? "text-amber-700" : "text-red-700");
+function tituloSlot(s: SlotJuego, sistema: Sistema) {
+  const doc = docDelSlot(s);
+  const cabeza = `${TIPO_PROC[s.tipo].label} · ${TIPO_PROC[s.tipo].nombre} — ${s.pregunta}`;
+  if (!doc) return `${cabeza}\n\nNo existe para ${SISTEMA_LABEL[sistema]}: clic para crearlo.`;
+  const extra = s.documentos.length > 1 ? `\n+${s.documentos.length - 1} documento(s) más de este tipo.` : "";
+  return `${cabeza}\n\n${doc.codigoCorto} · ${doc.titulo}\nEstado: ${estadoInfo(doc.estado).label}${extra}`;
+}
+---
+
+<Layout title="Cobertura por familia">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Cobertura por familia</h1>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">
+        El juego de documentos <strong>no se arma equipo por equipo</strong>: se define una vez por familia
+        —el sistema crítico— y todos sus equipos lo heredan. Todos los minisplit se rigen por los mismos cinco
+        documentos; la climatización con filtro HEPA de quirófanos y UCI, por los suyos; los ascensores, por
+        los suyos. Esta es la cadena de cada familia y dónde está rota.
+      </p>
+    </div>
+    <div class="flex flex-wrap items-end gap-2">
+      {sedes.length > 0 && (
+        <div class="min-w-[13rem]">
+          <label class="label text-xs" for="fSede">Documentos que cuentan</label>
+          <select id="fSede" class="input">
+            <option value="">Solo los modelo</option>
+            {sedes.map((s) => (
+              <option value={String(s.id)} selected={sedeId === s.id}>Modelo + {s.nombre}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <a href="/procedimientos" class="btn-secondary btn-sm">Biblioteca</a>
+      <a href="/eop" class="btn-secondary btn-sm">EOP</a>
+    </div>
+  </div>
+
+  {sedeNombre && (
+    <p class="mt-2 text-xs text-slate-500">
+      Contando los documentos modelo más los propios de <strong>{sedeNombre}</strong>, igual que el resolver
+      para un equipo de esa sede.
+    </p>
+  )}
+
+  <!-- ══ Los tres números ══ -->
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div class:list={[
+      "card border-2 p-4",
+      familiasCompletas === juegos.length ? "border-emerald-200 bg-emerald-50" : "border-slate-200",
+    ]}>
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Familias con juego completo</div>
+      <div class="mt-0.5 text-3xl font-bold text-slate-800">{familiasCompletas}<span class="text-lg font-semibold text-slate-400"> / {juegos.length}</span></div>
+      <div class="text-[11px] text-slate-500">Las cinco preguntas respondidas: configuración, rutina, desviación, emergencia e intervención.</div>
+    </div>
+
+    <div class:list={[
+      "card border-2 p-4",
+      criticosSinEop > 0 ? "border-red-300 bg-red-50" : "border-emerald-200 bg-emerald-50",
+    ]}>
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-red-700">Equipos críticos sin EOP</div>
+      <div class="mt-0.5 text-3xl font-bold text-red-700">{criticosSinEop}</div>
+      <div class="text-[11px] text-red-600">
+        {criticosSinEop > 0
+          ? "Si fallan hoy, el sistema no tiene qué decir. Este es el número que importa."
+          : "Toda familia con equipos críticos tiene su procedimiento de emergencia."}
+      </div>
+    </div>
+
+    <div class:list={["card border-2 p-4", soloInferido > 0 ? "border-amber-200 bg-amber-50" : "border-slate-200"]}>
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Equipos con sistema solo inferido</div>
+      <div class="mt-0.5 text-3xl font-bold text-amber-700">{soloInferido}</div>
+      <div class="text-[11px] text-slate-500">Nadie declaró su familia: se deduce del nombre. Una suposición se corrige con un clic en la ficha.</div>
+    </div>
+  </div>
+
+  <!-- ══ Qué es cada eslabón ══ -->
+  <details class="card group mt-4">
+    <summary class="flex cursor-pointer select-none items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+      <span class="inline-block transition-transform group-open:rotate-90" aria-hidden="true">›</span>
+      ¿Qué son los cinco documentos de un juego?
+    </summary>
+    <div class="grid gap-3 border-t border-slate-100 px-4 py-3 sm:grid-cols-5">
+      {LOS_CINCO.map((c) => (
+        <div>
+          <div class="text-xs font-bold text-slate-800">{c.label}</div>
+          <div class="mt-0.5 text-[11px] leading-snug text-slate-500">{c.pregunta}</div>
+        </div>
+      ))}
+    </div>
+  </details>
+
+  <!-- ══ Una tarjeta por familia ══ -->
+  <div class="mt-4 space-y-4">
+    {juegos.map((j) => {
+      const peso = pesoFamilia[j.sistema] ?? { total: 0, criticos: 0 };
+      const lista = porFamilia.get(j.sistema) ?? [];
+      const eop = slotEop(j);
+      const borradores = j.cubiertos - j.vigentes;
+      const faltan = j.slots.filter((s) => !s.cubierto);
+      return (
+        <div class:list={[
+          "card overflow-hidden",
+          !j.completo && (eop.cubierto ? "border-l-4 border-l-amber-400" : "border-l-4 border-l-red-400"),
+        ]}>
+          <!-- Encabezado: la familia y cuánto pesa -->
+          <div class="flex flex-wrap items-center justify-between gap-3 px-4 pt-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-base font-semibold text-slate-900">
+                {sistemaInfo(j.sistema).icono} {j.label}
+              </h2>
+              {peso.total > 0 ? (
+                <span class="badge bg-slate-100 text-slate-600">{peso.total} equipo{peso.total === 1 ? "" : "s"}</span>
+              ) : (
+                <span class="badge bg-slate-100 text-slate-500">Sin equipos registrados</span>
+              )}
+              {peso.criticos > 0 && (
+                <span class="badge bg-red-100 text-red-700" title="Equipos que no toleran estar fuera de servicio">
+                  {peso.criticos} crítico{peso.criticos === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+            <div class="flex items-baseline gap-2">
+              <span class={`text-3xl font-bold leading-none ${colorContador(j.cubiertos)}`}>{j.cubiertos}/5</span>
+              <span class="text-[11px] text-slate-500">
+                {j.completo ? "juego completo" : `falta${faltan.length === 1 ? "" : "n"} ${faltan.length}`}
+              </span>
+            </div>
+          </div>
+
+          <!-- La cadena de los cinco: el corazón de la pantalla -->
+          <div class="mt-3 flex items-stretch gap-1 px-4">
+            {j.slots.map((s, i) => {
+              const doc = docDelSlot(s);
+              const t = tono(s);
+              return (
+                <Fragment>
+                  {i > 0 && (
+                    <span class="hidden select-none items-center text-xs text-slate-300 sm:flex" aria-hidden="true">→</span>
+                  )}
+                  <a
+                    href={doc ? `/procedimientos/${doc.id}` : crearHref(s.tipo, j.sistema)}
+                    title={tituloSlot(s, j.sistema)}
+                    class:list={["min-w-0 flex-1 rounded-lg border-2 px-1 py-2 text-center transition", t.caja]}
+                  >
+                    <div class={`text-[11px] font-bold sm:text-xs ${t.texto}`}>{TIPO_PROC[s.tipo].label}</div>
+                    <div class={`mt-0.5 truncate font-mono text-[10px] ${t.pie}`}>
+                      {doc ? doc.codigoCorto : "falta"}
+                    </div>
+                    {doc && s.documentos.length > 1 && (
+                      <div class="text-[9px] text-slate-400">+{s.documentos.length - 1}</div>
+                    )}
+                    {doc && !s.vigente && <div class="text-[9px] text-amber-700">borrador</div>}
+                  </a>
+                </Fragment>
+              );
+            })}
+          </div>
+
+          <!-- Qué falta, dicho con palabras y con un enlace por eslabón -->
+          <div class="mt-2.5 px-4 pb-3 text-xs">
+            {faltan.length === 0 ? (
+              <span class="text-emerald-700">
+                ✓ Los cinco documentos existen para esta familia.
+                {borradores > 0 && (
+                  <span class="text-amber-700"> {borradores} todavía en borrador: el resolver los usa avisando que no están validados.</span>
+                )}
+              </span>
+            ) : (
+              <span class="text-slate-600">
+                Falta{faltan.length === 1 ? "" : "n"}:{" "}
+                {faltan.map((s, i) => (
+                  <Fragment>
+                    {i > 0 && <span class="text-slate-400"> · </span>}
+                    <a href={crearHref(s.tipo, j.sistema)} class="font-semibold text-red-700 hover:underline" title={`Crear el ${TIPO_PROC[s.tipo].nombre} de ${j.label}: ${s.pregunta}`}>
+                      {s.label}
+                    </a>
+                  </Fragment>
+                ))}
+                {peso.total > 0 && (
+                  <span class="text-slate-400">
+                    {" "}— ninguno de los {peso.total} equipo{peso.total === 1 ? "" : "s"} de esta familia tiene
+                    respuesta a {faltan.length === 1 ? "esa pregunta" : "esas preguntas"}.
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+
+          {peso.criticos > 0 && !eop.cubierto && (
+            <div class="mx-4 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2">
+              <span class="text-sm text-red-800">
+                <strong>{peso.criticos} equipo{peso.criticos === 1 ? "" : "s"} crítico{peso.criticos === 1 ? "" : "s"} sin procedimiento de emergencia.</strong>
+                <span class="text-red-700"> Si {peso.criticos === 1 ? "falla" : "falla uno"} hoy, nadie tiene qué decir ni en qué orden.</span>
+              </span>
+              <a href={crearHref("eop", j.sistema)} class="btn-primary btn-sm shrink-0">Crear el EOP</a>
+            </div>
+          )}
+
+          <!-- Los equipos que heredan este juego -->
+          {lista.length > 0 && (
+            <details class="group border-t border-slate-100">
+              <summary class="flex cursor-pointer select-none items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                <span class="inline-block transition-transform group-open:rotate-90" aria-hidden="true">›</span>
+                Ver los {lista.length} equipo{lista.length === 1 ? "" : "s"} que heredan este juego
+              </summary>
+              <div class="divide-y divide-slate-100 border-t border-slate-100">
+                {lista.map((e) => (
+                  <a href={`/activos/${e.id}#rige`} class="flex flex-wrap items-center gap-2 px-4 py-2 text-sm hover:bg-slate-50">
+                    <span class="font-mono text-xs text-slate-500">{e.codigo}</span>
+                    <span class="font-medium text-slate-800">{e.nombre}</span>
+                    {e.criticidad === "alta" && (
+                      <span class={`badge text-[11px] ${CRITICIDAD_COLOR[e.criticidad]}`}>{CRITICIDAD_LABEL[e.criticidad]}</span>
+                    )}
+                    {e.origen !== "declarado" && (
+                      <span class={`badge text-[11px] ${ORIGEN[e.origen].color}`} title={ORIGEN[e.origen].ayuda}>
+                        {ORIGEN[e.origen].label}
+                      </span>
+                    )}
+                    {e.familiaFicha !== e.familia && (
+                      <span class="badge bg-amber-100 text-[11px] text-amber-800" title="Su activo padre declara otra familia: la ficha del equipo responderá con esa.">
+                        su ficha resuelve a {SISTEMA_LABEL[e.familiaFicha]}
+                      </span>
+                    )}
+                    <span class="ml-auto text-xs capitalize text-slate-500">{e.estado}</span>
+                  </a>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      );
+    })}
+  </div>
+
+  <!-- ══ Los que no pertenecen a ninguna familia ══ -->
+  {sinFamilia.total > 0 && (
+    <div class="card mt-4 overflow-hidden border-l-4 border-l-amber-400">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900">Sin familia crítica asignada</h2>
+          <p class="mt-0.5 max-w-3xl text-xs text-slate-500">
+            Su nombre no coincide con ninguna familia y nadie declaró su sistema, así que ningún juego de
+            documentos los gobierna. El arreglo aquí no es escribir un documento: es declarar a qué sistema
+            pertenece cada uno en su ficha.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="badge bg-slate-100 text-slate-600">{sinFamilia.total} equipos</span>
+          {sinFamilia.criticos > 0 && <span class="badge bg-red-100 text-red-700">{sinFamilia.criticos} críticos</span>}
+        </div>
+      </div>
+      {(porFamilia.get("otro") ?? []).length > 0 && (
+        <details class="group border-t border-slate-100">
+          <summary class="flex cursor-pointer select-none items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+            <span class="inline-block transition-transform group-open:rotate-90" aria-hidden="true">›</span>
+            Ver los equipos por clasificar
+          </summary>
+          <div class="divide-y divide-slate-100 border-t border-slate-100">
+            {(porFamilia.get("otro") ?? []).map((e) => (
+              <a href={`/activos/${e.id}#rige`} class="flex flex-wrap items-center gap-2 px-4 py-2 text-sm hover:bg-slate-50">
+                <span class="font-mono text-xs text-slate-500">{e.codigo}</span>
+                <span class="font-medium text-slate-800">{e.nombre}</span>
+                {e.criticidad === "alta" && (
+                  <span class={`badge text-[11px] ${CRITICIDAD_COLOR[e.criticidad]}`}>{CRITICIDAD_LABEL[e.criticidad]}</span>
+                )}
+                {e.origen !== "declarado" && (
+                  <span class={`badge text-[11px] ${ORIGEN[e.origen].color}`} title={ORIGEN[e.origen].ayuda}>
+                    {ORIGEN[e.origen].label}
+                  </span>
+                )}
+                <span class="ml-auto text-xs capitalize text-slate-500">{e.estado}</span>
+              </a>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  )}
+
+  <p class="mt-4 text-xs text-slate-500">
+    Escribir un documento no cubre un equipo: cubre a <strong>toda su familia</strong>. Por eso declarar el
+    sistema de un equipo no es un dato administrativo — es lo que decide qué cinco documentos le aplican
+    cuando se opera, se desvía, falla o se interviene.
+  </p>
+
+  <script>
+    const sede = document.getElementById("fSede") as HTMLSelectElement | null;
+    if (sede) {
+      sede.addEventListener("change", () => {
+        location.href = sede.value ? `/cobertura?sede=${encodeURIComponent(sede.value)}` : "/cobertura";
+      });
+    }
+  </script>
+</Layout>

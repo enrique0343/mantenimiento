@@ -5,7 +5,15 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, ordenRepuestos, items as itemsTable, usuarios, encuestasSatisfaccion, metricasKpi } from "@/lib/schema";
 import { eq, and, sql, isNotNull, desc, gte, inArray } from "drizzle-orm";
 import { SCOPES, SCOPE_LABEL, ultimosPeriodos, KPI_BASELINE_DATE, aplicarLineaBase } from "@/lib/metricas";
-import { fmtFechaSolo } from "@/lib/datetime";
+// Indicadores del volumen GO-GUI-011-2026 (capítulos 02 y 08) — Fase 47.
+import {
+  mantenimientoDiferido, riesgosAceptados, tiemposPorSistema,
+  cumplimientoPreventivoPorDominio, hoySV, sumarDiasFecha, DIAS_DIFERIDO,
+} from "@/lib/metricas";
+// El indicador 8 lo calcula el motor AOP, dueño de aop_eventos: no se duplica.
+import { horasFueraRangoPorSala } from "@/lib/aop";
+import { fmtFechaSolo, fmtFechaSoloCompacta, fmtFechaCompacta } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -206,6 +214,92 @@ const KPIS_DEF = [
   { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v: any) => v == null ? "—" : String(v) },
   { key: "costoPorActivo", label: "Costo por activo", fmt: (v: any) => v == null ? "—" : `$${Number(v).toFixed(2)}` },
 ] as const;
+
+// ═══ Indicadores del volumen GO-GUI-011-2026 · Biblioteca de procedimientos ══
+// Se añaden a los 6 indicadores JCI de arriba; no modifican su cálculo ni la
+// línea base. Ventana: año en curso (los históricos quedan topados por la
+// línea base dentro de cada función).
+const hoyKpi = hoySV();
+const finVentana = sumarDiasFecha(hoyKpi, 1);
+const corteDiferido = sumarDiasFecha(hoyKpi, -DIAS_DIFERIDO);
+const puedeAceptarRiesgo = user.rol === "admin" || user.rol === "jefe";
+
+// §2.3 — mantenimiento diferido (backlog vivo: no se recorta por línea base).
+const diferidas = await mantenimientoDiferido(db, { hoy: hoyKpi });
+const diferidoAceptado = await riesgosAceptados(db, { hoy: hoyKpi, limite: 10 });
+
+// Indicadores 5 y 7 — respuesta y reparación por sistema.
+const tiemposSistema = await tiemposPorSistema(db, inicioAnoRaw, finVentana);
+const tRespAll = tiemposSistema.flatMap((r) => (r.respuestaHoras != null ? [{ h: r.respuestaHoras, n: r.conRespuesta }] : []));
+const tRepAll = tiemposSistema.flatMap((r) => (r.reparacionHoras != null ? [{ h: r.reparacionHoras, n: r.conReparacion }] : []));
+const nResp = tRespAll.reduce((s2, x) => s2 + x.n, 0);
+const nRep = tRepAll.reduce((s2, x) => s2 + x.n, 0);
+const respuestaGlobal = nResp > 0 ? tRespAll.reduce((s2, x) => s2 + x.h * x.n, 0) / nResp : null;
+const reparacionGlobal = nRep > 0 ? tRepAll.reduce((s2, x) => s2 + x.h * x.n, 0) / nRep : null;
+
+// Indicador 8 — horas fuera de rango por sala. Lo calcula `horasFueraRangoPorSala`
+// de src/lib/aop.ts (dueño de aop_eventos y de la regla del episodio abierto),
+// que trabaja por período 'AAAA-MM'. Aquí se acumulan los meses del año en
+// curso y se guarda aparte el mes corriente, que es el resumen mensual que
+// recibe Control de Infecciones.
+// El año y el mes se toman de `ultimosPeriodos`, que ya trabaja en hora de El
+// Salvador: usar now.getFullYear() (UTC en el worker) dejaría la tabla vacía
+// durante las primeras horas del 1 de enero.
+const periodosUlt12 = ultimosPeriodos(12);
+const periodoMes = periodosUlt12[periodosUlt12.length - 1];
+const periodosAnio = periodosUlt12.filter((p) => p.slice(0, 4) === periodoMes.slice(0, 4));
+type SalaAgg = {
+  ubicacionId: number | null; sala: string;
+  horasAnio: number; desvAnio: number; escAnio: number;
+  horasMes: number; desvMes: number; escMes: number;
+};
+const salasMap = new Map<string, SalaAgg>();
+for (const per of periodosAnio) {
+  const filas = await horasFueraRangoPorSala(db, per);
+  const esMes = per === periodoMes;
+  for (const f of filas) {
+    const clave = String(f.ubicacionId ?? "sin-sala");
+    const g = salasMap.get(clave) ?? {
+      ubicacionId: f.ubicacionId, sala: f.sala,
+      horasAnio: 0, desvAnio: 0, escAnio: 0, horasMes: 0, desvMes: 0, escMes: 0,
+    };
+    g.horasAnio += f.horasFueraRango;
+    g.desvAnio += f.desviaciones;
+    g.escAnio += f.desviacionesEscaladas;
+    if (esMes) { g.horasMes += f.horasFueraRango; g.desvMes += f.desviaciones; g.escMes += f.desviacionesEscaladas; }
+    salasMap.set(clave, g);
+  }
+}
+const salasFueraRango = [...salasMap.values()]
+  .map((g) => ({ ...g, horasAnio: Math.round(g.horasAnio * 10) / 10, horasMes: Math.round(g.horasMes * 10) / 10 }))
+  .sort((a, b) => b.horasAnio - a.horasAnio || a.sala.localeCompare(b.sala, "es"));
+const horasFueraTotal = Math.round(salasFueraRango.reduce((s2, r) => s2 + r.horasAnio, 0) * 10) / 10;
+const horasFueraMes = Math.round(salasFueraRango.reduce((s2, r) => s2 + r.horasMes, 0) * 10) / 10;
+const desviacionesTotal = salasFueraRango.reduce((s2, r) => s2 + r.desvAnio, 0);
+const escaladasTotal = salasFueraRango.reduce((s2, r) => s2 + r.escAnio, 0);
+
+// Indicador 1 — cumplimiento del preventivo por dominio.
+const cumplDominio = await cumplimientoPreventivoPorDominio(db, inicioAnoRaw, finVentana);
+const progDominio = cumplDominio.reduce((s2, r) => s2 + r.programados, 0);
+const aTiempoDominio = cumplDominio.reduce((s2, r) => s2 + r.aTiempo, 0);
+const cumplDominioGlobal = progDominio > 0 ? (aTiempoDominio / progDominio) * 100 : null;
+
+const ESTADO_OT_BADGE: Record<string, string> = {
+  abierta: "bg-blue-100 text-blue-700",
+  en_proceso: "bg-amber-100 text-amber-700",
+  en_espera: "bg-slate-200 text-slate-700",
+  completada: "bg-emerald-100 text-emerald-700",
+  verificada: "bg-teal-100 text-teal-700",
+};
+const ESTADO_OT_LABEL: Record<string, string> = {
+  abierta: "Abierta", en_proceso: "En proceso", en_espera: "En espera",
+  completada: "Completada", verificada: "Verificada", cerrada: "Cerrada", cancelada: "Cancelada",
+};
+// Semáforo de tiempos: < 1 h verde, < 4 h ámbar, el resto rojo (respuesta);
+// reparación se mide en días porque el EOP admite mitigación intermedia.
+const colorResp = (h: number | null) => h == null ? "text-slate-300" : h <= 1 ? "text-emerald-600" : h <= 4 ? "text-amber-600" : "text-red-600";
+const colorRep = (h: number | null) => h == null ? "text-slate-300" : h <= 8 ? "text-emerald-600" : h <= 24 ? "text-amber-600" : "text-red-600";
+const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-amber-600" : "text-red-600";
 ---
 
 <Layout title="KPIs">
@@ -215,14 +309,14 @@ const KPIS_DEF = [
       <p class="text-sm text-slate-500">Vista ejecutiva · ventana: últimos 30 días / año en curso</p>
     </div>
     <div class="flex flex-wrap gap-2">
-      <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>📄 Reporte JCI (PDF)</button>
-      <a href="/reportes" class="btn-secondary">📑 Reportes CSV</a>
+      <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>Reporte JCI (PDF)</button>
+      <a href="/reportes" class="btn-secondary">Reportes CSV</a>
     </div>
   </div>
 
   <!-- Aviso de línea base: KPIs reiniciados a partir de la fecha de corte. -->
   <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-    <div class="font-semibold">ℹ️ Línea base de KPIs: {fmtFechaSolo(KPI_BASELINE_DATE)}</div>
+    <div class="font-semibold">Línea base de KPIs: {fmtFechaSolo(KPI_BASELINE_DATE)}</div>
     <p class="mt-1 text-xs text-amber-800/90">
       Por retrasos y cambios de sistema que impidieron cerrar OTs/tickets a tiempo, los indicadores de mantenimiento
       (Cumplimiento SLA, MTTR, MTBF, Backlog vencido) cuentan únicamente OTs creadas a partir de esa fecha; el
@@ -231,17 +325,277 @@ const KPIS_DEF = [
     </p>
   </div>
 
+  <!-- ═══ Mantenimiento diferido · GO-GUI-011-2026 §2.3 ═══════════════════ -->
+  <section id="diferidoSection" class="card mt-4 border-l-4 p-5" class:list={[diferidas.length === 0 ? "border-emerald-500" : "border-red-500"]}>
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="font-semibold text-slate-900">Mantenimiento diferido</h2>
+        <p class="mt-0.5 text-xs text-slate-500">
+          GO-GUI-011-2026 §2.3: toda orden <strong>P1</strong> vencida más de {DIAS_DIFERIDO} días
+          <strong>sin riesgo aceptado por escrito</strong>. Entran las de vencimiento anterior al {fmtFechaSoloCompacta(corteDiferido)}
+          que siguen sin cerrar ni cancelar.
+        </p>
+      </div>
+      <div class="shrink-0 text-right">
+        <div class:list={["text-3xl font-bold", diferidas.length === 0 ? "text-emerald-600" : "text-red-600"]}>{diferidas.length}</div>
+        <div class="text-[11px] text-slate-500">OT P1 diferidas</div>
+      </div>
+    </div>
+
+    {diferidas.length === 0 ? (
+      <p class="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        ✓ Ninguna orden P1 lleva más de {DIAS_DIFERIDO} días vencida sin riesgo aceptado por escrito.
+      </p>
+    ) : (
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2">OT</th>
+              <th class="px-3 py-2">Equipo / procedimiento</th>
+              <th class="px-3 py-2">Sistema o dominio</th>
+              <th class="px-3 py-2">Vencimiento</th>
+              <th class="px-3 py-2 text-right">Días</th>
+              <th class="px-3 py-2">Estado</th>
+              {puedeAceptarRiesgo && <th class="px-3 py-2 text-right">Riesgo</th>}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {diferidas.map((d) => (
+              <tr>
+                <td class="px-3 py-2 align-top">
+                  <a href={`/ordenes/${d.id}`} class="whitespace-nowrap font-semibold text-brand-700 hover:underline">{etiquetaOT(d)}</a>
+                  <div class="max-w-[15rem] truncate text-[11px] text-slate-500" title={d.titulo}>{d.titulo}</div>
+                </td>
+                <td class="px-3 py-2 align-top">
+                  {d.activoId != null ? (
+                    <a href={`/activos/${d.activoId}`} class="text-slate-700 hover:underline">
+                      <span class="font-mono text-[10px] text-slate-400">{d.activoCodigo}</span> {d.activoNombre}
+                    </a>
+                  ) : <span class="text-slate-400">Sin equipo</span>}
+                  {d.procedimientoCodigo && (
+                    <div class="mt-0.5"><span class="badge bg-slate-100 font-mono text-[10px] text-slate-600">{d.procedimientoCodigo}</span></div>
+                  )}
+                </td>
+                <td class="px-3 py-2 align-top text-slate-600">{d.dominioLabel}</td>
+                <td class="px-3 py-2 align-top whitespace-nowrap text-slate-600">{fmtFechaSoloCompacta(d.vencimiento)}</td>
+                <td class="px-3 py-2 align-top text-right font-bold text-red-600">{d.diasVencida}</td>
+                <td class="px-3 py-2 align-top">
+                  <span class:list={["badge", ESTADO_OT_BADGE[d.estado] ?? "bg-slate-100 text-slate-600"]}>{ESTADO_OT_LABEL[d.estado] ?? d.estado}</span>
+                  {d.nivelRiesgo === "alto" && <span class="badge ml-1 bg-red-100 text-red-700">riesgo alto</span>}
+                </td>
+                {puedeAceptarRiesgo && (
+                  <td class="px-3 py-2 align-top text-right">
+                    <button type="button" class="riesgo-btn btn-secondary btn-sm whitespace-nowrap"
+                      data-id={String(d.id)} data-codigo={etiquetaOT(d)} data-titulo={d.titulo} data-dias={String(d.diasVencida)}>
+                      Aceptar riesgo por escrito
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    {diferidoAceptado.length > 0 && (
+      <details class="mt-4 rounded-md border border-slate-200 bg-slate-50/60 p-3">
+        <summary class="cursor-pointer text-xs font-semibold text-slate-700">
+          Riesgos aceptados por escrito ({diferidoAceptado.length}) — fuera del indicador, con la traza intacta
+        </summary>
+        <ul class="mt-2 space-y-2 text-[11px]">
+          {diferidoAceptado.map((r) => (
+            <li class="rounded-md bg-white px-3 py-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <a href={`/ordenes/${r.id}`} class="font-semibold text-brand-700 hover:underline">{etiquetaOT(r)} · {r.titulo}</a>
+                <span class="text-slate-500">
+                  {r.aceptadoPorNombre ?? "—"} · {r.riesgoAceptadoEn ? fmtFechaCompacta(r.riesgoAceptadoEn) : "—"}
+                  {r.diasVencida != null && <span class="ml-1">· {r.diasVencida} d vencida</span>}
+                </span>
+              </div>
+              {r.riesgoAceptadoNotas && <p class="mt-1 whitespace-pre-line text-slate-600">{r.riesgoAceptadoNotas}</p>}
+            </li>
+          ))}
+        </ul>
+      </details>
+    )}
+
+    <p class="mt-3 text-[10px] text-slate-400">
+      Este indicador no se recorta por la línea base ({fmtFechaSolo(KPI_BASELINE_DATE)}): es backlog P1 vivo y ocultarlo
+      escondería trabajo realmente vencido.
+    </p>
+  </section>
+
+  <!-- ═══ Indicadores 5 y 7 · respuesta y reparación por sistema ══════════ -->
+  <section class="card mt-4 p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 class="font-semibold text-slate-900">Indicadores 5 y 7 — respuesta y reparación por sistema</h2>
+        <p class="mt-0.5 text-xs text-slate-500">
+          Respuesta = hora de llegada − hora de alarma · Reparación = hora de restablecimiento − hora de alarma
+          (si no hay hora de alarma se usa la creación de la OT). Agrupado por el sistema del procedimiento y, cuando la OT
+          no trae procedimiento, por dominio del equipo. Año en curso.
+        </p>
+      </div>
+      <div class="flex shrink-0 gap-4 text-right">
+        <div>
+          <div class:list={["text-2xl font-bold", colorResp(respuestaGlobal)]}>{fmtKpiH(respuestaGlobal)}</div>
+          <div class="text-[11px] text-slate-500">respuesta ({nResp} OT)</div>
+        </div>
+        <div>
+          <div class:list={["text-2xl font-bold", colorRep(reparacionGlobal)]}>{fmtKpiH(reparacionGlobal)}</div>
+          <div class="text-[11px] text-slate-500">reparación ({nRep} OT)</div>
+        </div>
+      </div>
+    </div>
+
+    {tiemposSistema.length === 0 ? (
+      <p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        Aún no hay OT con hora de alarma, llegada o restablecimiento registradas. El EOP las alimenta al cerrar una emergencia.
+      </p>
+    ) : (
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 uppercase text-slate-500">
+            <tr>
+              <th class="px-3 py-2">Sistema / dominio</th>
+              <th class="px-3 py-2 text-center">OT</th>
+              <th class="px-3 py-2 text-center">Emerg.</th>
+              <th class="px-3 py-2 text-right">Respuesta (prom.)</th>
+              <th class="px-3 py-2 text-right">Peor</th>
+              <th class="px-3 py-2 text-right">Reparación (prom.)</th>
+              <th class="px-3 py-2 text-right">Peor</th>
+              <th class="px-3 py-2 text-right">Mitigación</th>
+              <th class="px-3 py-2 text-center">Sin registro</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {tiemposSistema.map((r) => (
+              <tr>
+                <td class="px-3 py-2 font-medium text-slate-700">
+                  {r.label}
+                  {r.fuente === "dominio" && <span class="badge ml-1 bg-slate-100 text-[10px] text-slate-500">dominio</span>}
+                  {r.fuente === "sin_clasificar" && <span class="badge ml-1 bg-amber-100 text-[10px] text-amber-700">sin clasificar</span>}
+                </td>
+                <td class="px-3 py-2 text-center text-slate-600">{r.ots}</td>
+                <td class="px-3 py-2 text-center text-slate-600">{r.emergencias || "—"}</td>
+                <td class:list={["px-3 py-2 text-right font-bold", colorResp(r.respuestaHoras)]}>{fmtKpiH(r.respuestaHoras)}</td>
+                <td class="px-3 py-2 text-right font-mono text-slate-500">{fmtKpiH(r.respuestaMaxHoras)}</td>
+                <td class:list={["px-3 py-2 text-right font-bold", colorRep(r.reparacionHoras)]}>{fmtKpiH(r.reparacionHoras)}</td>
+                <td class="px-3 py-2 text-right font-mono text-slate-500">{fmtKpiH(r.reparacionMaxHoras)}</td>
+                <td class="px-3 py-2 text-right font-mono text-slate-500">{fmtKpiH(r.mitigacionHoras)}</td>
+                <td class:list={["px-3 py-2 text-center", r.sinRegistro > 0 ? "font-semibold text-amber-600" : "text-slate-400"]}>{r.sinRegistro || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </section>
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <!-- ═══ Indicador 8 · horas fuera de rango por sala ══════════════════ -->
+    <section class="card overflow-hidden">
+      <div class="border-b border-slate-100 px-5 py-3">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-900">Indicador 8 — horas fuera de rango por sala</h2>
+            <p class="mt-0.5 text-[11px] text-slate-500">
+              Desviaciones AOP del año en curso, calculadas por el motor AOP. Control de Infecciones recibe el resumen mensual.
+            </p>
+          </div>
+          <div class="shrink-0 text-right">
+            <div class:list={["text-2xl font-bold", colorFuera(horasFueraTotal)]}>{horasFueraTotal.toFixed(1)} h</div>
+            <div class="text-[11px] text-slate-500">{desviacionesTotal} desv. · {escaladasTotal} escaladas</div>
+            <div class="text-[11px] text-slate-400">{horasFueraMes.toFixed(1)} h este mes</div>
+          </div>
+        </div>
+      </div>
+      {salasFueraRango.length === 0 ? (
+        <p class="px-5 py-5 text-center text-xs text-slate-400">Sin eventos AOP registrados en el año. Los abre la ronda o el sensor al salir de rango.</p>
+      ) : (
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 uppercase text-slate-500">
+            <tr>
+              <th class="px-4 py-2">Sala</th>
+              <th class="px-2 py-2 text-right">Horas mes</th>
+              <th class="px-2 py-2 text-right">Horas año</th>
+              <th class="px-2 py-2 text-center">Desv.</th>
+              <th class="px-4 py-2 text-center">Escaladas</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {salasFueraRango.map((r) => (
+              <tr>
+                <td class="px-4 py-2 font-medium text-slate-700">{r.sala}</td>
+                <td class:list={["px-2 py-2 text-right font-mono", colorFuera(r.horasMes)]}>{r.horasMes.toFixed(1)}</td>
+                <td class:list={["px-2 py-2 text-right font-bold", colorFuera(r.horasAnio)]}>{r.horasAnio.toFixed(1)}</td>
+                <td class="px-2 py-2 text-center text-slate-600">{r.desvAnio}</td>
+                <td class:list={["px-4 py-2 text-center", r.escAnio > 0 ? "font-semibold text-red-600" : "text-slate-400"]}>{r.escAnio || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <!-- ═══ Indicador 1 · cumplimiento del preventivo por dominio ════════ -->
+    <section class="card overflow-hidden">
+      <div class="border-b border-slate-100 px-5 py-3">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-900">Indicador 1 — cumplimiento del preventivo por dominio</h2>
+            <p class="mt-0.5 text-[11px] text-slate-500">OT preventivas cerradas a tiempo sobre programadas, por los cuatro dominios del plan maestro.</p>
+          </div>
+          <div class="shrink-0 text-right">
+            <div class:list={["text-2xl font-bold", colorPct(cumplDominioGlobal, 90, 70)]}>{cumplDominioGlobal != null ? `${pct(cumplDominioGlobal)}%` : "—"}</div>
+            <div class="text-[11px] text-slate-500">{aTiempoDominio}/{progDominio} a tiempo</div>
+          </div>
+        </div>
+      </div>
+      {cumplDominio.length === 0 ? (
+        <p class="px-5 py-5 text-center text-xs text-slate-400">Sin preventivos programados con vencimiento en la ventana.</p>
+      ) : (
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 uppercase text-slate-500">
+            <tr>
+              <th class="px-4 py-2">Dominio</th>
+              <th class="px-2 py-2 text-center">Programados</th>
+              <th class="px-2 py-2 text-center">A tiempo</th>
+              <th class="px-2 py-2 text-center">Tarde</th>
+              <th class="px-2 py-2 text-center">Pendientes</th>
+              <th class="px-4 py-2 text-right">Cumplimiento</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {cumplDominio.map((r) => (
+              <tr>
+                <td class="px-4 py-2 font-medium text-slate-700">{r.label}</td>
+                <td class="px-2 py-2 text-center text-slate-600">{r.programados}</td>
+                <td class="px-2 py-2 text-center font-semibold text-emerald-700">{r.aTiempo}</td>
+                <td class:list={["px-2 py-2 text-center", r.tarde > 0 ? "font-semibold text-amber-600" : "text-slate-400"]}>{r.tarde || "—"}</td>
+                <td class:list={["px-2 py-2 text-center", r.pendientes > 0 ? "font-semibold text-red-600" : "text-slate-400"]}>{r.pendientes || "—"}</td>
+                <td class:list={["px-4 py-2 text-right font-bold", colorPct(r.pct, 90, 70)]}>{r.pct != null ? `${pct(r.pct)}%` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  </div>
+
   <!-- ─── Indicadores JCI con tendencia documentada (persistidos) ─── -->
   <section class="card mt-4 p-5">
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">📊 Indicadores JCI con tendencia</h2>
+        <h2 class="font-semibold text-slate-900">Indicadores JCI con tendencia</h2>
         <p class="text-xs text-slate-500">Snapshot mensual persistido — evidencia auditable de "medir y mejorar" (FMS). {ultimoPeriodo ? `Último período: ${mesLabel(ultimoPeriodo)}` : ""}</p>
       </div>
       {esAdmin && (
         <div class="flex flex-wrap gap-2">
-          <button id="capturarBtn" class="btn-secondary text-xs">📸 Capturar mes actual</button>
-          <button id="recalcularBtn" class="btn-secondary text-xs">♻ Recalcular 12 meses</button>
+          <button id="capturarBtn" class="btn-secondary text-xs">Capturar mes actual</button>
+          <button id="recalcularBtn" class="btn-secondary text-xs">Recalcular 12 meses</button>
         </div>
       )}
     </div>
@@ -385,7 +739,7 @@ const KPIS_DEF = [
           <div class="flex min-w-[40px] flex-1 flex-col items-center gap-1">
             <div class="flex flex-1 items-end gap-0.5">
               <div class="w-3 rounded-t bg-emerald-500" style={`height:${hC}px`} title={`${t.completadas} completadas`}></div>
-              <div class="w-3 rounded-t bg-red-400" style={`height:${hX}px`} title={`${t.correctivas} correctivos`}></div>
+              <div class="w-3 rounded-t bg-slate-400" style={`height:${hX}px`} title={`${t.correctivas} correctivos`}></div>
             </div>
             <div class="text-[9px] text-slate-500 capitalize whitespace-nowrap">{t.mes}</div>
           </div>
@@ -394,7 +748,7 @@ const KPIS_DEF = [
     </div>
     <div class="mt-2 flex gap-4 text-xs text-slate-600">
       <span><span class="inline-block h-3 w-3 rounded bg-emerald-500"></span> Completadas</span>
-      <span><span class="inline-block h-3 w-3 rounded bg-red-400"></span> Correctivos</span>
+      <span><span class="inline-block h-3 w-3 rounded bg-slate-400"></span> Correctivos</span>
     </div>
   </div>
 
@@ -409,7 +763,7 @@ const KPIS_DEF = [
           { k: "completada", l: "Completadas", c: "bg-emerald-500" },
           { k: "verificada", l: "Verificadas", c: "bg-teal-500" },
           { k: "cerrada", l: "Cerradas", c: "bg-slate-700" },
-          { k: "cancelada", l: "Canceladas", c: "bg-red-400" },
+          { k: "cancelada", l: "Canceladas", c: "bg-slate-400" },
         ].map((s) => {
           const v = get(s.k);
           const w = total > 0 ? (v / total) * 100 : 0;
@@ -515,6 +869,7 @@ const KPIS_DEF = [
     </div>
   </div>
 
+  <script is:inline src="/js/pdf-avante.js"></script>
   <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }) }}>
     const { metricasJson, periodos, scopeLabels, scopes } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     // Tabs de alcance
@@ -539,7 +894,7 @@ const KPIS_DEF = [
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Capturando…";
       const r = await fetch("/api/cron/snapshot-kpis");
-      if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "📸 Capturar mes actual"; }
+      if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "Capturar mes actual"; }
     });
     document.getElementById("recalcularBtn")?.addEventListener("click", async (e) => {
       const go = window.confirmAction
@@ -549,74 +904,144 @@ const KPIS_DEF = [
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Recalculando…";
       const r = await fetch("/api/metricas/recalcular", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ meses: 12 }) });
-      if (r.ok) location.reload(); else { alert("Error al recalcular"); btn.disabled = false; btn.textContent = "♻ Recalcular 12 meses"; }
+      if (r.ok) location.reload(); else { alert("Error al recalcular"); btn.disabled = false; btn.textContent = "Recalcular 12 meses"; }
     });
 
     // ── PDF ──
-    async function loadJsPdf() {
-      if (window.jspdf) return window.jspdf;
-      await new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js";
-        s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-      });
-      return window.jspdf;
-    }
     function mesLbl(p) {
       const [y, m] = p.split("-").map(Number);
       const d = new Date(Date.UTC(y, m - 1, 1));
       return d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(y).slice(2);
     }
     const KPIS = [
-      { key: "cumplimientoPreventivo", label: "Cumpl. preventivo (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "disponibilidadPct", label: "Disponibilidad (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "mttrHoras", label: "MTTR (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "mtbfHoras", label: "MTBF (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v) => v == null ? "-" : String(v) },
-      { key: "costoPorActivo", label: "Costo por activo ($)", fmt: (v) => v == null ? "-" : Number(v).toFixed(0) },
+      { key: "cumplimientoPreventivo", label: "Cumpl. preventivo (%)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "disponibilidadPct", label: "Disponibilidad (%)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "mttrHoras", label: "MTTR (h)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "mtbfHoras", label: "MTBF (h)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v) => v == null ? "—" : String(v) },
+      { key: "costoPorActivo", label: "Costo por activo ($)", fmt: (v) => v == null ? "—" : Number(v).toFixed(0) },
     ];
 
     document.getElementById("pdfBtn")?.addEventListener("click", async () => {
-      const { serie } = JSON.parse(metricasJson);
-      let empresa = "Mantenimiento";
-      try { const r = await fetch("/api/empresa"); if (r.ok) empresa = (await r.json()).empresa?.nombre ?? empresa; } catch {}
-      const { jsPDF } = await loadJsPdf();
-      const doc = new jsPDF({ unit: "mm", format: "a4" });
-      const W = doc.internal.pageSize.getWidth();
-      const M = 10;
-      let y = M;
-      const cols = periodos.slice(-6); // últimos 6 meses para que quepan
-
-      doc.setFontSize(14); doc.setFont("helvetica", "bold");
-      doc.text("Reporte de indicadores JCI", M, y); y += 6;
-      doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      doc.text(`${empresa} · Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })}`, M, y); y += 7;
-
-      const labelW = 45;
-      const colW = (W - M * 2 - labelW) / cols.length;
-      for (const scope of scopes) {
-        if (y > 250) { doc.addPage(); y = M; }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(11);
-        doc.text(scopeLabels[scope], M, y); y += 5;
-        // Cabecera de meses
-        doc.setFontSize(8); doc.setFont("helvetica", "bold");
-        cols.forEach((p, i) => doc.text(mesLbl(p), M + labelW + i * colW + colW - 2, y, { align: "right" }));
-        y += 1; doc.setDrawColor(200); doc.line(M, y, W - M, y); y += 4;
-        doc.setFont("helvetica", "normal");
-        for (const kpi of KPIS) {
-          doc.setFont("helvetica", "bold"); doc.text(kpi.label, M, y); doc.setFont("helvetica", "normal");
-          cols.forEach((p, i) => {
-            const row = serie[scope]?.[p];
-            const v = row ? kpi.fmt(row[kpi.key]) : "·";
-            doc.text(String(v), M + labelW + i * colW + colW - 2, y, { align: "right" });
-          });
-          y += 5;
-          if (y > 285) { doc.addPage(); y = M; }
+      const boton = document.getElementById("pdfBtn");
+      const texto = boton.textContent;
+      boton.disabled = true; boton.textContent = "Generando…";
+      try {
+        const { serie } = JSON.parse(metricasJson);
+        const cols = periodos.slice(-6); // últimos 6 meses para que quepan
+        const P = await window.pdfAvante.crear({ titulo: "Reporte de indicadores JCI", subtitulo: `${mesLbl(cols[0])} a ${mesLbl(cols[cols.length - 1])}` });
+        for (const scope of scopes) {
+          P.nivel1(null, scopeLabels[scope]);
+          P.tabla(
+            [{ titulo: "Indicador", w: 3 }, ...cols.map((c) => ({ titulo: mesLbl(c), w: 1, alinear: "right" }))],
+            KPIS.map((kpi) => [kpi.label, ...cols.map((c) => { const row = serie[scope]?.[c]; return row ? kpi.fmt(row[kpi.key]) : "—"; })]),
+          );
         }
-        y += 4;
+        P.guardar(`indicadores-jci-${new Date().toISOString().slice(0, 10)}.pdf`);
+      } catch (e) {
+        window.showToast?.("No se pudo generar el PDF. Revisa tu conexión.", "error");
+      } finally {
+        boton.disabled = false; boton.textContent = texto;
       }
-      doc.save(`indicadores-jci-${new Date().toISOString().slice(0, 10)}.pdf`);
     });
+  </script>
+  {puedeAceptarRiesgo && (
+    <div id="riesgoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h3 class="text-lg font-semibold text-slate-900">Aceptar riesgo por escrito</h3>
+        <p class="mt-1 text-sm text-slate-500">
+          La OT sale del indicador de mantenimiento diferido y la aceptación queda registrada con tu nombre,
+          la fecha y estas notas. No se puede borrar.
+        </p>
+        <div class="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          <div id="r_ot" class="font-semibold"></div>
+          <div id="r_meta" class="text-slate-500"></div>
+        </div>
+        <input type="hidden" id="r_id" />
+        <div class="mt-4">
+          <label class="label text-xs" for="r_notas">Riesgo aceptado, quién lo asume y hasta cuándo (obligatorio)</label>
+          <textarea id="r_notas" class="input" rows="4"
+            placeholder="Ej. Se difiere la prueba de flujo de la bomba contra incendios hasta la ventana del 12/12: Seguridad y Salud Ocupacional acepta el riesgo con ronda diaria de presión y el contratista confirmado."></textarea>
+          <p class="mt-1 text-[11px] text-slate-400">Mínimo 15 caracteres. Queda en la OT y en el registro de auditoría.</p>
+        </div>
+        <p id="r_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" id="r_cancel" class="btn-secondary">Cancelar</button>
+          <button type="button" id="r_save" class="btn-primary">Registrar aceptación</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <script>
+    // ── Mantenimiento diferido: aceptar riesgo por escrito (GO-GUI-011 §2.3) ──
+    const riesgoModal = document.getElementById("riesgoModal");
+    if (riesgoModal) {
+      const el = (id: string) => document.getElementById(id);
+      const showR = () => { riesgoModal.classList.remove("hidden"); riesgoModal.classList.add("flex"); };
+      const hideR = () => { riesgoModal.classList.add("hidden"); riesgoModal.classList.remove("flex"); };
+      // El código de la orden abierta en el modal: el confirm lo vuelve a nombrar.
+      let codigoOT = "";
+
+      document.querySelectorAll<HTMLButtonElement>(".riesgo-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          (el("r_id") as HTMLInputElement).value = btn.dataset.id ?? "";
+          codigoOT = btn.dataset.codigo ?? "";
+          el("r_ot")!.textContent = `${codigoOT} · ${btn.dataset.titulo ?? ""}`;
+          el("r_meta")!.textContent = `${btn.dataset.dias ?? "?"} días vencida · clase P1`;
+          (el("r_notas") as HTMLTextAreaElement).value = "";
+          el("r_err")!.classList.add("hidden");
+          showR();
+        });
+      });
+
+      el("r_cancel")?.addEventListener("click", hideR);
+      riesgoModal.addEventListener("click", (e) => { if (e.target === riesgoModal) hideR(); });
+
+      el("r_save")?.addEventListener("click", async (ev) => {
+        const err = el("r_err")!;
+        err.classList.add("hidden");
+        const ordenId = Number((el("r_id") as HTMLInputElement).value);
+        const notas = (el("r_notas") as HTMLTextAreaElement).value.trim();
+        if (!ordenId) return;
+        if (notas.length < 15) {
+          err.textContent = "Describe el riesgo aceptado y quién lo asume (mínimo 15 caracteres).";
+          err.classList.remove("hidden");
+          return;
+        }
+        const ok = window.confirmAction
+          ? await window.confirmAction("Aceptar riesgo por escrito", `La ${codigoOT} saldrá del indicador de mantenimiento diferido y la aceptación quedará registrada a tu nombre. ¿Continuar?`, { confirmLabel: "Aceptar riesgo" })
+          : confirm(`La ${codigoOT} saldrá del indicador de mantenimiento diferido. ¿Continuar?`);
+        if (!ok) return;
+
+        const btn = ev.currentTarget as HTMLButtonElement;
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = "Registrando…";
+        try {
+          const res = await fetch("/api/metricas/aceptar-riesgo", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ordenId, notas }),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            window.showToast?.(data.mensaje ?? "Riesgo aceptado por escrito", "success");
+            location.reload();
+            return;
+          }
+          const data = await res.json().catch(() => null);
+          err.textContent = typeof data?.error === "string" ? data.error : "No se pudo registrar la aceptación.";
+          err.classList.remove("hidden");
+          window.showToast?.("No se pudo registrar la aceptación", "error");
+        } catch {
+          err.textContent = "Error de red al registrar la aceptación.";
+          err.classList.remove("hidden");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = prev;
+        }
+      });
+    }
   </script>
 </Layout>

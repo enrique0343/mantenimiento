@@ -102,9 +102,9 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
       <p class="mt-1 font-mono text-xs text-slate-500">{c.codigo}{c.numeroContratoExterno ? ` · Folio proveedor: ${c.numeroContratoExterno}` : ""}</p>
     </div>
     <div class="flex flex-wrap gap-2">
-      {puedeRenovar && <button id="btnRenovar" type="button" class="btn-primary text-sm">🔄 Renovar</button>}
+      {puedeRenovar && <button id="btnRenovar" type="button" class="btn-primary text-sm">Renovar</button>}
       {puedeCancelar && <button id="btnCancelar" type="button" class="btn-secondary text-sm text-red-600">Cancelar contrato</button>}
-      {esAdmin && <button id="btnEliminar" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
+      {esAdmin && <button id="btnEliminar" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">Eliminar</button>}
     </div>
   </div>
 
@@ -156,7 +156,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
       <!-- Contacto del proveedor -->
       {(c.contactoProveedor || c.telefonoContacto || c.emailContacto) && (
         <div class="card p-5">
-          <h2 class="font-semibold text-slate-900">👤 Contacto del proveedor</h2>
+          <h2 class="font-semibold text-slate-900">Contacto del proveedor</h2>
           <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
             {c.contactoProveedor && <div><div class="text-xs uppercase text-slate-500">Persona</div><div>{c.contactoProveedor}</div></div>}
             {c.telefonoContacto && <div><div class="text-xs uppercase text-slate-500">Teléfono</div><div><a href={`tel:${c.telefonoContacto}`} class="text-brand-600 hover:underline">{c.telefonoContacto}</a></div></div>}
@@ -168,7 +168,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
       <!-- Equipos cubiertos -->
       <div class="card p-5">
         <div class="flex items-center justify-between">
-          <h2 class="font-semibold text-slate-900">🛠 Equipos cubiertos ({equipos.length})</h2>
+          <h2 class="font-semibold text-slate-900">Equipos cubiertos ({equipos.length})</h2>
           {puedeGestionar && <button id="btnAgregarEquipo" type="button" class="text-sm text-brand-600 hover:underline">+ Agregar equipo</button>}
         </div>
         {equipos.length === 0 ? (
@@ -193,7 +193,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
       <!-- Adjuntos -->
       <div class="card p-5">
         <div class="flex items-center justify-between">
-          <h2 class="font-semibold text-slate-900">📎 Documentos ({adjs.length})</h2>
+          <h2 class="font-semibold text-slate-900">Documentos ({adjs.length})</h2>
           {puedeGestionar && (
             <label class="text-sm text-brand-600 hover:underline cursor-pointer">
               + Subir documento
@@ -208,7 +208,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
             {adjs.map((a) => (
               <li class="flex items-center justify-between gap-2 px-2 py-1 hover:bg-slate-50 rounded">
                 <a href={`/api/contratos/adjunto/${a.id}`} target="_blank" rel="noopener" class="text-brand-600 hover:underline truncate">
-                  📄 {a.nombre} <span class="text-xs text-slate-400">({(a.tamano / 1024).toFixed(0)} KB)</span>
+                  {a.nombre} <span class="text-xs text-slate-400">({(a.tamano / 1024).toFixed(0)} KB)</span>
                 </a>
                 {puedeGestionar && (
                   <button type="button" class="btn-borrar-adj text-xs text-red-600 hover:underline" data-id={a.id}>borrar</button>
@@ -221,7 +221,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
 
       <!-- Bitácora -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">💬 Bitácora ({coms.length})</h2>
+        <h2 class="font-semibold text-slate-900">Bitácora ({coms.length})</h2>
         <ul class="mt-3 space-y-3 text-sm">
           {coms.map((com) => (
             <li class="rounded-md bg-slate-50 p-3">
@@ -241,7 +241,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
     <div class="space-y-4">
       {(historial.length > 0 || renovacion) && (
         <div class="card p-5">
-          <h2 class="font-semibold text-slate-900">🔄 Historial de renovaciones</h2>
+          <h2 class="font-semibold text-slate-900">Historial de renovaciones</h2>
           <ul class="mt-3 space-y-2 text-sm">
             {historial.map((h) => (
               <li class="border-l-2 border-slate-300 pl-3">
@@ -267,7 +267,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
 
       <!-- Alertas enviadas -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">🔔 Alertas</h2>
+        <h2 class="font-semibold text-slate-900">Alertas</h2>
         <ul class="mt-3 space-y-1.5 text-xs text-slate-600">
           <li>90 días: {c.alerta90dEnviadaEn ? <span class="text-emerald-600">✓ {fmtFechaSimple(c.alerta90dEnviadaEn)}</span> : <span class="text-slate-400">pendiente</span>}</li>
           <li>60 días: {c.alerta60dEnviadaEn ? <span class="text-emerald-600">✓ {fmtFechaSimple(c.alerta60dEnviadaEn)}</span> : <span class="text-slate-400">pendiente</span>}</li>
@@ -281,7 +281,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
   <div id="modalRenovar" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-md">
       <div class="p-5">
-        <h3 class="text-lg font-bold">🔄 Renovar contrato</h3>
+        <h3 class="text-lg font-bold">Renovar contrato</h3>
         <p class="mt-1 text-xs text-slate-500">Se creará un contrato nuevo linkeado a este. El actual se marcará como "renovado".</p>
         <div class="mt-3 space-y-3">
           <div class="grid grid-cols-2 gap-3">
@@ -325,7 +325,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
         <p id="cErr" class="hidden mt-2 text-sm text-red-600"></p>
         <div class="mt-4 flex justify-end gap-2">
           <button type="button" id="cCerrar" class="btn-secondary text-sm">Volver</button>
-          <button type="button" id="cConfirm" class="btn-primary text-sm bg-red-600 hover:bg-red-700">Confirmar cancelación</button>
+          <button type="button" id="cConfirm" class="btn-danger text-sm">Confirmar cancelación</button>
         </div>
       </div>
     </div>

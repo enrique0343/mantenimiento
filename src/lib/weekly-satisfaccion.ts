@@ -6,6 +6,7 @@ import { and, eq, gte, isNotNull, inArray, desc } from "drizzle-orm";
 import { getDb } from "./db";
 import { encuestasSatisfaccion, ordenes, usuarios, emailLog } from "./schema";
 import { sendMail, emailLayout } from "./email";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 function escapeHtml(s: string | null | undefined): string {
   if (!s) return "";
@@ -80,68 +81,68 @@ export async function enviarResumenSemanalSatisfaccion(
   if (admins.length === 0) return { enviados: 0, razon: "Sin destinatarios" };
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
 
   // HTML
   const rankingHtml = rankingList.length === 0 ? "" : `
-    <h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px">🏆 Ranking de técnicos</h3>
+    <h3 style="margin:24px 0 10px 0;color:#23417D;font-size:15px">Ranking de técnicos</h3>
     <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:#f8fafc">
-        <th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Técnico</th>
-        <th style="text-align:center;padding:8px;border-bottom:1px solid #e2e8f0">Encuestas</th>
-        <th style="text-align:center;padding:8px;border-bottom:1px solid #e2e8f0">Promedio</th>
+      <thead><tr style="background:#F2F4F7">
+        <th style="text-align:left;padding:8px;border-bottom:1px solid #BDC6D8">Técnico</th>
+        <th style="text-align:center;padding:8px;border-bottom:1px solid #BDC6D8">Encuestas</th>
+        <th style="text-align:center;padding:8px;border-bottom:1px solid #BDC6D8">Promedio</th>
       </tr></thead>
       <tbody>
         ${rankingList.map((r) => `
           <tr>
-            <td style="padding:8px;border-bottom:1px solid #f1f5f9">${escapeHtml(r.nombre)}</td>
-            <td style="padding:8px;border-bottom:1px solid #f1f5f9;text-align:center">${r.n}</td>
-            <td style="padding:8px;border-bottom:1px solid #f1f5f9;text-align:center;font-weight:bold;color:${r.promedio >= 4.5 ? "#16a34a" : r.promedio >= 3.5 ? "#d97706" : "#dc2626"}">${r.promedio.toFixed(2)}</td>
+            <td style="padding:8px;border-bottom:1px solid #F2F4F7">${escapeHtml(r.nombre)}</td>
+            <td style="padding:8px;border-bottom:1px solid #F2F4F7;text-align:center">${r.n}</td>
+            <td style="padding:8px;border-bottom:1px solid #F2F4F7;text-align:center;font-weight:bold;color:${r.promedio >= 4.5 ? "#1F5740" : r.promedio >= 3.5 ? "#A27628" : "#C03435"}">${r.promedio.toFixed(2)}</td>
           </tr>
         `).join("")}
       </tbody>
     </table>`;
 
   const bajasHtml = bajasSinLeer.length === 0
-    ? `<p style="color:#16a34a;margin:18px 0">✅ Sin comentarios bajos pendientes de atender esta semana.</p>`
+    ? `<p style="color:#1F5740;margin:18px 0">✓ Sin comentarios bajos pendientes de atender esta semana.</p>`
     : `
-    <h3 style="margin:24px 0 10px 0;color:#dc2626;font-size:15px">⚠️ ${bajasSinLeer.length} comentario(s) bajo(s) sin atender</h3>
+    <h3 style="margin:24px 0 10px 0;color:#C03435;font-size:15px">${bajasSinLeer.length} comentario(s) bajo(s) sin atender</h3>
     ${bajasSinLeer.slice(0, 8).map((r) => `
-      <div style="border-left:3px solid #dc2626;background:#fef2f2;padding:10px 12px;margin:8px 0;border-radius:4px">
-        <div style="font-size:12px;color:#475569">
-          <strong>${r.e.calificacion}⭐</strong> · ${escapeHtml(r.e.destinatarioNombre)}
-          ${r.o ? ` · OT #${r.o.id} ${escapeHtml(r.o.titulo)}` : ""}
+      <div style="border-left:3px solid #C03435;background:#F2F4F7;padding:10px 12px;margin:8px 0;border-radius:2px">
+        <div style="font-size:12px;color:#4A4A4A">
+          <strong>${r.e.calificacion}★</strong> · ${escapeHtml(r.e.destinatarioNombre)}
+          ${r.o ? ` · ${etiquetaOT(r.o)} ${escapeHtml(r.o.titulo)}` : ""}
           ${r.tec ? ` · Técnico: ${escapeHtml(r.tec.nombre)}` : ""}
         </div>
-        <p style="margin:6px 0 0 0;white-space:pre-wrap;font-size:13px;color:#1e293b">${escapeHtml(r.e.comentario)}</p>
+        <p style="margin:6px 0 0 0;white-space:pre-wrap;font-size:13px;color:#1A1A1A">${escapeHtml(r.e.comentario)}</p>
       </div>
     `).join("")}
-    ${bajasSinLeer.length > 8 ? `<p style="font-size:12px;color:#64748b">…y ${bajasSinLeer.length - 8} más en el sistema.</p>` : ""}`;
+    ${bajasSinLeer.length > 8 ? `<p style="font-size:12px;color:#6B7280">…y ${bajasSinLeer.length - 8} más en el sistema.</p>` : ""}`;
 
   const html = emailLayout(
     "Resumen semanal de satisfacción",
     `<p>Este es el resumen de las encuestas respondidas en los últimos 7 días.</p>
      <div style="display:flex;gap:12px;margin:18px 0;flex-wrap:wrap">
-       <div style="flex:1;min-width:140px;background:#f8fafc;padding:14px;border-radius:6px">
-         <div style="font-size:11px;color:#64748b;text-transform:uppercase">Respondidas</div>
-         <div style="font-size:24px;font-weight:bold;color:#0a4082">${n}</div>
+       <div style="flex:1;min-width:140px;background:#F2F4F7;padding:14px;border-radius:2px">
+         <div style="font-size:11px;color:#6B7280;text-transform:uppercase">Respondidas</div>
+         <div style="font-size:24px;font-weight:bold;color:#23417D">${n}</div>
        </div>
-       <div style="flex:1;min-width:140px;background:#f0fdf4;padding:14px;border-radius:6px">
-         <div style="font-size:11px;color:#64748b;text-transform:uppercase">Promedio</div>
-         <div style="font-size:24px;font-weight:bold;color:#16a34a">${promedio.toFixed(2)}/5</div>
+       <div style="flex:1;min-width:140px;background:#F2F4F7;padding:14px;border-radius:2px">
+         <div style="font-size:11px;color:#6B7280;text-transform:uppercase">Promedio</div>
+         <div style="font-size:24px;font-weight:bold;color:#1F5740">${promedio.toFixed(2)}/5</div>
        </div>
-       <div style="flex:1;min-width:140px;background:#fef2f2;padding:14px;border-radius:6px">
-         <div style="font-size:11px;color:#64748b;text-transform:uppercase">% Bajas (1-3⭐)</div>
-         <div style="font-size:24px;font-weight:bold;color:#dc2626">${pctBajas}%</div>
+       <div style="flex:1;min-width:140px;background:#F2F4F7;padding:14px;border-radius:2px">
+         <div style="font-size:11px;color:#6B7280;text-transform:uppercase">% Bajas (1-3★)</div>
+         <div style="font-size:24px;font-weight:bold;color:#C03435">${pctBajas}%</div>
        </div>
-       <div style="flex:1;min-width:140px;background:#ecfdf5;padding:14px;border-radius:6px">
-         <div style="font-size:11px;color:#64748b;text-transform:uppercase">% Excelente</div>
-         <div style="font-size:24px;font-weight:bold;color:#059669">${pct5}%</div>
+       <div style="flex:1;min-width:140px;background:#F2F4F7;padding:14px;border-radius:2px">
+         <div style="font-size:11px;color:#6B7280;text-transform:uppercase">% Excelente</div>
+         <div style="font-size:24px;font-weight:bold;color:#1F5740">${pct5}%</div>
        </div>
      </div>
      ${bajasHtml}
      ${rankingHtml}
-     <p style="margin:24px 0 0 0"><a href="${baseUrl}/satisfaccion" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir tablero de satisfacción →</a></p>`
+     <p style="margin:24px 0 0 0"><a href="${baseUrl}/satisfaccion" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir tablero de satisfacción →</a></p>`
   );
 
   let enviados = 0;
@@ -150,7 +151,7 @@ export async function enviarResumenSemanalSatisfaccion(
     try {
       await sendMail(ctx, {
         to: a.email,
-        subject: `📊 Resumen semanal de satisfacción — ${n} respuestas`,
+        subject: `Resumen semanal de satisfacción — ${n} respuestas`,
         html,
         tipo: "resumen_semanal_satisfaccion",
         referencia: hoy,

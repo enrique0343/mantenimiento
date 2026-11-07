@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, planesMantenimiento, tickets, sucursales } from "@/lib/schema";
 import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -23,13 +24,14 @@ let nCompletadas = 0;
 let totalHoras = 0;
 let pctATiempo = 100;
 let totalCompletadasGlobal = 0;
-let nivelActual: any = { min: 0, nombre: "Aprendiz", emoji: "🔧" };
+let nivelActual: any = { min: 0, nombre: "Aprendiz", emoji: "" };
 let nivelSiguiente: any = null;
 let pctSiguiente = 100;
 
 if (!esMotorista) {
   misActivas = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos completas se pasan.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
@@ -83,12 +85,12 @@ if (!esMotorista) {
   totalCompletadasGlobal = Number(totalCompletadasRows[0]?.n ?? 0);
 
   const NIVELES = [
-    { min: 0, nombre: "Aprendiz", emoji: "🔧" },
-    { min: 10, nombre: "Operador", emoji: "⚙️" },
-    { min: 25, nombre: "Técnico", emoji: "🛠️" },
-    { min: 50, nombre: "Especialista", emoji: "🏅" },
-    { min: 100, nombre: "Maestro", emoji: "🏆" },
-    { min: 250, nombre: "Leyenda", emoji: "👑" },
+    { min: 0, nombre: "Aprendiz", emoji: "" },
+    { min: 10, nombre: "Operador", emoji: "" },
+    { min: 25, nombre: "Técnico", emoji: "" },
+    { min: 50, nombre: "Especialista", emoji: "" },
+    { min: 100, nombre: "Maestro", emoji: "" },
+    { min: 250, nombre: "Leyenda", emoji: "" },
   ];
   nivelActual = [...NIVELES].reverse().find((n) => totalCompletadasGlobal >= n.min) ?? NIVELES[0];
   nivelSiguiente = NIVELES.find((n) => totalCompletadasGlobal < n.min);
@@ -103,7 +105,7 @@ if (!esMotorista) {
     <>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} 👋</h1>
+          <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} </h1>
           <p class="text-sm text-slate-500">Resumen personal del mes</p>
         </div>
         <div class="card flex items-center gap-3 px-4 py-2">
@@ -144,7 +146,7 @@ if (!esMotorista) {
             <span class="text-xs text-slate-500">{nivelSiguiente.emoji} {nivelSiguiente.nombre} en {nivelSiguiente.min - totalCompletadasGlobal} OTs</span>
           </div>
           <div class="mt-2 h-3 overflow-hidden rounded bg-slate-100">
-            <div class="h-full bg-gradient-to-r from-brand-500 to-emerald-500" style={`width: ${pctSiguiente}%`}></div>
+            <div class="h-full bg-brand-600" style={`width: ${pctSiguiente}%`}></div>
           </div>
         </div>
       )}
@@ -162,16 +164,16 @@ if (!esMotorista) {
               {misActivas.map((r: any) => (
                 <a href={`/ordenes/${r.o.id}`} class="card block p-4 hover:bg-slate-50 active:bg-slate-100">
                   <div class="flex items-start justify-between gap-2">
-                    <div class="font-mono text-xs text-slate-400">#{r.o.id}</div>
+                    <div class="whitespace-nowrap font-mono text-xs text-slate-400">{etiquetaOT(r.o)}</div>
                     <span class={`badge ${PRIO_COLOR[r.o.prioridad]} capitalize text-[10px]`}>{r.o.prioridad}</span>
                   </div>
                   <div class="mt-1 text-base font-semibold text-brand-700">{r.o.titulo}</div>
-                  {r.a && <div class="mt-1 text-xs text-slate-500">🛠 {r.a.codigo} · {r.a.nombre}</div>}
+                  {r.a && <div class="mt-1 text-xs text-slate-500">{r.a.codigo} · {r.a.nombre}</div>}
                   <div class="mt-2 flex flex-wrap items-center gap-1.5">
                     <span class={`badge ${ESTADO_COLOR[r.o.estado as EstadoOT]}`}>{ESTADO_LABEL[r.o.estado as EstadoOT]}</span>
                     <span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span>
                     {r.o.vencimiento && (
-                      <span class="text-xs text-slate-500">⏱ {fmt(r.o.vencimiento)}</span>
+                      <span class="text-xs text-slate-500">{fmt(r.o.vencimiento)}</span>
                     )}
                   </div>
                 </a>
@@ -182,7 +184,7 @@ if (!esMotorista) {
               <table class="w-full text-left text-sm">
                 <thead class="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
-                    <th class="px-4 py-2">#</th>
+                    <th class="px-4 py-2">OT</th>
                     <th class="px-4 py-2">Título</th>
                     <th class="px-4 py-2">Equipo</th>
                     <th class="px-4 py-2">Tipo</th>
@@ -194,7 +196,7 @@ if (!esMotorista) {
                 <tbody class="divide-y divide-slate-100">
                   {misActivas.map((r: any) => (
                     <tr class="hover:bg-slate-50">
-                      <td class="px-4 py-2 font-mono text-xs">#{r.o.id}</td>
+                      <td class="whitespace-nowrap px-4 py-2 font-mono text-xs">{etiquetaOT(r.o)}</td>
                       <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={`/ordenes/${r.o.id}`}>{r.o.titulo}</a></td>
                       <td class="px-4 py-2 text-slate-600">{r.a?.codigo ?? "—"}</td>
                       <td class="px-4 py-2"><span class={`badge ${TIPO_COLOR[r.o.tipo as keyof typeof TIPO_COLOR]} capitalize`}>{r.o.tipo}</span></td>
@@ -212,7 +214,7 @@ if (!esMotorista) {
 
       {misTickets.length > 0 && (
         <div class="mt-6">
-          <h2 class="mb-2 font-semibold text-slate-900">🎫 Mis tickets asignados ({misTickets.length})</h2>
+          <h2 class="mb-2 font-semibold text-slate-900">Mis tickets asignados ({misTickets.length})</h2>
           <div class="card overflow-hidden">
             <ul class="divide-y divide-slate-100">
               {misTickets.map((r: any) => (
@@ -228,7 +230,7 @@ if (!esMotorista) {
                     <div class="mt-1 font-medium text-sm text-slate-800 truncate">{r.t.asunto}</div>
                     <div class="text-xs text-slate-500 truncate">
                       {r.t.solicitanteNombre} · {r.s?.nombre ?? "—"}
-                      {r.t.tipoMantenimiento === "biomedico" ? " · 🩺 Biomédico" : " · 🔧 General"}
+                      {r.t.tipoMantenimiento === "biomedico" ? " · Biomédico" : " · General"}
                     </div>
                   </a>
                 </li>
@@ -251,7 +253,7 @@ if (!esMotorista) {
                   <div class="mt-1 text-xs text-slate-500">{r.a?.codigo} · {r.a?.nombre}</div>
                   <div class="mt-2 flex items-center justify-between text-xs">
                     <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600 capitalize">{r.p.frecuencia}</span>
-                    <span class="text-slate-700">📅 {fmt(r.p.proximaFecha)}</span>
+                    <span class="text-slate-700">{fmt(r.p.proximaFecha)}</span>
                   </div>
                 </a>
               ))}

@@ -62,7 +62,7 @@ const fmtFecha = (f: string) => {
 <Layout title={`Presupuesto ${anio}`}>
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">💰 Presupuesto de mantenimiento</h1>
+      <h1 class="text-2xl font-bold">Presupuesto de mantenimiento</h1>
       <p class="mt-1 text-sm text-slate-500">
         Asignación anual por rubro y ejecución real · {fmtMonto(totalGastado)} de {fmtMonto(totalAsignado)} ejecutado
         ({Math.round(pctTotal)}%)
@@ -74,7 +74,7 @@ const fmtFecha = (f: string) => {
         <span class="px-2 font-bold text-lg">{anio}</span>
         <a href={`/presupuesto?anio=${anio + 1}`} class="btn-secondary btn-sm">→</a>
       </div>
-      <button id="defBtn" class="btn-secondary">⚙ Definir presupuestos</button>
+      <button id="defBtn" class="btn-secondary">Definir presupuestos</button>
       <button id="gastoBtn" class="btn-primary">+ Registrar gasto</button>
     </div>
   </div>
@@ -164,7 +164,7 @@ const fmtFecha = (f: string) => {
               <td class="px-4 py-2 text-xs text-slate-500 font-mono">{g.referencia ?? "—"}</td>
               <td class="px-4 py-2 text-right font-semibold text-slate-800 whitespace-nowrap">{fmtMonto(g.monto)}</td>
               <td class="px-4 py-2 text-right">
-                <button class="del-gasto-btn text-xs text-red-600 hover:underline" data-id={g.id} data-desc={g.descripcion}>🗑</button>
+                <button class="del-gasto-btn text-xs text-red-600 hover:underline" data-id={g.id} data-desc={g.descripcion}>Eliminar</button>
               </td>
             </tr>
           ))}
@@ -176,7 +176,7 @@ const fmtFecha = (f: string) => {
   <!-- Modal definir presupuestos -->
   <div id="defModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
     <div class="card w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
-      <h3 class="text-lg font-semibold text-slate-900">⚙ Presupuesto {anio} por rubro</h3>
+      <h3 class="text-lg font-semibold text-slate-900">Presupuesto {anio} por rubro</h3>
       <p class="mt-1 text-xs text-slate-500">Monto anual asignado a cada rubro (en USD).</p>
       <div class="mt-4 space-y-2.5">
         {RUBRO_KEYS.map((k) => (

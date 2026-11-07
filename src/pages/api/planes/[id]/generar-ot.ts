@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth";
 
 import { parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { conCodigo } from "@/lib/ordenes";
 export const prerender = false;
 
 // Genera una OT preventiva inmediatamente para el plan dado, sin esperar al cron.
@@ -65,5 +66,5 @@ export const POST: APIRoute = async (ctx) => {
     .set({ ultimaGeneracion: now })
     .where(eq(planesMantenimiento.id, p.id));
 
-  return Response.json({ orden }, { status: 201 });
+  return Response.json({ orden: await conCodigo(db, orden) }, { status: 201 });
 };

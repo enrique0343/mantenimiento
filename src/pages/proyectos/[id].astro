@@ -14,6 +14,7 @@ import {
 } from "@/lib/proyectos";
 import { ESTADO_LABEL as ESTADO_OT_LABEL, ESTADO_COLOR as ESTADO_OT_COLOR } from "@/lib/ordenes";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { fmtFechaSimple, fmtFechaLarga } from "@/lib/datetime";
 import { parseArea, AREAS, AREA_KEYS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
@@ -24,8 +25,18 @@ const user = Astro.locals.user!;
 const id = Number(Astro.params.id);
 const db = getDb(Astro);
 
+// D1 corta el resultado a 100 columnas: proyectos + usuarios + sucursales +
+// ubicaciones + activos + tickets se pasa de largo y la consulta falla entera.
+// Solo se piden las columnas que esta pantalla usa.
 const [row] = await db
-  .select({ p: proyectos, creador: usuarios, sucursal: sucursales, ubicacion: ubicaciones, activo: activos, ticket: tickets })
+  .select({
+    p: proyectos,
+    creador: { nombre: usuarios.nombre },
+    sucursal: { id: sucursales.id, nombre: sucursales.nombre },
+    ubicacion: { id: ubicaciones.id, nombre: ubicaciones.nombre },
+    activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+    ticket: { id: tickets.id, asunto: tickets.asunto },
+  })
   .from(proyectos)
   .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
   .leftJoin(sucursales, eq(sucursales.id, proyectos.sucursalId))
@@ -102,25 +113,25 @@ const tecnicosJson = JSON.stringify(tecnicos);
         {p.descripcion && <p class="mt-1 text-sm text-slate-600 whitespace-pre-wrap">{p.descripcion}</p>}
         <p class="mt-2 text-xs text-slate-400">
           Creado por {row.creador?.nombre ?? "—"} · {fmtFechaSimple(p.createdAt)}
-          {row.sucursal && <> · 🏢 {row.sucursal.nombre}</>}
-          {row.ubicacion && <> · 📍 {row.ubicacion.nombre}</>}
+          {row.sucursal && <> · {row.sucursal.nombre}</>}
+          {row.ubicacion && <> · {row.ubicacion.nombre}</>}
         </p>
       </div>
       <div class="flex flex-col gap-2 items-end">
         {puedeAprobar && (
           <div class="flex gap-2">
-            <button id="btnAprobar" class="btn-primary text-sm">✅ Aprobar</button>
-            <button id="btnRechazar" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">❌ Rechazar</button>
+            <button id="btnAprobar" class="btn-primary text-sm">✓ Aprobar</button>
+            <button id="btnRechazar" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">✕ Rechazar</button>
           </div>
         )}
         {esAdmin && p.estado === "en_ejecucion" && (
           <button id="btnCompletar" class="btn-primary bg-emerald-600 hover:bg-emerald-700 text-sm">✓ Marcar completado</button>
         )}
         {esAdmin && p.estado === "en_ejecucion" && (
-          <button id="btnPausar" class="text-sm px-3 py-1.5 rounded-lg border border-purple-300 text-purple-600 hover:bg-purple-50">⏸ Pausar</button>
+          <button id="btnPausar" class="text-sm px-3 py-1.5 rounded-lg border border-purple-300 text-purple-600 hover:bg-purple-50">Pausar</button>
         )}
         {esAdmin && p.estado === "en_pausa" && (
-          <button id="btnReanudar" class="btn-primary text-sm">▶ Reanudar</button>
+          <button id="btnReanudar" class="btn-primary text-sm">› Reanudar</button>
         )}
         {esAdmin && ["evaluacion","aprobado","en_ejecucion","en_pausa"].includes(p.estado) && (
           <button id="btnCancelar" class="text-xs text-slate-500 hover:underline">Cancelar proyecto</button>
@@ -171,7 +182,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
 
   <!-- Evaluación -->
   <div class="card mt-3 p-5">
-    <h2 class="font-semibold text-slate-900 mb-3">📋 Evaluación</h2>
+    <h2 class="font-semibold text-slate-900 mb-3">Evaluación</h2>
     <div class="grid grid-cols-1 gap-4 text-sm">
       <div>
         <div class="text-xs uppercase text-slate-500 mb-1">Justificación</div>
@@ -205,7 +216,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
 
   <!-- Plazos -->
   <div class="card mt-3 p-5">
-    <h2 class="font-semibold text-slate-900 mb-3">📅 Plazos</h2>
+    <h2 class="font-semibold text-slate-900 mb-3">Plazos</h2>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-4 text-sm">
       <div>
         <label class="text-xs uppercase text-slate-500">Inicio estimado</label>
@@ -229,7 +240,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
   <!-- Presupuesto detallado -->
   <div class="card mt-3 p-5">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="font-semibold text-slate-900">💰 Presupuesto detallado</h2>
+      <h2 class="font-semibold text-slate-900">Presupuesto detallado</h2>
       {puedeEditar && <button id="btnAgregarItem" class="btn-secondary text-xs">+ Agregar línea</button>}
     </div>
     <div class="overflow-x-auto">
@@ -287,7 +298,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
   <!-- Hitos -->
   <div class="card mt-3 p-5">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="font-semibold text-slate-900">🎯 Hitos / Milestones</h2>
+      <h2 class="font-semibold text-slate-900">Hitos / Milestones</h2>
       {puedeEditar && <button id="btnAgregarHito" class="btn-secondary text-xs">+ Agregar hito</button>}
     </div>
     <ul class="space-y-2" id="ulHitos">
@@ -299,7 +310,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
             {h.descripcion && <div class="text-xs text-slate-500 mt-0.5">{h.descripcion}</div>}
             {h.fechaObjetivo && (
               <div class="text-[11px] text-slate-400 mt-1">
-                🎯 Objetivo: {fmtFechaSimple(h.fechaObjetivo)}
+                Objetivo: {fmtFechaSimple(h.fechaObjetivo)}
                 {h.completado && h.fechaCompletado && <> · ✓ {fmtFechaSimple(h.fechaCompletado)}</>}
               </div>
             )}
@@ -314,7 +325,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
   <!-- OTs del proyecto -->
   <div class="card mt-3 p-5">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="font-semibold text-slate-900">🛠 Órdenes de trabajo del proyecto</h2>
+      <h2 class="font-semibold text-slate-900">Órdenes de trabajo del proyecto</h2>
       {puedeGenerarOT && <button id="btnGenerarOT" class="btn-secondary text-xs">+ Generar OT</button>}
     </div>
     {otsHijas.length === 0 ? (
@@ -324,7 +335,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
         {otsHijas.map((r) => (
           <li class="flex items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50">
             <a href={`/ordenes/${r.o.id}`} class="flex-1">
-              <span class="font-mono text-xs text-slate-400">#{r.o.id}</span>
+              <span class="font-mono text-xs text-slate-400 whitespace-nowrap">{etiquetaOT(r.o)}</span>
               <span class="ml-2 font-medium text-sm">{r.o.titulo}</span>
               <div class="text-xs text-slate-500 mt-0.5">{r.u?.nombre ?? "Sin asignar"}</div>
             </a>
@@ -337,14 +348,14 @@ const tecnicosJson = JSON.stringify(tecnicos);
 
   <!-- Adjuntos -->
   <div class="card mt-3 p-5">
-    <h2 class="font-semibold text-slate-900 mb-3">📎 Adjuntos (cotizaciones, planos, documentos)</h2>
+    <h2 class="font-semibold text-slate-900 mb-3">Adjuntos (cotizaciones, planos, documentos)</h2>
     <div class="flex flex-wrap gap-3 mb-3">
       {adjs.map((a) => (
         <div class="relative group w-24 h-24 rounded-lg overflow-hidden border border-slate-200 bg-slate-100" data-adj-id={a.id}>
           <a href={`/api/proyectos/adjunto/${a.id}`} target="_blank" rel="noopener">
             {a.contentType.startsWith("image/")
               ? <img src={`/api/proyectos/adjunto/${a.id}`} class="w-full h-full object-cover" loading="lazy" alt={a.nombre} />
-              : <div class="w-full h-full flex items-center justify-center text-xs text-slate-500 px-1 text-center p-1"><span>📄 {a.nombre}</span></div>
+              : <div class="w-full h-full flex items-center justify-center text-xs text-slate-500 px-1 text-center p-1"><span>{a.nombre}</span></div>
             }
           </a>
           {puedeEditar && (
@@ -357,14 +368,14 @@ const tecnicosJson = JSON.stringify(tecnicos);
     {puedeEditar && (
       <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100 w-fit">
         <input type="file" id="adjInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
-        📎 Subir archivos
+        Subir archivos
       </label>
     )}
   </div>
 
   <!-- Bitácora -->
   <div class="card mt-3 p-5">
-    <h2 class="font-semibold text-slate-900 mb-3">💬 Bitácora ({coms.length})</h2>
+    <h2 class="font-semibold text-slate-900 mb-3">Bitácora ({coms.length})</h2>
     <ul class="space-y-2">
       {coms.map((c) => (
         <li class="rounded-lg bg-slate-50 p-3">
@@ -569,7 +580,7 @@ const tecnicosJson = JSON.stringify(tecnicos);
   let decisionTipo = "aprobado";
   function abrirModalDecision(tipo) {
     decisionTipo = tipo;
-    document.getElementById("modalDecTitulo").textContent = tipo === "aprobado" ? "✅ Aprobar proyecto" : "❌ Rechazar proyecto";
+    document.getElementById("modalDecTitulo").textContent = tipo === "aprobado" ? "✓ Aprobar proyecto" : "✕ Rechazar proyecto";
     document.getElementById("decisionNotas").value = "";
     document.getElementById("decisionErr").classList.add("hidden");
     modalDec.classList.remove("hidden");

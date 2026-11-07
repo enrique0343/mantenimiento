@@ -1,0 +1,45 @@
+---
+// Modo técnico: la pantalla del técnico en el celular. Una sola pantalla, sin el
+// menú general: todo lo que se toca vive abajo, al alcance del pulgar.
+import { puedeUsarCampo } from "@/lib/campo";
+import "@/campo/campo.css";
+
+export const prerender = false;
+
+const user = Astro.locals.user;
+if (!user) return Astro.redirect("/login?next=/campo");
+if (!puedeUsarCampo(user.rol)) return Astro.redirect("/");
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>Modo técnico · Avante</title>
+    <meta name="theme-color" content="#1E2142" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Mantenimiento" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/favicon-64.png" sizes="64x64" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="preload" href="/fonts/figtree-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/figtree-600.woff2" as="font" type="font/woff2" crossorigin />
+  </head>
+  <body data-uid={user.id} data-nombre={user.nombre} data-rol={user.rol}>
+    <section id="movil" aria-label="Modo técnico">
+      <main id="pantalla">
+        <div class="simple"><p>Cargando tu día…</p></div>
+      </main>
+      <nav id="tabs" aria-label="Menú del técnico"></nav>
+      <div id="hoja" hidden></div>
+      <div id="aviso" role="status" hidden></div>
+    </section>
+    <noscript>Esta pantalla necesita JavaScript. Usa la <a href="/ordenes">versión completa</a>.</noscript>
+    <script>
+      import "@/campo/app";
+    </script>
+  </body>
+</html>

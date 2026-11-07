@@ -28,6 +28,6 @@ export const GET: APIRoute = async (ctx) => {
   const { enviados, razon } = await enviarDigestDiario(ctx, { force });
   const mensaje = enviados > 0
     ? `✓ Digest enviado a ${enviados} admin(s).`
-    : `⏸ Digest no enviado. ${razon ?? ""}`;
+    : `Digest no enviado. ${razon ?? ""}`;
   return Response.json({ ok: true, enviados, razon, mensaje });
 };

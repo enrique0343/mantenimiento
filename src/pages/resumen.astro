@@ -116,8 +116,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
         <div class="mt-1.5 text-3xl font-bold text-brand-600">{get(ordenesPorEstado, "abierta")}</div>
         <div class="mt-0.5 text-[11px] text-slate-400">órdenes de trabajo</div>
       </div>
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-xl">📋</div>
-    </a>
+      </a>
     <!-- En proceso -->
     <a href="/ordenes?estado=en_proceso" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
       <div class="min-w-0">
@@ -125,8 +124,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
         <div class="mt-1.5 text-3xl font-bold text-amber-600">{get(ordenesPorEstado, "en_proceso")}</div>
         <div class="mt-0.5 text-[11px] text-slate-400">en ejecución</div>
       </div>
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-xl">⚙️</div>
-    </a>
+      </a>
     <!-- Completadas -->
     <a href="/ordenes?estado=completada" class="card p-4 flex items-start justify-between gap-2 hover:shadow-md transition-shadow">
       <div class="min-w-0">
@@ -134,8 +132,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
         <div class="mt-1.5 text-3xl font-bold text-emerald-600">{get(ordenesPorEstado, "completada")}</div>
         <div class="mt-0.5 text-[11px] text-slate-400">finalizadas</div>
       </div>
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-xl">✅</div>
-    </a>
+      </a>
     <!-- Vencidas -->
     <div class="card p-4 flex items-start justify-between gap-2">
       <div class="min-w-0">
@@ -143,8 +140,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
         <div class="mt-1.5 text-3xl font-bold text-red-600">{vencidas[0]?.n ?? 0}</div>
         <div class="mt-0.5 text-[11px] text-slate-400">requieren atención</div>
       </div>
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-xl">⚡</div>
-    </div>
+      </div>
     <!-- Satisfacción -->
     <div class="card p-4 flex items-start justify-between gap-2">
       <div class="min-w-0">
@@ -161,8 +157,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
           </>
         )}
       </div>
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-xl">⭐</div>
-    </div>
+      </div>
   </div>
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -185,7 +180,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
               <div class="text-xs text-slate-500 truncate mt-0.5">{r.a?.codigo} · {r.a?.nombre}</div>
               {(r.suc?.nombre || r.ub?.nombre) && (
                 <div class="text-[11px] text-slate-400 truncate">
-                  📍 {r.suc?.nombre ?? "Sin sede"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
+                  {r.suc?.nombre ?? "Sin sede"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
                 </div>
               )}
             </div>
@@ -230,7 +225,6 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
     <div class="card mt-4 p-5 border-l-4 border-amber-400">
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
-          <span class="text-lg">📜</span>
           <h2 class="font-semibold text-slate-800">Contratos próximos a vencer</h2>
           <span class="badge bg-amber-100 text-amber-700">{contratosProximos.length}</span>
         </div>

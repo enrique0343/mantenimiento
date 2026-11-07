@@ -1,11 +1,13 @@
 ---
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
+import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
 import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos } from "@/lib/schema";
+import { etiquetaOT } from "@/lib/orden-codigo";
+import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos, procedimientos, activoUbicacionesServidas, variablesPredictivas } from "@/lib/schema";
 import { eq, asc, desc, and, inArray, ne } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { FRECUENCIAS } from "@/lib/frecuencias";
@@ -15,6 +17,19 @@ import {
   CRITICIDAD_LABEL, CRITICIDAD_COLOR, RESULTADO_CALIB_LABEL, RESULTADO_CALIB_COLOR,
   CATEGORIA_DOC_LABEL, vidaUtilRemanente, vidaUtilVencida, finVidaUtil, llevaCalibracion,
 } from "@/lib/inventario-jci";
+import {
+  NIVELES_JERARQUIA, NIVEL_LABEL, NIVEL_COLOR, PROFUNDIDAD_MAXIMA,
+  ROLES_UBICACION_SERVIDA, ROL_SERVIDA_LABEL, ROL_SERVIDA_COLOR, ROL_SERVIDA_AYUDA,
+  TIPO_ATRIBUTO_LABEL, TIPO_ATRIBUTO_COLOR, ESTADO_PROCEDIMIENTO_LABEL, ESTADO_PROCEDIMIENTO_COLOR,
+  valorNominalTexto, rutaAscendente, hijosConOrdenesAbiertas, descendientesDe,
+  type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
+} from "@/lib/jerarquia";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import {
+  queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
+  SISTEMA_LABEL, type Sistema,
+} from "@/lib/resolver";
+import { TIPO_PROC, SISTEMAS, estadoInfo } from "@/lib/procedimientos";
 import { AREAS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { leerDatosTecnicos } from "@/lib/activo-area";
@@ -187,36 +202,491 @@ const candidatosRespaldo = canJefe
   : [];
 const fueraDeServicio = a.estado === "averiado" || a.estado === "mantenimiento";
 const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operativo");
+
+// ─── Fase 47 · SCP: jerarquía, puntos de ajuste y mapa de distribución ──────
+// GO-GUI-011-2026 cap. 02-03: «Cada sistema crítico se registra como activo
+// padre con sus componentes como hijos»; el SCP es la ficha del sistema y su
+// versión vive como atributo del activo.
+const nivel = (a.nivelJerarquia ?? "componente") as NivelJerarquia;
+const estadoColorActivo: Record<string, string> = {
+  operativo: "bg-emerald-100 text-emerald-700",
+  averiado: "bg-red-100 text-red-700",
+  mantenimiento: "bg-amber-100 text-amber-700",
+  baja: "bg-slate-200 text-slate-600",
+};
+
+const ancestros = await rutaAscendente(db, id);
+const componentes = await hijosConOrdenesAbiertas(db, id);
+
+// SCP vinculado (activos.scpProcedimientoId → procedimientos)
+let scpInfo: { id: number; codigoCorto: string; titulo: string; version: string; estado: string; sistema: string; proximaRevision: string | null } | null = null;
+if (a.scpProcedimientoId) {
+  const [p] = await db
+    .select({
+      id: procedimientos.id, codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo,
+      version: procedimientos.version, estado: procedimientos.estado, sistema: procedimientos.sistema,
+      proximaRevision: procedimientos.proximaRevision,
+    })
+    .from(procedimientos).where(eq(procedimientos.id, a.scpProcedimientoId)).limit(1);
+  if (p) scpInfo = p;
+}
+// Un activo de nivel «sistema» sin SCP es un sistema crítico sin ficha.
+const faltaScp = nivel === "sistema" && !a.scpProcedimientoId;
+
+// Puntos de ajuste: atributos del activo con valor normal, mínimo y máximo.
+const atributosScp = await db
+  .select().from(variablesPredictivas)
+  .where(and(
+    eq(variablesPredictivas.activoId, id),
+    inArray(variablesPredictivas.tipoAtributo, ["punto_ajuste", "posicion_normal"]),
+  ))
+  .orderBy(asc(variablesPredictivas.nombre));
+
+// Mapa de distribución: «una manejadora sirve varias salas».
+const servidasRows = await db
+  .select({ rel: activoUbicacionesServidas, u: ubicaciones, s: sucursales })
+  .from(activoUbicacionesServidas)
+  .innerJoin(ubicaciones, eq(ubicaciones.id, activoUbicacionesServidas.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(eq(activoUbicacionesServidas.activoId, id))
+  .orderBy(asc(ubicaciones.nombre));
+
+// Opciones de los formularios (solo si el usuario puede editar).
+const descendientesIds = canEdit ? await descendientesDe(db, id) : new Set<number>();
+const candidatosPadre = canEdit
+  ? (await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, nivelJerarquia: activos.nivelJerarquia })
+      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"))).orderBy(asc(activos.codigo)))
+      .filter((c) => !descendientesIds.has(c.id))
+  : [];
+const procedimientosScp = canEdit
+  ? await db.select({ id: procedimientos.id, codigoCorto: procedimientos.codigoCorto, titulo: procedimientos.titulo, version: procedimientos.version })
+      .from(procedimientos).where(and(eq(procedimientos.tipo, "scp"), eq(procedimientos.activo, true)))
+      .orderBy(asc(procedimientos.codigoCorto))
+  : [];
+const idsYaServidos = new Set(servidasRows.map((r) => r.u.id));
+const ubicacionesOpciones = canEdit
+  ? await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, sucursal: sucursales.nombre })
+      .from(ubicaciones).leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+      .where(eq(ubicaciones.activa, true)).orderBy(asc(ubicaciones.nombre))
+  : [];
+
+// ─── Fase 48 · Qué rige este equipo (resolver) ───────────────────────────────
+// GO-GUI-011-2026: nadie debería buscar un documento. El resolver contesta aquí
+// y ahora qué sistema gobierna este equipo, con qué procedimientos, y —si el
+// equipo está fuera de servicio— qué EOP manda y cuáles son sus tres primeras
+// acciones. «Si un equipo falla, el sistema sabe que sigue bajo tal documento».
+const rige = await queRigeEsteActivo(db, id, sucursalInfo?.id ?? null);
+// Ya falló: la respuesta no se busca, se muestra.
+const sigueFalla = fueraDeServicio ? await queSigue(db, id, "falla", sucursalInfo?.id ?? null) : null;
+
+const ORIGEN_SISTEMA: Record<"declarado" | "heredado" | "inferido", { label: string; detalle: string; color: string }> = {
+  declarado: {
+    label: "Declarado por el equipo",
+    detalle: "Alguien lo fijó en la ficha: es un dato, no una deducción.",
+    color: "bg-emerald-100 text-emerald-700",
+  },
+  heredado: {
+    label: "Heredado del sistema padre",
+    detalle: "El componente toma el sistema del activo padre que lo contiene (cap. 02-03).",
+    color: "bg-sky-100 text-sky-700",
+  },
+  inferido: {
+    label: "Inferido por el nombre",
+    detalle:
+      "Nadie lo declaró: se deduce del nombre y la categoría. Una suposición no debería decidir qué " +
+      "procedimiento aplica cuando este equipo falle.",
+    color: "bg-amber-100 text-amber-700",
+  },
+};
+
+const sistemaResuelto: Sistema | null = rige?.sistema ?? null;
+
+// ─── El juego de los cinco es de la FAMILIA, no de este equipo ───────────────
+// «Todos los aires acondicionados deben aplicarse los mismos 5 documentos.»
+// El juego no se arma equipo por equipo: se define una vez por sistema crítico
+// y todos sus equipos lo heredan. Por eso la cadena se lee de juegoDeFamilia
+// —que incluye los documentos que cubren varias familias a la vez, como la
+// ronda por turno— y no de una lista suelta de este equipo.
+const juego = sistemaResuelto ? await juegoDeFamilia(db, sistemaResuelto, sucursalInfo?.id ?? null) : null;
+// Cuántos equipos comparten el juego: la brecha de 40 aires sin EOP no pesa
+// igual que la de uno.
+const familiaConteo = sistemaResuelto
+  ? (await equiposPorFamilia(db))[sistemaResuelto] ?? { total: 0, criticos: 0 }
+  : null;
+
+// Red de seguridad: si un documento existe para el sistema pero le falta su
+// fila en procedimiento_sistemas, igual debe verse. Nunca decir «falta» de algo
+// que ya está escrito.
+const docsDeRige: Record<string, any[]> = rige
+  ? { scp: rige.scp ? [rige.scp] : [], sop: rige.sop, aop: rige.aop, eop: rige.eop, mop: rige.mop }
+  : {};
+
+// La cadena del cap. 01 en orden: SCP cómo está configurado → SOP cómo se opera
+// → AOP se desvió → EOP ya falló → MOP se interviene. Un eslabón por tipo, con
+// el documento con el que de verdad se opera: el vigente manda sobre el
+// borrador. Única excepción: el SCP que declara el propio equipo manda sobre el
+// de la familia, porque la configuración sí es de cada máquina.
+const cadena = (juego?.slots ?? []).map((s) => {
+  const docs = s.documentos.length > 0 ? s.documentos : (docsDeRige[s.tipo] ?? []);
+  const pref =
+    docs.find((d: any) => d.estado === "vigente") ??
+    docs.find((d: any) => d.estado === "en_validacion") ??
+    docs[0] ??
+    null;
+  const propio = s.tipo === "scp" && !!a.scpProcedimientoId && !!rige?.scp;
+  const doc = propio ? rige!.scp! : pref;
+  return {
+    tipo: s.tipo,
+    label: s.label,
+    pregunta: s.pregunta,
+    doc,
+    propio,
+    cubierto: !!doc,
+    vigente: doc?.estado === "vigente",
+    otros: docs.filter((d: any) => d.id !== doc?.id).length,
+  };
+});
+const nCubiertos = cadena.filter((s) => s.cubierto).length;
+const nVigentes = cadena.filter((s) => s.vigente).length;
+// Lo que le falta a la familia se dice en la ficha del equipo: el hueco no es
+// de este equipo, es de todos los que comparten el juego.
+const faltanEnFamilia = cadena.filter((s) => !s.cubierto);
+const textoFaltantes = faltanEnFamilia
+  .map((s) => `el ${TIPO_PROC[s.tipo].label}`)
+  .reduce((acc, t, i, arr) => (i === 0 ? t : i === arr.length - 1 ? `${acc} y ${t}` : `${acc}, ${t}`), "");
+const sinNingunDocumento = cadena.length > 0 && nCubiertos === 0;
+// El EOP con el que se abrirá la respuesta si este equipo falla.
+const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 ---
 
 <Layout title={a.nombre}>
-  <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">&larr; {AREAS[area].inventoryLabel} · {AREAS[area].label}</a>
+  <nav class="flex flex-wrap items-center gap-1 text-sm text-slate-500" aria-label="Jerarquía del activo">
+    <a href={areaHref("/activos", area)} class="hover:underline">&larr; {AREAS[area].inventoryLabel} · {AREAS[area].label}</a>
+    {ancestros.map((an) => (
+      <Fragment>
+        <span class="text-slate-300">/</span>
+        <a href={`/activos/${an.id}`} class="hover:underline" title={an.nombre}>
+          <span class="font-mono text-xs">{an.codigo}</span>
+          <span class="ml-1">{an.nombre}</span>
+        </a>
+      </Fragment>
+    ))}
+    {ancestros.length > 0 && <span class="text-slate-300">/</span>}
+    {ancestros.length > 0 && <span class="font-medium text-slate-700">{a.nombre}</span>}
+  </nav>
 
   <div class="mt-2 flex items-start justify-between gap-4">
     <div>
       <div class="flex items-center gap-2">
         <h1 class="text-2xl font-bold">{a.nombre}</h1>
         <span class="badge bg-brand-50 text-brand-700">{AREAS[area].label}</span>
-        <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">⚑ {CRITICIDAD_LABEL[criticidad]}</span>
+        <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">{CRITICIDAD_LABEL[criticidad]}</span>
       </div>
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
     {canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
-        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">✎ Editar</a>
-        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
+        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>
+        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">Eliminar</button>}
       </div>
     )}
     {!canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
       </div>
     )}
   </div>
 
+  <!-- ══ Fase 48 · Qué sigue AHORA: el equipo ya está fuera de servicio ══════ -->
+  {sigueFalla && (
+    <div class="mt-4 rounded-lg border-2 border-red-400 bg-red-50 p-5" id="que-sigue">
+      <div class="text-[11px] font-bold uppercase tracking-wide text-red-700">
+        Este equipo está {a.estado} · qué sigue ahora
+      </div>
+      <h2 class="mt-0.5 text-xl font-bold text-red-800">{sigueFalla.encabezado}</h2>
+
+      {sigueFalla.documento ? (
+        <Fragment>
+          <div class="mt-1 flex flex-wrap items-center gap-2">
+            <a href={`/procedimientos/${sigueFalla.documento.id}`} class="font-mono text-sm font-bold text-red-700 underline">
+              {sigueFalla.documento.codigoCorto}
+            </a>
+            <span class="badge bg-white text-slate-600">v{sigueFalla.documento.version}</span>
+            <span class={`badge ${estadoInfo(sigueFalla.documento.estado).color}`}>
+              {estadoInfo(sigueFalla.documento.estado).icono} {estadoInfo(sigueFalla.documento.estado).label}
+            </span>
+          </div>
+
+          {sigueFalla.aviso && (
+            <p class="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-sm font-medium text-amber-800">
+              {sigueFalla.aviso}
+            </p>
+          )}
+
+          {sigueFalla.primerasAcciones.length > 0 ? (
+            <Fragment>
+              <h3 class="mt-4 text-sm font-semibold text-red-800">Las tres primeras acciones · se saben de memoria</h3>
+              <ol class="mt-2 space-y-2">
+                {sigueFalla.primerasAcciones.map((acc, i) => (
+                  <li class="flex gap-3 rounded-lg border-2 border-red-300 bg-white p-3">
+                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-lg font-bold ">
+                      {i + 1}
+                    </span>
+                    <span class="self-center text-base font-semibold leading-snug text-slate-900">{acc}</span>
+                  </li>
+                ))}
+              </ol>
+            </Fragment>
+          ) : (
+            <p class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+              El {sigueFalla.documento.codigoCorto} no tiene redactadas sus primeras acciones. Un EOP sin
+              primeras acciones no se puede ejecutar de memoria: complétalo en la ficha del documento.
+            </p>
+          )}
+
+          <div class="mt-4 flex flex-wrap gap-2">
+            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia&procedimiento=${sigueFalla.documento.id}`} class="btn-primary">
+              Abrir orden de emergencia
+            </a>
+            <a href={`/procedimientos/${sigueFalla.documento.id}`} class="btn-secondary">
+              Ver el {sigueFalla.documento.codigoCorto} completo
+            </a>
+            <a href="/eop" class="btn-secondary">Hoja imprimible</a>
+          </div>
+        </Fragment>
+      ) : (
+        <Fragment>
+          <p class="mt-2 text-sm font-medium text-red-800">{sigueFalla.aviso}</p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia`} class="btn-primary">Abrir orden de emergencia</a>
+            {canJefe && sistemaResuelto && (
+              <a href={`/procedimientos?nuevo=1&sistema=${sistemaResuelto}&tipo=eop`} class="btn-secondary">
+                Registrar el EOP que falta
+              </a>
+            )}
+          </div>
+        </Fragment>
+      )}
+    </div>
+  )}
+
+  <!-- ══ Qué rige este equipo · el resolver del volumen GO-GUI-011-2026 ══════ -->
+  {rige && (
+    <div class="card mt-4 border-slate-300 p-5" id="rige">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="font-semibold text-slate-900">Qué rige este equipo</h2>
+          <p class="text-xs text-slate-500">
+            Nadie tiene que buscar el documento: el sistema resuelve el juego de cinco que gobierna a toda la
+            familia de este equipo y en qué estado está cada eslabón.
+          </p>
+        </div>
+        <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">Cobertura del sistema</a>
+      </div>
+
+      <!-- El sistema resuelto y de dónde salió -->
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <span class="badge bg-slate-100 text-slate-700">
+          Sistema: <strong class="ml-1">{SISTEMA_LABEL[rige.sistema]}</strong>
+        </span>
+        <span class={`badge ${ORIGEN_SISTEMA[rige.origenSistema].color}`}>
+          {ORIGEN_SISTEMA[rige.origenSistema].label}
+        </span>
+      </div>
+      <p class="mt-1 text-xs text-slate-500">{ORIGEN_SISTEMA[rige.origenSistema].detalle}</p>
+
+      {rige.origenSistema === "inferido" && (
+        <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3">
+          <div class="text-sm font-semibold text-amber-800">Una inferencia no es una declaración</div>
+          <p class="mt-0.5 text-xs text-amber-700">
+            Mientras nadie lo declare, los documentos de abajo son una deducción del nombre del equipo.
+            Déjalo en firme para que la respuesta a una falla no dependa de una suposición.
+          </p>
+          {canEdit ? (
+            <Fragment>
+              <div class="mt-2 flex flex-wrap items-end gap-2">
+                <div class="min-w-[13rem]">
+                  <label class="label text-xs" for="sisSel">Sistema crítico</label>
+                  <select id="sisSel" class="input">
+                    {SISTEMAS.map((s) => (
+                      <option value={s.value} selected={s.value === rige.sistema}>{s.icono} {s.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button id="sisSave" class="btn-primary btn-sm">Declarar en firme</button>
+              </div>
+              <p id="sisErr" class="mt-2 hidden text-xs font-medium text-red-600"></p>
+            </Fragment>
+          ) : (
+            <p class="mt-1 text-xs text-amber-700">Pídele a Mantenimiento o Jefatura que lo declare.</p>
+          )}
+        </div>
+      )}
+
+      <!-- ══ El juego es de la familia, no de este equipo ════════════════════ -->
+      {juego && (
+        <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p class="text-sm text-slate-700">
+            Este equipo pertenece a la familia <strong>{juego.label}</strong>.
+            {familiaConteo && familiaConteo.total > 1 ? (
+              <Fragment>
+                {" "}Los 5 documentos de la familia aplican a sus <strong>{familiaConteo.total} equipos</strong>
+                {familiaConteo.criticos > 0 && (
+                  <Fragment> ({familiaConteo.criticos} de criticidad alta)</Fragment>
+                )}.
+              </Fragment>
+            ) : (
+              <Fragment> Los 5 documentos se definen para toda la familia, no para este equipo.</Fragment>
+            )}
+            <span class="text-slate-500">
+              {" "}El juego no se arma equipo por equipo: se define una vez por familia y todos lo heredan.
+            </span>
+          </p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+            <span class:list={[
+              "badge",
+              nCubiertos === 5 ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700",
+            ]}>
+              Juego {nCubiertos} de 5
+            </span>
+            <span class:list={[
+              "badge",
+              nVigentes === 5 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
+            ]}>
+              {nVigentes} vigente{nVigentes === 1 ? "" : "s"}
+            </span>
+            <a href={`/procedimientos?nuevo=1&sistema=${juego.sistema}`} class="font-medium text-brand-600 hover:underline">
+              Ver la biblioteca de la familia &rarr;
+            </a>
+          </div>
+        </div>
+      )}
+
+      <!-- La cadena del cap. 01: SCP → SOP → AOP → EOP → MOP ─────────────── -->
+      {sinNingunDocumento ? (
+        <div class="mt-3 rounded-md border-2 border-red-300 bg-red-50 p-4">
+          <div class="text-sm font-bold text-red-800">
+            La familia {SISTEMA_LABEL[rige.sistema]} no tiene ningún documento del juego.
+          </div>
+          <p class="mt-1 text-xs text-red-700">
+            No hay SCP, SOP, AOP, EOP ni MOP para {SISTEMA_LABEL[rige.sistema]}
+            {familiaConteo && familiaConteo.total > 1 && (
+              <Fragment>, y son {familiaConteo.total} equipos los que quedan sin gobierno</Fragment>
+            )}. Si este equipo falla, nadie sabrá qué sigue más que de memoria.
+          </p>
+          {canJefe && (
+            <a href={`/procedimientos?nuevo=1&sistema=${rige.sistema}`} class="btn-secondary btn-sm mt-2 inline-block">
+              Registrarlo en la biblioteca
+            </a>
+          )}
+        </div>
+      ) : (
+        <Fragment>
+          <div class="mt-3 -mx-1 overflow-x-auto pb-1">
+            <ol class="flex min-w-max items-stretch px-1" aria-label="Juego de documentos de la familia">
+              {cadena.map((s, i) => (
+                <Fragment>
+                  {i > 0 && (
+                    <li class="flex select-none items-center px-1 text-lg text-slate-300" aria-hidden="true">&rarr;</li>
+                  )}
+                  <li class:list={[
+                    "flex w-[9.5rem] shrink-0 flex-col rounded-md border-2 p-2",
+                    !s.cubierto
+                      ? "border-dashed border-red-300 bg-red-50"
+                      : s.vigente
+                        ? "border-emerald-300 bg-white"
+                        : "border-amber-300 bg-white",
+                  ]}>
+                    <span class={`badge w-fit px-1.5 text-[10px] ${TIPO_PROC[s.tipo].color}`}>
+                      {TIPO_PROC[s.tipo].icono} {TIPO_PROC[s.tipo].label}
+                    </span>
+
+                    {s.doc ? (
+                      <Fragment>
+                        <a
+                          href={`/procedimientos/${s.doc.id}`}
+                          class="mt-1 block font-mono text-sm font-bold text-brand-600 hover:underline"
+                          title={s.doc.titulo}
+                        >
+                          {s.doc.codigoCorto}
+                        </a>
+                        <span class:list={[
+                          "badge mt-1 w-fit text-[10px]",
+                          s.vigente ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700",
+                        ]}>
+                          {estadoInfo(s.doc.estado).icono} {estadoInfo(s.doc.estado).label}
+                        </span>
+                        {s.propio && (
+                          <span class="mt-1 text-[10px] font-medium text-sky-700">Propio de este equipo</span>
+                        )}
+                        {s.otros > 0 && (
+                          <span class="mt-1 text-[10px] text-slate-400">+{s.otros} más en la familia</span>
+                        )}
+                      </Fragment>
+                    ) : (
+                      <Fragment>
+                        <span class="mt-1 block text-sm font-bold text-red-700">Falta</span>
+                        {canJefe ? (
+                          <a
+                            href={`/procedimientos?nuevo=1&sistema=${rige.sistema}&tipo=${s.tipo}`}
+                            class="mt-1 text-[10px] font-medium text-red-700 underline"
+                          >
+                            Crear el {TIPO_PROC[s.tipo].label}
+                          </a>
+                        ) : (
+                          <span class="mt-1 text-[10px] text-red-600">Nadie lo ha redactado</span>
+                        )}
+                      </Fragment>
+                    )}
+
+                    <p class="mt-auto pt-2 text-[10px] leading-tight text-slate-500">{s.pregunta}</p>
+                  </li>
+                </Fragment>
+              ))}
+            </ol>
+          </div>
+
+          {faltanEnFamilia.length > 0 && (
+            <div class="mt-3 rounded-md border border-red-300 bg-red-50 p-3">
+              <div class="text-sm font-semibold text-red-800">
+                A esta familia le falta {textoFaltantes}.
+              </div>
+              <p class="mt-0.5 text-xs text-red-700">
+                El hueco no es de este equipo: es de
+                {familiaConteo && familiaConteo.total > 1
+                  ? ` los ${familiaConteo.total} equipos de ${juego?.label ?? ""} que comparten el juego`
+                  : " toda la familia"}.
+                Redactarlo una vez lo cierra para todos.
+              </p>
+              {canJefe && (
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {faltanEnFamilia.map((s) => (
+                    <a
+                      href={`/procedimientos?nuevo=1&sistema=${rige.sistema}&tipo=${s.tipo}`}
+                      class="btn-secondary btn-sm"
+                    >
+                      {TIPO_PROC[s.tipo].icono} Crear el {TIPO_PROC[s.tipo].label} de la familia
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </Fragment>
+      )}
+
+      {!fueraDeServicio && eopDeLaFamilia && (
+        <p class="mt-3 text-xs text-slate-500">
+          Si este equipo falla, el sistema abrirá la respuesta con
+          <strong class="mx-1">{eopDeLaFamilia.codigoCorto}</strong>
+          sin que nadie tenga que buscarlo.
+        </p>
+      )}
+    </div>
+  )}
   <ActivoConjuntos relaciones={conjuntosHistorial} />
   <CatalogoAireOrigen modeloAireId={a.modeloAireId} snapshot={a.modeloAireSnapshot} />
 
@@ -241,12 +711,12 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
         <div><div class="text-xs uppercase text-slate-500">Categoria</div><div>{a.categoria ?? "-"}</div></div>
         <div>
           <div class="text-xs uppercase text-slate-500">Sucursal</div>
-          <div>{sucursalInfo ? <span class="font-medium">🏢 {sucursalInfo.nombre}</span> : "-"}</div>
+          <div>{sucursalInfo ? <span class="font-medium">{sucursalInfo.nombre}</span> : "-"}</div>
         </div>
         <div>
           <div class="text-xs uppercase text-slate-500">Ubicación</div>
           <div>
-            {ubicacionInfo ? <span><span class="font-medium">📍 {ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
+            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
             {a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
           </div>
         </div>
@@ -260,27 +730,27 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
             {a.vidaUtilAnios ? <span>{a.vidaUtilAnios} años{finVida && <span class="text-xs text-slate-500"> · fin {fmt(finVida)}</span>}</span> : "-"}
           </div>
           {vidaRem != null && !vidaVencida && vidaRem < 2 && (
-            <div class="mt-0.5 text-xs text-amber-600">⚠ Quedan ~{vidaRem.toFixed(1)} años de vida útil</div>
+            <div class="mt-0.5 text-xs text-amber-600">Quedan ~{vidaRem.toFixed(1)} años de vida útil</div>
           )}
         </div>
         <div><div class="text-xs uppercase text-slate-500">Valor de adquisición</div><div>{a.valorAdquisicion != null ? `$${a.valorAdquisicion.toFixed(2)}` : "-"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Responsable</div><div>{responsableInfo ? `👤 ${responsableInfo.nombre}` : "-"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Responsable</div><div>{responsableInfo ? `${responsableInfo.nombre}` : "-"}</div></div>
         <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Descripcion</div><div class="whitespace-pre-wrap">{a.descripcion ?? "-"}</div></div>
       </div>
 
       {vidaVencida && (
         <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          ⏳ Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Considere evaluar su reemplazo.
+          Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Considere evaluar su reemplazo.
         </div>
       )}
 
       <div class="mt-5 border-t border-slate-200 pt-4">
-        <h3 class="font-semibold text-amber-700">⏱ SLA del equipo</h3>
+        <h3 class="font-semibold text-amber-700">SLA del equipo</h3>
         <div class="mt-2 grid grid-cols-4 gap-3 text-sm">
-          <div><div class="text-xs uppercase text-slate-500">🔴 Urgente</div><div class="font-mono">{a.slaUrgenteHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟠 Alta</div><div class="font-mono">{a.slaAltaHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟡 Media</div><div class="font-mono">{a.slaMediaHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟢 Baja</div><div class="font-mono">{a.slaBajaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Urgente</div><div class="font-mono">{a.slaUrgenteHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Alta</div><div class="font-mono">{a.slaAltaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Media</div><div class="font-mono">{a.slaMediaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Baja</div><div class="font-mono">{a.slaBajaHoras} h</div></div>
         </div>
       </div>
 
@@ -298,11 +768,14 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     </div>
 
     <div class="card p-5">
-      <h2 class="font-semibold">QR / Identificacion</h2>
+      <h2 class="font-semibold">Identificación</h2>
       <div class="mt-3">
-        <div class="text-xs uppercase text-slate-500">Codigo QR</div>
-        <div class="font-mono text-xs">{a.qrCode ?? "-"}</div>
+        <div class="text-xs uppercase text-slate-500">Código interno</div>
+        <div class="font-mono text-xs">{a.codigo}</div>
       </div>
+      {ESCANEO_ACTIVOS_HABILITADO
+        ? <div class="mt-3"><div class="text-xs uppercase text-slate-500">Código de etiqueta</div><div class="font-mono text-xs">{a.qrCode ?? "-"}</div></div>
+        : <p class="mt-3 text-xs text-slate-500">Etiqueta GS1 Data Matrix: pendiente. Por ahora el equipo se encuentra por sede y ubicación.</p>}
       <div class="mt-3">
         <div class="text-xs uppercase text-slate-500">Estado</div>
         <div class="capitalize">{a.estado}</div>
@@ -311,7 +784,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
 
     {contratosActivo.length > 0 && (
       <div class="card p-5">
-        <h2 class="font-semibold">📜 Contratos de mantenimiento</h2>
+        <h2 class="font-semibold">Contratos de mantenimiento</h2>
         <ul class="mt-3 space-y-2 text-sm">
           {contratosActivo.map(({ c, prov, colorBadge, labelBadge }) => (
             <li class="border-l-2 border-slate-200 pl-3">
@@ -329,21 +802,327 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   </div>
 
   <div class="mt-4 flex flex-wrap gap-2">
-    <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
+    <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">Mantenimiento predictivo</a>
   </div>
+
+  <!-- Configuración de sitio (SCP) — GO-GUI-011-2026 cap. 03 -->
+  <div class="grid grid-cols-1 gap-4 mt-6 lg:grid-cols-2">
+    <div class="card p-5" id="scp">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 class="font-semibold text-slate-900">Configuración de sitio (SCP)</h2>
+          <p class="text-xs text-slate-500">Cómo está configurado este sistema cuando todo está normal. La versión del SCP es un atributo del activo.</p>
+        </div>
+        <span class={`badge ${NIVEL_COLOR[nivel]}`} title="Nivel en la jerarquía del SCP">{NIVEL_LABEL[nivel]}</span>
+      </div>
+
+      {faltaScp && (
+        <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          Este activo es de nivel <strong>sistema</strong> y no tiene un SCP vinculado. Un sistema crítico sin
+          configuración de sitio escrita deja sin referencia a sus SOP, MOP y AOP (FMS.08.00).
+        </div>
+      )}
+
+      {scpInfo ? (
+        <div class="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-mono text-sm font-semibold text-slate-800">{scpInfo.codigoCorto}</span>
+            <span class={`badge ${ESTADO_PROCEDIMIENTO_COLOR[scpInfo.estado] ?? "bg-slate-100 text-slate-600"}`}>
+              {ESTADO_PROCEDIMIENTO_LABEL[scpInfo.estado] ?? scpInfo.estado}
+            </span>
+            <span class="badge bg-slate-100 text-slate-600">v{scpInfo.version}</span>
+            <span class="badge bg-slate-100 text-slate-600 capitalize">{scpInfo.sistema}</span>
+          </div>
+          <p class="mt-1 text-sm text-slate-700">{scpInfo.titulo}</p>
+          <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
+            <div>
+              <div class="uppercase">Versión en el activo</div>
+              <div class="font-mono text-slate-700">{a.scpVersionRef ?? "—"}</div>
+              {a.scpVersionRef && a.scpVersionRef !== scpInfo.version && (
+                <div class="mt-0.5 text-amber-600">El SCP ya va en v{scpInfo.version}: actualice la referencia del activo.</div>
+              )}
+            </div>
+            <div>
+              <div class="uppercase">Próxima revisión</div>
+              <div class="text-slate-700">{fmtFechaSoloCompacta(scpInfo.proximaRevision)}</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p class="mt-3 text-sm text-slate-500">Sin SCP vinculado. {canEdit && "Vincula el procedimiento de configuración de sitio que describe este activo."}</p>
+      )}
+
+      {canEdit && (
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button id="jerModalBtn" class="btn-secondary btn-sm">Jerarquía y SCP</button>
+          <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">Puntos de ajuste</a>
+        </div>
+      )}
+    </div>
+
+    <!-- Jerarquía: componentes hijos -->
+    <div class="card p-5" id="componentes">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 class="font-semibold text-slate-900">Componentes ({componentes.length})</h2>
+          <p class="text-xs text-slate-500">Cada sistema crítico se registra como activo padre con sus componentes como hijos.</p>
+        </div>
+      </div>
+
+      {ancestros.length > 0 && (
+        <div class="mt-3 text-xs text-slate-500">
+          Cuelga de{" "}
+          {ancestros.map((an, i) => (
+            <Fragment>
+              {i > 0 && <span class="text-slate-300"> › </span>}
+              <a href={`/activos/${an.id}`} class="text-brand-600 hover:underline">{an.codigo}</a>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
+      {componentes.length === 0 ? (
+        <p class="mt-3 text-sm text-slate-500">
+          Sin componentes registrados.
+          {canEdit && " Para colgar un componente, abre ese equipo y elige este activo como padre."}
+        </p>
+      ) : (
+        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+          {componentes.map((c) => (
+            <li class="flex items-center justify-between gap-3 py-2">
+              <div class="min-w-0 flex-1">
+                <a href={`/activos/${c.id}`} class="font-medium text-brand-700 hover:underline">{c.nombre}</a>
+                <div class="text-xs text-slate-500">
+                  <span class="font-mono">{c.codigo}</span>
+                  <span class={`badge ml-2 text-[10px] ${NIVEL_COLOR[(c.nivelJerarquia ?? "componente") as NivelJerarquia]}`}>
+                    {NIVEL_LABEL[(c.nivelJerarquia ?? "componente") as NivelJerarquia]}
+                  </span>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 whitespace-nowrap">
+                {c.otsAbiertas > 0 && (
+                  <span class="badge bg-blue-100 text-blue-700 text-[10px]" title="Órdenes de trabajo abiertas (abierta, en proceso o en espera)">
+                    {c.otsAbiertas} OT{c.otsAbiertas === 1 ? "" : "s"} abierta{c.otsAbiertas === 1 ? "" : "s"}
+                  </span>
+                )}
+                <span class={`badge text-[10px] ${estadoColorActivo[c.estado] ?? "bg-slate-100 text-slate-600"}`}>{c.estado}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </div>
+
+  <!-- Puntos de ajuste del SCP -->
+  <div class="card mt-6 p-5" id="puntos-ajuste">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">Puntos de ajuste del SCP</h2>
+        <p class="text-xs text-slate-500">
+          Los puntos de ajuste se cargan como atributos con valor normal, mínimo y máximo. Una posición normal
+          («selector en AUTO») se registra como texto.
+        </p>
+      </div>
+      {canEdit && <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">+ Agregar atributo</a>}
+    </div>
+
+    {atributosScp.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">
+        Sin puntos de ajuste cargados.
+        {canEdit && " Cárgalos desde Mantenimiento predictivo eligiendo el tipo «Punto de ajuste» o «Posición normal»."}
+      </p>
+    ) : (
+      <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th class="px-2 py-2">Parámetro</th>
+              <th class="px-2 py-2">Valor nominal</th>
+              <th class="px-2 py-2">Mín.</th>
+              <th class="px-2 py-2">Máx.</th>
+              <th class="px-2 py-2">Unidad</th>
+              <th class="px-2 py-2">Fuente normativa</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {atributosScp.map((v) => {
+              const tipo = (v.tipoAtributo ?? "punto_ajuste") as TipoAtributo;
+              const sinNominal = v.valorNominal == null && !v.valorNominalTexto;
+              return (
+                <tr class={!v.activo ? "opacity-50" : undefined}>
+                  <td class="px-2 py-2">
+                    <div class="font-medium text-slate-800">{v.nombre}</div>
+                    <span class={`badge text-[10px] ${TIPO_ATRIBUTO_COLOR[tipo]}`}>{TIPO_ATRIBUTO_LABEL[tipo]}</span>
+                    {!v.activo && <span class="badge ml-1 bg-slate-200 text-[10px] text-slate-600">Inactivo</span>}
+                  </td>
+                  <td class="px-2 py-2 font-mono">
+                    {sinNominal ? (
+                      <span class="badge bg-blue-50 text-blue-700" title="Campo en azul: celda pendiente de decisión">Pendiente</span>
+                    ) : (
+                      valorNominalTexto({ valorNominal: v.valorNominal, valorNominalTexto: v.valorNominalTexto, unidad: null })
+                    )}
+                  </td>
+                  <td class="px-2 py-2 font-mono text-slate-600">{v.minWarning ?? v.minCritico ?? "—"}</td>
+                  <td class="px-2 py-2 font-mono text-slate-600">{v.maxWarning ?? v.maxCritico ?? "—"}</td>
+                  <td class="px-2 py-2 text-slate-600">{v.unidad ?? "—"}</td>
+                  <td class="px-2 py-2 text-xs text-slate-600">
+                    {v.fuente ? (
+                      <span>
+                        {v.fuente}
+                        {v.fuenteReferencia && <span class="block text-slate-400">{v.fuenteReferencia}</span>}
+                      </span>
+                    ) : (
+                      <span class="badge bg-blue-50 text-blue-700" title="Campo en azul: norma por adoptar">Norma por adoptar</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+
+  <!-- Mapa de distribución: una manejadora sirve varias salas -->
+  <div class="card mt-6 p-5" id="mapa-distribucion">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">Mapa de distribución ({servidasRows.length})</h2>
+        <p class="text-xs text-slate-500">Qué salas depende de este activo: una manejadora sirve varias salas, un tablero alimenta varios servicios (FMS.08.00).</p>
+      </div>
+      {canEdit && <button id="servBtn" class="btn-primary btn-sm">+ Agregar ubicación</button>}
+    </div>
+
+    {canEdit && (
+      <div id="servForm" class="mt-4 hidden rounded-md border border-slate-200 bg-slate-50 p-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <label class="label text-xs" for="serv_ubic">Ubicación *</label>
+            <select id="serv_ubic" class="input">
+              <option value="">Seleccionar…</option>
+              {ubicacionesOpciones.map((u) => (
+                <option value={u.id} disabled={idsYaServidos.has(u.id)}>
+                  {u.nombre} ({u.tipo}){u.sucursal ? ` · ${u.sucursal}` : ""}{idsYaServidos.has(u.id) ? " — ya en el mapa" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="serv_rol">Rol *</label>
+            <select id="serv_rol" class="input">
+              {ROLES_UBICACION_SERVIDA.map((r) => <option value={r}>{ROL_SERVIDA_LABEL[r]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="serv_notas">Notas</label>
+            <input id="serv_notas" class="input" placeholder="Difusor, circuito, ramal…" />
+          </div>
+        </div>
+        <ul class="mt-2 space-y-0.5 text-xs text-slate-500">
+          {ROLES_UBICACION_SERVIDA.map((r) => <li><strong>{ROL_SERVIDA_LABEL[r]}:</strong> {ROL_SERVIDA_AYUDA[r]}</li>)}
+        </ul>
+        <p id="serv_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-3 flex gap-2">
+          <button id="serv_save" class="btn-primary btn-sm">Agregar al mapa</button>
+          <button id="serv_cancel" class="btn-secondary btn-sm">Cancelar</button>
+        </div>
+      </div>
+    )}
+
+    {servidasRows.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Sin ubicaciones servidas. {canEdit && "Agrega las salas que este activo sirve, alimenta, controla o de las que extrae."}</p>
+    ) : (
+      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+        {servidasRows.map(({ rel, u, s }) => (
+          <li class="flex items-center justify-between gap-3 py-2">
+            <div class="min-w-0 flex-1">
+              <span class={`badge text-[10px] ${ROL_SERVIDA_COLOR[(rel.rol ?? "sirve") as RolUbicacionServida]}`}>
+                {ROL_SERVIDA_LABEL[(rel.rol ?? "sirve") as RolUbicacionServida]}
+              </span>
+              <span class="ml-2 font-medium text-slate-800">{u.nombre}</span>
+              <span class="ml-1 text-xs capitalize text-slate-400">({u.tipo})</span>
+              <div class="text-xs text-slate-500">
+                {s?.nombre && <span>{s.nombre}</span>}
+                {rel.notas && <span class="ml-2">{rel.notas}</span>}
+              </div>
+            </div>
+            {canEdit && <button class="serv-del text-xs text-red-600 hover:underline" data-rel={rel.id}>Quitar</button>}
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
+  <!-- Modal: jerarquía (padre + nivel) y SCP vinculado -->
+  {canEdit && (
+    <div id="jerModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900">Jerarquía y configuración de sitio</h3>
+        <p class="mt-1 text-xs text-slate-500">
+          La jerarquía admite {PROFUNDIDAD_MAXIMA} niveles: sistema → subsistema → componente. Un activo no puede
+          colgar de sí mismo ni de uno de sus propios componentes.
+        </p>
+        <div class="mt-4 grid grid-cols-1 gap-3">
+          <div>
+            <label class="label text-xs" for="jer_padre">Activo padre</label>
+            <select id="jer_padre" class="input">
+              <option value="">Sin padre (raíz)</option>
+              {candidatosPadre.map((c) => (
+                <option value={c.id} selected={a.padreId === c.id}>
+                  {c.codigo} · {c.nombre} ({NIVEL_LABEL[(c.nivelJerarquia ?? "componente") as NivelJerarquia]})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_nivel">Nivel *</label>
+            <select id="jer_nivel" class="input">
+              {NIVELES_JERARQUIA.map((n) => <option value={n} selected={nivel === n}>{NIVEL_LABEL[n]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_scp">Procedimiento SCP</label>
+            <select id="jer_scp" class="input">
+              <option value="">Sin SCP vinculado</option>
+              {procedimientosScp.map((p) => (
+                <option value={p.id} selected={a.scpProcedimientoId === p.id} data-version={p.version}>
+                  {p.codigoCorto} · {p.titulo} (v{p.version})
+                </option>
+              ))}
+            </select>
+            {procedimientosScp.length === 0 && (
+              <p class="mt-1 text-xs text-amber-600">No hay procedimientos SCP activos todavía.</p>
+            )}
+          </div>
+          <div>
+            <label class="label text-xs" for="jer_version">Versión del SCP en este activo</label>
+            <input id="jer_version" class="input" value={a.scpVersionRef ?? ""} placeholder="0.9" />
+            <p class="mt-1 text-xs text-slate-500">Se completa con la versión del SCP elegido; edítala si el activo está configurado según otra.</p>
+          </div>
+        </div>
+        <p id="jer_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="jer_cancel" class="btn-secondary">Cancelar</button>
+          <button id="jer_save" class="btn-primary">Guardar</button>
+        </div>
+      </div>
+    </div>
+  )}
 
   <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <h2 class="font-semibold">🔎 Inspección de aceptación (entrada en servicio)</h2>
+      <h2 class="font-semibold">Inspección de aceptación (entrada en servicio)</h2>
       {canEdit && (
-        <button id="acepBtn" class="btn-secondary text-sm">{a.aceptacionFecha ? "✎ Editar registro" : "+ Registrar aceptación"}</button>
+        <button id="acepBtn" class="btn-secondary text-sm">{a.aceptacionFecha ? "Editar registro" : "+ Registrar aceptación"}</button>
       )}
     </div>
     {a.aceptacionFecha ? (
       <div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
         <span class={`badge ${a.aceptacionResultado === "aprobado" ? "bg-emerald-100 text-emerald-700" : a.aceptacionResultado === "condicionado" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
-          {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "⚠ Aprobado con condiciones" : "✗ Rechazado"}
+          {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "Aprobado con condiciones" : "✕ Rechazado"}
         </span>
         <span class="text-slate-600">Fecha: <span class="font-medium">{a.aceptacionFecha.split("-").reverse().join("/")}</span></span>
         {aceptadoPorNombre && <span class="text-slate-500 text-xs">Registrado por {aceptadoPorNombre}</span>}
@@ -359,7 +1138,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   {canEdit && (
     <div id="acepModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-md p-5">
-        <h3 class="text-lg font-semibold text-slate-900">🔎 Inspección de aceptación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Inspección de aceptación</h3>
         <p class="mt-1 text-xs text-slate-500">Prueba inicial de funcionamiento, integridad y accesorios al recibir/instalar el equipo.</p>
         <div class="mt-4 space-y-3">
           <div>
@@ -370,8 +1149,8 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
             <label class="label text-xs">Resultado *</label>
             <select id="acep_resultado" class="input">
               <option value="aprobado" selected={a.aceptacionResultado === "aprobado" || !a.aceptacionResultado}>✓ Aprobado — apto para servicio</option>
-              <option value="condicionado" selected={a.aceptacionResultado === "condicionado"}>⚠ Aprobado con condiciones</option>
-              <option value="rechazado" selected={a.aceptacionResultado === "rechazado"}>✗ Rechazado — no entra en servicio</option>
+              <option value="condicionado" selected={a.aceptacionResultado === "condicionado"}>Aprobado con condiciones</option>
+              <option value="rechazado" selected={a.aceptacionResultado === "rechazado"}>✕ Rechazado — no entra en servicio</option>
             </select>
           </div>
           <div>
@@ -424,7 +1203,10 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <!-- Documentos del equipo (ficha técnica, manual, garantía…) -->
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
-      <h2 class="font-semibold">📄 Documentos del equipo</h2>
+      <div>
+        <h2 class="font-semibold">Documentos del equipo</h2>
+        <p class="text-xs text-slate-500">Planos, unifilares y diagramas de válvulas se adjuntan al activo; los <strong>as-built</strong> son la configuración vigente del SCP.</p>
+      </div>
       {canEdit && <button id="docUploadBtn" class="btn-primary text-sm">+ Subir documento</button>}
     </div>
 
@@ -462,8 +1244,15 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
           <li class="flex items-center justify-between gap-3 py-2">
             <div class="min-w-0 flex-1">
               <a href={`/api/activos/documento/${d.id}`} target="_blank" class="font-medium text-brand-700 hover:underline">{d.nombre}</a>
+              {d.asBuilt && (
+                <span class="badge ml-2 bg-indigo-100 text-[10px] text-indigo-700" title="Plano o esquema as-built: refleja la instalación tal como está construida (SCP)">
+                  As-built
+                </span>
+              )}
               <div class="text-xs text-slate-500">
                 <span class="rounded bg-slate-100 px-1.5 py-0.5">{CATEGORIA_DOC_LABEL[d.categoria ?? "otro"] ?? d.categoria}</span>
+                {d.version && <span class="ml-2 font-mono">v{d.version}</span>}
+                {d.fechaVersion && <span class="ml-1">({fmtFechaSoloCompacta(d.fechaVersion)})</span>}
                 <span class="ml-2">{(d.tamano / 1024).toFixed(0)} KB · {fmt(d.createdAt)}</span>
               </div>
             </div>
@@ -478,7 +1267,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <div class="card mt-6 p-5" id="contingencia">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="font-semibold text-slate-900">🔁 Continuidad — equipos de respaldo</h2>
+        <h2 class="font-semibold text-slate-900">Continuidad — equipos de respaldo</h2>
         <p class="text-xs text-slate-500">Plan de contingencia (JCI FMS.9): a qué equipo recurrir si este sale de servicio.</p>
       </div>
       {canJefe && <button id="respaldoBtn" class="btn-primary text-sm">+ Vincular respaldo</button>}
@@ -486,7 +1275,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
 
     {fueraDeServicio && respaldosRows.length > 0 && (
       <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-        ⚠ Este equipo está <strong>{a.estado}</strong>.
+        Este equipo está <strong>{a.estado}</strong>.
         {respaldosOperativos.length > 0
           ? <span> Respaldo operativo disponible: <strong>{respaldosOperativos.map((r) => r.eq_.codigo).join(", ")}</strong>.</span>
           : <span> <strong>Ningún respaldo está operativo en este momento.</strong></span>}
@@ -494,7 +1283,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     )}
     {fueraDeServicio && respaldosRows.length === 0 && criticidad === "alta" && (
       <div class="mt-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
-        🔴 Equipo crítico fuera de servicio y <strong>sin respaldo configurado</strong>. Riesgo de continuidad.
+        Equipo crítico fuera de servicio y <strong>sin respaldo configurado</strong>. Riesgo de continuidad.
       </div>
     )}
 
@@ -548,7 +1337,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
     <div class="card mt-6 p-5" id="calibraciones">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="font-semibold text-purple-700">🔬 Calibraciones</h2>
+          <h2 class="font-semibold text-purple-700">Calibraciones</h2>
           <p class="text-xs text-slate-500">Trazabilidad metrológica (JCI FMS.8 / MINSAL): certificado, laboratorio acreditado, patrón y resultado.</p>
         </div>
         {canEdit && <button id="calNewBtn" class="btn-primary text-sm">+ Registrar calibración</button>}
@@ -569,7 +1358,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
               <label class="label">Laboratorio</label>
               <select id="c_lab" class="input">
                 <option value="">— Externo / no listado —</option>
-                {laboratorios.map((l) => <option value={l.id}>{l.nombre}{l.acred ? " ✔ acreditado" : ""}</option>)}
+                {laboratorios.map((l) => <option value={l.id}>{l.nombre}{l.acred ? " ✓ acreditado" : ""}</option>)}
               </select>
             </div>
             <div>
@@ -695,7 +1484,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
           </select>
         </div>
         <div class="sm:col-span-2 border-t border-slate-200 pt-3 mt-1">
-          <label class="label">📋 Plantilla de checklist <span class="text-slate-400 font-normal">(opcional pero recomendada)</span></label>
+          <label class="label">Plantilla de checklist <span class="text-slate-400 font-normal">(opcional pero recomendada)</span></label>
           <select class="input" id="p_plantilla">
             <option value="">— Sin plantilla (checklist vacío) —</option>
           </select>
@@ -726,13 +1515,13 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
                 <div class="flex-1">
                   <div class="font-medium">{r.p.titulo}</div>
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                    <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">📅 {r.p.frecuencia}</span>
+                    <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">{r.p.frecuencia}</span>
                     <span class="rounded bg-blue-100 px-2 py-0.5 text-blue-700">Próxima: <strong>{fmt(r.p.proximaFecha)}</strong></span>
                     {r.u
-                      ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">👤 {r.u.nombre}</span>
-                      : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">👤 Sin asignar</span>
+                      ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">{r.u.nombre}</span>
+                      : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">Sin asignar</span>
                     }
-                    {r.p.prioridad && <span class="rounded bg-slate-100 px-2 py-0.5 capitalize text-slate-600">⚡ {r.p.prioridad}</span>}
+                    {r.p.prioridad && <span class="rounded bg-slate-100 px-2 py-0.5 capitalize text-slate-600">{r.p.prioridad}</span>}
                   </div>
                   {r.p.ultimaGeneracion && <div class="mt-1 text-xs text-slate-400">Última OT generada: {fmt(r.p.ultimaGeneracion)}</div>}
                   {r.p.descripcion && <div class="mt-1 text-sm text-slate-600">{r.p.descripcion}</div>}
@@ -743,7 +1532,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
                   </span>
                   {canEdit && (
                     <>
-                      <button data-id={r.p.id} data-edit class="btn-secondary text-xs">✎ Editar</button>
+                      <button data-id={r.p.id} data-edit class="btn-secondary text-xs">Editar</button>
                       <button data-id={r.p.id} data-pause class="btn-secondary text-xs">{r.p.activo ? "Pausar" : "Activar"}</button>
                       <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>
                     </>
@@ -821,7 +1610,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {ordsRel.map((o) => (
           <li class="flex items-center justify-between py-2">
-            <a href={areaHref(`/ordenes/${o.id}`, area)} class="text-brand-700 hover:underline">#{o.id} - {o.titulo}</a>
+            <a href={areaHref(`/ordenes/${o.id}`, area)} class="text-brand-700 hover:underline">{etiquetaOT(o)} - {o.titulo}</a>
             <span class="text-xs text-slate-500 capitalize">{o.tipo} · {o.estado.replace("_"," ")}</span>
           </li>
         ))}
@@ -832,7 +1621,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
   <!-- Historial de cambios (audit) -->
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
-      <h2 class="font-semibold">📋 Historial de cambios</h2>
+      <h2 class="font-semibold">Historial de cambios</h2>
       <span class="text-xs text-slate-500">{auditRows.length} {auditRows.length === 1 ? "evento" : "eventos"}</span>
     </div>
     {auditRows.length === 0 ? (
@@ -841,7 +1630,7 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {auditRows.map((r) => {
           const cambios = parsearCambios(r.a.cambios);
-          const accionLabel = r.a.accion === "create" ? "✨ Creó" : r.a.accion === "delete" ? "🗑 Eliminó" : "✎ Modificó";
+          const accionLabel = r.a.accion === "create" ? "Creó" : r.a.accion === "delete" ? "Eliminó" : "Modificó";
           const accionColor = r.a.accion === "create" ? "bg-emerald-50 text-emerald-700"
             : r.a.accion === "delete" ? "bg-red-50 text-red-700"
             : "bg-blue-50 text-blue-700";
@@ -921,6 +1710,10 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
           bloqueante: !!it.bloqueante,
           minutos: it.minutosEstimados ?? null,
           materiales: it.materiales ?? null,
+          requiereValor: !!it.requiereValor,
+          unidad: it.unidad ?? null,
+          esperadoMin: it.valorEsperadoMin ?? null,
+          esperadoMax: it.valorEsperadoMax ?? null,
         };
       }
       const crit = p.items.filter((it) => it.criterioAceptacion).length;
@@ -1157,6 +1950,125 @@ const respaldosOperativos = respaldosRows.filter((r) => r.eq_.estado === "operat
         if (res.ok) location.reload(); else alert("Error al quitar");
       });
     });
+
+    // ─── Fase 47 · Jerarquía del SCP (padre + nivel + SCP vinculado) ───────
+    const jerModal = $("jerModal");
+    const abrirJer = () => { jerModal?.classList.remove("hidden"); jerModal?.classList.add("flex"); };
+    const cerrarJer = () => { jerModal?.classList.add("hidden"); jerModal?.classList.remove("flex"); };
+    $("jerModalBtn")?.addEventListener("click", abrirJer);
+    $("jer_cancel")?.addEventListener("click", cerrarJer);
+    jerModal?.addEventListener("click", (e) => { if (e.target === jerModal) cerrarJer(); });
+
+    // Al elegir un SCP se propone su versión vigente como referencia del activo.
+    $("jer_scp")?.addEventListener("change", () => {
+      const sel = $("jer_scp");
+      const opt = sel.options[sel.selectedIndex];
+      const ver = opt?.dataset?.version;
+      if (!sel.value) { $("jer_version").value = ""; return; }
+      if (ver) $("jer_version").value = ver;
+    });
+
+    $("jer_save")?.addEventListener("click", async () => {
+      const err = $("jer_err");
+      err.classList.add("hidden");
+      const padreVal = $("jer_padre").value;
+      const scpVal = $("jer_scp").value;
+      const payload = {
+        padreId: padreVal ? Number(padreVal) : null,
+        nivelJerarquia: $("jer_nivel").value,
+        scpProcedimientoId: scpVal ? Number(scpVal) : null,
+        scpVersionRef: scpVal ? ($("jer_version").value.trim() || null) : null,
+      };
+      const res = await fetch(`/api/activos/${activoId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        err.textContent = typeof j.error === "string" ? j.error : "No se pudo guardar la jerarquía.";
+        err.classList.remove("hidden");
+        window.showToast?.(typeof j.error === "string" ? j.error : "No se pudo guardar", "error");
+        return;
+      }
+      window.showToast?.("Jerarquía y SCP actualizados", "success");
+      location.reload();
+    });
+
+    // ─── Fase 47 · Mapa de distribución (ubicaciones servidas) ─────────────
+    $("servBtn")?.addEventListener("click", () => $("servForm")?.classList.toggle("hidden"));
+    $("serv_cancel")?.addEventListener("click", () => $("servForm")?.classList.add("hidden"));
+    $("serv_save")?.addEventListener("click", async () => {
+      const err = $("serv_err");
+      err.classList.add("hidden");
+      if (!$("serv_ubic").value) {
+        err.textContent = "Selecciona una ubicación.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const res = await fetch(`/api/activos/${activoId}/ubicaciones-servidas`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ubicacionId: Number($("serv_ubic").value),
+          rol: $("serv_rol").value,
+          notas: $("serv_notas").value.trim() || null,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        err.textContent = typeof j.error === "string" ? j.error : "No se pudo agregar al mapa.";
+        err.classList.remove("hidden");
+        return;
+      }
+      window.showToast?.("Ubicación agregada al mapa", "success");
+      location.reload();
+    });
+    document.querySelectorAll(".serv-del").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        const relId = e.currentTarget.dataset.rel;
+        const ok = await (window.confirmAction
+          ? window.confirmAction("Quitar del mapa", "¿Quitar esta ubicación del mapa de distribución del activo?")
+          : confirm("¿Quitar esta ubicación del mapa de distribución?"));
+        if (!ok) return;
+        const res = await fetch(`/api/activos/${activoId}/ubicaciones-servidas?relId=${relId}`, { method: "DELETE" });
+        if (res.ok) { window.showToast?.("Ubicación quitada", "success"); location.reload(); }
+        else window.showToast?.("Error al quitar", "error");
+      });
+    });
+
+
+    // ─── Fase 48 · Declarar en firme el sistema crítico del equipo ──────────
+    // El resolver sabe inferir el sistema por el nombre, pero una inferencia no
+    // debería decidir qué EOP aplica en una emergencia. Esto la vuelve un dato.
+    const btnSisSave = $("sisSave");
+    if (btnSisSave) {
+      btnSisSave.addEventListener("click", async () => {
+        const selSis = $("sisSel");
+        const errSis = $("sisErr");
+        if (!selSis) return;
+        errSis?.classList.add("hidden");
+        btnSisSave.disabled = true;
+        const fallo = (msg) => {
+          if (errSis) { errSis.textContent = msg; errSis.classList.remove("hidden"); }
+          else window.showToast?.(msg, "error");
+          btnSisSave.disabled = false;
+        };
+        try {
+          const res = await fetch(`/api/activos/${activoId}/sistema`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sistema: selSis.value }),
+          });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) return fallo(typeof j.error === "string" ? j.error : "No se pudo declarar el sistema.");
+          window.showToast?.("Sistema declarado en firme", "success");
+          location.reload();
+        } catch {
+          fallo("Error de red al declarar el sistema.");
+        }
+      });
+    }
 
     // Eliminar equipo (solo admin)
     document.getElementById("deleteBtn")?.addEventListener("click", async () => {

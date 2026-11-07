@@ -3,6 +3,7 @@ import { eq, and, isNotNull, desc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { encuestasSatisfaccion, ordenes, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -36,7 +37,7 @@ export const GET: APIRoute = async (ctx) => {
     .orderBy(desc(encuestasSatisfaccion.respondidaEn));
 
   const header = [
-    "Fecha respuesta", "OT ID", "OT título", "Técnico",
+    "Fecha respuesta", "OT", "OT título", "Técnico",
     "Evaluador", "Email evaluador", "Calificación",
     "Comentario", "Leída", "Respuesta jefe",
   ];
@@ -44,7 +45,7 @@ export const GET: APIRoute = async (ctx) => {
   for (const { e, o, tec } of rows) {
     lines.push([
       e.respondidaEn ?? "",
-      o?.id ?? "",
+      o ? etiquetaOT(o) : "",
       o?.titulo ?? "",
       tec?.nombre ?? "",
       e.destinatarioNombre ?? "",

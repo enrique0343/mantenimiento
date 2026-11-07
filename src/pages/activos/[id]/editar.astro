@@ -139,26 +139,26 @@ const ubJson = JSON.stringify(ubRows);
     </div>
 
     <div class="border-t border-slate-200 pt-5">
-      <h2 class="mb-3 font-semibold text-amber-700">⏱ SLA del equipo (horas para completar OT)</h2>
+      <h2 class="mb-3 font-semibold text-amber-700">SLA del equipo (horas para completar OT)</h2>
       <p class="text-xs text-slate-500 mb-3">Define el tiempo máximo según la prioridad. Usado para calcular vencimientos automáticos en nuevas OT.</p>
       <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div>
-          <label class="label">🔴 Urgente</label>
+          <label class="label">Urgente</label>
           <input class="input" id="slaUrgenteHoras" type="number" min="0" value={a.slaUrgenteHoras} />
           <p class="mt-1 text-xs text-slate-400">horas</p>
         </div>
         <div>
-          <label class="label">🟠 Alta</label>
+          <label class="label">Alta</label>
           <input class="input" id="slaAltaHoras" type="number" min="0" value={a.slaAltaHoras} />
           <p class="mt-1 text-xs text-slate-400">horas</p>
         </div>
         <div>
-          <label class="label">🟡 Media</label>
+          <label class="label">Media</label>
           <input class="input" id="slaMediaHoras" type="number" min="0" value={a.slaMediaHoras} />
           <p class="mt-1 text-xs text-slate-400">horas</p>
         </div>
         <div>
-          <label class="label">🟢 Baja</label>
+          <label class="label">Baja</label>
           <input class="input" id="slaBajaHoras" type="number" min="0" value={a.slaBajaHoras} />
           <p class="mt-1 text-xs text-slate-400">horas</p>
         </div>
@@ -166,7 +166,7 @@ const ubJson = JSON.stringify(ubRows);
     </div>
 
     <div class="border-t border-slate-200 pt-5">
-      <h2 class="mb-3 font-semibold text-brand-700">🏷 Datos patrimoniales y criticidad</h2>
+      <h2 class="mb-3 font-semibold text-brand-700">Datos patrimoniales y criticidad</h2>
       <p class="text-xs text-slate-500 mb-3">La criticidad evalúa el impacto de una falla del equipo o instalación. Es independiente de la urgencia de una solicitud.</p>
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>

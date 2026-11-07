@@ -170,25 +170,20 @@ try {
   assert.match(history(13).at(-1).actor_nombre,/Solicitante externo/);
   await assert.rejects(()=>app.verification.devolverOrdenDesdeTicket(db,order(1),{id:999,solicitanteNombre:'Prueba'},'No reabrir cierres desde un token','2026-10-03T12:00:00.000Z'));
 
-  // Bidirectional origin reads use immutable round configuration, not today's template.
-  const frozenConfig=JSON.stringify({points:[{code:'valvula',label:'Válvula original',criterion:'Sin fuga'}]});
-  sqlite.exec("INSERT INTO sucursales(id,nombre) VALUES(1,'Sede fuente'); INSERT INTO ubicaciones(id,nombre,sucursal_id) VALUES(1,'Zona original',1); INSERT INTO proveedores(id,nombre) VALUES(1,'Proveedor técnico');");
-  sqlite.prepare("INSERT INTO rondas_templates(id,name,config_json,mutation_token,created_by,created_at) VALUES(1,'Plantilla actual','{}','template',1,'2026-10-01')").run();
-  sqlite.prepare(`INSERT INTO rondas_executions(id,template_id,template_version,name,site_id,location_id,scheduled_date,shift,due_at,original_due_at,status,owner_id,reviewer_id,snapshot_json,data_json,mutation_token,created_at) VALUES(1,1,1,'Ronda de origen',1,1,'2026-10-01','mañana','2026-10-01T14:00:00Z','2026-10-01T14:00:00Z','validada',3,2,?,'[]','execution','2026-10-01')`).run(frozenConfig);
-  sqlite.exec(`INSERT INTO rondas_proposals(id,execution_id,point_id,asset_id,plan_id,kind,reason,executor_type,provider_id,status,dedup_key,assigned_to,order_id,created_by,created_at,mutation_token) VALUES(1,1,'valvula',1,1,'preventivo','PM pendiente detectado durante ronda','provider',1,'aprobada','unique',3,1,1,'2026-10-01','proposal'); INSERT INTO rondas_order_links(execution_id,point_id,order_id,proposal_id) VALUES(1,'valvula',1,1);`);
-  const roundBefore=JSON.stringify(one('SELECT * FROM rondas_executions WHERE id=1'));
+  // La orden conserva de qué parada de ronda nació; el texto sale de la foto del recorrido de ese turno.
+  sqlite.exec("INSERT INTO sucursales(id,nombre) VALUES(1,'Sede fuente');");
+  const parada=one("SELECT id,ronda_id FROM ronda_puntos ORDER BY id LIMIT 1");
+  sqlite.prepare("INSERT INTO ronda_ejecuciones(id,ronda_id,sucursal_id,fecha,turno,estado,recorrido_json) VALUES(1,?,1,'2026-10-01','06:00','en_curso',?)").run(parada.ronda_id,JSON.stringify([{id:parada.id,etiqueta:'Válvula original'}]));
+  sqlite.prepare("INSERT INTO ronda_lecturas(ejecucion_id,punto_id,resultado,nota,orden_id,registrado_por,registrado_en) VALUES(1,?,'fuera','Fuga visible',1,3,'2026-10-01T12:10:00Z')").run(parada.id);
+  sqlite.prepare("UPDATE ronda_puntos SET etiqueta='Texto de hoy' WHERE id=?").run(parada.id);
   const traced=await expect(call(app.order.GET,'/api/ordenes/1',{id:1}));
   assert.equal(traced.roundsOrigins.length,1);
-  assert.equal(traced.roundsOrigins[0].href,'/rondas?execution=1');
-  assert.equal(traced.roundsOrigins[0].pointLabel,'Válvula original');
-  assert.equal(traced.roundsOrigins[0].proposalId,1);
-  assert.equal(traced.roundsOrigins[0].zoneName,'Zona original');
-  assert.equal(traced.roundsOrigins[0].providerName,'Proveedor técnico');
-  assert.equal(traced.roundsOrigins[0].coordinatorName,'Prueba tecnico');
-  assert.equal(traced.roundsOrigins[0].snapshotJson,undefined);
+  assert.equal(traced.roundsOrigins[0].href,'/ronda/1');
+  assert.equal(traced.roundsOrigins[0].etiqueta,'Válvula original');
+  assert.equal(traced.roundsOrigins[0].sede,'Sede fuente');
+  assert.equal(traced.roundsOrigins[0].nota,'Fuga visible');
   assert.equal(traced.scheduledPM.href,'/activos/1#plan-1');
   assert.equal(traced.scheduledPM.frequency,'mensual');
-  assert.equal(JSON.stringify(one('SELECT * FROM rondas_executions WHERE id=1')),roundBefore);
   const unrelated=await expect(call(app.order.GET,'/api/ordenes/2',{id:2}));
   assert.deepEqual(unrelated.roundsOrigins,[]); assert.equal(unrelated.scheduledPM,null);
 

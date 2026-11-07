@@ -1,6 +1,7 @@
 ---
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
+import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
 import { desc, sql, eq } from "drizzle-orm";
@@ -108,9 +109,9 @@ function urlConVista(v: string) {
       <p class="text-sm text-slate-500">{rows.length} registros · mostrando <span id="visibleCount">{filtered.length}</span></p>
     </div>
     <div class="flex flex-wrap gap-2">
-      {(user.rol === "admin" || user.rol === "jefe") && <a href={areaHref("/activos/clasificar", area)} class="btn-secondary text-sm">🏷 Clasificar</a>}
-      <a href={areaHref("/activos/qr-print", area)} class="btn-secondary text-sm">🔳 Imprimir QRs</a>
-      {user.rol === "admin" && <a href={areaHref("/activos/importar", area)} class="btn-secondary text-sm">📥 Importar CSV</a>}
+      {(user.rol === "admin" || user.rol === "jefe") && <a href={areaHref("/activos/clasificar", area)} class="btn-secondary text-sm">Clasificar</a>}
+      {ESCANEO_ACTIVOS_HABILITADO && <a href={areaHref("/activos/qr-print", area)} class="btn-secondary text-sm">Imprimir códigos</a>}
+      {user.rol === "admin" && <a href={areaHref("/activos/importar", area)} class="btn-secondary text-sm">Importar CSV</a>}
       {canCreate && <a href={areaHref("/activos/nuevo", area)} class="btn-primary">+ {area ? AREAS[area].createLabel : "Registrar activo"}</a>}
     </div>
   </div>
@@ -125,7 +126,7 @@ function urlConVista(v: string) {
       id="searchBox"
       class="input w-full"
       type="search"
-      placeholder="🔍 Buscar por código, nombre, marca, modelo, ubicación, sucursal..."
+      placeholder="Buscar por código, nombre, marca, modelo, ubicación, sucursal..."
     />
   </div>
 
@@ -159,15 +160,15 @@ function urlConVista(v: string) {
         <select name="categoria" class="input text-sm">
           <option value="">Todas</option>
           {categoriasOrdenadas.map(([cat, info]) => (
-            <option value={cat} selected={cat === catFiltro}>{info.tipo === "biomedico" ? "🩺" : "🔧"} {cat} ({info.n})</option>
+            <option value={cat} selected={cat === catFiltro}>{cat} ({info.n})</option>
           ))}
         </select>
       </div>
       <button class="btn-primary text-sm">Filtrar</button>
       {(sucursalFiltro || ubicacionFiltro || tipoFiltro || catFiltro || criticidadFiltro) && <a href={areaHref(`/activos?vista=${vistaParam}`, area)} class="btn-secondary text-sm">Limpiar</a>}
       <div class="ml-auto flex gap-1 text-xs">
-        <a href={urlConVista("tabla")} class:list={["rounded px-3 py-1.5", vistaParam === "tabla" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📋 Tabla</a>
-        <a href={urlConVista("grupos")} class:list={["rounded px-3 py-1.5", vistaParam === "grupos" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>📂 Por categoría</a>
+        <a href={urlConVista("tabla")} class:list={["rounded px-3 py-1.5", vistaParam === "tabla" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>Tabla</a>
+        <a href={urlConVista("grupos")} class:list={["rounded px-3 py-1.5", vistaParam === "grupos" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700"]}>Por categoría</a>
       </div>
     </form>
   </div>
@@ -181,7 +182,7 @@ function urlConVista(v: string) {
         <div class="card overflow-x-auto grupo-card" data-search={`${categoria}`.toLowerCase()}>
           <div class="flex items-center justify-between bg-slate-50 px-4 py-2.5">
             <h3 class="font-semibold text-slate-700">
-              {items[0]?.a.tipo === "biomedico" ? "🩺" : "🔧"} {categoria}
+              {categoria}
             </h3>
             <span class="text-xs font-medium text-slate-500"><span class="grupo-count">{items.length}</span> registros</span>
           </div>

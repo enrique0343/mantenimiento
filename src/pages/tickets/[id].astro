@@ -2,12 +2,15 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos } from "@/lib/schema";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos, ordenes } from "@/lib/schema";
 import { eq, asc, and, inArray } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { proyectos } from "@/lib/schema";
+import { queSigue, type QueSigue } from "@/lib/resolver";
+import { TIPO_PROC, estadoInfo, puedeVerProcedimientos } from "@/lib/procedimientos";
 import { parseArea, areaHref, AREAS } from "@/lib/areas";
 export const prerender = false;
 
@@ -61,17 +64,43 @@ if (t.proyectoId) {
     .from(proyectos).where(eq(proyectos.id, t.proyectoId)).limit(1);
   proyectoVinc = p ?? null;
 }
+
+// La orden vinculada se muestra con su código; el id solo se usa en la dirección.
+let etiquetaOrden = "";
+if (t.otId) {
+  const [ordenVinc] = await db.select({ codigo: ordenes.codigo }).from(ordenes).where(eq(ordenes.id, t.otId)).limit(1);
+  etiquetaOrden = etiquetaOT({ id: t.otId, codigo: ordenVinc?.codigo });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Qué rige esta falla (GO-GUI-011-2026, cap. 02)
+// Nadie debe buscar el documento: si el reporte trae equipo, el sistema
+// resuelve solo cuál lo gobierna cuando ya falló (EOP) y deja a la vista sus
+// tres primeras acciones. En try/catch porque un entorno sin la migración
+// 0047 debe seguir abriendo el ticket.
+// ══════════════════════════════════════════════════════════════════════════
+const puedeVerProcs = puedeVerProcedimientos(user.rol);
+let rigeFalla: QueSigue | null = null;
+let rigeError: string | null = null;
+if (t.activoId) {
+  try {
+    rigeFalla = await queSigue(db, t.activoId, "falla", t.sucursalId);
+  } catch (e: any) {
+    rigeError = String(e?.message ?? e);
+  }
+}
+const docFalla = rigeFalla?.documento ?? null;
 ---
 
 <Layout title={`Ticket #${t.id}`}>
   <div class="flex items-center justify-between">
-    <a href={areaHref("/tickets", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+    <a href={user.rol === "tecnico" ? "/campo" : areaHref("/tickets", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
     <div class="flex gap-2">
       {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
-        <button id="cierreAdminTicketBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">🔒 Cerrar administrativamente</button>
+        <button id="cierreAdminTicketBtn" type="button" class="btn-secondary text-sm text-amber-700 hover:bg-amber-50 border-amber-300">Cerrar administrativamente</button>
       )}
       {esAdmin && (
-        <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar ticket</button>
+        <button id="deleteTicketBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">Eliminar ticket</button>
       )}
     </div>
   </div>
@@ -79,7 +108,7 @@ if (t.proyectoId) {
   {esAdmin && t.estado !== "cerrado" && t.estado !== "descartado" && (
     <div id="cierreAdminTicketModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/40 p-4">
       <div class="card w-full max-w-lg p-5">
-        <h3 class="text-lg font-semibold text-slate-900">🔒 Cierre administrativo del ticket</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Cierre administrativo del ticket</h3>
         <p class="mt-1 text-sm text-slate-600">Cierra el ticket sin pasar por el flujo normal. Registra un comentario interno con el motivo y marca el ticket como <em>cerrado</em> con la fecha actual como <em>resueltoEn</em>. La OT asociada (si la hay) <strong>no</strong> se toca.</p>
         <div class="mt-3">
           <label class="label text-xs">Motivo (comentario interno, el solicitante no lo verá)</label>
@@ -129,8 +158,8 @@ if (t.proyectoId) {
           const motivo = (motivoInp?.value || "").trim();
           confirmBtn.setAttribute("disabled", "true");
           const texto = motivo
-            ? `🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.\n\nMotivo: ${motivo}`
-            : "🔒 Cierre administrativo del ticket. Se cierra para preservar el registro.";
+            ? `Cierre administrativo del ticket. Se cierra para preservar el registro.\n\nMotivo: ${motivo}`
+            : "Cierre administrativo del ticket. Se cierra para preservar el registro.";
           const cr = await fetch(`/api/tickets/${ticketId}/comentario`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -160,18 +189,83 @@ if (t.proyectoId) {
         <h1 class="text-2xl font-bold">{t.asunto}</h1>
         <span class={`badge ${PRIO_COLOR[t.prioridad]} capitalize`}>{t.prioridad}</span>
         <span class={`badge ${ESTADO_TICKET_COLOR[t.estado as EstadoTicket]}`}>{ESTADO_TICKET_LABEL[t.estado as EstadoTicket]}</span>
-        {sla === "vencido" && <span class="badge bg-red-100 text-red-700">⚠ SLA vencido</span>}
+        {sla === "vencido" && <span class="badge bg-red-100 text-red-700">SLA vencido</span>}
         {sla === "warning" && <span class="badge bg-amber-100 text-amber-700">SLA próximo</span>}
       </div>
       <p class="mt-1 font-mono text-xs text-slate-500">#{t.id} · Token <span class="rounded bg-slate-100 px-1.5 py-0.5">{t.trackingToken}</span></p>
     </div>
     {t.otId && (
-      <a href={areaHref(`/ordenes/${t.otId}`, area)} class="btn-secondary">Ver OT #{t.otId} →</a>
+      <a href={areaHref(`/ordenes/${t.otId}`, area)} class="btn-secondary">Ver {etiquetaOrden} →</a>
     )}
     {proyectoVinc && (
-      <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="btn-secondary">📂 Ver {proyectoVinc.codigo} →</a>
+      <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="btn-secondary">Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
+
+  <!-- ══ QUÉ RIGE ESTA FALLA · el documento no se busca, el sistema lo dice ══ -->
+  {rigeFalla && (
+    <div class:list={["card mt-4 p-5 border-l-4", docFalla ? "border-red-500" : "border-amber-500"]}>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="font-semibold text-slate-900">Qué rige esta falla</h2>
+        {docFalla && (
+          <span class="flex flex-wrap items-center gap-2">
+            <span class={`badge ${TIPO_PROC.eop.color}`}>{TIPO_PROC.eop.icono} {TIPO_PROC.eop.label}</span>
+            <span class={`badge ${estadoInfo(docFalla.estado).color}`}>{estadoInfo(docFalla.estado).label}</span>
+          </span>
+        )}
+      </div>
+
+      {docFalla ? (
+        <Fragment>
+          <p class="mt-2 text-sm text-slate-900"><strong>{rigeFalla.encabezado}</strong></p>
+          <p class="mt-0.5 font-mono text-xs text-slate-500">
+            {docFalla.codigoCorto} · v{docFalla.version}{docFalla.codigoInstitucional ? ` · ${docFalla.codigoInstitucional}` : ""}
+          </p>
+
+          {rigeFalla.primerasAcciones.length > 0 ? (
+            <Fragment>
+              <p class="mt-3 text-xs font-medium uppercase tracking-wide text-slate-500">Las tres primeras acciones</p>
+              <ol class="mt-1.5 space-y-2">
+                {rigeFalla.primerasAcciones.map((acc, i) => (
+                  <li class="flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900">
+                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-xs font-bold ">{i + 1}</span>
+                    <span>{acc}</span>
+                  </li>
+                ))}
+              </ol>
+            </Fragment>
+          ) : (
+            <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              {docFalla.codigoCorto} todavía no tiene escritas sus tres primeras acciones. Complétalas en su ficha: son las que se hacen de memoria, sin abrir una pantalla.
+            </p>
+          )}
+
+          {rigeFalla.aviso && (
+            <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">{rigeFalla.aviso}</p>
+          )}
+
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            {puedeVerProcs && (
+              <a href={`/procedimientos/${docFalla.id}`} class="btn-secondary btn-sm">Ver {docFalla.codigoCorto} →</a>
+            )}
+            <span class="text-[11px] text-slate-400">Se responde con la hoja impresa del EOP; esto es la referencia y el registro.</span>
+          </div>
+        </Fragment>
+      ) : (
+        <div class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          <strong>Esta falla no tiene todavía un documento que la gobierne.</strong>
+          <p class="mt-1 text-xs">{rigeFalla.aviso}</p>
+          {puedeVerProcs && <a href="/procedimientos" class="btn-secondary btn-sm mt-2">Ir a Procedimientos</a>}
+        </div>
+      )}
+    </div>
+  )}
+  {rigeError && (
+    <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
+      <strong>No se pudo resolver qué procedimiento rige esta falla.</strong> El ticket sigue operativo.
+      <pre class="mt-1 whitespace-pre-wrap text-xs">{rigeError}</pre>
+    </div>
+  )}
 
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
     <div class="card lg:col-span-2 p-5">
@@ -191,7 +285,7 @@ if (t.proyectoId) {
 
       {adjs.length > 0 && (
         <div class="mt-4">
-          <h3 class="text-sm font-semibold text-slate-900 mb-2">📷 Fotos adjuntas ({adjs.length})</h3>
+          <h3 class="text-sm font-semibold text-slate-900 mb-2">Fotos adjuntas ({adjs.length})</h3>
           <div class="flex flex-wrap gap-2">
             {adjs.map((a) => (
               <a href={`/api/tickets/adjunto/${a.id}`} target="_blank" rel="noopener"
@@ -252,19 +346,19 @@ if (t.proyectoId) {
 
             {!t.otId && !t.proyectoId && (t.estado === "nuevo" || t.estado === "asignado") && (
               <div class="mt-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
-                💡 Al asignar un técnico se creará automáticamente la <strong>orden de trabajo</strong> y se le notificará por correo.
+                Al asignar un técnico se creará automáticamente la <strong>orden de trabajo</strong> y se le notificará por correo.
               </div>
             )}
             {puedeConvertirAProyecto && (
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
                 <p class="font-semibold text-sm">¿Es un trabajo grande?</p>
                 <p class="mt-1">Si el trabajo requiere evaluación, presupuesto o múltiples OTs (remodelaciones, instalaciones, traslados), conviértelo en proyecto en lugar de generar una OT directa.</p>
-                <a href={areaHref(`/proyectos/nuevo?ticketId=${t.id}`, area)} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">📂 Convertir a Proyecto</a>
+                <a href={areaHref(`/proyectos/nuevo?ticketId=${t.id}`, area)} class="mt-2 inline-block rounded-md bg-purple-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-purple-700">Convertir a Proyecto</a>
               </div>
             )}
             {proyectoVinc && (
               <div class="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3 text-xs text-purple-900">
-                📂 Este ticket está vinculado al proyecto <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
+                Este ticket está vinculado al proyecto <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="font-bold underline">{proyectoVinc.codigo} — {proyectoVinc.titulo}</a>. No se creará OT automáticamente al asignar técnico.
               </div>
             )}
             {!t.otId && t.estado !== "cerrado" && t.estado !== "descartado" && (
@@ -279,7 +373,7 @@ if (t.proyectoId) {
             )}
             {t.otId && (
               <div class="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800">
-                ✅ Este ticket ya tiene <a href={areaHref(`/ordenes/${t.otId}`, area)} class="font-bold underline">OT #{t.otId}</a> asociada.
+                ✓ Este ticket ya tiene <a href={areaHref(`/ordenes/${t.otId}`, area)} class="font-bold underline whitespace-nowrap">{etiquetaOrden}</a> asociada.
               </div>
             )}
           </div>
@@ -293,7 +387,7 @@ if (t.proyectoId) {
             <li class:list={["rounded-md p-3", c.c.publico ? "bg-slate-50" : "bg-amber-50 border border-amber-200"]}>
               <div class="flex items-center justify-between">
                 <span class="text-xs text-slate-500">{c.u?.nombre ?? c.c.autorExterno ?? "Solicitante"} · {fmt(c.c.createdAt)}</span>
-                {!c.c.publico && <span class="text-xs font-medium text-amber-700">🔒 nota interna</span>}
+                {!c.c.publico && <span class="text-xs font-medium text-amber-700">nota interna</span>}
               </div>
               <div class="mt-1 whitespace-pre-wrap">{c.c.texto}</div>
             </li>

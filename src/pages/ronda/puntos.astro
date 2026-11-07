@@ -1,0 +1,355 @@
+---
+// Paradas del recorrido · LO QUE LA JEFATURA FIJA
+//
+// Los valores normales de la ronda salen de la norma (ASHRAE 170, NFPA 99,
+// HSG274), pero varios son de cada sede: el nivel de reorden del combustible,
+// los cilindros de reserva, la presión del sistema de incendios. El volumen
+// los deja «en azul» y aquí es donde se llenan. Una parada sin valor normal
+// nunca avisa, y eso se dice en pantalla en lugar de disimularlo.
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { asc, eq, inArray } from "drizzle-orm";
+import { puedeConfigurarRondas, rangoNormal } from "@/lib/ronda-turno";
+import { LINEAS_CON_ORDEN } from "@/lib/turnos";
+import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
+import { sistemaInfo } from "@/lib/procedimientos";
+import { procedimientos, rondaPuntos, rondas, sucursales } from "@/lib/schema";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeConfigurarRondas(user.rol)) return Astro.redirect("/ronda");
+
+const db = getDb(Astro);
+// El modelo o el recorrido propio de una sede. Sin recorrido propio, la sede hereda el modelo.
+const rondasTodas = await db.select().from(rondas).orderBy(asc(rondas.id));
+const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
+const pedida = Number(new URL(Astro.request.url).searchParams.get("ronda"));
+const ronda = rondasTodas.find((r) => r.id === pedida) ?? rondasTodas.find((r) => r.sucursalId == null) ?? rondasTodas[0];
+const puntos = ronda
+  ? await db.select().from(rondaPuntos).where(eq(rondaPuntos.rondaId, ronda.id)).orderBy(asc(rondaPuntos.orden))
+  : [];
+
+const idsAop = [...new Set(puntos.map((p) => p.aopProcedimientoId).filter((x): x is number => x != null))];
+const aops = idsAop.length
+  ? await db
+      .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto })
+      .from(procedimientos)
+      .where(inArray(procedimientos.id, idsAop))
+  : [];
+const mapaAop = new Map(aops.map((a) => [a.id, a.codigo]));
+
+// Los AOP disponibles, para asignarlos a una parada nueva
+const aopsDisponibles = await db
+  .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema })
+  .from(procedimientos)
+  .where(eq(procedimientos.tipo, "aop"))
+  .orderBy(asc(procedimientos.codigoCorto));
+
+// Una parada numérica sin mínimo ni máximo no puede avisar nunca.
+const sinValorNormal = puntos.filter(
+  (p) => p.activo && (p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto),
+);
+// Bitácora y cuartos técnicos no llevan AOP: la guía les pide una orden.
+const sinAop = puntos.filter((p) => p.activo && !p.aopProcedimientoId && !LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0));
+const provisionales = puntos.filter((p) => p.activo && /^Provisional/.test(p.fuente ?? ""));
+---
+
+<Layout title="Paradas del recorrido">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <a href="/ronda" class="text-xs text-slate-400 hover:text-brand-600">← Ronda de turno</a>
+      <h1 class="mt-1 text-2xl font-bold text-slate-900">Paradas del recorrido</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {ronda?.nombre ?? "Sin ronda configurada"} · {puntos.filter((p) => p.activo).length} paradas activas
+      </p>
+    </div>
+    <button class="btn-primary btn-sm" id="btn-nueva">+ Agregar parada</button>
+  </div>
+
+  <div class="card mt-4 p-4 text-sm">
+    <div class="flex flex-wrap items-center gap-2">
+      <a class={`btn-sm ${ronda?.sucursalId == null ? "btn-primary" : "btn-secondary"}`} href="/ronda/puntos">Modelo (todas las sedes)</a>
+      {sedes.map((s) => {
+        const propia = rondasTodas.find((r) => r.sucursalId === s.id);
+        return propia
+          ? <a class={`btn-sm ${ronda?.id === propia.id ? "btn-primary" : "btn-secondary"}`} href={`/ronda/puntos?ronda=${propia.id}`}>{s.nombre}{propia.activa ? "" : " · no hace ronda"}</a>
+          : <button class="btn-secondary btn-sm" data-sede={s.id} data-activa="true">{s.nombre} · crear recorrido propio</button>;
+      })}
+    </div>
+    {ronda?.sucursalId != null && (
+      <div class="mt-3 flex flex-wrap items-end gap-2">
+        <div><label class="label" for="s_turnos">Turnos de esta sede</label><input class="input" id="s_turnos" value={JSON.parse(ronda.turnos).join(", ")} /></div>
+        <button class="btn-secondary btn-sm" id="s_guardar" data-sede-id={ronda.sucursalId}>Guardar turnos</button>
+        <button class="btn-secondary btn-sm" data-sede={ronda.sucursalId} data-activa={ronda.activa ? "false" : "true"}>{ronda.activa ? "Esta sede no hace ronda" : "Esta sede sí hace ronda"}</button>
+      </div>
+    )}
+    <p class="mt-2 text-xs text-slate-400">Un cambio aplica desde el turno siguiente: la ronda ya abierta conserva lo que decía al abrir.</p>
+  </div>
+
+  {(sinValorNormal.length > 0 || sinAop.length > 0 || provisionales.length > 0) && (
+    <div class="card mt-4 border-l-4 border-amber-400 p-4">
+      <h2 class="text-sm font-bold text-amber-800">Lo que falta para que la ronda avise sola</h2>
+      <ul class="mt-2 space-y-1 text-xs text-slate-700">
+        {sinValorNormal.length > 0 && (
+          <li>
+            <span class="font-semibold text-amber-700">{sinValorNormal.length} parada(s) sin valor normal.</span>{" "}
+            Mientras estén así, el técnico anota el número pero el sistema no puede decir si está fuera de rango.
+          </li>
+        )}
+        {provisionales.length > 0 && (
+          <li>
+            <span class="font-semibold text-amber-700">{provisionales.length} valor(es) provisional(es).</span>{" "}
+            No salen de la guía: {provisionales.map((p) => p.etiqueta.split(" · ")[0]).join(", ")}. Hay que fijarlos en el SCP de cada sede.
+          </li>
+        )}
+        {sinAop.length > 0 && (
+          <li>
+            <span class="font-semibold text-amber-700">{sinAop.length} parada(s) sin AOP asignado.</span>{" "}
+            Una desviación ahí no abre episodio ni arranca reloj.
+          </li>
+        )}
+      </ul>
+    </div>
+  )}
+
+  <div class="card mt-4 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+        <tr>
+          <th class="px-3 py-2.5">#</th>
+          <th class="px-3 py-2.5">Familia</th>
+          <th class="px-3 py-2.5">Parada</th>
+          <th class="px-3 py-2.5">Valor normal</th>
+          <th class="px-3 py-2.5">AOP</th>
+          <th class="px-3 py-2.5 text-center">Crítico</th>
+          <th class="px-3 py-2.5 text-center">Activa</th>
+          <th class="px-3 py-2.5"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {puntos.map((p) => {
+          const info = sistemaInfo(p.sistema);
+          const faltaValor = p.requiereValor ? p.minEsperado == null && p.maxEsperado == null : !p.valorEsperadoTexto;
+          return (
+            <tr class={`align-top ${p.activo ? "" : "opacity-50"}`} data-fila={p.id}>
+              <td class="px-3 py-3 font-mono text-xs text-slate-400">{p.orden}</td>
+              <td class="px-3 py-3 whitespace-nowrap">
+                <span class="mr-1">{info.icono}</span>
+                <span class="text-xs text-slate-600">{SISTEMA_LABEL[p.sistema as Sistema] ?? p.sistema}</span>
+              </td>
+              <td class="px-3 py-3">
+                <div class="font-medium text-slate-800">{p.etiqueta}</div>
+                {p.fuente && <div class="mt-0.5 text-[11px] text-slate-400">{p.fuente}</div>}
+              </td>
+              <td class="px-3 py-3">
+                {p.requiereValor ? (
+                  <div class="flex items-center gap-1">
+                    <input class="input w-20 !py-1 !text-xs" type="number" step="any" data-min={p.id} value={p.minEsperado ?? ""} placeholder="mín" />
+                    <span class="text-slate-300">–</span>
+                    <input class="input w-20 !py-1 !text-xs" type="number" step="any" data-max={p.id} value={p.maxEsperado ?? ""} placeholder="máx" />
+                    {p.unidad && <span class="ml-1 text-[11px] text-slate-400">{p.unidad}</span>}
+                  </div>
+                ) : (
+                  <input class="input w-full !py-1 !text-xs" type="text" data-texto={p.id} value={p.valorEsperadoTexto ?? ""} placeholder="qué se considera conforme" />
+                )}
+                {faltaValor && <div class="mt-1 text-[10px] font-semibold text-amber-600">Sin valor normal: no puede avisar</div>}
+              </td>
+              <td class="px-3 py-3 whitespace-nowrap">
+                {p.aopProcedimientoId ? (
+                  <a href={`/procedimientos/${p.aopProcedimientoId}`} class="font-mono text-xs text-brand-700 hover:underline">
+                    {mapaAop.get(p.aopProcedimientoId) ?? "—"}
+                  </a>
+                ) : (
+                  <span class="badge bg-amber-100 text-amber-700">Sin AOP</span>
+                )}
+              </td>
+              <td class="px-3 py-3 text-center">
+                <input type="checkbox" data-critico={p.id} checked={p.critico} class="h-4 w-4 rounded border-slate-300" />
+              </td>
+              <td class="px-3 py-3 text-center">
+                <input type="checkbox" data-activo={p.id} checked={p.activo} class="h-4 w-4 rounded border-slate-300" />
+              </td>
+              <td class="px-3 py-3 text-right">
+                <button class="btn-secondary btn-sm" data-guardar={p.id}>Guardar</button>
+              </td>
+            </tr>
+          );
+        })}
+        {puntos.length === 0 && (
+          <tr><td colspan="8" class="px-3 py-8 text-center text-sm text-slate-400">Sin paradas configuradas.</td></tr>
+        )}
+      </tbody>
+    </table>
+  </div>
+
+  {/* ── Modal: parada nueva ── */}
+  <div id="modal-nueva" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/40 p-4">
+    <div class="card max-h-[90vh] w-full max-w-xl overflow-y-auto p-5">
+      <h2 class="text-lg font-bold text-slate-900">Agregar una parada</h2>
+      <p class="mt-1 text-sm text-slate-500">Se agrega al final del recorrido y entra en la ronda del próximo turno.</p>
+      <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="sm:col-span-2">
+          <label class="label" for="n_etiqueta">Qué se verifica</label>
+          <input class="input" id="n_etiqueta" type="text" placeholder="Planta de emergencia · nivel de combustible" />
+        </div>
+        <div>
+          <label class="label" for="n_sistema">Familia</label>
+          <select class="input" id="n_sistema">
+            <option value="electrico">Energía</option>
+            <option value="hvac">Climatización crítica (HEPA)</option>
+            <option value="minisplit">Minisplit</option>
+            <option value="gases">Gases medicinales</option>
+            <option value="agua">Agua</option>
+            <option value="incendios">Protección contra incendios</option>
+            <option value="ascensores">Transporte vertical</option>
+            <option value="otro">Otro</option>
+          </select>
+        </div>
+        <div>
+          <label class="label" for="n_aop">AOP que la rige</label>
+          <select class="input" id="n_aop">
+            <option value="">— sin AOP (no abrirá episodio) —</option>
+            {aopsDisponibles.map((a) => <option value={a.id}>{a.codigo} · {a.titulo.slice(0, 48)}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label" for="n_instruccion">Instrucción para el técnico</label>
+          <textarea class="input" id="n_instruccion" rows="2" placeholder="Qué hacer exactamente en la parada."></textarea>
+        </div>
+        <div class="sm:col-span-2 flex items-center gap-2">
+          <input type="checkbox" id="n_requiere" class="h-4 w-4 rounded border-slate-300" />
+          <label for="n_requiere" class="text-sm text-slate-700">Se anota un número (si no, es conforme / no conforme)</label>
+        </div>
+        <div id="caja-numero" class="hidden sm:col-span-2 grid grid-cols-3 gap-3">
+          <div><label class="label" for="n_min">Mínimo</label><input class="input" id="n_min" type="number" step="any" /></div>
+          <div><label class="label" for="n_max">Máximo</label><input class="input" id="n_max" type="number" step="any" /></div>
+          <div><label class="label" for="n_unidad">Unidad</label><input class="input" id="n_unidad" type="text" placeholder="°C, %, kPa" /></div>
+        </div>
+        <div id="caja-texto" class="sm:col-span-2">
+          <label class="label" for="n_texto">Qué se considera conforme</label>
+          <input class="input" id="n_texto" type="text" placeholder="Selector en AUTO, sin alarmas" />
+        </div>
+        <div class="sm:col-span-2 flex items-center gap-2">
+          <input type="checkbox" id="n_critico" class="h-4 w-4 rounded border-slate-300" checked />
+          <label for="n_critico" class="text-sm text-slate-700">Crítica: la ronda no se cierra sin anotarla</label>
+        </div>
+      </div>
+      <div class="mt-5 flex justify-end gap-2">
+        <button class="btn-secondary btn-sm" id="nueva-cancelar">Cancelar</button>
+        <button class="btn-primary btn-sm" id="nueva-guardar">Agregar parada</button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ rondaId: ronda?.id ?? null }) }}>
+  const { rondaId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  const num = (el) => (el && el.value.trim() !== "" ? Number(el.value) : null);
+
+  const guardarSede = async (cuerpo) => {
+    const r = await fetch("/api/ronda-turno/puntos", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { window.showToast?.(typeof d.error === "string" ? d.error : "No se pudo guardar", "error"); return; }
+    location.href = "/ronda/puntos?ronda=" + d.ronda.id;
+  };
+  document.querySelectorAll("[data-sede]").forEach((b) => b.addEventListener("click", () => guardarSede({ sucursalId: Number(b.getAttribute("data-sede")), activa: b.getAttribute("data-activa") === "true" })));
+  document.getElementById("s_guardar")?.addEventListener("click", (ev) => guardarSede({ sucursalId: Number(ev.currentTarget.getAttribute("data-sede-id")), turnos: document.getElementById("s_turnos").value.split(",").map((x) => x.trim()).filter(Boolean) }));
+
+  document.querySelectorAll("[data-guardar]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.getAttribute("data-guardar"));
+      const body = { id };
+      const min = document.querySelector('[data-min="' + id + '"]');
+      const max = document.querySelector('[data-max="' + id + '"]');
+      const texto = document.querySelector('[data-texto="' + id + '"]');
+      if (min) body.minEsperado = num(min);
+      if (max) body.maxEsperado = num(max);
+      if (texto) body.valorEsperadoTexto = texto.value.trim() || null;
+      body.critico = !!document.querySelector('[data-critico="' + id + '"]')?.checked;
+      body.activo = !!document.querySelector('[data-activo="' + id + '"]')?.checked;
+
+      btn.setAttribute("disabled", "true");
+      const original = btn.textContent;
+      btn.textContent = "…";
+      try {
+        const r = await fetch("/api/ronda-turno/puntos", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(typeof d.error === "string" ? d.error : "No se pudo guardar");
+        window.showToast?.("Parada actualizada", "success");
+        setTimeout(() => location.reload(), 600);
+      } catch (e) {
+        window.showToast?.(e instanceof Error ? e.message : "Error al guardar", "error");
+      } finally {
+        btn.removeAttribute("disabled");
+        btn.textContent = original;
+      }
+    });
+  });
+
+  // ── Modal de parada nueva ──
+  const modal = document.getElementById("modal-nueva");
+  const abrir = () => { modal?.classList.remove("hidden"); modal?.classList.add("flex"); };
+  const cerrar = () => { modal?.classList.add("hidden"); modal?.classList.remove("flex"); };
+  document.getElementById("btn-nueva")?.addEventListener("click", abrir);
+  document.getElementById("nueva-cancelar")?.addEventListener("click", cerrar);
+  modal?.addEventListener("click", (e) => { if (e.target === modal) cerrar(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrar(); });
+
+  const req = document.getElementById("n_requiere");
+  const cajaNum = document.getElementById("caja-numero");
+  const cajaTxt = document.getElementById("caja-texto");
+  req?.addEventListener("change", () => {
+    cajaNum?.classList.toggle("hidden", !req.checked);
+    cajaTxt?.classList.toggle("hidden", req.checked);
+  });
+
+  document.getElementById("nueva-guardar")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const etiqueta = document.getElementById("n_etiqueta")?.value?.trim();
+    if (!etiqueta || etiqueta.length < 3) {
+      window.showToast?.("Escribe qué se verifica en la parada", "error");
+      return;
+    }
+    if (!rondaId) {
+      window.showToast?.("No hay una ronda activa a la que agregar la parada", "error");
+      return;
+    }
+    const requiere = !!req?.checked;
+    const payload = {
+      rondaId,
+      sistema: document.getElementById("n_sistema").value,
+      etiqueta,
+      instruccion: document.getElementById("n_instruccion")?.value?.trim() || null,
+      requiereValor: requiere,
+      unidad: requiere ? (document.getElementById("n_unidad")?.value?.trim() || null) : null,
+      minEsperado: requiere ? num(document.getElementById("n_min")) : null,
+      maxEsperado: requiere ? num(document.getElementById("n_max")) : null,
+      valorEsperadoTexto: requiere ? null : (document.getElementById("n_texto")?.value?.trim() || null),
+      aopProcedimientoId: Number(document.getElementById("n_aop").value) || null,
+      critico: !!document.getElementById("n_critico")?.checked,
+    };
+    btn.setAttribute("disabled", "true");
+    btn.textContent = "Agregando…";
+    try {
+      const r = await fetch("/api/ronda-turno/puntos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof d.error === "string" ? d.error : "No se pudo agregar");
+      window.showToast?.("Parada agregada", "success");
+      location.reload();
+    } catch (e) {
+      window.showToast?.(e instanceof Error ? e.message : "Error al agregar", "error");
+    } finally {
+      btn.removeAttribute("disabled");
+      btn.textContent = "Agregar parada";
+    }
+  });
+</script>

@@ -3,6 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { solicitudesCompra, usuarios, ordenes } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
+import { etiquetaOT } from "@/lib/orden-codigo";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -62,7 +63,7 @@ const ESTADO_LABEL: Record<string, string> = {
             <span class:list={["badge text-xs px-2 py-0.5 rounded-full font-medium", ESTADO_COLOR[s.estado]]}>
               {ESTADO_LABEL[s.estado]}
             </span>
-            {o && <span class="text-xs text-slate-400">OT #{o.id}</span>}
+            {o && <span class="text-xs text-slate-400 whitespace-nowrap">{etiquetaOT(o)}</span>}
           </div>
           <p class="mt-1 font-medium text-slate-900 truncate">{s.titulo}</p>
           {s.descripcion && <p class="text-xs text-slate-500 line-clamp-1 mt-0.5">{s.descripcion}</p>}
@@ -75,7 +76,6 @@ const ESTADO_LABEL: Record<string, string> = {
     ))}
     {rows.length === 0 && (
       <div class="card p-8 text-center text-slate-400">
-        <p class="text-4xl mb-2">🛒</p>
         <p>No hay solicitudes de compra aún.</p>
         <a href="/solicitudes-compra/nueva" class="mt-3 inline-block text-sm text-brand-600 hover:underline">Crear primera solicitud →</a>
       </div>

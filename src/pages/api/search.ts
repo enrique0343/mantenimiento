@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { parseArea } from "@/lib/areas";
+import { codigoDeBusqueda } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -29,29 +30,40 @@ export const GET: APIRoute = async (ctx) => {
   const area = parseArea(areaParam);
   if (areaParam !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   const q = (url.searchParams.get("q") ?? "").trim();
-  if (!q || q.length < 2) {
+  if (!q || (q.length < 2 && !/^\d$/.test(q))) {
     return Response.json({ resultados: { ordenes: [], equipos: [], tickets: [], items: [], requisiciones: [], comentarios: [] } });
   }
   const db = getDb(ctx);
   const ftsQ = fts5Query(q);
   const N = 6;
 
-  // OTs por id (búsqueda numérica directa)
+  // OTs por código (OT-MG0001, «mb12»). Un número solo busca en las dos series y
+  // también el id, porque en papeles viejos la orden todavía se llama «OT #12».
+  const codigoBuscado = codigoDeBusqueda(q);
   const idNum = Number(q);
   const isNumeric = Number.isFinite(idNum) && /^\d+$/.test(q);
 
   let ordenesList: any[] = [];
-  if (isNumeric) {
+  if (codigoBuscado) {
     const r = await db.all(sql`
-      SELECT id, titulo, estado, tipo, rubro, NULL as snippet
-      FROM ordenes WHERE id = ${idNum}
+      SELECT id, codigo, titulo, estado, tipo, rubro, NULL as snippet
+      FROM ordenes WHERE codigo = ${codigoBuscado}
       ${area ? sql`AND rubro = ${area}` : sql``} LIMIT 1
+    `);
+    ordenesList = (r as any).results ?? r ?? [];
+  } else if (isNumeric) {
+    const mg = codigoDeBusqueda(`MG${q}`), mb = codigoDeBusqueda(`MB${q}`);
+    const r = await db.all(sql`
+      SELECT id, codigo, titulo, estado, tipo, rubro, NULL as snippet
+      FROM ordenes WHERE (codigo IN (${mg}, ${mb}) OR id = ${idNum})
+      ${area ? sql`AND rubro = ${area}` : sql``}
+      ORDER BY (codigo IN (${mg}, ${mb})) DESC, id LIMIT 3
     `);
     ordenesList = (r as any).results ?? r ?? [];
   }
   if (ftsQ && ordenesList.length < N) {
     const r = await db.all(sql`
-      SELECT o.id, o.titulo, o.estado, o.tipo, o.rubro,
+      SELECT o.id, o.codigo, o.titulo, o.estado, o.tipo, o.rubro,
              snippet(ordenes_fts, -1, '<mark>', '</mark>', '...', 12) as snippet
       FROM ordenes_fts
       JOIN ordenes o ON o.id = ordenes_fts.rowid
@@ -144,7 +156,7 @@ export const GET: APIRoute = async (ctx) => {
   let comentariosList: any[] = [];
   if (ftsQ) {
     const r = await db.all(sql`
-      SELECT c.id, c.orden_id as ordenId, o.titulo as ordenTitulo, o.rubro,
+      SELECT c.id, c.orden_id as ordenId, o.codigo as ordenCodigo, o.titulo as ordenTitulo, o.rubro,
              snippet(comentarios_fts, -1, '<mark>', '</mark>', '...', 14) as snippet,
              c.created_at as createdAt
       FROM comentarios_fts

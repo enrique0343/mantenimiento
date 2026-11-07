@@ -74,3 +74,21 @@ export function fmtFechaCompacta(d: Date | string | null | undefined): string {
     timeZone: TZ,
   });
 }
+
+// "14:32" en hora de El Salvador. Acepta tanto el ISO con Z que escribe la app
+// como el "AAAA-MM-DD HH:MM:SS" (UTC, sin zona) que pone SQLite con
+// CURRENT_TIMESTAMP; sin normalizar, el segundo se interpretaría como local.
+export function fmtHora(d: string | null | undefined): string {
+  if (!d) return "—";
+  const s = String(d).trim();
+  if (!s) return "—";
+  const iso = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s.replace(" ", "T") : `${s.replace(" ", "T")}Z`;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleTimeString("es", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: TZ,
+  });
+}

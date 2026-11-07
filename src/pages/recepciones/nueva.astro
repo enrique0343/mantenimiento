@@ -101,6 +101,8 @@ const hoy = new Date().toISOString().slice(0, 10);
     const { itemsJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const ITEMS = JSON.parse(itemsJson);
     const lines = document.getElementById("lines");
+    // Sin ítems registrados el formulario no se muestra: no hay nada que preparar.
+    if (!lines) return;
     let idx = 0;
 
     function recalc() {

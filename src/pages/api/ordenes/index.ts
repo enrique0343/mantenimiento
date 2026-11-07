@@ -12,7 +12,9 @@ import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 import { parseArea } from "@/lib/areas";
-import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { conCodigo, validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
+import { sembrarDesdeMop } from "@/lib/mop";
 
 export const prerender = false;
 
@@ -20,7 +22,9 @@ const createSchema = z.object({
   rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().optional().nullable(),
-  tipo: z.enum(["preventivo", "correctivo", "predictivo"]).optional(),
+  tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),
+  // El documento que la rige: una intervención hereda de él sus prerrequisitos.
+  procedimientoId: z.number().int().positive().optional().nullable(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   // Sucursal obligatoria, ubicación opcional
   sucursalId: z.number().int().positive(),
@@ -52,10 +56,12 @@ export const GET: APIRoute = async (ctx) => {
   if (user.rol === "tecnico") conditions.push(eq(ordenes.asignadoA, user.id));
 
   const rows = await db
+    // D1 corta el resultado a 100 columnas: ordenes(62) + activos(45) ya se
+    // pasa. Solo se piden las columnas que la respuesta devuelve.
     .select({
       orden: ordenes,
-      activo: activos,
-      asignado: usuarios,
+      activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo, estado: activos.estado },
+      asignado: { id: usuarios.id, nombre: usuarios.nombre },
     })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
@@ -93,7 +99,7 @@ export const POST: APIRoute = async (ctx) => {
     vencimiento = calcularVencimiento(new Date().toISOString(), eq_row, prioridad);
   }
 
-  const [row] = await db
+  const [fila] = await db
     .insert(ordenes)
     .values({
       ...parsed.data,
@@ -103,8 +109,24 @@ export const POST: APIRoute = async (ctx) => {
       // Si la OT nace ya asignada, registramos la marca de asignación para que
       // la lista pueda mostrar "asignada hace N días" sin depender del log.
       asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
+      // Una emergencia nace P1 y con la hora de alarma: se actúa primero y se
+      // registra después (cap. 02), pero el reloj de la causa raíz ya corre.
+      ...(parsed.data.tipo === "emergencia" ? (() => {
+        const alarma = new Date().toISOString();
+        return { clasePrioridad: "P1" as const, horaAlarma: alarma, causaRaizVencimiento: vencimientoCausaRaiz(alarma) };
+      })() : {}),
     })
     .returning();
+  const row = await conCodigo(db, fila);
+
+  // MOP: la orden nace con los prerrequisitos y las lecturas de su plantilla.
+  let sembradoMop: Awaited<ReturnType<typeof sembrarDesdeMop>> | null = null;
+  if (row.tipo === "intervencion" && row.procedimientoId) {
+    try {
+      const r = await sembrarDesdeMop(db, row.id, row.procedimientoId);
+      if (r.prerrequisitos > 0 || r.liberaciones > 0) sembradoMop = r;
+    } catch {}
+  }
 
   // Audit: creación de OT
   await logAudit(ctx, {
@@ -125,7 +147,7 @@ export const POST: APIRoute = async (ctx) => {
         .select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, row.asignadoA)).limit(1);
       const env = (ctx.locals as any)?.runtime?.env ?? {};
-      const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+      const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
       const otUrl = `${baseUrl}/ordenes/${row.id}`;
       const wait = (ctx.locals as any)?.runtime?.ctx?.waitUntil;
 
@@ -151,12 +173,12 @@ export const POST: APIRoute = async (ctx) => {
       if (u?.email) {
         const p = sendMail(ctx, {
           to: u.email,
-          subject: `[OT #${row.id}] Te asignamos: ${row.titulo}${subjectVence}`,
+          subject: `[${etiquetaOT(row)}] Te asignamos: ${row.titulo}${subjectVence}`,
           html: emailLayout(
             "Nueva orden para ti",
             `<p>Hola <strong>${primerNombre}</strong>,</p>
              <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
-             <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
+             <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${etiquetaOT(row)} — ${row.titulo}</h3>
              <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                <li><strong>Tipo:</strong> ${row.tipo}</li>
                <li><strong>Prioridad:</strong> ${row.prioridad}</li>
@@ -164,9 +186,9 @@ export const POST: APIRoute = async (ctx) => {
                ${ubicacionTexto ? `<li><strong>Ubicación:</strong> ${ubicacionTexto}</li>` : ""}
              </ul>
              ${row.descripcion ? `<p style="margin:0 0 6px 0"><strong>Lo que reportaron:</strong></p>
-               <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
-             <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
-             <p style="font-size:13px;color:#475569;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
+               <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
+             <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+             <p style="font-size:13px;color:#4A4A4A;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
              <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
           ),
           tipo: "ot_asignada",
@@ -177,7 +199,7 @@ export const POST: APIRoute = async (ctx) => {
 
       if (u?.telegramChatId) {
         const p = sendTelegram(env, u.telegramChatId,
-          `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
+          `<b>Nueva OT asignada</b>\n${etiquetaOT(row)} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
           { linkUrl: otUrl, linkLabel: "Abrir orden" }
         );
         if (wait) wait(p); else await p;
@@ -185,12 +207,12 @@ export const POST: APIRoute = async (ctx) => {
 
       await crearNotificacion(ctx, {
         usuarioId: row.asignadoA, tipo: "ot_asignada",
-        titulo: `Nueva OT #${row.id}: ${row.titulo}`,
+        titulo: `Nueva ${etiquetaOT(row)}: ${row.titulo}`,
         mensaje: `Prioridad: ${row.prioridad}${row.vencimiento ? ` · Vence ${fmtFechaLarga(row.vencimiento)}` : ""}`,
         link: `/ordenes/${row.id}`,
       });
     } catch {}
   }
 
-  return Response.json({ orden: row }, { status: 201 });
+  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}) }, { status: 201 });
 };

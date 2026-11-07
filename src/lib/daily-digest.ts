@@ -15,10 +15,11 @@ import {
 import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga, fmtFechaSimple } from "./datetime";
 import { procesarContratosVencimiento } from "./contratos-alertas";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  return env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  return env.APP_URL || "https://mantenimiento.complejoavante.dev";
 }
 
 // Helpers de fecha en zona local El Salvador (UTC-6)
@@ -101,14 +102,24 @@ export async function enviarDigestDiario(
 
   // ── Datos para el resumen ejecutivo ───────────────────────────────────────
   const otsCerradasAyerRaw = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
     .where(and(eq(ordenes.estado, "cerrada"), gte(ordenes.cerradoEn, ayerIni), lte(ordenes.cerradoEn, ayerFin)));
 
   const otsEnProceso = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -116,7 +127,12 @@ export async function enviarDigestDiario(
     .orderBy(desc(ordenes.iniciadaEn));
 
   const otsAtrasadasRaw = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -127,7 +143,8 @@ export async function enviarDigestDiario(
     ));
 
   const otsAbiertasSinAsignarRaw = await db
-    .select({ o: ordenes, a: activos })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .where(and(eq(ordenes.estado, "abierta"), isNull(ordenes.asignadoA)));
@@ -153,7 +170,12 @@ export async function enviarDigestDiario(
 
   // ── KPIs del mes ──────────────────────────────────────────────────────────
   const otsDelMes = await db
-    .select({ o: ordenes, a: activos, u: usuarios })
+    // D1 corta el resultado a 100 columnas: ordenes + activos se pasa.
+    .select({
+      o: ordenes,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      u: { nombre: usuarios.nombre, tarifaHora: usuarios.tarifaHora },
+    })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
     .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -225,7 +247,10 @@ export async function enviarDigestDiario(
 
   // ── Próximos preventivos (3 días) ─────────────────────────────────────────
   const proximosPlanes = await db
-    .select({ p: planesMantenimiento, a: activos })
+    .select({
+      p: planesMantenimiento,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+    })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en3)))
@@ -257,7 +282,7 @@ export async function enviarDigestDiario(
   });
 
   const numCard = (n: number, label: string, color: string) =>
-    `<td style="padding:14px;text-align:center;background:${color.bg};border-radius:8px;width:20%">
+    `<td style="padding:14px;text-align:center;background:${color.bg};border-radius:2px;width:20%">
        <div style="font-size:28px;font-weight:700;color:${color.text}">${n}</div>
        <div style="font-size:11px;color:${color.text};margin-top:4px;line-height:1.3">${label}</div>
      </td>`;
@@ -273,37 +298,37 @@ export async function enviarDigestDiario(
   let html = `<p>Buenos días,</p>
   <p>Resumen del estado de Mantenimiento al inicio de <strong>${fechaHoy}</strong>.</p>
 
-  <h3 style="margin:22px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">📊 Resumen ejecutivo</h3>
+  <h3 style="margin:22px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Resumen ejecutivo</h3>
   <table style="width:100%;border-collapse:separate;border-spacing:6px">
     <tr>
-      ${numCard(otsCerradasAyerRaw.length, "OTs cerradas ayer", { bg: "#d1fae5", text: "#065f46" })}
-      ${numCard(otsEnProceso.length, "OTs en curso", { bg: "#dbeafe", text: "#1e40af" })}
-      ${numCard(otsAtrasadasRaw.length, "OTs atrasadas", { bg: "#fee2e2", text: "#991b1b" })}
-      ${numCard(ticketsSinAsignar.length, "Tickets sin asignar", { bg: "#fef3c7", text: "#92400e" })}
-      ${numCard(ticketsSlaVencido.length, "SLA vencido", { bg: "#fee2e2", text: "#991b1b" })}
+      ${numCard(otsCerradasAyerRaw.length, "OTs cerradas ayer", { bg: "#F2F4F7", text: "#1F5740" })}
+      ${numCard(otsEnProceso.length, "OTs en curso", { bg: "#F2F4F7", text: "#23417D" })}
+      ${numCard(otsAtrasadasRaw.length, "OTs atrasadas", { bg: "#F2F4F7", text: "#C03435" })}
+      ${numCard(ticketsSinAsignar.length, "Tickets sin asignar", { bg: "#F2F4F7", text: "#8A6420" })}
+      ${numCard(ticketsSlaVencido.length, "SLA vencido", { bg: "#F2F4F7", text: "#C03435" })}
     </tr>
   </table>`;
 
   // ── Avances de ayer ───────────────────────────────────────────────────────
-  html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">✅ Avances de ${ayerLabel}</h3>`;
+  html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">✓ Avances de ${ayerLabel}</h3>`;
   if (otsCerradasAyerRaw.length === 0 && ticketsResueltosAyer.length === 0) {
-    html += `<p style="color:#64748b">Sin cierres registrados ayer.</p>`;
+    html += `<p style="color:#6B7280">Sin cierres registrados ayer.</p>`;
   } else {
     if (otsCerradasAyerRaw.length > 0) {
       html += `<p style="margin:0 0 6px 0"><strong>OTs cerradas (${otsCerradasAyerRaw.length}):</strong></p>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">
-        <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;text-align:left">
-          <th style="padding:6px 8px">#</th><th style="padding:6px 8px">Título</th>
+        <thead><tr style="background:#F2F4F7;color:#4A4A4A;font-size:11px;text-align:left">
+          <th style="padding:6px 8px">OT</th><th style="padding:6px 8px">Título</th>
           <th style="padding:6px 8px">Equipo</th><th style="padding:6px 8px">Técnico</th>
           <th style="padding:6px 8px;text-align:right">Horas</th>
         </tr></thead><tbody>`;
       for (const r of otsCerradasAyerRaw) {
-        html += `<tr style="border-bottom:1px solid #f1f5f9">
-          <td style="padding:6px 8px;color:#94a3b8">#${r.o.id}</td>
-          <td style="padding:6px 8px"><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#0a4082;text-decoration:none">${r.o.titulo}</a></td>
-          <td style="padding:6px 8px;color:#64748b">${r.a ? r.a.codigo : "—"}</td>
+        html += `<tr style="border-bottom:1px solid #F2F4F7">
+          <td style="padding:6px 8px;color:#6B7280;white-space:nowrap">${etiquetaOT(r.o)}</td>
+          <td style="padding:6px 8px"><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#23417D;text-decoration:none">${r.o.titulo}</a></td>
+          <td style="padding:6px 8px;color:#6B7280">${r.a ? r.a.codigo : "—"}</td>
           <td style="padding:6px 8px">${r.u?.nombre ?? "—"}</td>
-          <td style="padding:6px 8px;text-align:right;font-family:monospace">${r.o.horasTrabajadas != null ? Number(r.o.horasTrabajadas).toFixed(1) : "—"}</td>
+          <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${r.o.horasTrabajadas != null ? Number(r.o.horasTrabajadas).toFixed(1) : "—"}</td>
         </tr>`;
       }
       html += `</tbody></table>`;
@@ -312,16 +337,16 @@ export async function enviarDigestDiario(
       html += `<p style="margin:8px 0 6px 0"><strong>Tickets resueltos (${ticketsResueltosAyer.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of ticketsResueltosAyer) {
-        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#0a4082;text-decoration:none">#${r.t.id} — ${r.t.asunto}</a> · ${r.u?.nombre ?? "—"}</li>`;
+        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#23417D;text-decoration:none">#${r.t.id} — ${r.t.asunto}</a> · ${r.u?.nombre ?? "—"}</li>`;
       }
       html += `</ul>`;
     }
   }
 
   // ── En curso ──────────────────────────────────────────────────────────────
-  html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">🟢 En curso ahora</h3>`;
+  html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">En curso ahora</h3>`;
   if (otsEnProceso.length === 0 && ticketsActivosRaw.filter((t) => t.t.asignadoA).length === 0) {
-    html += `<p style="color:#64748b">Sin trabajos activos en este momento.</p>`;
+    html += `<p style="color:#6B7280">Sin trabajos activos en este momento.</p>`;
   } else {
     if (otsEnProceso.length > 0) {
       html += `<p style="margin:0 0 6px 0"><strong>OTs (${otsEnProceso.length}):</strong></p>
@@ -329,9 +354,9 @@ export async function enviarDigestDiario(
       for (const r of otsEnProceso.slice(0, 15)) {
         const estado = ESTADO_OT_LABEL[r.o.estado] ?? r.o.estado;
         const desde = r.o.iniciadaEn ? `desde ${fmtFechaSimple(r.o.iniciadaEn)}` : "sin iniciar";
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#0a4082;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · ${r.u?.nombre ?? "Sin asignar"} · <em>${estado}</em> · ${desde}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#23417D;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · ${r.u?.nombre ?? "Sin asignar"} · <em>${estado}</em> · ${desde}</li>`;
       }
-      if (otsEnProceso.length > 15) html += `<li style="color:#94a3b8">... y ${otsEnProceso.length - 15} más</li>`;
+      if (otsEnProceso.length > 15) html += `<li style="color:#6B7280">... y ${otsEnProceso.length - 15} más</li>`;
       html += `</ul>`;
     }
     const ticketsAsignados = ticketsActivosRaw.filter((t) => t.t.asignadoA);
@@ -340,30 +365,30 @@ export async function enviarDigestDiario(
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of ticketsAsignados.slice(0, 10)) {
         const estado = ESTADO_TICKET_LABEL[r.t.estado] ?? r.t.estado;
-        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#0a4082;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · ${r.u?.nombre} · <em>${estado}</em></li>`;
+        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#23417D;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · ${r.u?.nombre} · <em>${estado}</em></li>`;
       }
-      if (ticketsAsignados.length > 10) html += `<li style="color:#94a3b8">... y ${ticketsAsignados.length - 10} más</li>`;
+      if (ticketsAsignados.length > 10) html += `<li style="color:#6B7280">... y ${ticketsAsignados.length - 10} más</li>`;
       html += `</ul>`;
     }
   }
 
   // ── Atrasados / críticos ──────────────────────────────────────────────────
   if (otsAtrasadasRaw.length > 0 || otsAbiertasSinAsignarRaw.length > 0 || ticketsSinAsignar.length > 0 || ticketsSlaVencido.length > 0) {
-    html += `<h3 style="margin:24px 0 10px 0;color:#991b1b;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">🔴 Requiere atención</h3>`;
+    html += `<h3 style="margin:24px 0 10px 0;color:#C03435;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Requiere atención</h3>`;
     if (otsAtrasadasRaw.length > 0) {
       html += `<p style="margin:0 0 6px 0"><strong>OTs vencidas y aún abiertas (${otsAtrasadasRaw.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of otsAtrasadasRaw.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#991b1b;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · vence ${fmtFechaSimple(r.o.vencimiento!)} · ${r.u?.nombre ?? "Sin asignar"}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · vence ${fmtFechaSimple(r.o.vencimiento!)} · ${r.u?.nombre ?? "Sin asignar"}</li>`;
       }
-      if (otsAtrasadasRaw.length > 10) html += `<li style="color:#94a3b8">... y ${otsAtrasadasRaw.length - 10} más</li>`;
+      if (otsAtrasadasRaw.length > 10) html += `<li style="color:#6B7280">... y ${otsAtrasadasRaw.length - 10} más</li>`;
       html += `</ul>`;
     }
     if (otsAbiertasSinAsignarRaw.length > 0) {
       html += `<p style="margin:0 0 6px 0"><strong>OTs creadas sin técnico (${otsAbiertasSinAsignarRaw.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of otsAbiertasSinAsignarRaw.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#991b1b;text-decoration:none">#${r.o.id} ${r.o.titulo}</a> · ${r.a ? r.a.codigo : "Sin equipo"}</li>`;
+        html += `<li><a href="${baseUrl}/ordenes/${r.o.id}" style="color:#C03435;text-decoration:none">${etiquetaOT(r.o)} ${r.o.titulo}</a> · ${r.a ? r.a.codigo : "Sin equipo"}</li>`;
       }
       html += `</ul>`;
     }
@@ -371,7 +396,7 @@ export async function enviarDigestDiario(
       html += `<p style="margin:0 0 6px 0"><strong>Tickets sin asignar (${ticketsSinAsignar.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of ticketsSinAsignar.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#991b1b;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · ${r.s?.nombre ?? "—"}</li>`;
+        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#C03435;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · ${r.s?.nombre ?? "—"}</li>`;
       }
       html += `</ul>`;
     }
@@ -379,50 +404,50 @@ export async function enviarDigestDiario(
       html += `<p style="margin:0 0 6px 0"><strong>Tickets con SLA vencido (${ticketsSlaVencido.length}):</strong></p>
       <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
       for (const r of ticketsSlaVencido.slice(0, 10)) {
-        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#991b1b;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · venció ${fmtFechaSimple(r.t.vencimientoSla!)}</li>`;
+        html += `<li><a href="${baseUrl}/tickets/${r.t.id}" style="color:#C03435;text-decoration:none">#${r.t.id} ${r.t.asunto}</a> · venció ${fmtFechaSimple(r.t.vencimientoSla!)}</li>`;
       }
       html += `</ul>`;
     }
   }
 
   // ── KPIs del mes ──────────────────────────────────────────────────────────
-  html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">📈 KPIs del mes en curso</h3>
+  html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">KPIs del mes en curso</h3>
   <table style="width:100%;border-collapse:separate;border-spacing:6px;margin-bottom:14px">
     <tr>
-      <td style="padding:10px;background:#f1f5f9;border-radius:6px;text-align:center">
-        <div style="font-size:11px;color:#64748b">% A tiempo</div>
-        <div style="font-size:20px;font-weight:600;color:${pctATiempo == null ? "#94a3b8" : pctATiempo >= 80 ? "#065f46" : pctATiempo >= 50 ? "#92400e" : "#991b1b"}">${pctATiempo == null ? "—" : pctATiempo + "%"}</div>
+      <td style="padding:10px;background:#F2F4F7;border-radius:2px;text-align:center">
+        <div style="font-size:11px;color:#6B7280">% A tiempo</div>
+        <div style="font-size:20px;font-weight:600;color:${pctATiempo == null ? "#6B7280" : pctATiempo >= 80 ? "#1F5740" : pctATiempo >= 50 ? "#8A6420" : "#C03435"}">${pctATiempo == null ? "—" : pctATiempo + "%"}</div>
       </td>
-      <td style="padding:10px;background:#f1f5f9;border-radius:6px;text-align:center">
-        <div style="font-size:11px;color:#64748b">MTTR</div>
-        <div style="font-size:20px;font-weight:600;color:#0a4082">${mttr == null ? "—" : mttr.toFixed(1) + " h"}</div>
+      <td style="padding:10px;background:#F2F4F7;border-radius:2px;text-align:center">
+        <div style="font-size:11px;color:#6B7280">MTTR</div>
+        <div style="font-size:20px;font-weight:600;color:#23417D">${mttr == null ? "—" : mttr.toFixed(1) + " h"}</div>
       </td>
-      <td style="padding:10px;background:#f1f5f9;border-radius:6px;text-align:center">
-        <div style="font-size:11px;color:#64748b">Cerradas</div>
-        <div style="font-size:20px;font-weight:600;color:#065f46">${cerradasMes.length}</div>
+      <td style="padding:10px;background:#F2F4F7;border-radius:2px;text-align:center">
+        <div style="font-size:11px;color:#6B7280">Cerradas</div>
+        <div style="font-size:20px;font-weight:600;color:#1F5740">${cerradasMes.length}</div>
       </td>
-      <td style="padding:10px;background:#f1f5f9;border-radius:6px;text-align:center">
-        <div style="font-size:11px;color:#64748b">Creadas</div>
-        <div style="font-size:20px;font-weight:600;color:#0a4082">${creadasMes}</div>
+      <td style="padding:10px;background:#F2F4F7;border-radius:2px;text-align:center">
+        <div style="font-size:11px;color:#6B7280">Creadas</div>
+        <div style="font-size:20px;font-weight:600;color:#23417D">${creadasMes}</div>
       </td>
-      <td style="padding:10px;background:${backlog > 0 ? "#fee2e2" : "#d1fae5"};border-radius:6px;text-align:center">
-        <div style="font-size:11px;color:#64748b">Backlog</div>
-        <div style="font-size:20px;font-weight:600;color:${backlog > 0 ? "#991b1b" : "#065f46"}">${backlog > 0 ? "+" : ""}${backlog}</div>
+      <td style="padding:10px;background:${backlog > 0 ? "#F2F4F7" : "#F2F4F7"};border-radius:2px;text-align:center">
+        <div style="font-size:11px;color:#6B7280">Backlog</div>
+        <div style="font-size:20px;font-weight:600;color:${backlog > 0 ? "#C03435" : "#1F5740"}">${backlog > 0 ? "+" : ""}${backlog}</div>
       </td>
     </tr>
   </table>
 
-  <p style="margin:16px 0 6px 0;font-size:13px"><strong>💰 Costo del mes:</strong></p>
+  <p style="margin:16px 0 6px 0;font-size:13px"><strong>Costo del mes:</strong></p>
   <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.7">
     <li>Mano de obra: <strong>$${costoManoObraMes.toFixed(2)}</strong></li>
     <li>Repuestos: <strong>$${costoRepuestosMes.toFixed(2)}</strong></li>
-    <li><strong>Total:</strong> <strong style="color:#065f46">$${costoTotalMes.toFixed(2)}</strong></li>
+    <li><strong>Total:</strong> <strong style="color:#1F5740">$${costoTotalMes.toFixed(2)}</strong></li>
   </ul>`;
 
   if (topTecnicos.length > 0) {
-    html += `<p style="margin:16px 0 6px 0;font-size:13px"><strong>🏆 Top técnicos del mes:</strong></p>
+    html += `<p style="margin:16px 0 6px 0;font-size:13px"><strong>Top técnicos del mes:</strong></p>
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">
-      <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;text-align:left">
+      <thead><tr style="background:#F2F4F7;color:#4A4A4A;font-size:11px;text-align:left">
         <th style="padding:6px 8px">Técnico</th>
         <th style="padding:6px 8px;text-align:right">Cerradas</th>
         <th style="padding:6px 8px;text-align:right">Horas</th>
@@ -430,18 +455,18 @@ export async function enviarDigestDiario(
       </tr></thead><tbody>`;
     for (const t of topTecnicos) {
       const pct = t.cerradas > 0 ? Math.round((t.aTiempo / t.cerradas) * 100) : 0;
-      html += `<tr style="border-bottom:1px solid #f1f5f9">
+      html += `<tr style="border-bottom:1px solid #F2F4F7">
         <td style="padding:6px 8px">${t.nombre}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace">${t.cerradas}</td>
-        <td style="padding:6px 8px;text-align:right;font-family:monospace">${t.horas.toFixed(1)}</td>
-        <td style="padding:6px 8px;text-align:right;color:${pct >= 80 ? "#065f46" : pct >= 50 ? "#92400e" : "#991b1b"}">${pct}%</td>
+        <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${t.cerradas}</td>
+        <td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${t.horas.toFixed(1)}</td>
+        <td style="padding:6px 8px;text-align:right;color:${pct >= 80 ? "#1F5740" : pct >= 50 ? "#8A6420" : "#C03435"}">${pct}%</td>
       </tr>`;
     }
     html += `</tbody></table>`;
   }
 
   if (topEquipos.length > 0) {
-    html += `<p style="margin:16px 0 6px 0;font-size:13px"><strong>🛠 Equipos con más OTs del mes:</strong></p>
+    html += `<p style="margin:16px 0 6px 0;font-size:13px"><strong>Equipos con más OTs del mes:</strong></p>
     <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
     for (const e of topEquipos) {
       html += `<li><strong>${e.codigo}</strong> · ${e.nombre} → <strong>${e.cantidad}</strong> OTs</li>`;
@@ -451,46 +476,46 @@ export async function enviarDigestDiario(
 
   // ── Próximos vencimientos ─────────────────────────────────────────────────
   if (proximosPlanes.length > 0 || proximasActividades.length > 0) {
-    html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">📅 Próximos 3 días</h3>
+    html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Próximos 3 días</h3>
     <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
     for (const r of proximosPlanes) {
-      const venc = r.p.proximaFecha <= hoy ? `<strong style="color:#991b1b">vencido</strong>` : fmtFechaSimple(r.p.proximaFecha);
-      html += `<li>🛠 <strong>${r.p.titulo}</strong>${r.a ? ` (${r.a.codigo})` : ""} — ${venc}</li>`;
+      const venc = r.p.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fmtFechaSimple(r.p.proximaFecha);
+      html += `<li><strong>${r.p.titulo}</strong>${r.a ? ` (${r.a.codigo})` : ""} — ${venc}</li>`;
     }
     for (const r of proximasActividades) {
-      const venc = r.a.proximaFecha <= hoy ? `<strong style="color:#991b1b">vencido</strong>` : fmtFechaSimple(r.a.proximaFecha);
-      html += `<li>📌 <strong>${r.a.titulo}</strong> (${r.a.codigo}) — ${venc}</li>`;
+      const venc = r.a.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fmtFechaSimple(r.a.proximaFecha);
+      html += `<li><strong>${r.a.titulo}</strong> (${r.a.codigo}) — ${venc}</li>`;
     }
     html += `</ul>`;
   }
 
   // ── Contratos por vencer (90 días) ───────────────────────────────────────
   if (contratosPorVencer.length > 0) {
-    html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">📜 Contratos por vencer (próximos 90 días)</h3>
+    html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Contratos por vencer (próximos 90 días)</h3>
     <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
     for (const c of contratosPorVencer) {
-      const color = c.diasRestantes <= 30 ? "#dc2626" : c.diasRestantes <= 60 ? "#ea580c" : "#0a4082";
+      const color = c.diasRestantes <= 30 ? "#C03435" : c.diasRestantes <= 60 ? "#A27628" : "#23417D";
       const dias = c.diasRestantes < 0
-        ? `<strong style="color:#991b1b">vencido hace ${Math.abs(c.diasRestantes)} día${Math.abs(c.diasRestantes) === 1 ? "" : "s"}</strong>`
+        ? `<strong style="color:#C03435">vencido hace ${Math.abs(c.diasRestantes)} día${Math.abs(c.diasRestantes) === 1 ? "" : "s"}</strong>`
         : `<strong style="color:${color}">${c.diasRestantes} día${c.diasRestantes === 1 ? "" : "s"}</strong>`;
-      html += `<li><a href="${baseUrl}/contratos/${c.id}" style="color:#0a4082;text-decoration:none">${c.codigo} — ${c.nombre}</a> · ${c.proveedor ?? "—"} · ${dias}</li>`;
+      html += `<li><a href="${baseUrl}/contratos/${c.id}" style="color:#23417D;text-decoration:none">${c.codigo} — ${c.nombre}</a> · ${c.proveedor ?? "—"} · ${dias}</li>`;
     }
     html += `</ul>`;
   }
 
   // ── Compras pendientes ────────────────────────────────────────────────────
   if (comprasPendientes.length > 0) {
-    html += `<h3 style="margin:24px 0 10px 0;color:#0a4082;font-size:15px;text-transform:uppercase;letter-spacing:0.5px">🛒 Solicitudes de compra abiertas (${comprasPendientes.length})</h3>
+    html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Solicitudes de compra abiertas (${comprasPendientes.length})</h3>
     <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
     for (const sc of comprasPendientes.slice(0, 10)) {
       const dias = Math.floor((Date.now() - new Date(sc.createdAt).getTime()) / (24 * 3600_000));
-      html += `<li><a href="${baseUrl}/solicitudes-compra/${sc.id}" style="color:#0a4082;text-decoration:none">${sc.codigo} — ${sc.titulo}</a> · ${dias === 0 ? "hoy" : `hace ${dias} día${dias === 1 ? "" : "s"}`}</li>`;
+      html += `<li><a href="${baseUrl}/solicitudes-compra/${sc.id}" style="color:#23417D;text-decoration:none">${sc.codigo} — ${sc.titulo}</a> · ${dias === 0 ? "hoy" : `hace ${dias} día${dias === 1 ? "" : "s"}`}</li>`;
     }
-    if (comprasPendientes.length > 10) html += `<li style="color:#94a3b8">... y ${comprasPendientes.length - 10} más</li>`;
+    if (comprasPendientes.length > 10) html += `<li style="color:#6B7280">... y ${comprasPendientes.length - 10} más</li>`;
     html += `</ul>`;
   }
 
-  html += `<p style="margin-top:24px;font-size:12px;color:#64748b">Este resumen se envía cada mañana a las 6:00 AM. Para cambiar destinatarios, edita los usuarios admin en /usuarios.</p>`;
+  html += `<p style="margin-top:24px;font-size:12px;color:#6B7280">Este resumen se envía cada mañana a las 6:00 AM. Para cambiar destinatarios, edita los usuarios admin en /usuarios.</p>`;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Enviar a cada destinatario
@@ -500,7 +525,7 @@ export async function enviarDigestDiario(
     try {
       await sendMail(ctx, {
         to: dest.email,
-        subject: `📊 Resumen diario de Mantenimiento — ${new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/El_Salvador" })}`,
+        subject: `Resumen diario de Mantenimiento — ${new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/El_Salvador" })}`,
         html: emailLayout("Resumen diario de operaciones", html),
         tipo: "digest_diario",
         referencia: `digest:${hoy}`,

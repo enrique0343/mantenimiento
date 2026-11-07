@@ -12,7 +12,7 @@ function fixture(seed = true) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys=ON');
   for (const name of fs.readdirSync(path.join(root, 'migrations')).filter((name) => /^\d{4}.*\.sql$/.test(name)).sort()) {
-    if (name.startsWith('0050') && seed) sqlite.exec(`
+    if (name.startsWith('0050_sgo') && seed) sqlite.exec(`
       INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(1,'PERSONA SECRETA','secret@example.invalid','fixture','admin');
       INSERT INTO sucursales(id,nombre) VALUES(1,'SEDE A'),(2,'SEDE B');
       INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo) VALUES(1,1,'UBICACIÓN PRIVADA','sala'),(2,2,'OTRA UBICACIÓN','sala');
@@ -21,7 +21,7 @@ function fixture(seed = true) {
       VALUES(1,'TÍTULO PRIVADO','RELATO PRIVADO','correctivo','abierta','aires',1,1,1,'2026-01-01 10:00:00','2026-01-31');
     `);
     const source = fs.readFileSync(path.join(root, 'migrations', name), 'utf8');
-    if (name.startsWith('0050')) {
+    if (name.startsWith('0050_sgo')) {
       const statements = unstable_splitSqlQuery(source);
       assert(statements.length > 50, 'Wrangler must not collapse CASE/END trigger bodies with subsequent statements');
       for (const statement of statements) {

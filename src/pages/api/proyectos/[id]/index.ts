@@ -21,13 +21,15 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   const [row] = await db
+    // D1 corta el resultado a 100 columnas: con las seis tablas completas la
+    // consulta falla entera. Solo se piden las columnas que la respuesta usa.
     .select({
       p: proyectos,
-      creador: usuarios,
-      sucursal: sucursales,
-      ubicacion: ubicaciones,
-      activo: activos,
-      ticket: tickets,
+      creador: { id: usuarios.id, nombre: usuarios.nombre, email: usuarios.email },
+      sucursal: { id: sucursales.id, nombre: sucursales.nombre },
+      ubicacion: { id: ubicaciones.id, nombre: ubicaciones.nombre },
+      activo: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      ticket: { id: tickets.id, asunto: tickets.asunto, trackingToken: tickets.trackingToken },
     })
     .from(proyectos)
     .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))

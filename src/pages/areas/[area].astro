@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db";
 import { activos, ordenes, tickets } from "@/lib/schema";
 import { sql, eq, and, desc, inArray, or, isNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { CRITICIDAD_LABEL, CRITICIDAD_COLOR } from "@/lib/inventario-jci";
 export const prerender = false;
 const area = parseArea(Astro.params.area);
@@ -18,7 +19,7 @@ const [assetStats]=await db.select({n:sql<number>`count(*)`,alta:sql<number>`sum
 const orderWhere=and(eq(ordenes.rubro,area),inArray(ordenes.estado,["abierta","en_proceso","en_espera","completada"]),isTech?eq(ordenes.asignadoA,user.id):undefined);
 const [orderStats]=await db.select({n:sql<number>`count(*)`}).from(ordenes).where(orderWhere);
 const [ticketStats]=await db.select({n:sql<number>`count(*)`}).from(tickets).where(and(eq(tickets.rubro,area),inArray(tickets.estado,["nuevo","asignado","en_proceso"]),isTech?or(eq(tickets.asignadoA,user.id),isNull(tickets.asignadoA)):undefined));
-const recent=await db.select({o:ordenes,a:activos}).from(ordenes).leftJoin(activos,eq(activos.id,ordenes.activoId)).where(orderWhere).orderBy(desc(ordenes.id)).limit(6);
+const recent=await db.select({o:ordenes,a:{id:activos.id,codigo:activos.codigo,nombre:activos.nombre,criticidadOperacional:activos.criticidadOperacional}}).from(ordenes).leftJoin(activos,eq(activos.id,ordenes.activoId)).where(orderWhere).orderBy(desc(ordenes.id)).limit(6);
 const canPlan=["admin","jefe","tecnico","visualizador"].includes(user.rol);
 const isOperativo=["admin","jefe","tecnico"].includes(user.rol);
 const canCreate=["admin","tecnico"].includes(user.rol);
@@ -31,7 +32,7 @@ const canCreate=["admin","tecnico"].includes(user.rol);
     <a href={areaHref("/tickets",area)}><span>Solicitudes pendientes</span><strong>{Number(ticketStats?.n??0)}</strong><small>Por atender o en seguimiento</small></a>
   </div>
   <section class="card mt-6 overflow-hidden"><div class="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><h2 class="font-medium">Trabajo de {info.label}</h2><a class="text-sm text-brand-700" href={areaHref("/ordenes",area)}>Ver órdenes →</a></div>
-    {recent.length===0?<div class="workspace-empty"><span class="area-symbol"><AppIcon name={info.icon}/></span><h3>Todo listo para comenzar</h3><p>Registra {info.inventoryLabel.toLowerCase()}, recibe solicitudes y programa el mantenimiento de esta área.</p><a class="btn-secondary" href={areaHref("/soporte",area)}>Nueva solicitud</a></div>:<ul class="divide-y divide-slate-100">{recent.map(({o,a})=><li><a class="area-work-row" href={areaHref(`/ordenes/${o.id}`,area)}><div><strong>{o.titulo}</strong><small>OT #{o.id}{a?` · ${a.nombre}`:" · Trabajo por ubicación"}</small></div><div class="flex flex-wrap items-center gap-2">{a?.criticidadOperacional&&<span class={`badge ${CRITICIDAD_COLOR[a.criticidadOperacional]}`}>Criticidad {CRITICIDAD_LABEL[a.criticidadOperacional].toLowerCase()}</span>}<span class={`badge ${ESTADO_COLOR[o.estado]}`}>{ESTADO_LABEL[o.estado]}</span></div></a></li>)}</ul>}
+    {recent.length===0?<div class="workspace-empty"><span class="area-symbol"><AppIcon name={info.icon}/></span><h3>Todo listo para comenzar</h3><p>Registra {info.inventoryLabel.toLowerCase()}, recibe solicitudes y programa el mantenimiento de esta área.</p><a class="btn-secondary" href={areaHref("/soporte",area)}>Nueva solicitud</a></div>:<ul class="divide-y divide-slate-100">{recent.map(({o,a})=><li><a class="area-work-row" href={areaHref(`/ordenes/${o.id}`,area)}><div><strong>{o.titulo}</strong><small>{etiquetaOT(o)}{a?` · ${a.nombre}`:" · Trabajo por ubicación"}</small></div><div class="flex flex-wrap items-center gap-2">{a?.criticidadOperacional&&<span class={`badge ${CRITICIDAD_COLOR[a.criticidadOperacional]}`}>Criticidad {CRITICIDAD_LABEL[a.criticidadOperacional].toLowerCase()}</span>}<span class={`badge ${ESTADO_COLOR[o.estado]}`}>{ESTADO_LABEL[o.estado]}</span></div></a></li>)}</ul>}
   </section>
   {canPlan && <div class="mt-5 flex flex-wrap gap-3"><a class="btn-secondary" href={areaHref("/cronograma",area)}>Calendario</a><a class="btn-secondary" href={areaHref("/actividades",area)}>Actividades por ubicación</a>{area==="infraestructura"&&<a class="btn-secondary" href="/electrico">Sistemas eléctricos</a>}<a class="btn-secondary" href={areaHref("/plan-mantenimiento",area)}>Plan anual</a>{isOperativo && <a class="btn-secondary" href="/proyectos">Proyectos</a>}</div>}
 </Layout>

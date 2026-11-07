@@ -4,6 +4,14 @@ import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales } from "@/lib/schema";
 import { eq, asc, ne, and } from "drizzle-orm";
 import { RUBRO_KEYS, RUBROS, SUBCAT_KEYS, SUBCATS_BIOMEDICO, rubroDeActivo } from "@/lib/rubros";
+import { SISTEMAS_PROC } from "@/lib/procedimientos";
+import {
+  SISTEMA_LABEL,
+  inferirSistema,
+  juegosDeTodasLasFamilias,
+  equiposPorFamilia,
+  type Sistema,
+} from "@/lib/resolver";
 import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area"));
@@ -26,6 +34,53 @@ const sucursalesList = await db
   .where(eq(sucursales.activa, true))
   .orderBy(asc(sucursales.nombre));
 
+// El juego de los cinco documentos no se arma equipo por equipo: se define una
+// vez por familia (el sistema crítico) y todos sus equipos lo heredan. Traemos
+// el juego de cada familia para que al asignar se vea qué hereda el equipo.
+const juegos = await juegosDeTodasLasFamilias(db);
+const porFamilia = await equiposPorFamilia(db);
+const juegoDe: Record<string, (typeof juegos)[number]> = {};
+for (const j of juegos) juegoDe[j.sistema] = j;
+
+const SIS_ICONO: Record<string, string> = {
+  electrico: "",
+  hvac: "",
+  minisplit: "",
+  gases: "",
+  agua: "",
+  incendios: "",
+  ascensores: "",
+  otro: "",
+};
+const etiquetaFamilia = (k: string) => `${SIS_ICONO[k] ?? ""} ${SISTEMA_LABEL[k as Sistema] ?? k}`;
+/** "AOP, EOP" — los tipos que le faltan a la familia, en corto. */
+const faltanCortos = (j?: (typeof juegos)[number]) =>
+  (j?.faltantes ?? []).map((f) => f.split(" ")[0]).join(", ");
+const notaJuego = (k: string) => {
+  const j = juegoDe[k];
+  if (!j) return "Esta familia no tiene juego de documentos propio.";
+  return j.completo
+    ? `Juego completo 5/5 · ${j.vigentes} vigente(s)`
+    : `Juego ${j.cubiertos}/5 · faltan ${faltanCortos(j)}`;
+};
+
+// Cada fila sabe su familia en uno de tres estados: la que declara, la que el
+// nombre sugiere (suposición, hay que confirmarla), o ninguna.
+const filas = rows.map((r) => {
+  const declarado = (r.a.sistema ?? "") as Sistema | "";
+  const sugerido = inferirSistema(r.a.nombre, r.a.categoria, r.a.rubro, r.ub?.nombre);
+  const estadoFam: "declarado" | "inferido" | "sinresolver" = declarado
+    ? "declarado"
+    : sugerido === "otro"
+      ? "sinresolver"
+      : "inferido";
+  return { ...r, declarado, sugerido, estadoFam, famRes: (declarado || sugerido) as Sistema };
+});
+
+const famDeclarada = filas.filter((f) => f.estadoFam === "declarado").length;
+const famInferida = filas.filter((f) => f.estadoFam === "inferido").length;
+const famSinResolver = filas.filter((f) => f.estadoFam === "sinresolver").length;
+
 const sinDominio = rows.filter((r) => !r.a.rubro).length;
 const bioSinSubcat = rows.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico" && !r.a.subcategoria).length;
 const sinCriticidad = rows.filter((r) => !r.a.criticidadOperacional).length;
@@ -43,7 +98,7 @@ const CRIT = [
       <a href={areaHref("/activos", area)} class="text-xs text-slate-400 hover:text-slate-600">← Equipos</a>
       <h1 class="mt-1 text-2xl font-bold">Clasificación {area ? `· ${AREAS[area].label}` : "de activos"}</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Área de mantenimiento, subcategoría biomédica y criticidad Alta, Media o Baja.
+        Área de mantenimiento, familia (sistema crítico), subcategoría biomédica y criticidad Alta, Media o Baja.
         Cada cambio se guarda al instante.
       </p>
     </div>
@@ -54,6 +109,59 @@ const CRIT = [
       {sinDominio === 0 && bioSinSubcat === 0 && sinCriticidad === 0 && (
         <span class="badge bg-emerald-100 text-emerald-700">✓ Clasificación completa</span>
       )}
+    </div>
+  </div>
+
+  <!-- ── Familia: la llave del juego de documentos ── -->
+  <div class="card mt-4 p-3">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="max-w-2xl">
+        <div class="text-sm font-semibold text-slate-700">La familia decide qué documentos rigen el equipo</div>
+        <p class="mt-0.5 text-xs text-slate-500">
+          Los cinco documentos —SCP, SOP, AOP, EOP, MOP— no se redactan equipo por equipo: se definen
+          <strong>una vez por familia</strong> y todos sus equipos los heredan. Todos los aires acondicionados
+          responden al mismo juego; lo único que hay que declarar aquí es a qué familia pertenece cada equipo.
+          <a href="/cobertura" class="text-brand-700 hover:underline">Ver cobertura por familia →</a>
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="badge bg-emerald-100 text-emerald-700">
+          <span id="cDecl">{famDeclarada}</span> con familia declarada
+        </span>
+        <span class="badge bg-amber-100 text-amber-700">
+          <span id="cInf">{famInferida}</span> sugeridas por confirmar
+        </span>
+        <span class="badge bg-slate-100 text-slate-600">
+          <span id="cSin">{famSinResolver}</span> sin resolver
+        </span>
+        <span id="famOkBadge" class:list={["badge bg-emerald-100 text-emerald-700", (famInferida + famSinResolver) > 0 && "hidden"]}>
+          ✓ Todas declaradas
+        </span>
+      </div>
+    </div>
+
+    <!-- Un chip por familia: cuántos equipos la heredan y cuánto juego hay escrito -->
+    <div class="mt-3 flex flex-wrap gap-2">
+      {juegos.map((j) => (
+        <button
+          type="button"
+          class="fam-chip rounded-full border px-2.5 py-1 text-xs"
+          class:list={[j.completo ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"]}
+          data-sis={j.sistema}
+          title={j.completo ? `Juego completo · ${j.vigentes} vigente(s)` : `Faltan: ${j.faltantes.join(" · ")}`}
+        >
+          {etiquetaFamilia(j.sistema)} · {porFamilia[j.sistema]?.total ?? 0} equipos · juego {j.cubiertos}/5
+          {!j.completo && <span class="ml-1 font-medium">(faltan {faltanCortos(j)})</span>}
+        </button>
+      ))}
+      <button
+        type="button"
+        class="fam-chip rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
+        data-sis="otro"
+        title="Equipos que no pertenecen a un sistema crítico: no heredan juego"
+      >
+        Otro · {porFamilia["otro"]?.total ?? 0} equipos · sin juego propio
+      </button>
     </div>
   </div>
 
@@ -68,6 +176,15 @@ const CRIT = [
       <select id="fSede" class="input text-sm">
         <option value="">Todas</option>
         {sucursalesList.map((s) => <option value={s.nombre}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs">Familia (sistema)</label>
+      <select id="fFamilia" class="input text-sm">
+        <option value="">Todas</option>
+        {SISTEMAS_PROC.map((k) => <option value={k}>{etiquetaFamilia(k)}</option>)}
+        <option value="__pendiente__">Sugeridas por confirmar</option>
+        <option value="__sinresolver__">✕ Sin resolver</option>
       </select>
     </div>
     <div>
@@ -88,6 +205,33 @@ const CRIT = [
         <option value="__sin__">Sin asignar</option>
       </select>
     </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="marcarVisible" type="button" class="btn-secondary btn-sm">Marcar todo lo visible</button>
+      <button id="aceptarSug" type="button" class="btn-secondary btn-sm">✓ Aceptar todas las sugerencias visibles</button>
+      <span class="text-xs text-slate-500"><span id="visibles">{filas.length}</span> visibles</span>
+    </div>
+  </div>
+
+  <!-- Barra de asignación masiva (aparece cuando hay seleccionados) -->
+  <div id="bulkBar" class="hidden mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-brand-50 p-3 text-sm">
+    <div>
+      <span class="text-brand-700"><span id="bulkCount" class="font-semibold">0</span> equipos seleccionados</span>
+      <div class="text-xs text-brand-600">Solo cuenta lo visible con los filtros actuales.</div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <select id="bulkSistema" class="input py-1 text-sm">
+        <option value="">— Familia a asignar —</option>
+        {SISTEMAS_PROC.map((k) => (
+          <option value={k} data-nota={notaJuego(k)}>
+            {etiquetaFamilia(k)}{juegoDe[k] ? ` · ${juegoDe[k].cubiertos}/5` : ""}
+          </option>
+        ))}
+      </select>
+      <button id="bulkAsignar" type="button" class="btn-primary btn-sm">
+        Asignar familia a los <span id="bulkCount2">0</span> seleccionados
+      </button>
+    </div>
+    <div id="bulkNota" class="w-full text-xs text-brand-700"></div>
   </div>
 
   <div class="card mt-4 overflow-hidden">
@@ -95,15 +239,17 @@ const CRIT = [
       <table class="w-full text-left text-sm" id="tabla">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
+            <th class="w-8 px-3 py-2"><input type="checkbox" id="selAll" title="Marcar todo lo visible" /></th>
             <th class="px-3 py-2">Equipo</th>
             <th class="px-3 py-2">Sede / Ubicación</th>
+            <th class="px-3 py-2">Familia (sistema)</th>
             <th class="px-3 py-2">Área de mantenimiento</th>
             <th class="px-3 py-2">Subcategoría biomédica</th>
             <th class="px-3 py-2">Criticidad</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          {rows.map((r) => {
+          {filas.map((r) => {
             const dominio = r.a.rubro ?? "";
             const esBio = rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico";
             return (
@@ -113,7 +259,11 @@ const CRIT = [
                 data-sede={r.s?.nombre ?? ""}
                 data-dominio={dominio || "__sin__"}
                 data-crit={r.a.criticidadOperacional ?? "__sin__"}
+                data-fam={r.declarado}
+                data-fam-res={r.famRes}
+                data-fam-estado={r.estadoFam}
               >
+                <td class="px-3 py-2"><input type="checkbox" class="row-chk" data-id={r.a.id} /></td>
                 <td class="px-3 py-2">
                   <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">
                     <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span> {r.a.nombre}
@@ -122,6 +272,32 @@ const CRIT = [
                 </td>
                 <td class="px-3 py-2 text-xs text-slate-500">
                   {r.s?.nombre ?? "—"}{r.ub?.nombre ? ` · ${r.ub.nombre}` : ""}
+                </td>
+                <td class="px-3 py-2">
+                  <div class="flex items-center gap-1">
+                    <select
+                      class="fam-sel rounded border px-1.5 py-1 text-xs"
+                      class:list={[r.declarado ? "border-slate-200 bg-white text-slate-700" : "border-dashed border-amber-300 bg-amber-50 text-slate-400"]}
+                      data-id={r.a.id}
+                      data-sugerido={r.sugerido}
+                    >
+                      <option value="">
+                        {r.estadoFam === "inferido" ? `≈ ${etiquetaFamilia(r.sugerido)} (sugerido)` : "— sin declarar —"}
+                      </option>
+                      {SISTEMAS_PROC.map((k) => (
+                        <option value={k} selected={r.declarado === k}>{etiquetaFamilia(k)}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      class:list={["fam-ok rounded border border-amber-300 bg-white px-1.5 py-1 text-[10px] font-medium text-amber-700 hover:bg-amber-50", r.estadoFam !== "inferido" && "hidden"]}
+                      data-id={r.a.id}
+                      title={`Declarar en firme: ${SISTEMA_LABEL[r.sugerido]}`}
+                    >✓</button>
+                  </div>
+                  <div class:list={["fam-nota mt-0.5 text-[10px]", r.declarado && "hidden", r.estadoFam === "inferido" ? "text-amber-600" : "text-slate-400"]}>
+                    {r.estadoFam === "inferido" ? "deducido del nombre · por confirmar" : "ninguna familia deducible"}
+                  </div>
                 </td>
                 <td class="px-3 py-2">
                   <select class="dominio-sel rounded border px-1.5 py-1 text-xs" class:list={[dominio ? "border-slate-200 bg-white text-slate-700" : "border-amber-300 bg-amber-50 text-amber-800"]} data-id={r.a.id}>
@@ -158,6 +334,12 @@ const CRIT = [
   <div class="mt-3 text-xs text-slate-500">
     <span class="font-medium text-slate-600">Criticidad:</span>
     Alta: una falla afecta la seguridad o un servicio esencial. Media: limita la operación con una alternativa temporal. Baja: impacto localizado que permite programar la intervención. La urgencia de cada solicitud se evalúa por separado.
+  </div>
+  <div class="mt-1 text-xs text-slate-500">
+    <span class="font-medium text-slate-600">Familia:</span>
+    declarada = alguien la confirmó y el resolver la usa sin suponer ·
+    sugerida = deducida del nombre, sirve para proponer pero no para gobernar una emergencia ·
+    sin resolver = el nombre no dice nada, hay que elegirla a mano.
   </div>
 
   <script>
@@ -223,25 +405,285 @@ const CRIT = [
       });
     });
 
+    // ── Familia (sistema crítico) ──────────────────────────────────────────
+    // Un equipo sin familia declarada no es un equipo sin familia: el resolver
+    // igual la deduce del nombre. Lo que falta es que alguien la confirme, y
+    // eso es lo que esta columna y la asignación masiva vuelven barato.
+    const filasDom = () => Array.from(document.querySelectorAll<HTMLTableRowElement>(".fila"));
+    const filasVisibles = () => filasDom().filter((tr) => tr.style.display !== "none");
+
+    function recontar() {
+      const todas = filasDom();
+      const cuenta = (e: string) => todas.filter((tr) => tr.dataset.famEstado === e).length;
+      const inf = cuenta("inferido");
+      const sin = cuenta("sinresolver");
+      const set = (id: string, n: number) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = String(n);
+      };
+      set("cDecl", cuenta("declarado"));
+      set("cInf", inf);
+      set("cSin", sin);
+      document.getElementById("famOkBadge")?.classList.toggle("hidden", inf + sin > 0);
+    }
+
+    /** Repinta la celda de familia según lo que quedó declarado. */
+    function pintarFamilia(sel: HTMLSelectElement, recuenta = true) {
+      const tr = sel.closest("tr") as HTMLTableRowElement;
+      const declarado = !!sel.value;
+      const sugerido = sel.dataset.sugerido ?? "otro";
+      for (const c of ["border-slate-200", "bg-white", "text-slate-700"]) sel.classList.toggle(c, declarado);
+      for (const c of ["border-dashed", "border-amber-300", "bg-amber-50", "text-slate-400"]) sel.classList.toggle(c, !declarado);
+      tr.dataset.fam = sel.value;
+      tr.dataset.famRes = sel.value || sugerido;
+      tr.dataset.famEstado = declarado ? "declarado" : sugerido === "otro" ? "sinresolver" : "inferido";
+      tr.querySelector<HTMLElement>(".fam-nota")?.classList.toggle("hidden", declarado);
+      tr.querySelector<HTMLElement>(".fam-ok")?.classList.toggle("hidden", declarado || sugerido === "otro");
+      if (recuenta) recontar();
+    }
+
+    async function patchFamilia(sel: HTMLSelectElement, prev: string) {
+      sel.disabled = true;
+      const r = await fetch(`/api/activos/${sel.dataset.id}/sistema`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sistema: sel.value || null }),
+      });
+      sel.disabled = false;
+      if (!r.ok) {
+        sel.value = prev;
+        window.showToast?.("No se pudo guardar la familia", "error");
+        return false;
+      }
+      sel.classList.add("ring-2", "ring-emerald-300");
+      setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+      pintarFamilia(sel);
+      return true;
+    }
+
+    document.querySelectorAll<HTMLSelectElement>(".fam-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        if (await patchFamilia(sel, prev)) prev = sel.value;
+      });
+    });
+
+    // Confirmar la sugerencia de una fila con un clic
+    document.querySelectorAll<HTMLButtonElement>(".fam-ok").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const sel = btn.closest("tr")!.querySelector<HTMLSelectElement>(".fam-sel")!;
+        const sug = sel.dataset.sugerido ?? "";
+        if (!sug || sug === "otro") return;
+        const prev = sel.value;
+        sel.value = sug;
+        await patchFamilia(sel, prev);
+      });
+    });
+
+    // ── Selección y asignación masiva ─────────────────────────────────────
+    // Trabaja siempre sobre lo visible: filtrar por "split" y asignar los 40
+    // de golpe es el caso que esta pantalla existe para resolver.
+    const selAll = document.getElementById("selAll") as HTMLInputElement | null;
+    const bulkBar = document.getElementById("bulkBar")!;
+    const bulkSistema = document.getElementById("bulkSistema") as HTMLSelectElement;
+    const bulkAsignar = document.getElementById("bulkAsignar") as HTMLButtonElement;
+    const aceptarSug = document.getElementById("aceptarSug") as HTMLButtonElement;
+
+    const chkDe = (tr: HTMLTableRowElement) => tr.querySelector<HTMLInputElement>(".row-chk");
+    const marcados = () =>
+      filasVisibles()
+        .map(chkDe)
+        .filter((c): c is HTMLInputElement => !!c && c.checked);
+
+    function refreshSel() {
+      const n = marcados().length;
+      const total = filasVisibles().length;
+      document.getElementById("bulkCount")!.textContent = String(n);
+      document.getElementById("bulkCount2")!.textContent = String(n);
+      bulkBar.classList.toggle("hidden", n === 0);
+      if (selAll) {
+        selAll.checked = n > 0 && n === total;
+        selAll.indeterminate = n > 0 && n < total;
+      }
+    }
+
+    function marcarVisible(valor: boolean) {
+      filasVisibles().forEach((tr) => {
+        const c = chkDe(tr);
+        if (c) c.checked = valor;
+      });
+      refreshSel();
+    }
+
+    selAll?.addEventListener("change", () => marcarVisible(selAll.checked));
+    document.getElementById("marcarVisible")?.addEventListener("click", () => marcarVisible(true));
+    document.querySelectorAll<HTMLInputElement>(".row-chk").forEach((c) => c.addEventListener("change", refreshSel));
+
+    bulkSistema.addEventListener("change", () => {
+      const opt = bulkSistema.selectedOptions[0];
+      document.getElementById("bulkNota")!.textContent = bulkSistema.value
+        ? `Heredarán el juego de esta familia — ${opt?.dataset.nota ?? ""}`
+        : "";
+    });
+
+    /**
+     * Escribe la familia en lote. Devuelve cuántos actualizó el servidor, o
+     * null si algo falló: en ese caso recargamos, porque mostrar una pantalla
+     * que no coincide con la base es peor que perder los filtros.
+     */
+    async function asignarFamilia(sistema: string, ids: number[]): Promise<number | null> {
+      let actualizados = 0;
+      for (let i = 0; i < ids.length; i += 400) {
+        const tanda = ids.slice(i, i + 400);
+        const r = await fetch("/api/activos/bulk-sistema", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids: tanda, sistema }),
+        });
+        if (!r.ok) {
+          window.showToast?.("No se pudo completar la asignación; recargando", "error");
+          setTimeout(() => location.reload(), 1200);
+          return null;
+        }
+        const j = (await r.json().catch(() => ({}))) as { actualizados?: number };
+        actualizados += Number(j.actualizados ?? 0);
+      }
+      return actualizados;
+    }
+
+    /** Deja las filas con la familia ya escrita, sin recargar (los filtros siguen puestos). */
+    function aplicarEnPantalla(trs: HTMLTableRowElement[], sistema: string) {
+      trs.forEach((tr) => {
+        const sel = tr.querySelector<HTMLSelectElement>(".fam-sel");
+        if (!sel) return;
+        sel.value = sistema;
+        pintarFamilia(sel, false); // un solo recuento al final, no uno por fila
+        const c = chkDe(tr);
+        if (c) c.checked = false;
+      });
+      recontar();
+      // Re-filtra: si estabas viendo "sugeridas por confirmar", las que acabas
+      // de declarar salen de la lista y queda a la vista lo que falta.
+      filtrar();
+    }
+
+    bulkAsignar.addEventListener("click", async () => {
+      const sistema = bulkSistema.value;
+      if (!sistema) {
+        window.showToast?.("Elige primero la familia a asignar", "warning");
+        bulkSistema.focus();
+        return;
+      }
+      const chks = marcados();
+      if (chks.length === 0) return;
+      const label = bulkSistema.selectedOptions[0]?.text ?? sistema;
+      const nota = bulkSistema.selectedOptions[0]?.dataset.nota ?? "";
+      const msg =
+        `${chks.length} equipos quedarán declarados en «${label}» y heredarán su juego de documentos. ${nota}`;
+      const ok = (await window.confirmAction?.("Asignar familia", msg, { confirmLabel: "Asignar" })) ?? confirm(msg);
+      if (!ok) return;
+
+      bulkAsignar.disabled = true;
+      const trs = chks.map((c) => c.closest("tr") as HTMLTableRowElement);
+      const n = await asignarFamilia(sistema, chks.map((c) => Number(c.dataset.id)));
+      bulkAsignar.disabled = false;
+      if (n === null) return;
+      aplicarEnPantalla(trs, sistema);
+      window.showToast?.(
+        n > 0 ? `${n} equipos declarados en ${label}` : "Esos equipos ya estaban en esa familia",
+        n > 0 ? "success" : "info",
+      );
+    });
+
+    // ── Aceptar en firme lo que el nombre sugiere, para todo lo visible ───
+    aceptarSug.addEventListener("click", async () => {
+      const pendientes = filasVisibles().filter((tr) => tr.dataset.famEstado === "inferido");
+      if (pendientes.length === 0) {
+        window.showToast?.("No hay sugerencias pendientes entre los equipos visibles", "info");
+        return;
+      }
+      const msg =
+        `${pendientes.length} equipos visibles quedarán declarados con la familia que el sistema deduce de su nombre. ` +
+        `Los equipos sin familia deducible no se tocan. Puedes corregir cualquiera después, uno por uno.`;
+      const ok =
+        (await window.confirmAction?.(`Aceptar ${pendientes.length} sugerencias`, msg, { confirmLabel: "Aceptar sugerencias" })) ??
+        confirm(msg);
+      if (!ok) return;
+
+      // Una petición por familia sugerida
+      const porSistema = new Map<string, HTMLTableRowElement[]>();
+      for (const tr of pendientes) {
+        const sug = tr.querySelector<HTMLSelectElement>(".fam-sel")?.dataset.sugerido;
+        if (!sug || sug === "otro") continue;
+        porSistema.set(sug, [...(porSistema.get(sug) ?? []), tr]);
+      }
+
+      aceptarSug.disabled = true;
+      let total = 0;
+      for (const [sistema, trs] of porSistema) {
+        const ids = trs
+          .map((tr) => Number(chkDe(tr)?.dataset.id ?? 0))
+          .filter((id) => id > 0);
+        const n = await asignarFamilia(sistema, ids);
+        if (n === null) return; // ya avisó y está recargando
+        total += n;
+        aplicarEnPantalla(trs, sistema);
+      }
+      aceptarSug.disabled = false;
+      window.showToast?.(`${total} equipos declarados con la familia sugerida`, "success");
+    });
+
     // ── Filtros client-side ──
     const buscar = document.getElementById("buscar") as HTMLInputElement;
     const fSede = document.getElementById("fSede") as HTMLSelectElement;
+    const fFamilia = document.getElementById("fFamilia") as HTMLSelectElement;
     const fDominio = document.getElementById("fDominio") as HTMLSelectElement;
     const fCrit = document.getElementById("fCrit") as HTMLSelectElement;
 
     function filtrar() {
       const q = buscar.value.trim().toLowerCase();
-      document.querySelectorAll<HTMLTableRowElement>(".fila").forEach((tr) => {
+      const fam = fFamilia.value;
+      let n = 0;
+      filasDom().forEach((tr) => {
         const okQ = !q || (tr.dataset.search ?? "").includes(q);
         const okS = !fSede.value || tr.dataset.sede === fSede.value;
         const okD = !fDominio.value || tr.dataset.dominio === fDominio.value;
         const okC = !fCrit.value || tr.dataset.crit === fCrit.value;
-        tr.style.display = okQ && okS && okD && okC ? "" : "none";
+        const okF =
+          !fam ||
+          (fam === "__pendiente__"
+            ? tr.dataset.famEstado === "inferido"
+            : fam === "__sinresolver__"
+              ? tr.dataset.famEstado === "sinresolver"
+              : tr.dataset.famRes === fam);
+        const visible = okQ && okS && okD && okC && okF;
+        tr.style.display = visible ? "" : "none";
+        if (visible) n++;
+        // Nada oculto queda marcado: la asignación masiva no debe tocar lo
+        // que la persona no está viendo.
+        if (!visible) {
+          const c = chkDe(tr);
+          if (c) c.checked = false;
+        }
       });
+      document.getElementById("visibles")!.textContent = String(n);
+      refreshSel();
     }
     buscar.addEventListener("input", filtrar);
     fSede.addEventListener("change", filtrar);
+    fFamilia.addEventListener("change", filtrar);
     fDominio.addEventListener("change", filtrar);
     fCrit.addEventListener("change", filtrar);
+
+    // Los chips de familia son un filtro más
+    document.querySelectorAll<HTMLButtonElement>(".fam-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        fFamilia.value = fFamilia.value === chip.dataset.sis ? "" : (chip.dataset.sis ?? "");
+        filtrar();
+      });
+    });
+
+    filtrar();
+    recontar();
   </script>
 </Layout>

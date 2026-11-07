@@ -21,7 +21,7 @@ try {
       catalogDetail: 'pages/api/catalogo-aires/[id]/index',
     },
     migrationStatements(migration, source) {
-      if (!migration.startsWith('0049_')) return [source];
+      if (!migration.startsWith('0049_catalogo_')) return [source];
       // D1 receives independently split statements. A complete SQLite script
       // may succeed even when Wrangler truncates CASE/END inside a trigger.
       const statements = unstable_splitSqlQuery(source);
@@ -29,7 +29,7 @@ try {
       return statements;
     },
     beforeMigration(sqlite, migration) {
-      if (!migration.startsWith('0049_')) return;
+      if (!migration.startsWith('0049_catalogo_')) return;
       sqlite.exec(`
         INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(900,'Usuario histórico','historico@example.invalid','isolated','admin');
         INSERT INTO activos(id,codigo,nombre,serial,rubro,tipo,qr_code) VALUES(900,'LEGADO-AC-1','Aire anterior sin modificar','Serie anterior','aires','general','QR-LEGADO-AC-1');

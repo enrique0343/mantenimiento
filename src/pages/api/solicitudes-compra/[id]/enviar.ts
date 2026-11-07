@@ -41,7 +41,7 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
-  const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+  const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
 
   // Datos para el correo formal: técnico solicitante + jefe que autoriza
   const [creador] = sol.creadoPor
@@ -123,7 +123,7 @@ export const POST: APIRoute = async (ctx) => {
            <p>Reciba un cordial saludo de la Gerencia de Operaciones.</p>
            <p>Por este medio le hago llegar la solicitud de compra <strong>${sol.codigo}</strong>, generada desde el módulo de Mantenimiento para atender una falla activa${ot?.titulo ? ` relacionada con: <em>${ot.titulo}</em>` : ""}.</p>
 
-           <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Detalle de la solicitud</h3>
+           <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Detalle de la solicitud</h3>
            <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7;font-size:14px">
              <li><strong>Código:</strong> ${sol.codigo}</li>
              <li><strong>Bien solicitado:</strong> ${itemsResumen}</li>
@@ -132,16 +132,16 @@ export const POST: APIRoute = async (ctx) => {
              ${autorizador?.nombre ? `<li><strong>Autorizado por:</strong> ${autorizador.nombre}</li>` : ""}
            </ul>
 
-           ${sol.descripcion ? `<h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Justificación operativa</h3>
+           ${sol.descripcion ? `<h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Justificación operativa</h3>
              <p style="white-space:pre-wrap">${sol.descripcion}</p>
              <p>La pronta atención de esta solicitud resulta clave para restablecer la operación bajo parámetros normales y proteger la continuidad del servicio en las áreas que dependen de esta operación.</p>` : ""}
 
-           <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Documentación adjunta</h3>
+           <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Documentación adjunta</h3>
            <p>En el siguiente enlace encontrará el detalle técnico completo, especificaciones del repuesto y el formulario PDF firmado de la solicitud:</p>
-           <p style="margin:14px 0"><a href="${viewUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver solicitud y descargar PDF →</a></p>
-           <p style="color:#64748b;font-size:12px">Este enlace es personal e intransferible. Su acceso queda registrado en el expediente de la solicitud para efectos de trazabilidad.</p>
+           <p style="margin:14px 0"><a href="${viewUrl}" style="display:inline-block;padding:10px 22px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Ver solicitud y descargar PDF →</a></p>
+           <p style="color:#6B7280;font-size:12px">Este enlace es personal e intransferible. Su acceso queda registrado en el expediente de la solicitud para efectos de trazabilidad.</p>
 
-           <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Próximos pasos</h3>
+           <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Próximos pasos</h3>
            <p>Le agradecemos confirmar la recepción de la presente solicitud y, en cuanto le sea posible, hacernos llegar el plazo estimado de adquisición. Si requiere información adicional o necesita coordinar con el área técnica, puede dirigirse a ${creador?.nombre ? `<strong>${creador.nombre}</strong>` : "la jefatura"} o a la jefatura correspondiente de Mantenimiento.</p>
 
            <p style="margin-top:20px">Agradezco de antemano su gestión y disposición habituales.</p>
@@ -149,7 +149,7 @@ export const POST: APIRoute = async (ctx) => {
            <p style="margin-top:24px">Atentamente,<br/>
              <strong>Departamento de Operaciones</strong><br/>
              <em>Avante Complejo Hospitalario</em><br/>
-             <span style="font-size:12px;color:#64748b">Inversiones Avante S.A. de C.V.</span>
+             <span style="font-size:12px;color:#6B7280">Inversiones Avante S.A. de C.V.</span>
            </p>`
         ),
         tipo: "solicitud_compra",

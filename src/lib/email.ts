@@ -235,13 +235,20 @@ export async function sendMail(ctx: APIContext, params: SendMailParams): Promise
   }
 }
 
+const LOGO_CORREO = "https://mantenimiento.complejoavante.dev/brand/avante-logo.png";
+
+// Correo institucional · Sistema Visual Avante v2.0. Figtree solo se ve donde el
+// cliente de correo la tenga; el resto cae a Segoe UI o Arial.
 export function emailLayout(title: string, body: string, footer?: string): string {
   return `<!doctype html>
-<html><body style="font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px">
-  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden">
-    <div style="background:#0a4082;color:#fff;padding:16px 20px"><h1 style="margin:0;font-size:18px">${title}</h1></div>
-    <div style="padding:20px;color:#0f172a;line-height:1.5">${body}</div>
-    <div style="padding:12px 20px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+<html lang="es"><body style="font-family:Figtree,'Segoe UI',Arial,sans-serif;background:#E5E8EF;margin:0;padding:24px;color:#1A1A1A">
+  <div style="max-width:600px;margin:0 auto;background:#fff">
+    <div style="padding:14px 20px 12px;border-bottom:1px solid #23417D">
+      <img src="${LOGO_CORREO}" alt="Avante Complejo Hospitalario" height="38" style="display:block;height:38px;width:auto;border:0">
+    </div>
+    <div style="padding:18px 20px 0"><h1 style="margin:0;font-size:20px;font-weight:600;line-height:1.2;color:#1A1A1A">${title}</h1></div>
+    <div style="padding:12px 20px 20px;color:#1A1A1A;font-size:14px;line-height:1.5">${body}</div>
+    <div style="padding:10px 20px;color:#4A4A4A;font-size:11px;border-top:1px solid #23417D">
       ${footer ?? "Correo enviado automáticamente desde la Gerencia de Operaciones."}
     </div>
   </div>

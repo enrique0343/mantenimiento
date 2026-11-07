@@ -9,6 +9,7 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { devolverOrdenDesdeTicket, ErrorVerificacion } from "@/lib/orden-verificacion";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga } from "@/lib/datetime";
+import { etiquetaOT } from "@/lib/orden-codigo";
 
 export const prerender = false;
 
@@ -82,7 +83,7 @@ export const POST: APIRoute = async (ctx) => {
       await db.insert(comentarios).values({
         ordenId: ot.id,
         usuarioId: autorId,
-        texto: `🔁 INCONFORMIDAD REPORTADA POR EL SOLICITANTE\n\n${t.solicitanteNombre} <${t.solicitanteEmail}> reabrió la orden con el siguiente motivo:\n\n${motivo}`,
+        texto: `INCONFORMIDAD REPORTADA POR EL SOLICITANTE\n\n${t.solicitanteNombre} <${t.solicitanteEmail}> reabrió la orden con el siguiente motivo:\n\n${motivo}`,
       });
     }
   } catch (e) { console.error("comentario reapertura:", e); }
@@ -114,7 +115,7 @@ export const POST: APIRoute = async (ctx) => {
   // 6) Notificar al técnico y al jefe
   try {
     const env = (ctx.locals as any)?.runtime?.env ?? {};
-    const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+    const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
     const otUrl = `${baseUrl}/ordenes/${ot.id}`;
 
     // Técnico asignado
@@ -125,24 +126,24 @@ export const POST: APIRoute = async (ctx) => {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: tec.email,
-            subject: `[OT #${ot.id}] Necesitamos una segunda visita — ${ot.titulo}`,
+            subject: `[${etiquetaOT(ot)}] Necesitamos una segunda visita — ${ot.titulo}`,
             html: emailLayout(
               "Volvamos al sitio para terminar bien",
               `<p>Hola <strong>${primerNombreTec}</strong>,</p>
-               <p>El solicitante de la <strong>OT #${ot.id} — ${ot.titulo}</strong> nos compartió que el problema no quedó completamente resuelto después de tu intervención. La orden volvió a estado <strong>en proceso</strong> para que puedas completarla.</p>
+               <p>El solicitante de la <strong>${etiquetaOT(ot)} — ${ot.titulo}</strong> nos compartió que el problema no quedó completamente resuelto después de tu intervención. La orden volvió a estado <strong>en proceso</strong> para que puedas completarla.</p>
 
-               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Lo que el solicitante observó al verificar:</h3>
-               <p style="white-space:pre-wrap;background:#fef2f2;padding:12px;border-left:3px solid #dc2626;border-radius:4px;margin:0 0 18px 0">${motivo}</p>
+               <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Lo que el solicitante observó al verificar:</h3>
+               <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #C03435;border-radius:2px;margin:0 0 18px 0">${motivo}</p>
 
-               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Cómo leer este reabrimiento</h3>
+               <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Cómo leer este reabrimiento</h3>
                <p>Esto no es una observación contra tu trabajo. El trabajo que ejecutaste está registrado y sigue siendo válido. Lo que el solicitante está señalando es un alcance adicional que probablemente no era visible al momento del diagnóstico inicial, o que se manifestó después.</p>
                <p>Estos casos pasan. El sistema de reabrimiento existe precisamente para que casos como este se resuelvan dentro de la misma OT, sin generar tickets nuevos ni perder la trazabilidad del trabajo ya hecho.</p>
 
-               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Próximos pasos sugeridos</h3>
+               <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Próximos pasos sugeridos</h3>
                <p>Cuando regreses al sitio, te sugerimos verificar tres cosas: el estado real del problema bajo las condiciones actuales, los componentes adicionales que pudieran estar relacionados con el síntoma, y cualquier otro elemento del sistema que pueda estar contribuyendo al caso.</p>
                <p>Si al diagnosticar de nuevo encuentras un alcance distinto al original (por ejemplo, repuesto adicional, falla en otro componente, intervención mayor), regístralo en la orden antes de intervenir. Si al evaluar consideras que el caso ya excede mantenimiento correctivo y requiere apoyo de jefatura o de un especialista externo, escálalo. Esto no es retroceso; es buen criterio.</p>
 
-               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
                <p style="margin-top:14px"><em>Gracias por tomar este reabrimiento como lo que es: una oportunidad de cerrar bien un caso que importa.</em></p>`
             ),
             tipo: "ot_reabierta",
@@ -153,14 +154,14 @@ export const POST: APIRoute = async (ctx) => {
       if (tec?.telegramChatId) {
         ctx.locals.runtime.ctx.waitUntil(
           sendTelegram(env, tec.telegramChatId,
-            `🔁 <b>OT #${ot.id} reabierta por inconformidad</b>\n${ot.titulo}\n<i>${motivo.slice(0, 200)}</i>`,
+            `<b>${etiquetaOT(ot)} reabierta por inconformidad</b>\n${ot.titulo}\n<i>${motivo.slice(0, 200)}</i>`,
             { linkUrl: otUrl, linkLabel: "Abrir orden" }
           )
         );
       }
       await crearNotificacion(ctx, {
         usuarioId: ot.asignadoA, tipo: "ot_reabierta",
-        titulo: `OT #${ot.id} reabierta por inconformidad`,
+        titulo: `${etiquetaOT(ot)} reabierta por inconformidad`,
         mensaje: motivo,
         link: `/ordenes/${ot.id}`,
       });
@@ -183,14 +184,14 @@ export const POST: APIRoute = async (ctx) => {
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: jefe.email,
-            subject: `[OT #${ot.id}] Reabrimiento de OT — Aviso para tu monitoreo`,
+            subject: `[${etiquetaOT(ot)}] Reabrimiento de OT — Aviso para tu monitoreo`,
             html: emailLayout(
               "Aviso de gobierno",
               `<p>Hola <strong>${primerNombreJefe}</strong>,</p>
                <p>Te enviamos este aviso para tu monitoreo, no para que intervengas.</p>
-               <p>La <strong>OT #${ot.id} — ${ot.titulo}</strong>, que cerró <strong>${nombreTecnico}</strong>, fue reabierta por inconformidad del solicitante.</p>
+               <p>La <strong>${etiquetaOT(ot)} — ${ot.titulo}</strong>, que cerró <strong>${nombreTecnico}</strong>, fue reabierta por inconformidad del solicitante.</p>
 
-               <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:15px">Datos clave</h3>
+               <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:15px">Datos clave</h3>
                <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                  <li><strong>Solicitante:</strong> ${t.solicitanteNombre} &lt;${t.solicitanteEmail}&gt;</li>
                  <li><strong>Técnico asignado:</strong> ${nombreTecnico}</li>
@@ -198,14 +199,14 @@ export const POST: APIRoute = async (ctx) => {
                  <li><strong>Fecha de reabrimiento:</strong> ${fechaReabrimiento}</li>
                </ul>
 
-               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Lo que reportó el solicitante</h3>
-               <p style="white-space:pre-wrap;background:#fef2f2;padding:12px;border-left:3px solid #dc2626;border-radius:4px;margin:0 0 18px 0">${motivo}</p>
+               <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Lo que reportó el solicitante</h3>
+               <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #C03435;border-radius:2px;margin:0 0 18px 0">${motivo}</p>
 
-               <h3 style="margin:18px 0 8px 0;color:#0a4082;font-size:15px">Estado actual</h3>
+               <h3 style="margin:18px 0 8px 0;color:#23417D;font-size:15px">Estado actual</h3>
                <p>La OT regresó a estado <strong>en proceso</strong>. ${nombreTecnico.split(" ")[0]} ya fue notificado y volverá al sitio bajo flujo estándar.</p>
                <p>Si después de revisar el caso consideras que requiere tu intervención, puedes hacerlo desde la orden. Si no, basta con que quede registrado para tu visibilidad.</p>
 
-               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>`
+               <p style="margin:22px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 22px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir orden →</a></p>`
             ),
             tipo: "ot_reabierta_jefe",
             referencia: `orden:${ot.id}`,
@@ -214,7 +215,7 @@ export const POST: APIRoute = async (ctx) => {
       }
       await crearNotificacion(ctx, {
         usuarioId: jefe.id, tipo: "ot_reabierta",
-        titulo: `Inconformidad en OT #${ot.id}`,
+        titulo: `Inconformidad en ${etiquetaOT(ot)}`,
         mensaje: `${t.solicitanteNombre}: ${motivo.slice(0, 100)}`,
         link: `/ordenes/${ot.id}`,
       });

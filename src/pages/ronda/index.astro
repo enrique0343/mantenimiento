@@ -1,0 +1,220 @@
+---
+// Ronda de turno · EL PRIMER PASO
+//
+// La cadena del volumen GO-GUI-011-2026 no arranca en el documento, arranca
+// aquí: alguien recorre los sistemas críticos al empezar su turno y anota lo
+// que ve. Esta pantalla es de quien supervisa; la ronda se hace en Modo técnico.
+//
+// Lo que contesta de un vistazo:
+//   ¿se hizo la ronda de este turno, en qué sede no, y qué salió fuera de rango?
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import {
+  ESTADO_RONDA,
+  puedeEjecutarRonda,
+  puedeVerRondas,
+  puedeConfigurarRondas,
+  resumenTablero,
+  tableroRondas,
+  turnosDeTablero,
+  etiquetaTurno,
+  ahoraSV,
+  turnoActual,
+  type FilaTablero,
+} from "@/lib/ronda-turno";
+import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
+import { aopEventos, campoOperaciones, procedimientos, rondaEjecuciones, sucursales, ubicaciones, usuarios } from "@/lib/schema";
+import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerRondas(user.rol)) return Astro.redirect(user.rol === "tecnico" ? "/campo" : "/");
+
+const db = getDb(Astro);
+const url = new URL(Astro.request.url);
+
+// Sin filtro, cada sede muestra su turno vigente; con filtro, el turno pedido.
+const turnos = await turnosDeTablero(db);
+const pedidoFecha = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("fecha") ?? "") ? url.searchParams.get("fecha")! : null;
+const pedidoTurno = turnos.includes(url.searchParams.get("turno") ?? "") ? url.searchParams.get("turno")! : null;
+const pedido = pedidoFecha && pedidoTurno ? { fecha: pedidoFecha, turno: pedidoTurno } : undefined;
+const t = turnoActual(turnos);
+const fecha = pedido?.fecha ?? t.fecha;
+const turno = pedido?.turno ?? t.turno;
+
+const filas: FilaTablero[] = await tableroRondas(db, pedido);
+const resumen = resumenTablero(filas);
+const PESO: Record<FilaTablero["estado"], number> = { sin_iniciar: 0, no_se_hizo: 0, incompleta: 1, en_curso: 2, con_novedad: 3, completa: 4, no_aplica: 5 };
+const filasOrdenadas = [...filas].sort((a, b) => PESO[a.estado] - PESO[b.estado] || a.sucursal.localeCompare(b.sucursal, "es"));
+const faltan = resumen.sinIniciar + resumen.noSeHizo + resumen.incompletas;
+
+const desviaciones = await db
+  .select({ e: aopEventos, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sala: ubicaciones.nombre, sede: sucursales.nombre })
+  .from(aopEventos)
+  .leftJoin(procedimientos, eq(procedimientos.id, aopEventos.procedimientoId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, aopEventos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, aopEventos.sucursalId))
+  .where(inArray(aopEventos.estado, ESTADOS_AOP_ABIERTOS))
+  .orderBy(desc(aopEventos.detectadoEn))
+  .limit(8);
+const desvConReloj = desviaciones.map((d) => ({ ...d, cron: cronometro(d.e) })).sort((a, b) => a.cron.urgencia - b.cron.urgencia);
+
+const historial = await db
+  .select({ id: rondaEjecuciones.id, fecha: rondaEjecuciones.fecha, turno: rondaEjecuciones.turno, estado: rondaEjecuciones.estado, puntosFuera: rondaEjecuciones.puntosFuera, puntosNoVerificados: rondaEjecuciones.puntosNoVerificados, firma: rondaEjecuciones.firmaNombre, sede: sucursales.nombre })
+  .from(rondaEjecuciones)
+  .leftJoin(sucursales, eq(sucursales.id, rondaEjecuciones.sucursalId))
+  .orderBy(desc(rondaEjecuciones.fecha), desc(rondaEjecuciones.turno))
+  .limit(8);
+
+// Lo que el servidor no aceptó en los últimos 14 días. Nada de lo capturado se pierde.
+const desde = new Date(Date.now() - 14 * 86_400_000).toISOString();
+const rechazos = await db
+  .select({ opId: campoOperaciones.opId, tipo: campoOperaciones.tipo, capturadoEn: campoOperaciones.capturadoEn, recibidoEn: campoOperaciones.recibidoEn, detalle: campoOperaciones.detalle, payload: campoOperaciones.payload, quien: usuarios.nombre })
+  .from(campoOperaciones)
+  .leftJoin(usuarios, eq(usuarios.id, campoOperaciones.usuarioId))
+  .where(and(eq(campoOperaciones.resultado, "rechazada"), gte(campoOperaciones.recibidoEn, desde)))
+  .orderBy(desc(campoOperaciones.recibidoEn))
+  .limit(10);
+---
+
+<Layout title="Ronda de turno">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <div class="flex items-center gap-2">
+        <h1 class="text-2xl font-bold text-slate-900">Ronda de turno</h1>
+        <span class="badge bg-emerald-100 text-emerald-700">Paso 1 de la cadena</span>
+      </div>
+      <p class="mt-1 text-sm text-slate-500">Lo primero del turno. Una lectura fuera de rango abre sola la desviación con el AOP que la rige.</p>
+    </div>
+    <form method="get" class="flex items-end gap-2">
+      <div>
+        <label class="label" for="f_fecha">Fecha</label>
+        <input class="input" type="date" id="f_fecha" name="fecha" value={fecha} />
+      </div>
+      <div>
+        <label class="label" for="f_turno">Turno</label>
+        <select class="input" id="f_turno" name="turno">
+          {turnos.map((x) => <option value={x} selected={x === turno}>{etiquetaTurno(x)}</option>)}
+        </select>
+      </div>
+      <button class="btn-secondary btn-sm" type="submit">Ver</button>
+      {pedido && <a class="btn-secondary btn-sm" href="/ronda">Turno actual</a>}
+    </form>
+  </div>
+
+  <div class={`card mt-5 border-l-4 p-5 ${faltan > 0 ? "border-red-500" : resumen.todoListo ? "border-emerald-500" : "border-amber-400"}`}>
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">{pedido ? `${fmtFechaSoloCompacta(fecha)} · ${etiquetaTurno(turno)}` : "Turno vigente de cada sede"}</div>
+        <div class="mt-1 text-xl font-bold text-slate-900">
+          {resumen.sedes === 0
+            ? "Ninguna sede tiene ronda configurada"
+            : `${resumen.completas + resumen.conNovedad} de ${resumen.sedes} sedes cerraron su ronda`}
+        </div>
+        <div class="mt-1 text-sm text-slate-500">
+          {[
+            resumen.sinIniciar > 0 && `${resumen.sinIniciar} sin iniciar`,
+            resumen.noSeHizo > 0 && `${resumen.noSeHizo} no se hizo`,
+            resumen.incompletas > 0 && `${resumen.incompletas} incompleta`,
+            resumen.enCurso > 0 && `${resumen.enCurso} en curso`,
+            resumen.fuera > 0 && `${resumen.fuera} fuera de rango`,
+            resumen.sinVerificar > 0 && `${resumen.sinVerificar} sin verificar`,
+          ].filter(Boolean).join(" · ") || (resumen.todoListo ? "Ronda de este turno verificada, sin novedades." : "")}
+        </div>
+        <p class="mt-1 text-[11px] text-slate-400">Un celular sin señal envía su ronda cuando vuelve la señal: lo que hoy se ve «sin iniciar» puede estar hecho. La cifra definitiva es la de la revisión semanal.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary btn-sm" href="/ronda/semana">Revisión de la semana</a>
+        {puedeConfigurarRondas(user.rol) && <a class="btn-secondary btn-sm" href="/ronda/puntos">Paradas del recorrido</a>}
+      </div>
+    </div>
+  </div>
+
+  <div class="card mt-4 overflow-hidden">
+    <div class="border-b border-slate-100 px-5 py-3"><h2 class="font-semibold text-slate-800">Por sede</h2></div>
+    <ul class="divide-y divide-slate-100">
+      {filasOrdenadas.map((f) => {
+        const est = ESTADO_RONDA[f.estado];
+        return (
+          <li class="flex flex-wrap items-center gap-3 px-5 py-3.5">
+            <span class={`h-2.5 w-2.5 shrink-0 rounded-full ${est.punto}`}></span>
+            <div class="min-w-0 flex-1">
+              <span class="truncate font-medium text-slate-800">{f.sucursal}</span>
+              <span class="ml-2 text-[11px] text-slate-400">turno {f.turno}</span>
+              {f.estado !== "no_aplica" && (
+                <div class="mt-1 flex items-center gap-2">
+                  <div class="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
+                    <div class={`h-full rounded-full ${f.fuera + f.sinVerificar > 0 ? "bg-orange-400" : "bg-emerald-500"}`} style={`width:${f.pct}%`}></div>
+                  </div>
+                  <span class="text-[11px] text-slate-400">{f.anotados} de {f.puntosTotal} paradas{f.iniciadaEn ? ` · inició ${fmtHora(f.iniciadaEn)}` : ""}{f.firma ? ` · firmó ${f.firma}` : ""}</span>
+                </div>
+              )}
+            </div>
+            {f.fuera > 0 && <span class="badge bg-orange-100 text-orange-700">{f.fuera} fuera de rango</span>}
+            {f.sinVerificar > 0 && <span class="badge bg-slate-100 text-slate-600">{f.sinVerificar} sin verificar</span>}
+            <span class={`badge ${est.badge}`}>{est.label}</span>
+            {f.ejecucionId
+              ? <a class="btn-secondary btn-sm" href={`/ronda/${f.ejecucionId}`}>Ver</a>
+              : f.estado === "sin_iniciar" && puedeEjecutarRonda(user.rol) && <a class="btn-primary btn-sm" href="/campo#ronda">Hacerla en Modo técnico</a>}
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+
+  {rechazos.length > 0 && (
+    <div class="card mt-4 border-l-4 border-red-500 p-5">
+      <h2 class="font-semibold text-slate-800">Registros del celular sin aceptar</h2>
+      <p class="mb-3 text-xs text-slate-400">Últimos 14 días. Lo capturado se conserva; hay que revisarlo con quien lo envió.</p>
+      <ul class="space-y-1.5 text-xs">
+        {rechazos.map((r) => <li class="rounded-lg bg-slate-50 px-3 py-2"><span class="font-semibold text-slate-700">{r.quien ?? "—"}</span> · {r.tipo} · capturado {fmtFechaSoloCompacta(ahoraSV(new Date(r.capturadoEn)).fecha)} {fmtHora(r.capturadoEn)} · <span class="text-red-700">{r.detalle}</span>{r.payload && <details class="mt-1"><summary class="cursor-pointer text-slate-500">Ver lo capturado</summary><code class="block break-all text-[11px] text-slate-500">{r.payload}</code></details>}</li>)}
+      </ul>
+    </div>
+  )}
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="card p-5">
+      <div class="mb-1 flex items-center justify-between">
+        <h2 class="font-semibold text-slate-800">Desviaciones con el reloj corriendo</h2>
+        <a href="/aop" class="text-xs font-medium text-brand-600 hover:underline">Ver todas →</a>
+      </div>
+      <p class="mb-3 text-xs text-slate-400">Lo más vencido, arriba.</p>
+      {desvConReloj.length === 0 ? (
+        <div class="rounded-lg bg-emerald-50 px-3 py-4 text-xs text-emerald-700">Ninguna desviación abierta.</div>
+      ) : (
+        <ul class="space-y-2">
+          {desvConReloj.map((d) => {
+            const r = RELOJ[d.cron.reloj];
+            return (
+              <li class={`rounded-lg border-l-4 bg-slate-50 px-3 py-2.5 ${r.borde}`}>
+                <div class="flex items-start justify-between gap-2">
+                  <a href={`/aop/${d.e.id}`} class="min-w-0 flex-1 hover:underline">
+                    <div class="text-sm font-medium text-slate-800">{d.codigo ? <span class="mr-1.5 font-mono text-[10px] text-slate-500">{d.codigo}</span> : null}{d.titulo ?? "Desviación"}</div>
+                    <div class="mt-0.5 truncate text-[11px] text-slate-500">{d.sede ?? "Sin sede"}{d.sala ? ` · ${d.sala}` : ""}{d.e.valorDetectado != null ? ` · leído ${d.e.valorDetectado}${d.e.unidad ? ` ${d.e.unidad}` : ""}` : ""}</div>
+                  </a>
+                  <span class={`badge shrink-0 ${r.badge}`}>{r.label}</span>
+                </div>
+                <div class={`mt-1 text-[11px] font-medium ${r.texto}`}>Actuar: {fmtCuentaRegresiva(d.cron.minutosParaActuar)} · Escalar: {fmtCuentaRegresiva(d.cron.minutosParaEscalar)}</div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+    <div class="card p-5">
+      <h2 class="mb-2 font-semibold text-slate-800">Últimas rondas</h2>
+      <ul class="space-y-1 text-xs">
+        {historial.length === 0 && <li class="text-slate-400">Todavía no hay rondas registradas.</li>}
+        {historial.map((h) => (
+          <li class="flex items-center justify-between gap-2 py-1">
+            <a href={`/ronda/${h.id}`} class="min-w-0 flex-1 truncate text-slate-600 hover:text-brand-700">{fmtFechaSoloCompacta(h.fecha)} · {h.turno} · {h.sede ?? "—"}{h.firma ? <span class="text-slate-400"> · {h.firma}</span> : null}</a>
+            <span class={`badge shrink-0 ${h.estado !== "completada" ? "bg-amber-100 text-amber-700" : h.puntosFuera + h.puntosNoVerificados > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {h.estado !== "completada" ? "sin cerrar" : h.puntosFuera + h.puntosNoVerificados > 0 ? "con novedades" : "completa"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</Layout>

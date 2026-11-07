@@ -53,7 +53,7 @@ const puedeCrear = puedeCrearProyecto(user.rol);
 <Layout title="Proyectos">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📂 Proyectos</h1>
+      <h1 class="text-2xl font-bold">Proyectos</h1>
       <p class="text-sm text-slate-500">{rowsRaw.length} totales · mostrando {rows.length}</p>
     </div>
     {puedeCrear && (
@@ -65,25 +65,25 @@ const puedeCrear = puedeCrearProyecto(user.rol);
   <div class="mt-4 flex flex-wrap gap-1.5 text-xs">
     <a href="/proyectos"
        class:list={["rounded-md px-2 py-1 font-medium", !filtroEstado && !verCerrados ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}>
-      ⚡ Activos ({conteoActivos})
+      Activos ({conteoActivos})
     </a>
     <span class="text-slate-300">·</span>
     <a href="/proyectos?estado=evaluacion"
-       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "evaluacion" ? "bg-amber-600 text-white" : "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"]}>
-      🟡 Evaluación ({conteo.evaluacion ?? 0})
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "evaluacion" ? "bg-white text-amber-800 border border-amber-500 " : "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"]}>
+      Evaluación ({conteo.evaluacion ?? 0})
     </a>
     <a href="/proyectos?estado=aprobado"
        class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "aprobado" ? "bg-blue-600 text-white" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"]}>
-      🔵 Aprobados ({conteo.aprobado ?? 0})
+      Aprobados ({conteo.aprobado ?? 0})
     </a>
     <a href="/proyectos?estado=en_ejecucion"
-       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_ejecucion" ? "bg-emerald-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
-      🟢 En ejecución ({conteo.en_ejecucion ?? 0})
+       class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_ejecucion" ? "bg-brand-600 text-white" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"]}>
+      En ejecución ({conteo.en_ejecucion ?? 0})
     </a>
     {(conteo.en_pausa ?? 0) > 0 && (
       <a href="/proyectos?estado=en_pausa"
          class:list={["rounded-md px-2 py-1 font-medium", filtroEstado === "en_pausa" ? "bg-purple-600 text-white" : "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"]}>
-        🟣 En pausa ({conteo.en_pausa})
+        En pausa ({conteo.en_pausa})
       </a>
     )}
     <span class="text-slate-300">·</span>
@@ -96,7 +96,7 @@ const puedeCrear = puedeCrearProyecto(user.rol);
     {!filtroEstado && (
       <a href="/proyectos?verCerrados=1"
          class:list={["rounded-md px-2 py-1 font-medium ml-auto", verCerrados ? "bg-slate-200 text-slate-700" : "bg-slate-100 text-slate-500 hover:bg-slate-200"]}>
-        {verCerrados ? "🗂 Mostrando todos" : "🗂 Ver cerrados (" + conteoCerrados + ")"}
+        {verCerrados ? "Mostrando todos" : "Ver cerrados (" + conteoCerrados + ")"}
       </a>
     )}
   </div>

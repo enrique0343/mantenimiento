@@ -15,7 +15,6 @@ bucket_name = "mantenimiento-adjuntos"
 
 [vars]
 APP_NAME = "Mantenimiento"
-RONDAS_SCHEDULER_ENABLED = "false"
 
 [env.production.vars]
 APP_NAME = "Mantenimiento"
@@ -25,7 +24,6 @@ SGO_ACCESS_ISSUER = "https://avantescp.cloudflareaccess.com"
 SGO_API_ORIGIN = "https://mantenimiento.complejoavante.dev"
 SGO_AUTH_DIAGNOSTICS_ENABLED = "false"
 SGO_INTEGRATION_ENABLED = "true"
-RONDAS_SCHEDULER_ENABLED = "false"
 
 [[env.production.d1_databases]]
 binding = "DB"

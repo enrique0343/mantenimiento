@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios } from "@/lib/schema";
 import { eq, and, inArray, gte, lt, isNotNull, asc, desc, sql } from "drizzle-orm";
 import { PRIO_COLOR } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref } from "@/lib/areas";
 export const prerender = false;
 
@@ -24,7 +25,8 @@ const ahoraIso = new Date().toISOString();
 
 // OTs activas (lo que está en el taller ahora).
 const abiertas = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { codigo: activos.codigo }, u: { nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -33,7 +35,8 @@ const abiertas = await db
 
 // Cierres verificados esta semana; ejecución pendiente no equivale a cierre.
 const completadasSemana = await db
-  .select({ o: ordenes, a: activos, u: usuarios })
+  // D1 limita el resultado a 100 columnas: ordenes + activos + usuarios se pasa.
+  .select({ o: ordenes, a: { codigo: activos.codigo }, u: { nombre: usuarios.nombre } })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
@@ -64,11 +67,11 @@ const completCorr = completadasSemana.filter((r) => r.o.tipo === "correctivo").l
 
 // Columnas del tablero.
 const columnas = [
-  { estado: "abierta", titulo: "📥 Abiertas", items: abiertas.filter((r) => r.o.estado === "abierta"), color: "border-blue-300" },
-  { estado: "en_proceso", titulo: "🔧 En proceso", items: abiertas.filter((r) => r.o.estado === "en_proceso"), color: "border-amber-300" },
-  { estado: "en_espera", titulo: "⏸ En espera", items: abiertas.filter((r) => r.o.estado === "en_espera"), color: "border-purple-300" },
-  { estado: "pendiente_verificacion", titulo: "🔎 Pendientes de verificación", items: abiertas.filter((r) => ["completada", "verificada"].includes(r.o.estado)), color: "border-teal-300" },
-  { estado: "completada", titulo: "✅ Cierres verificados (semana)", items: completadasSemana, color: "border-emerald-300" },
+  { estado: "abierta", titulo: "Abiertas", items: abiertas.filter((r) => r.o.estado === "abierta"), color: "border-blue-300" },
+  { estado: "en_proceso", titulo: "En proceso", items: abiertas.filter((r) => r.o.estado === "en_proceso"), color: "border-amber-300" },
+  { estado: "en_espera", titulo: "En espera", items: abiertas.filter((r) => r.o.estado === "en_espera"), color: "border-purple-300" },
+  { estado: "pendiente_verificacion", titulo: "Pendientes de verificación", items: abiertas.filter((r) => ["completada", "verificada"].includes(r.o.estado)), color: "border-teal-300" },
+  { estado: "completada", titulo: "✓ Cierres verificados (semana)", items: completadasSemana, color: "border-emerald-300" },
 ];
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
@@ -78,7 +81,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
 <Layout title="Tablero de taller">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
-      <h1 class="text-2xl font-bold">🗂 Tablero de taller</h1>
+      <h1 class="text-2xl font-bold">Tablero de taller</h1>
       <p class="text-sm text-slate-500">Gestión visual semanal · {rangoSemana}</p>
     </div>
     <div class="flex gap-1 rounded-lg bg-slate-100 p-1">
@@ -100,16 +103,16 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
               return (
                 <a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class:list={["block rounded-md border p-2 text-sm hover:shadow-sm transition", vencida ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"]}>
                   <div class="flex items-center justify-between gap-1">
-                    <span class="font-medium text-slate-800">#{r.o.id}</span>
+                    <span class="whitespace-nowrap font-medium text-slate-800">{etiquetaOT(r.o)}</span>
                     <span class={`badge text-[10px] ${PRIO_COLOR[r.o.prioridad] ?? ""}`}>{r.o.prioridad}</span>
                   </div>
                   <div class="mt-0.5 line-clamp-2 text-xs text-slate-700">{r.o.titulo}</div>
                   {r.a && <div class="mt-0.5 font-mono text-[10px] text-slate-500">{r.a.codigo}</div>}
                   <div class="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-                    <span>{r.u ? `👤 ${r.u.nombre.split(" ")[0]}` : "Sin asignar"}</span>
+                    <span>{r.u ? `${r.u.nombre.split(" ")[0]}` : "Sin asignar"}</span>
                     {col.estado === "completada"
                       ? <span>✓ {fmt(r.o.completadaEn)}</span>
-                      : r.o.vencimiento && <span class:list={[vencida && "font-semibold text-red-600"]}>⏱ {fmt(r.o.vencimiento)}</span>}
+                      : r.o.vencimiento && <span class:list={[vencida && "font-semibold text-red-600"]}>{fmt(r.o.vencimiento)}</span>}
                   </div>
                 </a>
               );
@@ -146,7 +149,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
     </div>
 
     <div class="card mt-4 overflow-hidden">
-      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-red-700">🚩 OTs vencidas — requieren acción</h2></div>
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-red-700">OTs vencidas — requieren acción</h2></div>
       {vencidas.length === 0 ? (
         <p class="px-5 pb-4 text-sm text-emerald-700">✓ No hay OTs vencidas. Buen trabajo.</p>
       ) : (
@@ -157,7 +160,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
           <tbody class="divide-y divide-slate-100">
             {vencidas.map((r) => (
               <tr class="hover:bg-slate-50">
-                <td class="px-4 py-2"><a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class="text-brand-700 hover:underline">#{r.o.id} {r.o.titulo}</a></td>
+                <td class="px-4 py-2"><a href={areaHref(`/ordenes/${r.o.id}`, area ?? r.o.rubro)} class="text-brand-700 hover:underline"><span class="whitespace-nowrap">{etiquetaOT(r.o)}</span> {r.o.titulo}</a></td>
                 <td class="px-4 py-2 font-mono text-xs text-slate-600">{r.a?.codigo ?? "—"}</td>
                 <td class="px-4 py-2 text-xs">{r.u?.nombre ?? "Sin asignar"}</td>
                 <td class="px-4 py-2 font-mono text-xs text-red-600">{fmt(r.o.vencimiento)}</td>
@@ -169,7 +172,7 @@ const rangoSemana = `${fmt(inicio)} – ${fmt(new Date(monday.getTime() + 6 * 86
       )}
     </div>
 
-    <p class="mt-3 text-xs text-slate-500">💡 Para la reunión semanal: revisa cumplimiento, ataca el backlog vencido, y confirma que ningún equipo crítico quede sin cobertura (ver <a href="/contingencia" class="text-brand-600 hover:underline">Contingencia compartida</a> y <a href={areaHref("/cronograma", area)} class="text-brand-600 hover:underline">Cronograma</a>).</p>
+    <p class="mt-3 text-xs text-slate-500">Para la reunión semanal: revisa cumplimiento, ataca el backlog vencido, y confirma que ningún equipo crítico quede sin cobertura (ver <a href="/contingencia" class="text-brand-600 hover:underline">Contingencia compartida</a> y <a href={areaHref("/cronograma", area)} class="text-brand-600 hover:underline">Cronograma</a>).</p>
   </div>
 
   <script>

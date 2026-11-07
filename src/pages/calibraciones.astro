@@ -57,7 +57,7 @@ const claseColor: Record<string, string> = {
 <Layout title="Calibraciones biomédicas">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
-      <h1 class="text-2xl font-bold">🩺 Calibraciones biomédicas</h1>
+      <h1 class="text-2xl font-bold">Calibraciones biomédicas</h1>
       <p class="text-sm text-slate-500">{rows.length} equipos biomédicos · {vencidas.length} vencidas · {proximas30.length} próximos 30 días</p>
     </div>
     <a href="/activos?tipo=biomedico" class="btn-secondary">Ver equipos biomédicos →</a>
@@ -88,10 +88,10 @@ const claseColor: Record<string, string> = {
   </div>
 
   {[
-    { titulo: "🚨 Calibraciones vencidas", items: vencidas, color: "border-red-300", textColor: "text-red-700" },
-    { titulo: "⚠ Próximas 30 días", items: proximas30, color: "border-amber-300", textColor: "text-amber-700" },
-    { titulo: "📅 Próximas 60 días", items: proximas60, color: "border-blue-200", textColor: "text-blue-700" },
-    { titulo: "🩺 Sin calibración registrada", items: sinCal, color: "border-slate-200", textColor: "text-slate-700" },
+    { titulo: "Calibraciones vencidas", items: vencidas, color: "border-red-300", textColor: "text-red-700" },
+    { titulo: "Próximas 30 días", items: proximas30, color: "border-amber-300", textColor: "text-amber-700" },
+    { titulo: "Próximas 60 días", items: proximas60, color: "border-blue-200", textColor: "text-blue-700" },
+    { titulo: "Sin calibración registrada", items: sinCal, color: "border-slate-200", textColor: "text-slate-700" },
     { titulo: "✓ Al día (más de 60 días)", items: conCalOk, color: "border-emerald-200", textColor: "text-emerald-700" },
   ].map((g) => g.items.length > 0 && (
     <div class={`card mt-6 overflow-hidden border-l-4 ${g.color}`}>
@@ -124,7 +124,7 @@ const claseColor: Record<string, string> = {
                 {fmt(r.a.proximaCalibracion)}
               </td>
               <td class="px-4 py-2 text-right">
-                <a href={`/activos/${r.a.id}#calibraciones`} class="text-xs text-brand-600 hover:underline">📝 Registrar</a>
+                <a href={`/activos/${r.a.id}#calibraciones`} class="text-xs text-brand-600 hover:underline">Registrar</a>
               </td>
             </tr>
           ))}

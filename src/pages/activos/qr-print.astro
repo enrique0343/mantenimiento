@@ -6,7 +6,11 @@ import { eq, asc, inArray, and, isNotNull, sql } from "drizzle-orm";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 export const prerender = false;
+
+// Inhabilitado hasta el etiquetado GS1 Data Matrix: ver lib/campo-config.ts.
+if (!ESCANEO_ACTIVOS_HABILITADO) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
@@ -69,7 +73,7 @@ const origin = Astro.url.origin;
     </div>
     <div class="flex gap-2">
       <a href={areaHref("/activos", area)} class="btn-secondary">← Volver</a>
-      <button onclick="window.print()" class="btn-primary">🖨 Imprimir</button>
+      <button onclick="window.print()" class="btn-primary">Imprimir</button>
     </div>
   </div>
 
@@ -86,8 +90,8 @@ const origin = Astro.url.origin;
       <label class="label text-xs">Tipo</label>
       <select name="tipo" class="input text-sm">
         <option value="">Todos</option>
-        <option value="general" selected={tipoFiltro === "general"}>🔧 General</option>
-        <option value="biomedico" selected={tipoFiltro === "biomedico"}>🩺 Biomédico</option>
+        <option value="general" selected={tipoFiltro === "general"}>General</option>
+        <option value="biomedico" selected={tipoFiltro === "biomedico"}>Biomédico</option>
       </select>
     </div>
     <button class="btn-primary text-sm">Filtrar</button>
@@ -107,9 +111,8 @@ const origin = Astro.url.origin;
             <div class="qr-code">{r.a.codigo}</div>
             <div class="qr-name">{r.a.nombre}</div>
             <div class="qr-meta">
-              {r.a.tipo === "biomedico" ? "🩺" : "🔧"}
-              {r.s && <span> · 🏢 {r.s.nombre}</span>}
-              {r.ub && <span> · 📍 {r.ub.nombre}</span>}
+                            {r.s && <span> · {r.s.nombre}</span>}
+              {r.ub && <span> · {r.ub.nombre}</span>}
             </div>
             {(ultima || proxima) && (
               <div class="qr-fechas">
@@ -137,8 +140,8 @@ const origin = Astro.url.origin;
       .qr-grid { grid-template-columns: repeat(4, 1fr); }
     }
     .qr-tag {
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
+      border: 1px solid #BDC6D8;
+      border-radius:2px;
       padding: 12px;
       text-align: center;
       background: white;
@@ -146,13 +149,13 @@ const origin = Astro.url.origin;
     }
     .qr-tag img { width: 100%; height: auto; max-width: 240px; margin: 0 auto; display: block; }
     .qr-info { margin-top: 8px; }
-    .qr-code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; }
+    .qr-code { font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 700; }
     .qr-name { font-size: 12px; margin-top: 2px; }
-    .qr-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
-    .qr-fechas { font-size: 10px; color: #334155; margin-top: 4px; border-top: 1px dashed #cbd5e1; padding-top: 4px; }
+    .qr-meta { font-size: 10px; color: #6B7280; margin-top: 2px; }
+    .qr-fechas { font-size: 10px; color: #4A4A4A; margin-top: 4px; border-top: 1px dashed #BDC6D8; padding-top: 4px; }
     @media print {
       .qr-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
-      .qr-tag { border: 1px dashed #999; box-shadow: none; }
+      .qr-tag { border: 1px dashed #999;  }
       body { background: white !important; }
     }
   </style>

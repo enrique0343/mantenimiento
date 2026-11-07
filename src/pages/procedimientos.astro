@@ -2,215 +2,630 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
-import { asc, inArray } from "drizzle-orm";
+import {
+  procedimientos,
+  procedimientoCampos,
+  procedimientoValidaciones,
+  sucursales,
+  usuarios,
+} from "@/lib/schema";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import {
+  AREAS_VALIDADORAS,
+  AREAS_ADICIONALES,
+  CODIGOS_VOLUMEN,
+  ESTADOS_PROC,
+  ESTADO_PROC,
+  MATRIZ_CAP08,
+  SEMANAS_VALIDACION,
+  SISTEMAS,
+  SISTEMAS_PROC,
+  TIPOS_PROC,
+  TIPO_PROC,
+  colorProgreso,
+  hoyISO,
+  progresoValidacion,
+  puedeAdministrarProcedimientos,
+  puedeVerProcedimientos,
+  sistemaInfo,
+  type EstadoProc,
+  type SistemaProc,
+  type TipoProc,
+} from "@/lib/procedimientos";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+if (!puedeVerProcedimientos(user.rol)) return Astro.redirect("/");
+const esAdmin = puedeAdministrarProcedimientos(user.rol);
 
 const db = getDb(Astro);
-const plantillasRows = await db.select().from(checklistPlantillas).orderBy(asc(checklistPlantillas.nombre));
-const itemsRows = plantillasRows.length > 0
-  ? await db.select().from(checklistPlantillaItems)
-      .where(inArray(checklistPlantillaItems.plantillaId, plantillasRows.map((p) => p.id)))
-      .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id))
+const url = new URL(Astro.request.url);
+const fTipo = url.searchParams.get("tipo");
+const fSistema = url.searchParams.get("sistema");
+const fEstado = url.searchParams.get("estado");
+const fSede = url.searchParams.get("sede");
+
+const filas0 = await db
+  .select({ p: procedimientos, resp: usuarios, suc: sucursales })
+  .from(procedimientos)
+  .leftJoin(usuarios, eq(usuarios.id, procedimientos.responsableId))
+  .leftJoin(sucursales, eq(sucursales.id, procedimientos.sucursalId))
+  .where(eq(procedimientos.activo, true))
+  .orderBy(asc(procedimientos.codigoCorto));
+
+const ids = filas0.map((r) => r.p.id);
+const camposAll = ids.length
+  ? await db.select().from(procedimientoCampos).where(inArray(procedimientoCampos.procedimientoId, ids))
+  : [];
+const validacionesAll = ids.length
+  ? await db.select().from(procedimientoValidaciones).where(inArray(procedimientoValidaciones.procedimientoId, ids))
   : [];
 
-const plantillas = plantillasRows.map((p) => ({
-  ...p,
-  items: itemsRows.filter((it) => it.plantillaId === p.id),
+const filasTodas = filas0.map((r) => ({
+  ...r,
+  progreso: progresoValidacion(
+    camposAll.filter((c) => c.procedimientoId === r.p.id),
+    validacionesAll.filter((v) => v.procedimientoId === r.p.id),
+  ),
 }));
-const plantillasJson = JSON.stringify(plantillas);
 
-const totalPasos = itemsRows.length;
-const totalCriticos = itemsRows.filter((it) => it.bloqueante).length;
-const totalMin = itemsRows.reduce((s, it) => s + (it.minutosEstimados ?? 0), 0);
+// Contadores por estado sobre el total, no sobre el filtro: son el tablero.
+const conteos: Record<string, number> = {};
+for (const e of ESTADOS_PROC) conteos[e] = 0;
+for (const f of filasTodas) conteos[f.p.estado] = (conteos[f.p.estado] ?? 0) + 1;
+
+const filas = filasTodas.filter((f) => {
+  if (fTipo && f.p.tipo !== fTipo) return false;
+  if (fSistema && f.p.sistema !== fSistema) return false;
+  if (fEstado && f.p.estado !== fEstado) return false;
+  if (fSede === "0" && f.p.sucursalId != null) return false;
+  if (fSede && fSede !== "0" && String(f.p.sucursalId) !== fSede) return false;
+  return true;
+});
+
+const conteosTipo: Record<string, number> = {};
+for (const t of TIPOS_PROC) conteosTipo[t] = filasTodas.filter((f) => f.p.tipo === t).length;
+
+const sedes = await db
+  .select({ id: sucursales.id, nombre: sucursales.nombre })
+  .from(sucursales)
+  .where(eq(sucursales.activa, true))
+  .orderBy(asc(sucursales.nombre));
+
+const responsables = esAdmin
+  ? await db
+      .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+      .from(usuarios)
+      .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["admin", "jefe", "tecnico"])))
+      .orderBy(asc(usuarios.nombre))
+  : [];
+
+const hoy = hoyISO();
+const vigentes = conteos.vigente ?? 0;
+const pctBiblioteca = filasTodas.length === 0 ? 0 : Math.round((vigentes / filasTodas.length) * 100);
+
+// Querystring con un parámetro cambiado, para los chips de contador.
+function qs(cambios: Record<string, string | null>) {
+  const p = new URLSearchParams(url.search);
+  for (const [k, v] of Object.entries(cambios)) {
+    if (v === null || v === "") p.delete(k);
+    else p.set(k, v);
+  }
+  const s = p.toString();
+  return s ? `/procedimientos?${s}` : "/procedimientos";
+}
+
+const matrizJson = JSON.stringify(MATRIZ_CAP08);
+const semanasJson = JSON.stringify(SEMANAS_VALIDACION);
+const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
 ---
 
-<Layout title="Procedimientos estándar">
-  <div class="flex flex-wrap items-start justify-between gap-2">
+<Layout title="Biblioteca de procedimientos">
+  <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📋 Procedimientos estándar</h1>
-      <p class="text-sm text-slate-500">Biblioteca normalizada de procedimientos de mantenimiento (JCI). Cada paso lleva criterio de aceptación, tiempo y recursos. Se usan al crear un plan en cada equipo.</p>
+      <h1 class="text-2xl font-bold">Biblioteca de procedimientos</h1>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">
+        Los veinticinco documentos modelo de Mantenimiento General (GO-GUI-011-2026) como catálogo vivo:
+        <strong>SCP</strong> configuración, <strong>SOP</strong> rutina, <strong>MOP</strong> intervención,
+        <strong>EOP</strong> emergencia y <strong>AOP</strong> condición anormal.
+        Ninguno entra en vigor por haber sido escrito.
+      </p>
     </div>
-    <button id="newBtn" class="btn-primary">+ Nuevo procedimiento</button>
+    {esAdmin && <button id="nuevoBtn" class="btn-primary">+ Nuevo documento</button>}
   </div>
 
-  <div class="mt-4 grid grid-cols-3 gap-3">
-    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Procedimientos</div><div class="mt-1 text-2xl font-bold text-slate-700">{plantillas.length}</div></div>
-    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Pasos totales</div><div class="mt-1 text-2xl font-bold text-slate-700">{totalPasos}</div></div>
-    <div class="card p-4"><div class="text-xs uppercase text-slate-500">Puntos críticos</div><div class="mt-1 text-2xl font-bold text-red-600">{totalCriticos}</div></div>
-  </div>
-
-  <!-- Formulario crear/editar -->
-  <div id="form" class="card mt-4 hidden p-5">
-    <h2 id="formTitle" class="mb-3 font-semibold">Nuevo procedimiento</h2>
-    <input type="hidden" id="f_id" value="" />
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div><label class="label">Nombre *</label><input class="input" id="f_nombre" placeholder="Ej: Mantenimiento preventivo AC split" /></div>
-      <div><label class="label">Descripción</label><input class="input" id="f_descripcion" placeholder="Alcance / tipo de equipo" /></div>
-    </div>
-
-    <div class="mt-4">
-      <div class="flex items-center justify-between">
-        <label class="label mb-0">Pasos del procedimiento</label>
-        <button id="addItemBtn" type="button" class="btn-secondary text-xs">+ Agregar paso</button>
-      </div>
-      <p class="mt-1 text-xs text-slate-500">El <strong>criterio de aceptación</strong> es la condición esperada (ej: "≥ 35 psi"). Un <strong>punto crítico</strong> impide cerrar la OT si queda en desviación.</p>
-      <div id="itemsContainer" class="mt-3 space-y-2"></div>
-    </div>
-
-    <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
-    <div class="mt-4 flex gap-2">
-      <button id="saveBtn" class="btn-primary">Guardar procedimiento</button>
-      <button id="cancelBtn" class="btn-secondary">Cancelar</button>
-    </div>
-  </div>
-
-  <!-- Listado -->
-  <div class="mt-6 space-y-4">
-    {plantillas.length === 0 && <p class="card p-4 text-sm text-slate-500">Sin procedimientos configurados. Crea el primero.</p>}
-    {plantillas.map((p) => (
-      <div class="card p-5" class:list={[!p.activa && "opacity-60"]}>
-        <div class="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <h3 class="font-semibold text-slate-900">
-              {p.nombre}
-              {!p.activa && <span class="badge ml-2 bg-slate-200 text-slate-500 text-[10px]">Inactiva</span>}
-            </h3>
-            {p.descripcion && <p class="text-sm text-slate-500">{p.descripcion}</p>}
-            <p class="mt-0.5 text-xs text-slate-400">{p.items.length} pasos · {p.items.filter((it) => it.bloqueante).length} críticos · {p.items.reduce((s, it) => s + (it.minutosEstimados ?? 0), 0)} min estimados</p>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <button class="edit-btn btn-secondary text-xs" data-id={p.id}>✎ Editar</button>
-            <button class="toggle-btn btn-secondary text-xs" data-id={p.id} data-activa={p.activa ? "1" : "0"}>{p.activa ? "Desactivar" : "Activar"}</button>
-            <button class="del-btn btn-secondary text-xs text-red-600" data-id={p.id}>🗑</button>
-          </div>
+  <!-- Contadores por estado -->
+  <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <a href={qs({ estado: null })}
+       class:list={["card p-3 transition hover:border-slate-400", !fEstado && "ring-2 ring-brand-500"]}>
+      <div class="text-[11px] uppercase tracking-wide text-slate-500">Documentos</div>
+      <div class="mt-0.5 text-2xl font-bold text-slate-700">{filasTodas.length}</div>
+      <div class="text-[11px] text-slate-400">{filasTodas.filter((f) => CODIGOS_VOLUMEN.includes(f.p.codigoCorto)).length} de {CODIGOS_VOLUMEN.length} del volumen</div>
+    </a>
+    {ESTADOS_PROC.map((e) => (
+      <a href={qs({ estado: fEstado === e ? null : e })}
+         class:list={["card p-3 transition hover:border-slate-400", fEstado === e && "ring-2 ring-brand-500"]}>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">{ESTADO_PROC[e].icono} {ESTADO_PROC[e].label}</div>
+        <div class="mt-0.5 text-2xl font-bold text-slate-700">{conteos[e] ?? 0}</div>
+        <div class="text-[11px] text-slate-400">
+          {e === "vigente" ? `${pctBiblioteca}% de la biblioteca` : ESTADO_PROC[e].descripcion}
         </div>
-        <ol class="mt-3 space-y-1.5 text-sm">
-          {p.items.map((it) => (
-            <li class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-l-2 border-slate-200 pl-3">
-              {it.bloqueante && <span class="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">🔴 CRÍTICO</span>}
-              <span class="font-medium text-slate-800">{it.texto}</span>
-              {it.criterioAceptacion && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">🎯 {it.criterioAceptacion}</span>}
-              {it.minutosEstimados != null && <span class="text-xs text-slate-500">⏱ {it.minutosEstimados} min</span>}
-              {it.materiales && <span class="text-xs text-slate-500">🧰 {it.materiales}</span>}
-            </li>
-          ))}
-        </ol>
-      </div>
+      </a>
     ))}
   </div>
+
+  <!-- Filtros -->
+  <div class="card mt-4 p-4">
+    <div class="flex flex-wrap items-end gap-3">
+      <div class="min-w-[9rem]">
+        <label class="label text-xs" for="fTipo">Tipo</label>
+        <select id="fTipo" class="input">
+          <option value="">Todos los tipos</option>
+          {TIPOS_PROC.map((t) => (
+            <option value={t} selected={fTipo === t}>
+              {TIPO_PROC[t].label} · {TIPO_PROC[t].nombre} ({conteosTipo[t]})
+            </option>
+          ))}
+        </select>
+      </div>
+      <div class="min-w-[9rem]">
+        <label class="label text-xs" for="fSistema">Sistema</label>
+        <select id="fSistema" class="input">
+          <option value="">Todos los sistemas</option>
+          {SISTEMAS.map((s) => (
+            <option value={s.value} selected={fSistema === s.value}>{s.label}</option>
+          ))}
+        </select>
+      </div>
+      <div class="min-w-[9rem]">
+        <label class="label text-xs" for="fEstado">Estado</label>
+        <select id="fEstado" class="input">
+          <option value="">Todos los estados</option>
+          {ESTADOS_PROC.map((e) => (
+            <option value={e} selected={fEstado === e}>{ESTADO_PROC[e].label}</option>
+          ))}
+        </select>
+      </div>
+      <div class="min-w-[9rem]">
+        <label class="label text-xs" for="fSede">Sede</label>
+        <select id="fSede" class="input">
+          <option value="">Todas las sedes</option>
+          <option value="0" selected={fSede === "0"}>Modelo (sin sede)</option>
+          {sedes.map((s) => (
+            <option value={String(s.id)} selected={fSede === String(s.id)}>{s.nombre}</option>
+          ))}
+        </select>
+      </div>
+      {(fTipo || fSistema || fEstado || fSede) && (
+        <a href="/procedimientos" class="btn-secondary btn-sm">Limpiar filtros</a>
+      )}
+      <span class="ml-auto text-xs text-slate-400">{filas.length} de {filasTodas.length} documentos</span>
+    </div>
+  </div>
+
+  {filasTodas.length === 0 && (
+    <div class="card mt-6 p-10 text-center">
+      <h2 class="mt-3 font-semibold text-slate-800">La biblioteca está vacía</h2>
+      <p class="mx-auto mt-1 max-w-lg text-sm text-slate-500">
+        Carga los veinticinco documentos del volumen. Al escribir un código corto conocido
+        (SCP-ELE-01, MOP-HVAC-01…) se precargan el título, las áreas validadoras y los campos en azul
+        que el capítulo 08 le asigna.
+      </p>
+      {esAdmin && <button id="nuevoBtn2" class="btn-primary mt-4">+ Cargar el primero</button>}
+    </div>
+  )}
+
+  {filasTodas.length > 0 && filas.length === 0 && (
+    <div class="card mt-4 p-6 text-center text-sm text-slate-400">Sin documentos con esos filtros.</div>
+  )}
+
+  {filas.length > 0 && (
+    <div class="card mt-4 overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th class="px-4 py-3">Código</th>
+            <th class="px-4 py-3">Documento</th>
+            <th class="px-4 py-3">Tipo</th>
+            <th class="px-4 py-3">Sistema</th>
+            <th class="px-4 py-3 text-center">Ver.</th>
+            <th class="px-4 py-3">Estado</th>
+            <th class="px-4 py-3">Dueño</th>
+            <th class="w-48 px-4 py-3">Validación</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {filas.map(({ p, resp, suc, progreso }) => {
+            const t = TIPO_PROC[p.tipo as TipoProc];
+            const sis = sistemaInfo(p.sistema as SistemaProc);
+            const est = ESTADO_PROC[p.estado as EstadoProc];
+            const revisionVencida = p.proximaRevision != null && p.proximaRevision < hoy;
+            return (
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3 align-top">
+                  <a href={`/procedimientos/${p.id}`} class="font-mono text-xs font-semibold text-brand-700 hover:underline">
+                    {p.codigoCorto}
+                  </a>
+                  <div class="font-mono text-[10px] text-slate-400">
+                    {p.codigoInstitucional ?? "sin código institucional"}
+                  </div>
+                </td>
+                <td class="px-4 py-3 align-top">
+                  <a href={`/procedimientos/${p.id}`} class="font-medium text-slate-800 hover:underline">{p.titulo}</a>
+                  <div class="text-[11px] text-slate-400">
+                    {suc?.nombre ?? "Modelo (sin sede)"}
+                    {p.semanaValidacion && <span> · Semana {p.semanaValidacion}</span>}
+                    {revisionVencida && (
+                      <span class="ml-1 text-red-600">· revisión vencida {fmtFechaSoloCompacta(p.proximaRevision)}</span>
+                    )}
+                  </div>
+                </td>
+                <td class="px-4 py-3 align-top">
+                  <span class:list={["badge", t.color]}>{t.label}</span>
+                </td>
+                <td class="px-4 py-3 align-top text-xs text-slate-600">{sis.icono} {sis.label}</td>
+                <td class="px-4 py-3 align-top text-center font-mono text-xs text-slate-600">{p.version}</td>
+                <td class="px-4 py-3 align-top">
+                  <span class:list={["badge", est.color]}>{est.icono} {est.label}</span>
+                </td>
+                <td class="px-4 py-3 align-top text-xs text-slate-600">
+                  {resp?.nombre ?? <span class="text-red-600">sin dueño</span>}
+                  {p.suplenteCargo && <div class="text-[10px] text-slate-400">Suplente: {p.suplenteCargo}</div>}
+                </td>
+                <td class="px-4 py-3 align-top">
+                  <div class="flex items-center gap-2">
+                    <div class="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                      <div class={`h-full ${colorProgreso(progreso.pct)}`} style={`width:${progreso.pct}%`}></div>
+                    </div>
+                    <span class="w-9 text-right text-xs font-semibold text-slate-600">{progreso.pct}%</span>
+                  </div>
+                  <div class="mt-1 text-[10px] text-slate-400">
+                    {progreso.areasValidadas}/{progreso.areasTotal} áreas
+                    {progreso.camposFaltan > 0 && (
+                      <span class="text-amber-600"> · faltan {progreso.camposFaltan} campo(s) en azul</span>
+                    )}
+                    {progreso.camposFaltan === 0 && progreso.camposTotal > 0 && (
+                      <span class="text-emerald-600"> · campos completos</span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  <p class="mt-3 text-xs text-slate-400">
+    Calendario del capítulo 08: {Object.values(SEMANAS_VALIDACION).map((s) => s.label).join(" · ")}.
+    Un documento no pasa a vigente con un campo en azul vacío ni con un área sin confirmar.
+  </p>
+
+  {esAdmin && (
+    <div id="nuevoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card max-h-[92vh] w-full max-w-3xl overflow-y-auto p-5">
+        <h3 class="text-lg font-semibold text-slate-900">Nuevo documento de la biblioteca</h3>
+        <p class="mt-1 text-xs text-slate-500">
+          Cada documento lleva dos códigos (cap. 2.4) y nace con dueño y calendario de validación.
+          Sin eso, el borrador se vuelve permanente.
+        </p>
+
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label class="label text-xs" for="n_codigo">Código corto *</label>
+            <input id="n_codigo" class="input font-mono" list="codigosVolumen" placeholder="SCP-ELE-01" />
+            <datalist id="codigosVolumen">
+              {CODIGOS_VOLUMEN.map((c) => <option value={c}>{MATRIZ_CAP08[c].titulo}</option>)}
+            </datalist>
+            <p id="n_sug" class="mt-1 hidden text-[11px] text-brand-700"></p>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_inst">Código institucional <span class="text-slate-400">[ÁREA]-[TIPO]-[NNN]-[AAAA]</span></label>
+            <input id="n_inst" class="input font-mono" placeholder="GO-PNT-014-2026" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_titulo">Título *</label>
+            <input id="n_titulo" class="input" placeholder="Sistema eléctrico esencial: configuración normal" />
+          </div>
+          <div>
+            <label class="label text-xs" for="n_tipo">Tipo *</label>
+            <select id="n_tipo" class="input">
+              {TIPOS_PROC.map((t) => <option value={t}>{TIPO_PROC[t].label} · {TIPO_PROC[t].nombre}</option>)}
+            </select>
+            <p id="n_semanaTxt" class="mt-1 text-[11px] text-slate-500"></p>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_sistema">Sistema *</label>
+            <select id="n_sistema" class="input">
+              {SISTEMAS_PROC.map((s) => (
+                <option value={s}>{sistemaInfo(s).icono} {sistemaInfo(s).label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_resp">Responsable (dueño) *</label>
+            <select id="n_resp" class="input">
+              <option value="">— Elegir dueño —</option>
+              {responsables.map((r) => <option value={String(r.id)}>{r.nombre} ({r.rol})</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_suplente">Cargo suplente</label>
+            <input id="n_suplente" class="input" placeholder="Técnico de turno" />
+          </div>
+          <div>
+            <label class="label text-xs" for="n_sede">Sede</label>
+            <select id="n_sede" class="input">
+              <option value="">Modelo (sin sede)</option>
+              {sedes.map((s) => <option value={String(s.id)}>{s.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_riesgo">Nivel de riesgo</label>
+            <select id="n_riesgo" class="input">
+              <option value="">Sin clasificar</option>
+              <option value="bajo">Bajo</option>
+              <option value="medio">Medio</option>
+              <option value="alto">Alto</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_norma">Norma adoptada</label>
+            <input id="n_norma" class="input" placeholder="NFPA 110 (2010), declarada por Gerencia de Operaciones y Calidad" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_proposito">Propósito</label>
+            <textarea id="n_proposito" class="input" rows="2" placeholder="Qué pregunta responde este documento"></textarea>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_semana">Semana de validación</label>
+            <select id="n_semana" class="input">
+              <option value="1">Semana 1 · SCP</option>
+              <option value="2">Semana 2 · SOP y AOP</option>
+              <option value="3">Semana 3 · EOP (simulacro de mesa)</option>
+              <option value="4">Semana 4 · MOP</option>
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_fechaBase">Fecha programada para las áreas *</label>
+            <input id="n_fechaBase" type="date" class="input" value={hoy} />
+          </div>
+        </div>
+
+        <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 class="text-sm font-semibold text-slate-800">Matriz de validación *</h4>
+              <p class="text-[11px] text-slate-500">Un renglón por área, cada uno con su fecha programada. Al menos uno.</p>
+            </div>
+            <button id="n_addArea" type="button" class="btn-secondary btn-sm">+ Área</button>
+          </div>
+          <div id="n_areas" class="mt-2 space-y-2"></div>
+          <datalist id="areasValidadoras">
+            {AREAS.map((a) => <option value={a}></option>)}
+          </datalist>
+        </div>
+
+        <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 class="text-sm font-semibold text-blue-900">Campos en azul</h4>
+              <p class="text-[11px] text-blue-700">
+                Los números son de las normas; estos valores son de Avante. Se pueden dejar vacíos y completarlos en la ficha.
+              </p>
+            </div>
+            <button id="n_addCampo" type="button" class="btn-secondary btn-sm">+ Campo</button>
+          </div>
+          <div id="n_campos" class="mt-2 space-y-2"></div>
+        </div>
+
+        <p id="n_err" class="mt-3 hidden text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="n_cancel" class="btn-secondary">Cancelar</button>
+          <button id="n_save" class="btn-primary">Crear documento</button>
+        </div>
+      </div>
+    </div>
+  )}
 </Layout>
 
-<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ plantillasJson }) }}>
-  const { plantillasJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
-  const plantillas = JSON.parse(plantillasJson);
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ matrizJson, semanasJson, esAdmin }) }}>
+  const { matrizJson, semanasJson, esAdmin } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const $ = (id) => document.getElementById(id);
-  const form = $("form");
-  const itemsContainer = $("itemsContainer");
 
-  function itemRow(data = {}) {
-    const div = document.createElement("div");
-    div.className = "proc-item rounded border border-slate-200 bg-slate-50 p-3";
-    div.innerHTML = `
-      <div class="grid grid-cols-1 gap-2 sm:grid-cols-12">
-        <div class="sm:col-span-12"><input class="input it-texto" placeholder="Paso a verificar *" /></div>
-        <div class="sm:col-span-6"><input class="input it-criterio" placeholder="Criterio de aceptación (ej: ≥ 35 psi)" /></div>
-        <div class="sm:col-span-2"><input class="input it-minutos" type="number" min="0" placeholder="min" /></div>
-        <div class="sm:col-span-4"><input class="input it-materiales" placeholder="Materiales / herramientas" /></div>
-        <div class="sm:col-span-12 flex items-center justify-between">
-          <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" class="it-bloqueante h-4 w-4" /> 🔴 Punto crítico (bloquea el cierre si queda en desviación)</label>
-          <button type="button" class="it-remove text-xs text-red-600 hover:underline">Quitar paso</button>
-        </div>
-      </div>`;
-    div.querySelector(".it-texto").value = data.texto ?? "";
-    div.querySelector(".it-criterio").value = data.criterioAceptacion ?? "";
-    div.querySelector(".it-minutos").value = data.minutosEstimados ?? "";
-    div.querySelector(".it-materiales").value = data.materiales ?? "";
-    div.querySelector(".it-bloqueante").checked = !!data.bloqueante;
-    div.querySelector(".it-remove").addEventListener("click", () => div.remove());
-    return div;
-  }
+  // Filtros: recargan con querystring (SSR, igual que /ordenes).
+  const aplicar = () => {
+    const p = new URLSearchParams();
+    const t = $("fTipo")?.value, s = $("fSistema")?.value, e = $("fEstado")?.value, d = $("fSede")?.value;
+    if (t) p.set("tipo", t);
+    if (s) p.set("sistema", s);
+    if (e) p.set("estado", e);
+    if (d) p.set("sede", d);
+    const q = p.toString();
+    location.href = q ? `/procedimientos?${q}` : "/procedimientos";
+  };
+  ["fTipo", "fSistema", "fEstado", "fSede"].forEach((id) => $(id)?.addEventListener("change", aplicar));
 
-  $("addItemBtn")?.addEventListener("click", () => itemsContainer.appendChild(itemRow()));
+  if (esAdmin) {
+    const MATRIZ = JSON.parse(matrizJson);
+    const SEMANAS = JSON.parse(semanasJson);
+    const SEM_POR_TIPO = { scp: 1, sop: 2, aop: 2, eop: 3, mop: 4 };
+    const modal = $("nuevoModal");
 
-  function abrirForm() { form.classList.remove("hidden"); form.scrollIntoView({ behavior: "smooth" }); }
-
-  $("newBtn")?.addEventListener("click", () => {
-    $("f_id").value = ""; $("f_nombre").value = ""; $("f_descripcion").value = "";
-    $("formTitle").textContent = "Nuevo procedimiento";
-    itemsContainer.innerHTML = "";
-    itemsContainer.appendChild(itemRow());
-    abrirForm();
-  });
-
-  $("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
-
-  document.querySelectorAll(".edit-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const p = plantillas.find((x) => x.id === Number(btn.dataset.id));
-      if (!p) return;
-      $("f_id").value = p.id; $("f_nombre").value = p.nombre; $("f_descripcion").value = p.descripcion ?? "";
-      $("formTitle").textContent = "Editar procedimiento";
-      itemsContainer.innerHTML = "";
-      (p.items.length ? p.items : [{}]).forEach((it) => itemsContainer.appendChild(itemRow(it)));
-      abrirForm();
-    });
-  });
-
-  document.querySelectorAll(".toggle-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const activa = btn.dataset.activa === "1";
-      await fetch(`/api/checklist-plantillas/${btn.dataset.id}`, {
-        method: "PATCH", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ activa: !activa }),
-      });
-      location.reload();
-    });
-  });
-
-  document.querySelectorAll(".del-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      if (!confirm("¿Eliminar este procedimiento? Los planes que ya lo usaron conservan su checklist.")) return;
-      await fetch(`/api/checklist-plantillas/${btn.dataset.id}`, { method: "DELETE" });
-      location.reload();
-    });
-  });
-
-  $("saveBtn")?.addEventListener("click", async () => {
-    const err = $("formErr");
-    err.classList.add("hidden");
-    const nombre = $("f_nombre").value.trim();
-    if (!nombre) { err.textContent = "El nombre es obligatorio."; err.classList.remove("hidden"); return; }
-    const items = [];
-    itemsContainer.querySelectorAll(".proc-item").forEach((row) => {
-      const texto = row.querySelector(".it-texto").value.trim();
-      if (!texto) return;
-      const min = row.querySelector(".it-minutos").value;
-      items.push({
-        texto,
-        criterioAceptacion: row.querySelector(".it-criterio").value.trim() || null,
-        bloqueante: row.querySelector(".it-bloqueante").checked,
-        minutosEstimados: min ? Number(min) : null,
-        materiales: row.querySelector(".it-materiales").value.trim() || null,
-      });
-    });
-    if (items.length === 0) { err.textContent = "Agrega al menos un paso al procedimiento."; err.classList.remove("hidden"); return; }
-    const id = $("f_id").value;
-    const payload = { nombre, descripcion: $("f_descripcion").value.trim() || null, items };
-    const res = await fetch(id ? `/api/checklist-plantillas/${id}` : "/api/checklist-plantillas", {
-      method: id ? "PATCH" : "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
-      err.classList.remove("hidden");
-      return;
+    function pintarSemana() {
+      const sem = SEM_POR_TIPO[$("n_tipo").value] ?? 1;
+      $("n_semana").value = String(sem);
+      const info = SEMANAS[String(sem)];
+      $("n_semanaTxt").textContent = info ? info.label + " — " + info.detalle : "";
     }
-    location.reload();
-  });
+
+    function filaArea(data) {
+      data = data || {};
+      const div = document.createElement("div");
+      div.className = "fila-area grid grid-cols-1 gap-2 rounded border border-slate-200 bg-white p-2 sm:grid-cols-12";
+      div.innerHTML =
+        '<div class="sm:col-span-4"><input class="input a-area" list="areasValidadoras" placeholder="Área validadora *" /></div>' +
+        '<div class="sm:col-span-5"><input class="input a-confirma" placeholder="Qué confirma" /></div>' +
+        '<div class="sm:col-span-2"><input type="date" class="input a-fecha" /></div>' +
+        '<div class="sm:col-span-1 flex items-center justify-end"><button type="button" class="a-del text-xs text-red-600 hover:underline">Quitar</button></div>';
+      div.querySelector(".a-area").value = data.area || "";
+      div.querySelector(".a-confirma").value = data.queConfirma || "";
+      div.querySelector(".a-fecha").value = data.fechaProgramada || $("n_fechaBase").value || "";
+      div.querySelector(".a-del").addEventListener("click", () => div.remove());
+      $("n_areas").appendChild(div);
+      return div;
+    }
+
+    function filaCampo(data) {
+      data = data || {};
+      const div = document.createElement("div");
+      div.className = "fila-campo grid grid-cols-1 gap-2 rounded border border-blue-200 bg-white p-2 sm:grid-cols-12";
+      div.innerHTML =
+        '<div class="sm:col-span-5"><input class="input c-etiqueta" placeholder="Etiqueta del campo *" /></div>' +
+        '<div class="sm:col-span-3"><input class="input c-valor" placeholder="Valor (puede quedar vacío)" /></div>' +
+        '<div class="sm:col-span-2"><input class="input c-unidad" placeholder="Unidad" /></div>' +
+        '<div class="sm:col-span-2 flex items-center justify-end"><button type="button" class="c-del text-xs text-red-600 hover:underline">Quitar</button></div>';
+      div.querySelector(".c-etiqueta").value = data.etiqueta || "";
+      div.querySelector(".c-valor").value = data.valor || "";
+      div.querySelector(".c-unidad").value = data.unidad || "";
+      div.querySelector(".c-del").addEventListener("click", () => div.remove());
+      $("n_campos").appendChild(div);
+      return div;
+    }
+
+    const abrir = () => {
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      if (!$("n_areas").children.length) filaArea();
+      pintarSemana();
+    };
+    const cerrar = () => {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    };
+    $("nuevoBtn")?.addEventListener("click", () => abrir());
+    $("nuevoBtn2")?.addEventListener("click", () => abrir());
+
+    // Llegada desde "falta el AOP de incendios" (cobertura o ficha del equipo):
+    // ?nuevo=1&tipo=aop&sistema=incendios abre el formulario ya apuntado al hueco,
+    // en vez de dejar al usuario frente a un filtro sin saber que hacer.
+    (() => {
+      const qs = new URLSearchParams(location.search);
+      if (qs.get("nuevo") !== "1") return;
+      const t = qs.get("tipo");
+      const sis = qs.get("sistema");
+      abrir();
+      if (t && $("n_tipo")) $("n_tipo").value = t;
+      if (sis && $("n_sistema")) $("n_sistema").value = sis;
+      pintarSemana();
+    })();
+    $("n_cancel")?.addEventListener("click", cerrar);
+    modal.addEventListener("click", (ev) => { if (ev.target === modal) cerrar(); });
+    $("n_tipo")?.addEventListener("change", pintarSemana);
+    $("n_addArea")?.addEventListener("click", () => filaArea());
+    $("n_addCampo")?.addEventListener("click", () => filaCampo());
+
+    // Al teclear un código del volumen, precarga la fila real del capítulo 8.2.
+    $("n_codigo")?.addEventListener("change", () => {
+      const cod = ($("n_codigo").value || "").trim().toUpperCase();
+      $("n_codigo").value = cod;
+      const fila = MATRIZ[cod];
+      const sug = $("n_sug");
+      if (!fila) { sug.classList.add("hidden"); return; }
+      if (!$("n_titulo").value) $("n_titulo").value = fila.titulo;
+      $("n_tipo").value = fila.tipo;
+      $("n_sistema").value = fila.sistema;
+      if (fila.nivelRiesgo) $("n_riesgo").value = fila.nivelRiesgo;
+      pintarSemana();
+      $("n_areas").innerHTML = "";
+      fila.areas.forEach((a) => filaArea({ area: a, queConfirma: fila.queConfirma }));
+      $("n_campos").innerHTML = "";
+      fila.campos.forEach((c) => filaCampo({ etiqueta: c }));
+      sug.textContent =
+        "Precargado del capítulo 08: " + fila.areas.length + " área(s) validadora(s) y " +
+        fila.campos.length + " campo(s) en azul.";
+      sug.classList.remove("hidden");
+    });
+
+    // Cambiar la fecha base rellena las filas de área que estén vacías.
+    $("n_fechaBase")?.addEventListener("change", () => {
+      const f = $("n_fechaBase").value;
+      $("n_areas").querySelectorAll(".a-fecha").forEach((i) => { if (!i.value) i.value = f; });
+    });
+
+    $("n_save")?.addEventListener("click", async () => {
+      const err = $("n_err");
+      err.classList.add("hidden");
+      const fail = (m) => { err.textContent = m; err.classList.remove("hidden"); };
+
+      const codigoCorto = ($("n_codigo").value || "").trim().toUpperCase();
+      const titulo = ($("n_titulo").value || "").trim();
+      const responsableId = Number($("n_resp").value);
+      if (codigoCorto.length < 3) return fail("El código corto es obligatorio.");
+      if (titulo.length < 3) return fail("El título es obligatorio.");
+      if (!responsableId) return fail("Un dueño por documento: elige el responsable (cap. 08).");
+
+      const validaciones = [];
+      let sinFecha = null;
+      $("n_areas").querySelectorAll(".fila-area").forEach((row) => {
+        const area = row.querySelector(".a-area").value.trim();
+        if (!area) return;
+        const fechaProgramada = row.querySelector(".a-fecha").value;
+        if (!fechaProgramada) { sinFecha = area; return; }
+        validaciones.push({
+          area,
+          queConfirma: row.querySelector(".a-confirma").value.trim() || null,
+          fechaProgramada,
+        });
+      });
+      if (sinFecha) return fail('"' + sinFecha + '" necesita fecha programada: sin fecha, el borrador se vuelve permanente.');
+      if (validaciones.length === 0) return fail("Asigna al menos un área validadora con su fecha programada.");
+
+      const campos = [];
+      $("n_campos").querySelectorAll(".fila-campo").forEach((row) => {
+        const etiqueta = row.querySelector(".c-etiqueta").value.trim();
+        if (!etiqueta) return;
+        campos.push({
+          etiqueta,
+          valor: row.querySelector(".c-valor").value.trim() || null,
+          unidad: row.querySelector(".c-unidad").value.trim() || null,
+        });
+      });
+
+      const payload = {
+        codigoCorto,
+        codigoInstitucional: ($("n_inst").value || "").trim() || null,
+        titulo,
+        tipo: $("n_tipo").value,
+        sistema: $("n_sistema").value,
+        responsableId,
+        suplenteCargo: ($("n_suplente").value || "").trim() || null,
+        sucursalId: $("n_sede").value ? Number($("n_sede").value) : null,
+        nivelRiesgo: $("n_riesgo").value || null,
+        normaAdoptada: ($("n_norma").value || "").trim() || null,
+        proposito: ($("n_proposito").value || "").trim() || null,
+        semanaValidacion: Number($("n_semana").value) || null,
+        validaciones,
+        campos,
+      };
+
+      const btn = $("n_save");
+      btn.disabled = true;
+      const res = await fetch("/api/procedimientos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      btn.disabled = false;
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        return fail(typeof j.error === "string" ? j.error : "No se pudo crear el documento.");
+      }
+      const j = await res.json();
+      window.showToast?.(codigoCorto + " creado en borrador.", "success");
+      location.href = "/procedimientos/" + j.procedimiento.id;
+    });
+  }
 </script>

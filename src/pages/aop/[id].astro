@@ -1,0 +1,584 @@
+---
+// Detalle del episodio AOP: la ficha del procedimiento, las acciones inmediatas
+// que el técnico va marcando con hora, la relectura, la evaluación de riesgo y
+// las tres salidas: normalizar, escalar o pasar a EOP.
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  activos,
+  aopAcciones,
+  aopEventoAcciones,
+  aopEventos,
+  aopFicha,
+  aopUmbrales,
+  procedimientos,
+  sucursales,
+  ubicaciones,
+  usuarios,
+  variablesPredictivas,
+} from "@/lib/schema";
+import { asc, eq } from "drizzle-orm";
+import {
+  BANDA,
+  ESTADO_AOP,
+  RELOJ,
+  cronometro,
+  evaluarLectura,
+  fmtCuentaRegresiva,
+  fmtDuracion,
+  fmtRango,
+  msDe,
+  puedeOperarAop,
+  puedeVerAop,
+  type EstadoAop,
+} from "@/lib/aop";
+import { fmtFechaCompacta } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerAop(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const puedeOperar = puedeOperarAop(user.rol);
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect("/aop");
+
+const [row] = await db
+  .select({
+    e: aopEventos,
+    proc: procedimientos,
+    varNombre: variablesPredictivas.nombre,
+    varUnidad: variablesPredictivas.unidad,
+    varMinW: variablesPredictivas.minWarning,
+    varMaxW: variablesPredictivas.maxWarning,
+    varMinC: variablesPredictivas.minCritico,
+    varMaxC: variablesPredictivas.maxCritico,
+    uMinAlerta: aopUmbrales.minAlerta,
+    uMaxAlerta: aopUmbrales.maxAlerta,
+    uPersistente: aopUmbrales.minutosEventoPersistente,
+    uEop: aopUmbrales.eopProcedimientoId,
+    sala: ubicaciones.nombre,
+    equipo: activos.nombre,
+    equipoCodigo: activos.codigo,
+    sede: sucursales.nombre,
+    detectadoPorNombre: usuarios.nombre,
+  })
+  .from(aopEventos)
+  .leftJoin(procedimientos, eq(procedimientos.id, aopEventos.procedimientoId))
+  .leftJoin(variablesPredictivas, eq(variablesPredictivas.id, aopEventos.variableId))
+  .leftJoin(aopUmbrales, eq(aopUmbrales.id, aopEventos.umbralId))
+  .leftJoin(ubicaciones, eq(ubicaciones.id, aopEventos.ubicacionId))
+  .leftJoin(activos, eq(activos.id, aopEventos.activoId))
+  .leftJoin(sucursales, eq(sucursales.id, aopEventos.sucursalId))
+  .leftJoin(usuarios, eq(usuarios.id, aopEventos.detectadoPor))
+  .where(eq(aopEventos.id, id))
+  .limit(1);
+
+if (!row) return Astro.redirect("/aop");
+
+const e = row.e;
+const unidad = e.unidad ?? row.varUnidad ?? null;
+const lectura =
+  e.valorDetectado != null
+    ? evaluarLectura(
+        { minWarning: row.varMinW, maxWarning: row.varMaxW, minCritico: row.varMinC, maxCritico: row.varMaxC },
+        e.valorDetectado,
+        { minAlerta: row.uMinAlerta, maxAlerta: row.uMaxAlerta },
+      )
+    : null;
+const cron = cronometro(e);
+const rel = RELOJ[cron.reloj];
+const est = ESTADO_AOP[e.estado as EstadoAop];
+const abierto = e.estado === "abierto" || e.estado === "en_correccion" || e.estado === "escalado";
+const persistente = row.uPersistente != null && cron.minutosAbierto >= row.uPersistente;
+
+// Ficha del AOP y sus acciones inmediatas numeradas.
+const [ficha] = e.procedimientoId
+  ? await db.select().from(aopFicha).where(eq(aopFicha.procedimientoId, e.procedimientoId)).limit(1)
+  : [];
+const acciones = e.procedimientoId
+  ? await db
+      .select()
+      .from(aopAcciones)
+      .where(eq(aopAcciones.procedimientoId, e.procedimientoId))
+      .orderBy(asc(aopAcciones.orden), asc(aopAcciones.id))
+  : [];
+
+// Bitácora: cada acción con su hora, como pide el registro del AOP.
+const bitacora = await db
+  .select({ a: aopEventoAcciones, quien: usuarios.nombre })
+  .from(aopEventoAcciones)
+  .leftJoin(usuarios, eq(usuarios.id, aopEventoAcciones.ejecutadoPor))
+  .where(eq(aopEventoAcciones.eventoId, id))
+  .orderBy(asc(aopEventoAcciones.ejecutadoEn), asc(aopEventoAcciones.id));
+const yaHechas = new Set(bitacora.map((b) => b.a.accion));
+
+const [eopDestino] = row.uEop
+  ? await db
+      .select({ codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo })
+      .from(procedimientos)
+      .where(eq(procedimientos.id, row.uEop))
+      .limit(1)
+  : [];
+
+const FICHA = [
+  { t: "Condición y umbral", v: ficha?.condicionUmbral },
+  { t: "Quién detecta", v: ficha?.quienDetecta },
+  { t: "Tiempo tolerable y escalamiento", v: ficha?.tiempoTolerable },
+  { t: "Decisión sobre los casos", v: ficha?.decisionCasos },
+  { t: "Pasa a EOP cuando", v: ficha?.pasaAEop },
+  { t: "Registro", v: row.proc?.registro },
+].filter((f) => f.v);
+
+const msActuar = msDe(e.actuarAntesDe);
+const msEscalar = msDe(e.escalarAntesDe);
+---
+
+<Layout title={`AOP · episodio #${e.id}`}>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div class="min-w-0">
+      <a href="/aop" class="text-xs text-slate-400 hover:text-slate-600">← Tablero AOP</a>
+      <h1 class="mt-1 flex flex-wrap items-center gap-2 text-2xl font-bold">
+        <span class="font-mono text-base text-slate-400">{row.proc?.codigoCorto ?? `#${e.id}`}</span>
+        {row.varNombre ?? row.proc?.titulo ?? "Desviación"}
+      </h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {row.proc?.titulo ?? "Episodio sin procedimiento vinculado"}
+        {row.proc?.version ? ` · v${row.proc.version}` : ""}
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <span class={`badge ${est.badge}`}>{est.label}</span>
+      {abierto && <span class={`badge ${rel.badge}`}>{rel.label}</span>}
+      {persistente && <span class="badge bg-purple-100 text-purple-700">Evento persistente</span>}
+    </div>
+  </div>
+
+  <!-- Qué se desvió, dónde, desde cuándo y el reloj -->
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class={`card border-l-4 p-5 ${rel.borde}`}>
+      <div class="text-xs uppercase text-slate-500">Valor detectado</div>
+      <div class="mt-1 flex flex-wrap items-baseline gap-2">
+        <span class="text-3xl font-bold text-slate-900 tabular-nums">{e.valorDetectado ?? "—"}</span>
+        {unidad && <span class="text-sm text-slate-500">{unidad}</span>}
+        {lectura && <span class={`badge ${BANDA[lectura.banda].badge}`}>{BANDA[lectura.banda].label}</span>}
+      </div>
+      {lectura && (
+        <div class="mt-1 text-xs text-slate-500">
+          rango de operación {fmtRango(lectura.minAlerta, lectura.maxAlerta, unidad)}
+          {lectura.minCritico != null || lectura.maxCritico != null
+            ? ` · crítico ${fmtRango(lectura.minCritico, lectura.maxCritico, unidad)}`
+            : ""}
+        </div>
+      )}
+      {e.valorFinal != null && (
+        <div class="mt-2 text-sm text-emerald-700">
+          Valor final {e.valorFinal}{unidad ? ` ${unidad}` : ""} · {fmtDuracion(e.minutosFuera)} fuera de rango
+        </div>
+      )}
+    </div>
+
+    <div class="card p-5">
+      <div class="text-xs uppercase text-slate-500">Dónde</div>
+      <div class="mt-1 font-semibold text-slate-800">{row.sala ?? "Sin sala asignada"}</div>
+      <div class="text-xs text-slate-500">{row.sede ?? ""}</div>
+      {row.equipo && (
+        <div class="mt-2 text-sm text-slate-600">
+          {row.equipo}{row.equipoCodigo ? <span class="font-mono text-xs text-slate-400"> {row.equipoCodigo}</span> : null}
+        </div>
+      )}
+      <div class="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-500">
+        Detectado {fmtFechaCompacta(e.detectadoEn)} · origen {e.origen}
+        {row.detectadoPorNombre ? ` · ${row.detectadoPorNombre}` : ""}
+      </div>
+    </div>
+
+    <div class="card p-5">
+      <div class="text-xs uppercase text-slate-500">El reloj</div>
+      <div class="mt-1 text-sm text-slate-600">Abierta {fmtDuracion(cron.minutosAbierto)}</div>
+      <div class="mt-3 space-y-2 text-sm">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-slate-500">Actuar antes de</span>
+          {msActuar != null ? (
+            <span class="text-right">
+              <span class="block text-xs text-slate-400">{fmtFechaCompacta(e.actuarAntesDe)}</span>
+              <span class="tabular-nums font-medium" data-reloj={msActuar}>{fmtCuentaRegresiva(cron.minutosParaActuar)}</span>
+            </span>
+          ) : <span class="text-slate-400">sin plazo definido</span>}
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-slate-500">Escalar antes de</span>
+          {msEscalar != null ? (
+            <span class="text-right">
+              <span class="block text-xs text-slate-400">{fmtFechaCompacta(e.escalarAntesDe)}</span>
+              <span class="tabular-nums font-medium" data-reloj={msEscalar}>{fmtCuentaRegresiva(cron.minutosParaEscalar)}</span>
+            </span>
+          ) : <span class="text-slate-400">sin plazo definido</span>}
+        </div>
+        {row.uPersistente != null && (
+          <div class="flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
+            <span class="text-slate-500">Evento persistente</span>
+            <span class={persistente ? "font-medium text-purple-700" : "text-slate-500"}>
+              a las {fmtDuracion(row.uPersistente)}
+            </span>
+          </div>
+        )}
+        {e.escaladoEn && (
+          <div class="border-t border-slate-100 pt-2 text-xs text-red-600">
+            Escalado el {fmtFechaCompacta(e.escaladoEn)}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <!-- Las tres salidas -->
+  {puedeOperar && abierto && (
+    <div class="card mt-4 flex flex-wrap items-center gap-2 p-4">
+      <button id="accionBtn" class="btn-secondary">Registrar acción</button>
+      <button id="relecturaBtn" class="btn-secondary">Registrar relectura</button>
+      <button id="normalizarBtn" class="btn-primary">Normalizar</button>
+      <button id="escalarBtn" class="btn-secondary">Escalar</button>
+      <button id="eopBtn" class="btn-secondary">Pasa a EOP</button>
+      {eopDestino && (
+        <span class="ml-auto text-xs text-slate-400">
+          EOP definido: <span class="font-mono">{eopDestino.codigo}</span> · {eopDestino.titulo}
+        </span>
+      )}
+    </div>
+  )}
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-5">
+    <!-- Acciones inmediatas del AOP -->
+    <div class="lg:col-span-3">
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-800">Acciones inmediatas</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          Las del procedimiento, en orden. Marcar una la registra con su hora en la bitácora del episodio.
+        </p>
+        {acciones.length === 0 ? (
+          <p class="mt-3 text-sm text-slate-500">
+            El procedimiento no tiene acciones inmediatas cargadas. Usa «Registrar acción» para dejar constancia de lo hecho.
+          </p>
+        ) : (
+          <ol class="mt-3 space-y-2">
+            {acciones.map((a, i) => {
+              const hecha = yaHechas.has(a.accion);
+              const registro = bitacora.find((b) => b.a.accion === a.accion);
+              return (
+                <li class={`rounded-lg border p-3 ${hecha ? "border-emerald-200 bg-emerald-50/50" : "border-slate-200"}`}>
+                  <div class="flex items-start gap-3">
+                    <span class={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${hecha ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                      {hecha ? "✓" : a.orden || i + 1}
+                    </span>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-sm text-slate-800">{a.accion}</div>
+                      {a.resultadoEsperado && (
+                        <div class="mt-0.5 text-xs text-slate-500">Resultado esperado: {a.resultadoEsperado}</div>
+                      )}
+                      {hecha && registro && (
+                        <div class="mt-1 text-xs text-emerald-700">
+                          Registrada {fmtFechaCompacta(registro.a.ejecutadoEn)}
+                          {registro.quien ? ` · ${registro.quien}` : ""}
+                          {registro.a.resultado ? ` · ${registro.a.resultado}` : ""}
+                        </div>
+                      )}
+                      {!hecha && puedeOperar && abierto && (
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                          <input
+                            class="input text-xs sm:max-w-xs"
+                            placeholder="Resultado observado (opcional)"
+                            data-res={a.id}
+                          />
+                          <button class="btn-secondary btn-sm marcarBtn" data-accion={a.accion} data-res={a.id}>
+                            Marcar hecha
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+
+      <!-- Bitácora: la relectura y todo lo demás, con hora -->
+      <div class="card mt-4 p-5">
+        <h2 class="font-semibold text-slate-800">Registro del episodio</h2>
+        {bitacora.length === 0 ? (
+          <p class="mt-2 text-sm text-slate-500">Todavía sin acciones registradas.</p>
+        ) : (
+          <ul class="mt-3 space-y-3">
+            {bitacora.map((b) => (
+              <li class="flex gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+                <div class="w-32 shrink-0 text-xs text-slate-400">{fmtFechaCompacta(b.a.ejecutadoEn)}</div>
+                <div class="min-w-0">
+                  <div class="text-sm text-slate-800">{b.a.accion}</div>
+                  {b.a.resultado && <div class="text-xs text-slate-500">{b.a.resultado}</div>}
+                  {b.quien && <div class="text-[11px] text-slate-400">{b.quien}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+
+    <!-- Ficha del AOP + evaluación de riesgo -->
+    <div class="lg:col-span-2">
+      <div class="card p-5">
+        <h2 class="font-semibold text-slate-800">Ficha del AOP</h2>
+        {FICHA.length === 0 ? (
+          <p class="mt-2 text-sm text-slate-500">
+            El procedimiento todavía no tiene ficha cargada (condición, quién detecta, tiempo tolerable, decisión y paso a EOP).
+          </p>
+        ) : (
+          <dl class="mt-3 space-y-3">
+            {FICHA.map((f) => (
+              <div>
+                <dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{f.t}</dt>
+                <dd class="mt-0.5 whitespace-pre-line text-sm text-slate-700">{f.v}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {row.proc && (
+          <a href="/procedimientos" class="mt-3 inline-block text-xs text-slate-400 hover:text-slate-600">
+            Procedimientos →
+          </a>
+        )}
+      </div>
+
+      <div class="card mt-4 p-5">
+        <h2 class="font-semibold text-slate-800">Evaluación de riesgo</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          Causa probable, duración esperada, riesgo de recurrencia, evidencia de humedad y función de los equipos.
+          Es la evidencia de que el evento no tuvo consecuencia o de las medidas tomadas.
+        </p>
+        <textarea
+          id="riesgo"
+          class="input mt-2"
+          rows="7"
+          readonly={!puedeOperar}
+          placeholder="Evaluación conjunta del servicio afectado, Control de Infecciones y Mantenimiento…"
+        >{e.evaluacionRiesgo ?? ""}</textarea>
+        {puedeOperar && (
+          <div class="mt-2 flex justify-end">
+            <button id="riesgoBtn" class="btn-secondary btn-sm">Guardar evaluación</button>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: registrar acción / relectura -->
+  {puedeOperar && abierto && (
+    <div id="accionModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h2 id="a_titulo" class="font-semibold text-slate-800">Registrar acción</h2>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="label text-xs">Acción *</label>
+            <input id="a_accion" class="input" placeholder="Ajustar la consigna de la sala y verificar puertas cerradas" />
+          </div>
+          <div id="a_valorWrap" class="hidden">
+            <label class="label text-xs">Valor releído</label>
+            <input id="a_valor" class="input" type="number" step="0.01" placeholder={unidad ? `en ${unidad}` : "valor medido"} />
+            <p class="mt-1 text-xs text-slate-400">Se evalúa contra la banda de alerta y queda anotado en la bitácora.</p>
+          </div>
+          <div>
+            <label class="label text-xs">Resultado</label>
+            <textarea id="a_resultado" class="input" rows="3" placeholder="Lo que se obtuvo, con lo observado"></textarea>
+          </div>
+        </div>
+        <p id="a_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="a_cancel" class="btn-secondary">Cancelar</button>
+          <button id="a_save" class="btn-primary">Registrar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <!-- Modal: normalizar -->
+  {puedeOperar && abierto && (
+    <div id="normModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5">
+        <h2 class="font-semibold text-slate-800">Normalizar el episodio</h2>
+        <p class="mt-1 text-xs text-slate-500">
+          La relectura está en rango. Al cerrar se calculan los minutos fuera de rango entre la detección y ahora:
+          de ahí sale el indicador 8.
+        </p>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="label text-xs">Valor final {unidad ? `(${unidad})` : ""}</label>
+            <input id="n_valor" class="input" type="number" step="0.01" placeholder="55" />
+          </div>
+          <div>
+            <label class="label text-xs">Evaluación de riesgo</label>
+            <textarea id="n_riesgo" class="input" rows="4" placeholder="Causa probable, duración, riesgo de recurrencia…">{e.evaluacionRiesgo ?? ""}</textarea>
+          </div>
+        </div>
+        <p id="n_err" class="mt-2 hidden text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="n_cancel" class="btn-secondary">Cancelar</button>
+          <button id="n_save" class="btn-primary">Normalizar y cerrar</button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ eventoId: e.id, puedeOperar, abierto }) }}>
+    const { eventoId, puedeOperar, abierto } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+    const $ = (id) => document.getElementById(id);
+
+    function fmtDur(min) {
+      const m = Math.abs(Math.round(min));
+      if (m < 60) return m + " min";
+      const h = Math.floor(m / 60), r = m % 60;
+      if (h < 24) return r ? h + " h " + r + " min" : h + " h";
+      const d = Math.floor(h / 24), hr = h % 24;
+      return hr ? d + " d " + hr + " h" : d + " d";
+    }
+    function tick() {
+      const now = Date.now();
+      document.querySelectorAll("[data-reloj]").forEach((el) => {
+        const ms = Number(el.getAttribute("data-reloj"));
+        if (!ms) return;
+        const restante = Math.round((ms - now) / 60000);
+        el.textContent = restante >= 0 ? "faltan " + fmtDur(restante) : "vencido hace " + fmtDur(restante);
+        el.classList.toggle("text-red-600", restante < 0);
+        el.classList.toggle("text-amber-600", restante >= 0 && restante <= 30);
+      });
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    if (puedeOperar) {
+      async function patch(body, okMsg) {
+        const res = await fetch("/api/aop/eventos/" + eventoId, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok) {
+          window.showToast?.(okMsg, "success");
+          return j;
+        }
+        window.showToast?.(typeof j.error === "string" ? j.error : "No se pudo registrar", "error");
+        return null;
+      }
+
+      // Evaluación de riesgo
+      $("riesgoBtn")?.addEventListener("click", async () => {
+        const v = $("riesgo").value.trim();
+        await patch({ operacion: "evaluacion_riesgo", evaluacionRiesgo: v || null }, "Evaluación guardada");
+      });
+
+      // Marcar una acción inmediata del procedimiento
+      document.querySelectorAll(".marcarBtn").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const accion = b.getAttribute("data-accion");
+          const campo = document.querySelector('[data-res="' + b.getAttribute("data-res") + '"]');
+          const res = await fetch("/api/aop/eventos/" + eventoId, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ accion, resultado: campo && campo.value.trim() ? campo.value.trim() : null }),
+          });
+          if (res.ok) { window.showToast?.("Acción registrada con su hora", "success"); location.reload(); }
+          else window.showToast?.("No se pudo registrar la acción", "error");
+        });
+      });
+
+      if (abierto) {
+        // Modal de acción / relectura
+        const am = $("accionModal");
+        const abrirA = (relectura) => {
+          $("a_titulo").textContent = relectura ? "Registrar relectura" : "Registrar acción";
+          $("a_valorWrap").classList.toggle("hidden", !relectura);
+          $("a_accion").value = relectura ? "Volver a medir con el instrumento calibrado" : "";
+          $("a_resultado").value = "";
+          $("a_valor").value = "";
+          $("a_err").classList.add("hidden");
+          am.classList.remove("hidden");
+          am.classList.add("flex");
+          (relectura ? $("a_valor") : $("a_accion")).focus();
+        };
+        const cerrarA = () => { am.classList.add("hidden"); am.classList.remove("flex"); };
+        $("accionBtn")?.addEventListener("click", () => abrirA(false));
+        $("relecturaBtn")?.addEventListener("click", () => abrirA(true));
+        $("a_cancel")?.addEventListener("click", cerrarA);
+        am.addEventListener("click", (ev) => { if (ev.target === am) cerrarA(); });
+
+        $("a_save").addEventListener("click", async () => {
+          const err = $("a_err");
+          err.classList.add("hidden");
+          const accion = $("a_accion").value.trim();
+          if (!accion) {
+            err.textContent = "Escribe la acción.";
+            err.classList.remove("hidden");
+            return;
+          }
+          const body = { accion, resultado: $("a_resultado").value.trim() || null };
+          if (!$("a_valorWrap").classList.contains("hidden") && $("a_valor").value !== "") {
+            body.valorReleido = Number($("a_valor").value);
+          }
+          const res = await fetch("/api/aop/eventos/" + eventoId, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (res.ok) { window.showToast?.("Registrado con su hora", "success"); location.reload(); }
+          else {
+            err.textContent = "No se pudo registrar.";
+            err.classList.remove("hidden");
+          }
+        });
+
+        // Normalizar
+        const nm = $("normModal");
+        $("normalizarBtn")?.addEventListener("click", () => {
+          nm.classList.remove("hidden");
+          nm.classList.add("flex");
+          $("n_valor").focus();
+        });
+        $("n_cancel")?.addEventListener("click", () => { nm.classList.add("hidden"); nm.classList.remove("flex"); });
+        nm.addEventListener("click", (ev) => { if (ev.target === nm) { nm.classList.add("hidden"); nm.classList.remove("flex"); } });
+        $("n_save").addEventListener("click", async () => {
+          const valor = $("n_valor").value === "" ? null : Number($("n_valor").value);
+          const riesgo = $("n_riesgo").value.trim() || null;
+          const j = await patch({ operacion: "normalizar", valorFinal: valor, evaluacionRiesgo: riesgo }, "Episodio normalizado");
+          if (j) location.reload();
+        });
+
+        // Escalar
+        $("escalarBtn")?.addEventListener("click", async () => {
+          const ok = await window.confirmAction?.(
+            "Escalar el episodio",
+            "No se restableció en el tiempo tolerable. Queda registrado con la hora y se avisa al nivel superior.",
+            { danger: true, confirmLabel: "Escalar" },
+          );
+          if (!ok) return;
+          const j = await patch({ operacion: "escalar" }, "Episodio escalado");
+          if (j) location.reload();
+        });
+
+        // Pasa a EOP
+        $("eopBtn")?.addEventListener("click", async () => {
+          const ok = await window.confirmAction?.(
+            "Pasar a EOP",
+            "Se alcanzó el criterio de emergencia del procedimiento. El episodio deja de ser un AOP y lo conduce el EOP.",
+            { danger: true, confirmLabel: "Pasa a EOP" },
+          );
+          if (!ok) return;
+          const j = await patch({ operacion: "paso_a_eop" }, "Pasó a EOP");
+          if (j) location.reload();
+        });
+      }
+    }
+  </script>
+</Layout>

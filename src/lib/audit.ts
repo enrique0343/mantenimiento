@@ -4,7 +4,11 @@ import { getDb } from "./db";
 import { auditLog } from "./schema";
 
 export type Accion = "create" | "update" | "delete" | "estado" | "asignacion";
-export type Entidad = "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto" | "contrato";
+export type Entidad =
+  | "activo" | "plan" | "orden" | "extintor" | "actividad" | "vehiculo" | "proyecto" | "contrato"
+  // Fase 52: las paradas de la ronda de turno también se auditan, porque
+  // cambiar el valor normal de un punto cambia cuándo el sistema avisa.
+  | "ronda_punto" | "ronda";
 
 export interface DiffEntry {
   antes: unknown;

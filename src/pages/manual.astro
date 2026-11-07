@@ -1,5 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -9,7 +11,28 @@ type Seccion = { icono: string; titulo: string; solo?: "adminjefe"; pasos: { t: 
 
 const secciones: Seccion[] = [
   {
-    icono: "🎫",
+    icono: "",
+    titulo: "Modo técnico: el trabajo desde el celular",
+    pasos: [
+      { t: "Entrar", d: "Abre mantenimiento.complejoavante.dev en Android o iPhone con tu usuario. Puedes agregarla a la pantalla de inicio: desde Ayuda en Android y con Compartir → Agregar a inicio en iPhone." },
+      { t: "Hoy", d: "Muestra una sola cosa por hacer: primero la ronda del turno y luego tu siguiente orden. Debajo está el resto del día, agrupado por ubicación." },
+      { t: "Tiempos", d: "«Empezar» arranca el cronómetro. Cada paso queda con su hora. «Pausar» detiene el tiempo de trabajo y pide el motivo. Con eso se escribe solo el reporte de mantenimiento." },
+      { t: "Buscar equipo", d: "Para un mantenimiento que no está en la lista: sede → ubicación → equipo. El escaneo de códigos está inhabilitado hasta que los equipos tengan su etiqueta GS1 Data Matrix." },
+      { t: "Reportar falla", d: "Eliges el equipo o el sistema y el sistema dice qué documento manda y las tres primeras acciones. La emergencia y el correctivo quedan abiertos con su hora." },
+      { t: "Sin señal", d: "Sigue trabajando. Todo se guarda en el celular con la hora real y se envía solo cuando vuelve la señal. Solo buscar un equipo por primera vez y abrir una orden nueva desde la búsqueda necesitan señal." },
+    ],
+  },
+  {
+    icono: "",
+    solo: "adminjefe",
+    titulo: "Reporte de mantenimiento",
+    pasos: [
+      { t: "De una orden", d: "En la orden, «Reporte de mantenimiento»: equipo, inicio, fin, tiempo de trabajo, pausas, cada paso con su hora, lecturas, novedades, fotos y firmas. Se imprime o se guarda en PDF." },
+      { t: "De un periodo", d: "Indicadores y reportes → Reportes → «Reporte de mantenimiento». Filtra por fecha, sede, área, técnico y tipo. Se imprime o se descarga en CSV." },
+    ],
+  },
+  {
+    icono: "",
     titulo: "Tickets — reportar un problema",
     pasos: [
       { t: "Crear un ticket", d: "Menú Tickets → «+ Nuevo ticket». Describe el problema, indica la sede/ubicación y adjunta foto si ayuda. El equipo de mantenimiento lo recibe al instante." },
@@ -18,55 +41,55 @@ const secciones: Seccion[] = [
     ],
   },
   {
-    icono: "📋",
+    icono: "",
     titulo: "Órdenes de trabajo (OT)",
     pasos: [
-      { t: "Crear una OT", d: "Menú Órdenes → «+ Nueva orden». Elige tipo (correctivo/preventivo), prioridad, equipo y técnico asignado." },
-      { t: "Ejecutar una OT (técnico)", d: "Desde Mi panel o Órdenes → «Asignadas a mí». Abre la OT, pulsa «Iniciar», completa el checklist y al terminar pulsa «Completar». Las fotos de antes/después son opcionales." },
+      { t: "Crear una OT", d: "Menú Órdenes → «+ Nueva orden». Elige tipo (correctivo/preventivo), prioridad, equipo y técnico asignado. Cada orden tiene un código fijo: OT-MG0001 en Mantenimiento General y OT-MB0001 en Biomédico." },
+      { t: "Ejecutar una OT (técnico)", d: "En el celular, Hoy → «Empezar». Cada paso se marca con «Hecho» y al final «Enviar a verificación». Las intervenciones y emergencias se trabajan en la ficha completa de la orden." },
       { t: "Seguimiento", d: "La columna «Días» muestra cuánto lleva asignada cada OT con semáforo de colores. Usa «Ver cerradas» para consultar el histórico." },
-      { t: "Cierre administrativo (solo admin)", d: "Para OTs que se trabajaron fuera del sistema: botón 🔒 en la OT o selección múltiple en la lista. Se cierra con un motivo y dispara la encuesta de satisfacción normal." },
+      { t: "Cierre administrativo (solo admin)", d: "Para OTs que se trabajaron fuera del sistema: botón en la OT o selección múltiple en la lista. Se cierra con un motivo y dispara la encuesta de satisfacción normal." },
     ],
   },
   {
-    icono: "📅",
+    icono: "",
     titulo: "Cronograma y Gantt — planificar preventivos",
     pasos: [
       { t: "Vista por fechas", d: "Menú Cronograma: muestra lo vencido y lo que viene en 7/15/30 días. Usa el selector de sede para ver solo un hospital." },
       { t: "Vista Gantt", d: "Menú Gantt: los 12 meses de cada rutina proyectados según su frecuencia. «2×» significa dos veces ese mes; rojo = vencido; ámbar = equipo crítico." },
       { t: "Asignar técnico y fecha (jefe/admin)", d: "Directo en las tarjetas del Cronograma: cambia el técnico en el selector o la fecha en el campo de fecha — se guarda al instante." },
-      { t: "Generar la OT del preventivo", d: "Botón «⚡ Generar OT» en la tarjeta cuando quieras crearla manualmente; si no, el sistema la genera solo al vencer la fecha." },
+      { t: "Generar la OT del preventivo", d: "Botón «Generar OT» en la tarjeta cuando quieras crearla manualmente; si no, el sistema la genera solo al vencer la fecha." },
     ],
   },
   {
-    icono: "🛠",
+    icono: "",
     titulo: "Equipos e inventario de activos",
     pasos: [
-      { t: "Registrar un equipo", d: "Entra en el área de mantenimiento → Equipos → «+ Registrar equipo». El código interno y su QR se asignan automáticamente. Los campos del formulario son opcionales; puedes completar los datos después. Los textos se guardan en mayúsculas aunque escribas o pegues en minúsculas." },
+      { t: "Registrar un equipo", d: "Entra en el área de mantenimiento → Equipos → «+ Registrar equipo». El código interno se asigna automáticamente. Los campos del formulario son opcionales; puedes completar los datos después. Los textos se guardan en mayúsculas aunque escribas o pegues en minúsculas." },
       { t: "Programar su preventivo", d: "En la lista de Equipos, columna Cronograma → «+ Programar»: eliges fecha y frecuencia, y queda en el cronograma." },
       { t: "Hoja de vida", d: "Entra al equipo para ver su historial completo: OTs, planes, documentos y trazabilidad." },
     ],
   },
   {
-    icono: "❄️",
+    icono: "",
     titulo: "Catálogo de aires acondicionados",
     pasos: [
       { t: "Crear una ficha reutilizable", d: "Entra en Aire acondicionado → Catálogo de aires → «Crear ficha de modelo». Registra una sola vez el nombre, marca, modelo, categoría y características comunes: tipo de unidad, capacidad y refrigerante. Solo el nombre de la ficha es obligatorio. Administración y técnicos pueden gestionar el catálogo." },
-      { t: "Registrar cada unidad", d: "Desde la ficha pulsa «Registrar unidad», o selecciona una ficha del catálogo al registrar una unidad de aire. Se completan sus características comunes y puedes ajustarlas. Agrega la serie, ubicación y demás datos propios de esa unidad cuando los tengas; su código interno y QR se generan automáticamente." },
+      { t: "Registrar cada unidad", d: "Desde la ficha pulsa «Registrar unidad», o selecciona una ficha del catálogo al registrar una unidad de aire. Se completan sus características comunes y puedes ajustarlas. Agrega la serie, ubicación y demás datos propios de esa unidad cuando los tengas; su código interno se genera automáticamente." },
       { t: "Registrar varias unidades del mismo modelo", d: "Usa «Guardar y registrar otra unidad» para guardar el registro actual y abrir el siguiente con la misma ficha seleccionada. La serie, ubicación y demás datos particulares quedan vacíos para evitar repetirlos por error." },
       { t: "Conservar la trazabilidad", d: "Cada unidad conserva su ficha individual, mantenimientos y la versión del catálogo utilizada al registrarla. Editar una ficha crea una nueva versión sin modificar las unidades anteriores. En la ficha del catálogo puedes consultar las unidades registradas y el historial de cambios con fecha y responsable." },
       { t: "Archivar una ficha", d: "Si ya no utilizarás un modelo para nuevas unidades, archiva su ficha. Desaparece de las opciones de registro, pero conserva sus unidades e historial. Puedes consultarla con «Incluir archivadas» y reactivarla después." },
     ],
   },
   {
-    icono: "📌",
+    icono: "",
     titulo: "Actividades recurrentes (limpieza, puertas, fumigación…)",
     pasos: [
       { t: "¿Qué va aquí?", d: "Mantenimientos que no son de un equipo específico: lubricación de puertas, limpieza de tanques, jardinería, trampas de grasa, etc." },
-      { t: "Crear una actividad", d: "Menú Actividades → «+ Nueva». Elige categoría (🚪 Puertas, 🧹 Limpieza…), sede, frecuencia y responsable. Genera OTs automáticamente igual que los planes de equipos." },
+      { t: "Crear una actividad", d: "Menú Actividades → «+ Nueva». Elige categoría (Puertas, Limpieza…), sede, frecuencia y responsable. Genera OTs automáticamente igual que los planes de equipos." },
     ],
   },
   {
-    icono: "⚡",
+    icono: "",
     titulo: "Control eléctrico",
     pasos: [
       { t: "Registrar subestaciones", d: "Menú Eléctrico → «+ Nueva subestación»: sede, capacidad en kVA y voltaje. (Solo admin/jefe editan.)" },
@@ -75,43 +98,43 @@ const secciones: Seccion[] = [
     ],
   },
   {
-    icono: "📄",
+    icono: "",
     titulo: "Plan anual de mantenimiento",
     pasos: [
-      { t: "Generar el documento", d: "Menú Plan anual: se arma solo con los datos del sistema (rutinas, rubros, presupuesto). Elige la sede y pulsa «🖨 Imprimir / PDF»." },
-      { t: "Personalizar los textos (jefe/admin)", d: "Botón «✎ Editar textos»: introducción, objetivos, normativa, firmantes y código del documento. Se guardan para siempre." },
+      { t: "Generar el documento", d: "Menú Plan anual: se arma solo con los datos del sistema (rutinas, rubros, presupuesto). Elige la sede y pulsa «Imprimir / PDF»." },
+      { t: "Personalizar los textos (jefe/admin)", d: "Botón «Editar textos»: introducción, objetivos, normativa, firmantes y código del documento. Se guardan para siempre." },
     ],
   },
   {
-    icono: "💰",
+    icono: "",
     titulo: "Presupuesto de mantenimiento",
     solo: "adminjefe",
     pasos: [
-      { t: "Definir el presupuesto del año", d: "Menú Presupuesto → «⚙ Definir presupuestos»: monto anual por categoría (infraestructura, aires acondicionados, equipo general, equipo biomédico)." },
+      { t: "Definir el presupuesto del año", d: "Menú Presupuesto → «Definir presupuestos»: monto anual por categoría (infraestructura, aires acondicionados, equipo general, equipo biomédico)." },
       { t: "Registrar gastos", d: "«+ Registrar gasto» con fecha, rubro, monto y referencia (factura/contrato). Las barras muestran el % ejecutado con semáforo." },
     ],
   },
   {
-    icono: "🛍",
+    icono: "",
     titulo: "Compras y proveedores",
     pasos: [
       { t: "Solicitar una compra", d: "Menú Compras → «+ Nueva solicitud»: describe lo que necesitas (puede vincularse a una OT). El admin la autoriza y marca cuando se compró." },
-      { t: "Inventario de repuestos", d: "Menú Inventario: existencias y stock mínimo. Cuando un ítem cae bajo el mínimo aparece el botón «⚠ Reabastecer»." },
+      { t: "Inventario de repuestos", d: "Menú Inventario: existencias y stock mínimo. Cuando un ítem cae bajo el mínimo aparece el botón «Reabastecer»." },
       { t: "Contratos de mantenimiento (jefe/admin)", d: "Menú Contratos: registra cada contrato con proveedor, vigencia y costo. El sistema avisa 90/60/30 días antes del vencimiento." },
     ],
   },
   {
-    icono: "✅",
+    icono: "✓",
     titulo: "Cumplimiento JCI y alertas de equipo",
     solo: "adminjefe",
     pasos: [
       { t: "Panel de cumplimiento (FMS.07)", d: "Menú Cumplimiento: cobertura preventiva del equipo biomédico, preventivos y calibraciones vencidas, por subcategoría y sede. Los «sin plan» son tu lista de trabajo. Imprime la evidencia para auditorías." },
       { t: "Alertas y retiros (FMS.07.1)", d: "Menú Alertas equipo: registra recalls y avisos de fabricantes con los equipos afectados. Para cerrar una alerta el sistema exige documentar la acción tomada." },
-      { t: "Hoja de vida por equipo", d: "En la ficha de cada equipo → «📄 Hoja de vida»: documento imprimible con datos de placa, planes, historial de OTs y calibraciones — lo que pide el auditor equipo por equipo." },
+      { t: "Hoja de vida por equipo", d: "En la ficha de cada equipo → «Hoja de vida»: documento imprimible con datos de placa, planes, historial de OTs y calibraciones — lo que pide el auditor equipo por equipo." },
     ],
   },
   {
-    icono: "📊",
+    icono: "",
     titulo: "KPIs y satisfacción",
     solo: "adminjefe",
     pasos: [
@@ -120,7 +143,7 @@ const secciones: Seccion[] = [
     ],
   },
   {
-    icono: "👤",
+    icono: "",
     titulo: "Usuarios y roles",
     solo: "adminjefe",
     pasos: [
@@ -140,32 +163,33 @@ const guiaRol: Record<string, { titulo: string; items: string[] }> = {
   },
   tecnico: {
     titulo: "Tu flujo como técnico",
-    items: ["1. Revisa Mi panel al iniciar el día: ahí están tus OTs", "2. Abre la OT → «Iniciar» → completa el checklist → «Completar»", "3. En Cronograma ves tus preventivos próximos"],
+    items: ["1. Al entrar de turno, abre Hoy y haz la ronda", "2. Frente al equipo, toca «Empezar» y marca cada paso con «Hecho»", "3. Para un equipo que no está en tu lista: Buscar equipo, por sede y ubicación", "4. Si algo falla: Reportar falla te dice qué documento manda y qué hacer primero"],
   },
   jefe: {
     titulo: "Tu flujo como jefe",
-    items: ["1. Dashboard para el estado general del día", "2. Tickets nuevos → generar OT y asignar técnico", "3. Cronograma/Gantt para planificar; asigna técnico y fecha en la misma tarjeta", "4. KPIs y Presupuesto para el control gerencial", "5. Plan anual cuando te pidan el documento formal"],
+    items: ["1. Panorama para el estado del día: lo primero es si se hizo la ronda de cada sede", "2. Ronda de turno: tablero por sede, desviaciones con su reloj y registros sin aceptar. Cada semana, firma la revisión", "3. Tickets nuevos → generar OT y asignar técnico", "4. Cronograma/Gantt para planificar; asigna técnico y fecha en la misma tarjeta", "5. KPIs y Presupuesto para el control gerencial", "6. Plan anual cuando te pidan el documento formal"],
   },
   admin: {
     titulo: "Tu flujo como administrador",
-    items: ["1. Todo lo del jefe, más: Usuarios, Configuración y cierres administrativos 🔒", "2. Presupuesto: define montos anuales y registra gastos", "3. Plan anual: edita los textos institucionales una vez y genera el PDF cuando lo pidan"],
+    items: ["1. Todo lo del jefe, más: Usuarios, Configuración y cierres administrativos ", "2. Presupuesto: define montos anuales y registra gastos", "3. Plan anual: edita los textos institucionales una vez y genera el PDF cuando lo pidan"],
   },
 };
 const guia = guiaRol[user.rol] ?? null;
 ---
 
 <Layout title="Manual de usuario">
+  <DocCabecera soloImpresion titulo="Manual de usuario" subtitulo="Plataforma de mantenimiento" />
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📖 Manual de usuario</h1>
+      <h1 class="text-2xl font-bold">Manual de usuario</h1>
       <p class="mt-1 text-sm text-slate-500">Guía rápida de la plataforma de mantenimiento de Avante.</p>
     </div>
-    <button onclick="window.print()" class="btn-secondary no-print">🖨 Imprimir</button>
+    <button onclick="window.print()" class="btn-secondary no-print">Imprimir</button>
   </div>
 
   {guia && (
     <div class="card mt-4 p-5 border-l-4 border-brand-600">
-      <h2 class="font-semibold text-slate-800">👋 {guia.titulo}</h2>
+      <h2 class="font-semibold text-slate-800">{guia.titulo}</h2>
       <ul class="mt-2 space-y-1.5 text-sm text-slate-700">
         {guia.items.map((i) => <li>{i}</li>)}
       </ul>
@@ -176,9 +200,8 @@ const guia = guiaRol[user.rol] ?? null;
     {visibles.map((s) => (
       <details class="card overflow-hidden group">
         <summary class="flex items-center gap-3 px-5 py-3.5 cursor-pointer select-none hover:bg-slate-50 font-semibold text-slate-800 text-sm">
-          <span class="text-lg">{s.icono}</span>
           <span class="flex-1">{s.titulo}</span>
-          <span class="text-slate-400 text-xs group-open:rotate-90 transition-transform">▶</span>
+          <span class="text-slate-400 text-xs group-open:rotate-90 transition-transform">›</span>
         </summary>
         <div class="border-t border-slate-100 px-5 py-4">
           <dl class="space-y-3">
@@ -195,10 +218,12 @@ const guia = guiaRol[user.rol] ?? null;
   </div>
 
   <div class="card mt-5 p-4 text-xs text-slate-500 leading-relaxed">
-    <span class="font-semibold text-slate-600">💡 Atajos útiles:</span>
+    <span class="font-semibold text-slate-600">Atajos útiles:</span>
     <kbd class="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd> / <kbd class="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 font-mono text-[10px]">Ctrl+K</kbd> abre la búsqueda global (OTs, equipos, tickets, repuestos) ·
-    la 🔔 campana muestra tus notificaciones · en móvil el menú se abre con ☰.
+    la campana muestra tus notificaciones · en móvil el menú se abre con ☰.
   </div>
+
+  <DocFolio soloImpresion codigo="Manual de usuario" />
 
   <style is:global>
     @media print {

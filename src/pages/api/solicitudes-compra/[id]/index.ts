@@ -140,7 +140,7 @@ export const PATCH: APIRoute = async (ctx) => {
       const [creador] = await db.select({ id: usuarios.id, nombre: usuarios.nombre, email: usuarios.email })
         .from(usuarios).where(eq(usuarios.id, actual.creadoPor)).limit(1);
       if (creador) {
-        const estadoLabel = parsed.data.estado === "comprada" ? "✅ aprobada/comprada" : "❌ rechazada";
+        const estadoLabel = parsed.data.estado === "comprada" ? "✓ aprobada/comprada" : "✕ rechazada";
         // Notificación in-app (campanita) — sigue activa
         await crearNotificacion(ctx, {
           usuarioId: creador.id,
@@ -156,7 +156,7 @@ export const PATCH: APIRoute = async (ctx) => {
         /*
         if (creador.email) {
           const env = (ctx.locals as any)?.runtime?.env ?? {};
-          const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+          const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
           ctx.locals.runtime.ctx.waitUntil(
             sendMail(ctx, {
               to: creador.email,

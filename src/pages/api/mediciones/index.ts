@@ -6,7 +6,7 @@ import { mediciones, variablesPredictivas, ordenes, activos } from "@/lib/schema
 import { requireUser } from "@/lib/auth";
 import { evaluarMedicion } from "@/lib/predictivo";
 import { rubroDeActivo } from "@/lib/rubros";
-import { validarContextoArea } from "@/lib/ordenes";
+import { conCodigo, validarContextoArea } from "@/lib/ordenes";
 
 export const prerender = false;
 
@@ -65,7 +65,7 @@ export const POST: APIRoute = async (ctx) => {
         creadoPor: user.id,
       })
       .returning();
-    ordenAuto = orden;
+    ordenAuto = await conCodigo(db, orden);
   }
 
   return Response.json({ medicion: med, ordenAutomatica: ordenAuto }, { status: 201 });

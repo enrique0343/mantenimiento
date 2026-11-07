@@ -6,6 +6,7 @@ import { actividades, actividadCategorias, sucursales, ubicaciones, usuarios, pr
 import { eq, desc } from "drizzle-orm";
 import { estadoFecha, ESTADO_FECHA_COLOR, FRECUENCIA_LABEL, diasParaFecha, puedeAdministrarActividades } from "@/lib/actividades";
 import { ESTADO_LABEL, ESTADO_COLOR, PRIO_COLOR, parseChecklist, type EstadoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref, AREAS } from "@/lib/areas";
 import { areaDeActividad } from "@/lib/actividades";
 export const prerender = false;
@@ -91,7 +92,7 @@ const dias = diasParaFecha(a.proximaFecha);
           <h2 class="font-semibold text-slate-900">Checklist plantilla</h2>
           <p class="text-xs text-slate-500">Se copia a cada OT generada para que el técnico lo ejecute.</p>
           <ul class="mt-3 space-y-1 text-sm">
-            {checklist.map((it) => <li class="flex items-start gap-2"><span class="text-slate-400">▢</span> {it.texto}</li>)}
+            {checklist.map((it) => <li class="flex items-start gap-2"><span class="text-slate-400">□</span> {it.texto}</li>)}
           </ul>
         </div>
       )}
@@ -102,8 +103,8 @@ const dias = diasParaFecha(a.proximaFecha);
         <div class="card p-5">
           <h2 class="font-semibold text-slate-900">Acciones</h2>
           <div class="mt-3 space-y-2">
-            <button id="generarBtn" class="btn-primary w-full justify-center text-sm">⚡ Generar OT ahora</button>
-            <button id="reprogramarBtn" class="btn-secondary w-full justify-center text-sm">📅 Reprogramar próxima fecha</button>
+            <button id="generarBtn" class="btn-primary w-full justify-center text-sm">Generar OT ahora</button>
+            <button id="reprogramarBtn" class="btn-secondary w-full justify-center text-sm">Reprogramar próxima fecha</button>
             <button id="darBajaBtn" class="text-xs text-red-500 hover:underline">Dar de baja la actividad</button>
           </div>
           <p id="actMsg" class="mt-2 hidden text-xs"></p>
@@ -118,7 +119,7 @@ const dias = diasParaFecha(a.proximaFecha);
     <table class="w-full text-left text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
-          <th class="px-4 py-2">#</th>
+          <th class="px-4 py-2">OT</th>
           <th class="px-4 py-2">Título</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2">Vencimiento</th>
@@ -129,7 +130,7 @@ const dias = diasParaFecha(a.proximaFecha);
         {ots.length === 0 && <tr><td colspan="5" class="px-4 py-6 text-center text-slate-400">Sin OTs aún. Se generarán al llegar la próxima fecha.</td></tr>}
         {ots.map((o) => (
           <tr class="hover:bg-slate-50">
-            <td class="px-4 py-2 font-mono text-xs">#{o.id}</td>
+            <td class="px-4 py-2 font-mono text-xs whitespace-nowrap">{etiquetaOT(o)}</td>
             <td class="px-4 py-2"><a class="text-brand-700 hover:underline" href={areaHref(`/ordenes/${o.id}`, area)}>{o.titulo}</a></td>
             <td class="px-4 py-2"><span class={`badge ${ESTADO_COLOR[o.estado as EstadoOT]}`}>{ESTADO_LABEL[o.estado as EstadoOT]}</span></td>
             <td class="px-4 py-2 text-xs text-slate-600">{fmtFull(o.vencimiento)}</td>
@@ -166,7 +167,8 @@ const dias = diasParaFecha(a.proximaFecha);
       const res = await fetch(`/api/actividades/${id}/generar-ot?area=${area ?? ""}`, { method: "POST" });
       if (!res.ok) { showMsg("Error al generar", false); return; }
       const j = await res.json();
-      if (confirm(`OT #${j.orden.id} generada. ¿Abrirla?`)) location.href = `/ordenes/${j.orden.id}?area=${area ?? ""}`;
+      const etiqueta = j.orden.codigo || `OT #${j.orden.id}`;
+      if (confirm(`${etiqueta} generada. ¿Abrirla?`)) location.href = `/ordenes/${j.orden.id}?area=${area ?? ""}`;
       else location.reload();
     });
 

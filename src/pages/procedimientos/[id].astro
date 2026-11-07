@@ -1,0 +1,901 @@
+---
+import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import {
+  procedimientos,
+  procedimientoCampos,
+  procedimientoEscalamientos,
+  procedimientoValidaciones,
+  procedimientoVersiones,
+  sucursales,
+  usuarios,
+} from "@/lib/schema";
+import { asc, eq } from "drizzle-orm";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import {
+  AREAS_VALIDADORAS,
+  AREAS_ADICIONALES,
+  ESTADO_PROC,
+  SEMANAS_VALIDACION,
+  TIPO_PROC,
+  colorProgreso,
+  exigeSimulacroDeMesa,
+  hoyISO,
+  progresoValidacion,
+  puedeAdministrarProcedimientos,
+  puedeSerVigente,
+  puedeVerProcedimientos,
+  sistemaInfo,
+  type EstadoProc,
+  type SemanaValidacion,
+  type SistemaProc,
+  type TipoProc,
+} from "@/lib/procedimientos";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerProcedimientos(user.rol)) return Astro.redirect("/");
+const esAdmin = puedeAdministrarProcedimientos(user.rol);
+
+const db = getDb(Astro);
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id)) return Astro.redirect("/procedimientos");
+
+const [row] = await db
+  .select({ p: procedimientos, resp: usuarios, suc: sucursales })
+  .from(procedimientos)
+  .leftJoin(usuarios, eq(usuarios.id, procedimientos.responsableId))
+  .leftJoin(sucursales, eq(sucursales.id, procedimientos.sucursalId))
+  .where(eq(procedimientos.id, id));
+
+if (!row) return Astro.redirect("/procedimientos");
+const p = row.p;
+
+const campos = await db
+  .select()
+  .from(procedimientoCampos)
+  .where(eq(procedimientoCampos.procedimientoId, id))
+  .orderBy(asc(procedimientoCampos.orden), asc(procedimientoCampos.id));
+
+const validaciones = await db
+  .select({ v: procedimientoValidaciones, u: usuarios })
+  .from(procedimientoValidaciones)
+  .leftJoin(usuarios, eq(usuarios.id, procedimientoValidaciones.validadoPor))
+  .where(eq(procedimientoValidaciones.procedimientoId, id))
+  .orderBy(asc(procedimientoValidaciones.fechaProgramada), asc(procedimientoValidaciones.id));
+
+const versiones = await db
+  .select({ v: procedimientoVersiones, u: usuarios })
+  .from(procedimientoVersiones)
+  .leftJoin(usuarios, eq(usuarios.id, procedimientoVersiones.responsableId))
+  .where(eq(procedimientoVersiones.procedimientoId, id))
+  .orderBy(asc(procedimientoVersiones.fecha), asc(procedimientoVersiones.id));
+
+const escalamientos = await db
+  .select()
+  .from(procedimientoEscalamientos)
+  .where(eq(procedimientoEscalamientos.procedimientoId, id))
+  .orderBy(asc(procedimientoEscalamientos.orden), asc(procedimientoEscalamientos.minutos));
+
+const avance = progresoValidacion(campos, validaciones.map((r) => r.v));
+const veredicto = puedeSerVigente(campos, validaciones.map((r) => r.v));
+
+const [aprobador] = p.aprobadoPor
+  ? await db.select({ nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.id, p.aprobadoPor))
+  : [];
+
+const t = TIPO_PROC[p.tipo as TipoProc];
+const sis = sistemaInfo(p.sistema as SistemaProc);
+const est = ESTADO_PROC[p.estado as EstadoProc];
+const semana = p.semanaValidacion ? SEMANAS_VALIDACION[p.semanaValidacion as SemanaValidacion] : null;
+const hoy = hoyISO();
+const revisionVencida = p.proximaRevision != null && p.proximaRevision < hoy;
+
+const ESTADO_VAL = {
+  pendiente: { label: "Pendiente", color: "bg-slate-100 text-slate-600", icono: "" },
+  validado: { label: "Validado", color: "bg-emerald-100 text-emerald-700", icono: "✓" },
+  observado: { label: "Observado", color: "bg-amber-100 text-amber-700", icono: "" },
+} as const;
+
+const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
+const veredictoJson = JSON.stringify(veredicto);
+---
+
+<Layout title={`${p.codigoCorto} · ${p.titulo}`}>
+  <a href="/procedimientos" class="text-sm text-slate-500 hover:underline">← Biblioteca de procedimientos</a>
+
+  <!-- Cabecera documental -->
+  <div class:list={["card mt-3 border-l-4 p-5", t.borde]}>
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-mono text-sm font-bold text-slate-900">{p.codigoCorto}</span>
+          <span class:list={["badge", t.color]}>{t.icono} {t.label} · {t.nombre}</span>
+          <span class:list={["badge", sis.color]}>{sis.icono} {sis.label}</span>
+          <span class:list={["badge", est.color]}>{est.icono} {est.label}</span>
+          {p.nivelRiesgo === "alto" && <span class="badge bg-red-100 text-red-700">Riesgo alto</span>}
+        </div>
+        <h1 class="mt-2 text-2xl font-bold text-slate-900">{p.titulo}</h1>
+        <p class="mt-1 text-xs italic text-slate-500">{t.pregunta}</p>
+      </div>
+      {esAdmin && (
+        <div class="flex flex-wrap gap-2">
+          {p.estado !== "vigente" && (
+            <button id="vigenciaBtn" class="btn-primary btn-sm">✓ Poner en vigencia</button>
+          )}
+          {p.estado === "borrador" && (
+            <button class="estado-btn btn-secondary btn-sm" data-estado="en_validacion">Enviar a validación</button>
+          )}
+          {p.estado === "vigente" && (
+            <button class="estado-btn btn-secondary btn-sm" data-estado="en_revision">Abrir revisión</button>
+          )}
+          <button id="editarBtn" class="btn-secondary btn-sm">Editar cabecera</button>
+        </div>
+      )}
+    </div>
+
+    <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Código institucional</dt>
+        <dd class="font-mono text-slate-800">
+          {p.codigoInstitucional ?? <span class="text-amber-600">pendiente de control documental</span>}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Versión</dt>
+        <dd class="font-mono text-slate-800">{p.version}</dd>
+      </div>
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Dueño del documento</dt>
+        <dd class="text-slate-800">
+          {row.resp?.nombre ?? <span class="text-red-600">sin dueño</span>}
+          {p.suplenteCargo && <span class="block text-[11px] text-slate-400">Suplente: {p.suplenteCargo}</span>}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Sede</dt>
+        <dd class="text-slate-800">{row.suc?.nombre ?? "Modelo (sin sede)"}</dd>
+      </div>
+      <div class="col-span-2">
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Norma adoptada</dt>
+        <dd class="text-slate-800">
+          {p.normaAdoptada ?? (
+            <span class="text-amber-600">
+              sin declarar: sin esa declaración los valores son referencias, no requisitos
+            </span>
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Próxima revisión</dt>
+        <dd class:list={[revisionVencida ? "font-semibold text-red-600" : "text-slate-800"]}>
+          {fmtFechaSoloCompacta(p.proximaRevision)}
+          {revisionVencida && <span class="block text-[11px]">vencida</span>}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-[11px] uppercase tracking-wide text-slate-400">Aprobación</dt>
+        <dd class="text-slate-800">
+          {p.aprobadoEn
+            ? `${fmtFechaSoloCompacta(p.aprobadoEn)}${aprobador ? ` · ${aprobador.nombre}` : ""}`
+            : "—"}
+        </dd>
+      </div>
+      {semana && (
+        <div class="col-span-2">
+          <dt class="text-[11px] uppercase tracking-wide text-slate-400">Semana de validación</dt>
+          <dd class="text-slate-800">
+            {semana.label}
+            {exigeSimulacroDeMesa(p.tipo) && <span class="text-[11px] text-slate-500"> · con simulacro de mesa</span>}
+            <span class="block text-[11px] text-slate-400">{semana.detalle}</span>
+          </dd>
+        </div>
+      )}
+      {p.proposito && (
+        <div class="col-span-2 sm:col-span-3 lg:col-span-4">
+          <dt class="text-[11px] uppercase tracking-wide text-slate-400">Propósito</dt>
+          <dd class="text-slate-700">{p.proposito}</dd>
+        </div>
+      )}
+      {p.alcance && (
+        <div class="col-span-2 sm:col-span-3 lg:col-span-4">
+          <dt class="text-[11px] uppercase tracking-wide text-slate-400">Alcance</dt>
+          <dd class="text-slate-700">{p.alcance}</dd>
+        </div>
+      )}
+      {p.referencias && (
+        <div class="col-span-2 sm:col-span-3 lg:col-span-4">
+          <dt class="text-[11px] uppercase tracking-wide text-slate-400">Referencias verificables</dt>
+          <dd class="text-xs text-slate-600">{p.referencias}</dd>
+        </div>
+      )}
+      {p.registro && (
+        <div class="col-span-2 sm:col-span-3 lg:col-span-4">
+          <dt class="text-[11px] uppercase tracking-wide text-slate-400">Registro</dt>
+          <dd class="text-xs text-slate-600">{p.registro}</dd>
+        </div>
+      )}
+    </dl>
+  </div>
+
+  <!-- Avance y regla dura -->
+  <div class="card mt-4 p-5">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h2 class="font-semibold text-slate-900">Avance de validación</h2>
+      <span id="avancePct" class="text-2xl font-bold text-slate-700">{avance.pct}%</span>
+    </div>
+    <div class="mt-2 h-3 overflow-hidden rounded-full bg-slate-200">
+      <div id="avanceBar" class={`h-full ${colorProgreso(avance.pct)}`} style={`width:${avance.pct}%`}></div>
+    </div>
+    <div class="mt-2 grid grid-cols-2 gap-3 text-xs text-slate-600 sm:grid-cols-4">
+      <div>Campos en azul: <strong id="avanceCampos">{avance.camposLlenos}/{avance.camposTotal}</strong></div>
+      <div>Áreas que confirmaron: <strong>{avance.areasValidadas}/{avance.areasTotal}</strong></div>
+      <div>Pendientes: <strong>{avance.areasPendientes}</strong></div>
+      <div>Con observación: <strong>{avance.areasObservadas}</strong></div>
+    </div>
+
+    {veredicto.ok ? (
+      <p class="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
+        ✓ Cumple la regla del capítulo 8.1: todos los campos en azul tienen valor y ninguna área queda pendiente.
+        Puede entrar en vigencia.
+      </p>
+    ) : (
+      <div class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+        <p class="font-semibold">No puede entrar en vigencia todavía</p>
+        <ul class="mt-1 list-disc space-y-1 pl-5 text-xs">
+          {veredicto.motivos.map((m) => <li>{m}</li>)}
+        </ul>
+      </div>
+    )}
+    {veredicto.advertencias.length > 0 && (
+      <ul class="mt-2 list-disc pl-5 text-xs text-slate-500">
+        {veredicto.advertencias.map((a) => <li>{a}</li>)}
+      </ul>
+    )}
+  </div>
+
+  <!-- Campos en azul -->
+  <div class="card mt-4 p-5">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">Campos en azul</h2>
+        <p class="text-xs text-slate-500">
+          Los números son de las normas; estos valores son de Avante.
+          <span id="camposResumen" class:list={["font-semibold", avance.camposFaltan > 0 ? "text-amber-700" : "text-emerald-700"]}>
+            {avance.camposTotal === 0
+              ? ""
+              : avance.camposFaltan > 0
+                ? ` Faltan ${avance.camposFaltan} de ${avance.camposTotal}.`
+                : " Todos completos."}
+          </span>
+        </p>
+      </div>
+      {esAdmin && <button id="addCampoBtn" class="btn-secondary btn-sm">+ Campo</button>}
+    </div>
+
+    {campos.length === 0 && (
+      <p class="mt-3 text-sm text-slate-400">
+        Sin campos en azul registrados. Cárgalos desde el recuadro del documento: son los datos que decide cada área.
+      </p>
+    )}
+
+    {campos.length > 0 && (
+      <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+            <tr>
+              <th class="px-3 py-2">Campo</th>
+              <th class="px-3 py-2 w-56">Valor de Avante</th>
+              <th class="px-3 py-2 w-28">Unidad</th>
+              <th class="px-3 py-2">Lo decide</th>
+              {esAdmin && <th class="px-3 py-2 w-16"></th>}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {campos.map((c) => (
+              <tr class:list={["campo-row", !c.valor && "bg-blue-50/60"]} data-cid={c.id}>
+                <td class="px-3 py-2 align-middle font-medium text-slate-800">{c.etiqueta}</td>
+                <td class="px-3 py-2 align-middle">
+                  {esAdmin ? (
+                    <input
+                      class="input campo-valor py-1 text-sm"
+                      value={c.valor ?? ""}
+                      placeholder="pendiente…"
+                      data-cid={c.id}
+                      data-orig={c.valor ?? ""}
+                    />
+                  ) : c.valor ? (
+                    <span class="text-slate-800">{c.valor}</span>
+                  ) : (
+                    <span class="text-amber-700">pendiente</span>
+                  )}
+                </td>
+                <td class="px-3 py-2 align-middle text-xs text-slate-500">{c.unidad ?? "—"}</td>
+                <td class="px-3 py-2 align-middle text-xs text-slate-500">{c.decideArea ?? "—"}</td>
+                {esAdmin && (
+                  <td class="px-3 py-2 align-middle text-right">
+                    <button class="campo-del text-xs text-red-600 hover:underline" data-cid={c.id} data-etq={c.etiqueta}>Eliminar</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {esAdmin && (
+          <p class="mt-2 text-[11px] text-slate-400">
+            Escribe el valor y sal del campo (o pulsa Enter) para guardarlo. Vaciar una celda de un documento vigente lo devuelve a revisión.
+          </p>
+        )}
+      </div>
+    )}
+  </div>
+
+  <!-- Matriz de validación -->
+  <div class="card mt-4 p-5">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <h2 class="font-semibold text-slate-900">Matriz de validación por área</h2>
+        <p class="text-xs text-slate-500">
+          Fecha, responsable y método de verificación por documento (cap. 8.1).
+          {semana && <span> Este documento se valida en la {semana.label.toLowerCase()}.</span>}
+        </p>
+      </div>
+      {esAdmin && <button id="addAreaBtn" class="btn-secondary btn-sm">+ Área</button>}
+    </div>
+
+    <div class="mt-3 overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+          <tr>
+            <th class="px-3 py-2">Área</th>
+            <th class="px-3 py-2">Qué confirma</th>
+            <th class="px-3 py-2 w-24">Programada</th>
+            <th class="px-3 py-2 w-28">Estado</th>
+            <th class="px-3 py-2">Confirmación</th>
+            {esAdmin && <th class="px-3 py-2 w-40"></th>}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {validaciones.length === 0 && (
+            <tr>
+              <td colspan={esAdmin ? 6 : 5} class="px-3 py-6 text-center text-sm text-slate-400">
+                Sin matriz de validación. Un documento sin áreas asignadas no puede entrar en vigor.
+              </td>
+            </tr>
+          )}
+          {validaciones.map(({ v, u }) => {
+            const ev = ESTADO_VAL[v.estado as keyof typeof ESTADO_VAL] ?? ESTADO_VAL.pendiente;
+            const atrasada = v.estado === "pendiente" && v.fechaProgramada < hoy;
+            return (
+              <tr class="align-top">
+                <td class="px-3 py-2 font-medium text-slate-800">{v.area}</td>
+                <td class="px-3 py-2 text-xs text-slate-600">{v.queConfirma ?? "—"}</td>
+                <td class:list={["px-3 py-2 text-xs", atrasada ? "font-semibold text-red-600" : "text-slate-600"]}>
+                  {fmtFechaSoloCompacta(v.fechaProgramada)}
+                  {atrasada && <span class="block text-[10px]">atrasada</span>}
+                </td>
+                <td class="px-3 py-2">
+                  <span class:list={["badge", ev.color]}>{ev.icono} {ev.label}</span>
+                </td>
+                <td class="px-3 py-2 text-xs text-slate-600">
+                  {v.validadoEn ? (
+                    <>
+                      <div>{u?.nombre ?? "—"} · {fmtFechaSoloCompacta(v.validadoEn)}</div>
+                      {v.metodoVerificacion && <div class="text-[11px] text-slate-400">Método: {v.metodoVerificacion}</div>}
+                    </>
+                  ) : (
+                    <span class="text-slate-400">sin confirmar</span>
+                  )}
+                  {v.observaciones && <div class="mt-0.5 text-[11px] text-amber-700">{v.observaciones}</div>}
+                </td>
+                {esAdmin && (
+                  <td class="px-3 py-2 text-right">
+                    <div class="flex flex-wrap justify-end gap-1">
+                      {v.estado !== "validado" && (
+                        <button class="val-btn rounded bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+                                data-vid={v.id} data-area={v.area} data-accion="validado">Validar</button>
+                      )}
+                      {v.estado !== "observado" && (
+                        <button class="val-btn rounded bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
+                                data-vid={v.id} data-area={v.area} data-accion="observado">Observar</button>
+                      )}
+                      {v.estado !== "pendiente" && (
+                        <button class="val-reset rounded bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-200"
+                                data-vid={v.id} data-area={v.area}>Reabrir</button>
+                      )}
+                      <button class="val-del rounded px-1.5 py-1 text-[11px] text-red-600 hover:underline"
+                              data-vid={v.id} data-area={v.area}>Eliminar</button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <!-- Historial de versiones -->
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Historial de versiones</h2>
+      <p class="text-xs text-slate-500">
+        Ningún cambio de un SCP se ejecuta sin actualizar antes el SCP y los MOP afectados (cap. 2.4).
+      </p>
+      {versiones.length === 0 && <p class="mt-3 text-sm text-slate-400">Sin movimientos registrados.</p>}
+      {versiones.length > 0 && (
+        <ol class="mt-3 space-y-2">
+          {versiones.slice().reverse().map(({ v, u }) => (
+            <li class="border-l-2 border-slate-200 pl-3 text-sm">
+              <div class="flex flex-wrap items-baseline gap-2">
+                <span class="font-mono text-xs font-semibold text-slate-700">v{v.version}</span>
+                <span class="text-xs text-slate-400">{fmtFechaSoloCompacta(v.fecha)}</span>
+                {u?.nombre && <span class="text-xs text-slate-400">· {u.nombre}</span>}
+              </div>
+              {v.cambio && <p class="text-xs text-slate-600">{v.cambio}</p>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+
+    <!-- Escalamientos -->
+    <div class="card p-5">
+      <h2 class="font-semibold text-slate-900">Escalamientos</h2>
+      <p class="text-xs text-slate-500">A quién se avisa y en cuántos minutos, si la condición no se corrige.</p>
+      {escalamientos.length === 0 && (
+        <p class="mt-3 text-sm text-slate-400">
+          Sin escalamientos definidos{p.tipo === "aop" || p.tipo === "eop" ? " (este tipo de documento normalmente lleva al menos uno)" : ""}.
+        </p>
+      )}
+      {escalamientos.length > 0 && (
+        <ol class="mt-3 space-y-2">
+          {escalamientos.map((e) => (
+            <li class:list={["rounded-lg border p-2 text-sm", e.esPasoAEop ? "border-red-200 bg-red-50" : "border-slate-200"]}>
+              <div class="flex flex-wrap items-baseline gap-2">
+                <span class="badge bg-slate-100 text-slate-700">{e.minutos} min</span>
+                <span class="font-medium text-slate-800">{e.avisarCargo}</span>
+                {e.esPasoAEop && <span class="badge bg-red-100 text-red-700">pasa a EOP</span>}
+              </div>
+              {e.accion && <p class="mt-0.5 text-xs text-slate-600">{e.accion}</p>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  </div>
+
+  {esAdmin && (
+    <>
+      <!-- Modal confirmar/observar un área -->
+      <div id="valModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-md p-5">
+          <h3 id="v_titulo" class="text-lg font-semibold text-slate-900">Confirmar validación</h3>
+          <p id="v_sub" class="mt-1 text-xs text-slate-500"></p>
+          <input type="hidden" id="v_id" />
+          <input type="hidden" id="v_accion" />
+          <div class="mt-4 space-y-3">
+            <div id="v_metodoWrap">
+              <label class="label text-xs" for="v_metodo">Método de verificación *</label>
+              <input id="v_metodo" class="input" placeholder="Lectura in situ · acta de reunión · informe del proveedor" />
+            </div>
+            <div>
+              <label class="label text-xs" for="v_obs">Observaciones</label>
+              <textarea id="v_obs" class="input" rows="2" placeholder="Qué falta y para quién"></textarea>
+            </div>
+          </div>
+          <p id="v_err" class="mt-2 hidden text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="v_cancel" class="btn-secondary">Cancelar</button>
+            <button id="v_save" class="btn-primary">Guardar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal nueva área -->
+      <div id="areaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-md p-5">
+          <h3 class="text-lg font-semibold text-slate-900">+ Área validadora</h3>
+          <div class="mt-4 space-y-3">
+            <div>
+              <label class="label text-xs" for="a_area">Área *</label>
+              <input id="a_area" class="input" list="areasLista" placeholder="Control de Infecciones" />
+              <datalist id="areasLista">{AREAS.map((a) => <option value={a}></option>)}</datalist>
+            </div>
+            <div>
+              <label class="label text-xs" for="a_confirma">Qué confirma</label>
+              <input id="a_confirma" class="input" placeholder="Umbrales, tiempos tolerables, decisión sobre casos" />
+            </div>
+            <div>
+              <label class="label text-xs" for="a_fecha">Fecha programada *</label>
+              <input id="a_fecha" type="date" class="input" value={hoy} />
+            </div>
+          </div>
+          <p id="a_err" class="mt-2 hidden text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="a_cancel" class="btn-secondary">Cancelar</button>
+            <button id="a_save" class="btn-primary">Agregar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal nuevo campo en azul -->
+      <div id="campoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card w-full max-w-md p-5">
+          <h3 class="text-lg font-semibold text-slate-900">+ Campo en azul</h3>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="c_etiqueta">Etiqueta *</label>
+              <input id="c_etiqueta" class="input" placeholder="kVA contratados" />
+            </div>
+            <div>
+              <label class="label text-xs" for="c_valor">Valor</label>
+              <input id="c_valor" class="input" placeholder="puede quedar pendiente" />
+            </div>
+            <div>
+              <label class="label text-xs" for="c_unidad">Unidad</label>
+              <input id="c_unidad" class="input" placeholder="kVA" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="c_area">Lo decide</label>
+              <input id="c_area" class="input" list="areasLista" placeholder="Mantenimiento General" />
+            </div>
+          </div>
+          <p id="c_err" class="mt-2 hidden text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="c_cancel" class="btn-secondary">Cancelar</button>
+            <button id="c_save" class="btn-primary">Agregar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal editar cabecera -->
+      <div id="editModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <div class="card max-h-[90vh] w-full max-w-xl overflow-y-auto p-5">
+          <h3 class="text-lg font-semibold text-slate-900">Cabecera documental</h3>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="label text-xs" for="e_inst">Código institucional</label>
+              <input id="e_inst" class="input font-mono" value={p.codigoInstitucional ?? ""} placeholder="GO-PNT-014-2026" />
+            </div>
+            <div>
+              <label class="label text-xs" for="e_version">Versión</label>
+              <input id="e_version" class="input font-mono" value={p.version} />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_titulo">Título</label>
+              <input id="e_titulo" class="input" value={p.titulo} />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_norma">Norma adoptada</label>
+              <input id="e_norma" class="input" value={p.normaAdoptada ?? ""} />
+            </div>
+            <div>
+              <label class="label text-xs" for="e_suplente">Cargo suplente</label>
+              <input id="e_suplente" class="input" value={p.suplenteCargo ?? ""} />
+            </div>
+            <div>
+              <label class="label text-xs" for="e_revision">Próxima revisión</label>
+              <input id="e_revision" type="date" class="input" value={p.proximaRevision ?? ""} />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_proposito">Propósito</label>
+              <textarea id="e_proposito" class="input" rows="2">{p.proposito ?? ""}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_alcance">Alcance</label>
+              <textarea id="e_alcance" class="input" rows="2">{p.alcance ?? ""}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_refs">Referencias verificables</label>
+              <textarea id="e_refs" class="input" rows="2">{p.referencias ?? ""}</textarea>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_cambio">Nota para el historial</label>
+              <input id="e_cambio" class="input" placeholder="Qué cambió en esta versión" />
+            </div>
+          </div>
+          <p id="e_err" class="mt-2 hidden text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button id="e_cancel" class="btn-secondary">Cancelar</button>
+            <button id="e_save" class="btn-primary">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </>
+  )}
+</Layout>
+
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ procId: id, esAdmin, veredictoJson }) }}>
+  const { procId, esAdmin, veredictoJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  const $ = (id) => document.getElementById(id);
+  const veredicto = JSON.parse(veredictoJson);
+  const abrir = (m) => { m.classList.remove("hidden"); m.classList.add("flex"); };
+  const cerrar = (m) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+  const preguntar = (titulo, msg, opts) =>
+    window.confirmAction ? window.confirmAction(titulo, msg, opts) : Promise.resolve(confirm(msg));
+
+  async function enviar(url, opciones, mensajeOk) {
+    const res = await fetch(url, opciones);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const motivos = Array.isArray(j.motivos) && j.motivos.length ? "\n• " + j.motivos.join("\n• ") : "";
+      window.showToast?.((j.error || "No se pudo guardar") + motivos, "error");
+      return null;
+    }
+    if (j.aviso) window.showToast?.(j.aviso, "success");
+    else if (mensajeOk) window.showToast?.(mensajeOk, "success");
+    return j;
+  }
+
+  if (esAdmin) {
+    // ── Poner en vigencia. La API vuelve a comprobar la regla del 8.1.
+    $("vigenciaBtn")?.addEventListener("click", async () => {
+      if (!veredicto.ok) {
+        window.showToast?.("No puede entrar en vigencia:\n• " + veredicto.motivos.join("\n• "), "error");
+        return;
+      }
+      const ok = await preguntar(
+        "¿Poner el documento en vigencia?",
+        "Queda firmado con tu nombre y la fecha de hoy. A partir de aquí, todo cambio abre una revisión.",
+        { danger: false, confirmLabel: "Poner en vigencia" },
+      );
+      if (!ok) return;
+      const j = await enviar(
+        `/api/procedimientos/${procId}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ estado: "vigente", cambio: "Entrada en vigencia tras validación completa." }),
+        },
+        "Documento vigente.",
+      );
+      if (j) location.reload();
+    });
+
+    document.querySelectorAll(".estado-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const j = await enviar(
+          `/api/procedimientos/${procId}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ estado: btn.dataset.estado }),
+          },
+          "Estado actualizado.",
+        );
+        if (j) location.reload();
+      });
+    });
+
+    // ── Campos en azul: edición en línea.
+    // No recarga en cada celda (rompería el tabulado); sólo repinta el avance,
+    // y recarga cuando el documento cruza el umbral del 8.1 en un sentido u otro.
+    function pintarAvance(pr) {
+      $("avancePct").textContent = pr.pct + "%";
+      const bar = $("avanceBar");
+      bar.style.width = pr.pct + "%";
+      bar.className = "h-full " + (pr.pct >= 100 ? "bg-emerald-500" : pr.pct >= 60 ? "bg-amber-500" : pr.pct > 0 ? "bg-orange-400" : "bg-slate-300");
+      $("avanceCampos").textContent = pr.camposLlenos + "/" + pr.camposTotal;
+      const res = $("camposResumen");
+      if (res) {
+        res.textContent = pr.camposTotal === 0
+          ? ""
+          : pr.camposFaltan > 0
+            ? ` Faltan ${pr.camposFaltan} de ${pr.camposTotal}.`
+            : " Todos completos.";
+        res.className = "font-semibold " + (pr.camposFaltan > 0 ? "text-amber-700" : "text-emerald-700");
+      }
+    }
+
+    async function guardarCampo(input) {
+      const valor = input.value.trim();
+      if (valor === (input.dataset.orig || "")) return;
+      const j = await enviar(
+        `/api/procedimientos/${procId}/campos`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: Number(input.dataset.cid), valor: valor || null }),
+        },
+        valor ? "Valor guardado." : "Celda vaciada: vuelve a contar como pendiente.",
+      );
+      if (!j) { input.value = input.dataset.orig || ""; return; }
+      input.dataset.orig = valor;
+      const fila = input.closest("tr");
+      if (fila) fila.classList.toggle("bg-blue-50/60", !valor);
+      // El aviso significa que el documento cambió de estado: hay que repintar todo.
+      if (j.aviso || (j.progreso && j.progreso.listo !== veredicto.ok)) { location.reload(); return; }
+      if (j.progreso) pintarAvance(j.progreso);
+    }
+    document.querySelectorAll(".campo-valor").forEach((input) => {
+      input.addEventListener("blur", () => guardarCampo(input));
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+        if (ev.key === "Escape") { input.value = input.dataset.orig || ""; input.blur(); }
+      });
+    });
+
+    document.querySelectorAll(".campo-del").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const ok = await preguntar("¿Quitar el campo?", `Se elimina "${btn.dataset.etq}" de la ficha.`);
+        if (!ok) return;
+        const j = await enviar(
+          `/api/procedimientos/${procId}/campos?cid=${btn.dataset.cid}`,
+          { method: "DELETE" },
+          "Campo eliminado.",
+        );
+        if (j) location.reload();
+      });
+    });
+
+    $("addCampoBtn")?.addEventListener("click", () => abrir($("campoModal")));
+    $("c_cancel")?.addEventListener("click", () => cerrar($("campoModal")));
+    $("c_save")?.addEventListener("click", async () => {
+      const err = $("c_err");
+      err.classList.add("hidden");
+      const etiqueta = $("c_etiqueta").value.trim();
+      if (!etiqueta) { err.textContent = "La etiqueta es obligatoria."; err.classList.remove("hidden"); return; }
+      const j = await enviar(
+        `/api/procedimientos/${procId}/campos`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            etiqueta,
+            valor: $("c_valor").value.trim() || null,
+            unidad: $("c_unidad").value.trim() || null,
+            decideArea: $("c_area").value.trim() || null,
+          }),
+        },
+        "Campo agregado.",
+      );
+      if (j) location.reload();
+    });
+
+    // ── Matriz de validación
+    document.querySelectorAll(".val-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const accion = btn.dataset.accion;
+        $("v_id").value = btn.dataset.vid;
+        $("v_accion").value = accion;
+        $("v_titulo").textContent = accion === "validado" ? "Confirmar validación" : "Registrar observación";
+        $("v_sub").textContent =
+          (accion === "validado"
+            ? "Queda firmado con tu nombre, la fecha y el método de verificación. Área: "
+            : "La observación dice qué falta y para quién. Área: ") + btn.dataset.area;
+        $("v_metodoWrap").style.display = accion === "validado" ? "" : "none";
+        $("v_err").classList.add("hidden");
+        abrir($("valModal"));
+      });
+    });
+    $("v_cancel")?.addEventListener("click", () => cerrar($("valModal")));
+    $("v_save")?.addEventListener("click", async () => {
+      const err = $("v_err");
+      err.classList.add("hidden");
+      const accion = $("v_accion").value;
+      const metodo = $("v_metodo").value.trim();
+      const obs = $("v_obs").value.trim();
+      if (accion === "validado" && !metodo) {
+        err.textContent = "El capítulo 8.1 pide fecha, responsable y método de verificación.";
+        err.classList.remove("hidden");
+        return;
+      }
+      if (accion === "observado" && !obs) {
+        err.textContent = "Una observación necesita texto.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const j = await enviar(
+        `/api/procedimientos/${procId}/validaciones`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            id: Number($("v_id").value),
+            estado: accion,
+            metodoVerificacion: metodo || null,
+            observaciones: obs || null,
+          }),
+        },
+        accion === "validado" ? "Área confirmada." : "Observación registrada.",
+      );
+      if (j) location.reload();
+    });
+
+    document.querySelectorAll(".val-reset").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const ok = await preguntar(
+          "¿Reabrir la validación?",
+          `${btn.dataset.area} vuelve a "pendiente" y el documento pierde la unanimidad que exige el capítulo 8.1.`,
+        );
+        if (!ok) return;
+        const j = await enviar(
+          `/api/procedimientos/${procId}/validaciones`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: Number(btn.dataset.vid), estado: "pendiente" }),
+          },
+          "Validación reabierta.",
+        );
+        if (j) location.reload();
+      });
+    });
+
+    document.querySelectorAll(".val-del").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const ok = await preguntar("¿Quitar el área de la matriz?", `Se elimina ${btn.dataset.area}.`);
+        if (!ok) return;
+        const j = await enviar(
+          `/api/procedimientos/${procId}/validaciones?vid=${btn.dataset.vid}`,
+          { method: "DELETE" },
+          "Área eliminada.",
+        );
+        if (j) location.reload();
+      });
+    });
+
+    $("addAreaBtn")?.addEventListener("click", () => abrir($("areaModal")));
+    $("a_cancel")?.addEventListener("click", () => cerrar($("areaModal")));
+    $("a_save")?.addEventListener("click", async () => {
+      const err = $("a_err");
+      err.classList.add("hidden");
+      const area = $("a_area").value.trim();
+      const fecha = $("a_fecha").value;
+      if (!area) { err.textContent = "El área es obligatoria."; err.classList.remove("hidden"); return; }
+      if (!fecha) { err.textContent = "Sin fecha programada, el borrador se vuelve permanente."; err.classList.remove("hidden"); return; }
+      const j = await enviar(
+        `/api/procedimientos/${procId}/validaciones`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            area,
+            queConfirma: $("a_confirma").value.trim() || null,
+            fechaProgramada: fecha,
+          }),
+        },
+        "Área agregada a la matriz.",
+      );
+      if (j) location.reload();
+    });
+
+    // ── Cabecera
+    $("editarBtn")?.addEventListener("click", () => abrir($("editModal")));
+    $("e_cancel")?.addEventListener("click", () => cerrar($("editModal")));
+    $("e_save")?.addEventListener("click", async () => {
+      const err = $("e_err");
+      err.classList.add("hidden");
+      const titulo = $("e_titulo").value.trim();
+      if (titulo.length < 3) { err.textContent = "El título es obligatorio."; err.classList.remove("hidden"); return; }
+      const j = await enviar(
+        `/api/procedimientos/${procId}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            titulo,
+            codigoInstitucional: $("e_inst").value.trim() || null,
+            version: $("e_version").value.trim() || undefined,
+            normaAdoptada: $("e_norma").value.trim() || null,
+            suplenteCargo: $("e_suplente").value.trim() || null,
+            proximaRevision: $("e_revision").value || null,
+            proposito: $("e_proposito").value.trim() || null,
+            alcance: $("e_alcance").value.trim() || null,
+            referencias: $("e_refs").value.trim() || null,
+            cambio: $("e_cambio").value.trim() || null,
+          }),
+        },
+        "Cabecera actualizada.",
+      );
+      if (j) location.reload();
+    });
+
+    [$("valModal"), $("areaModal"), $("campoModal"), $("editModal")].forEach((m) => {
+      m?.addEventListener("click", (ev) => { if (ev.target === m) cerrar(m); });
+    });
+  }
+</script>

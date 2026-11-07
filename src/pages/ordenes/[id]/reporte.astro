@@ -1,0 +1,139 @@
+---
+// Reporte de mantenimiento de una orden. Modo controlado: se imprime, se firma y se archiva.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { etiquetaMinutos, reporteDeOrden } from "@/lib/reporte-mantenimiento";
+
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) return Astro.redirect("/");
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id) || id <= 0) return new Response("Orden inválida", { status: 400 });
+const r = await reporteDeOrden(getDb(Astro), id);
+if (!r) return new Response("Orden no encontrada", { status: 404 });
+const o = r.orden;
+const hora = (iso: string | null | undefined) => iso ? new Date(iso).toLocaleTimeString("es-SV", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/El_Salvador" }) : "—";
+const fechaHora = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const s = new Date(Date.parse(iso) - 6 * 3_600_000).toISOString();
+  return `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)} ${s.slice(11, 16)}`;
+};
+const equipoTxt = r.activo ? `${r.activo.codigo} · ${r.activo.nombre}` : o.titulo;
+const marcaTxt = r.activo ? [r.activo.marca, r.activo.modelo, r.activo.serial ? `S/N ${r.activo.serial}` : null].filter(Boolean).join(" · ") : null;
+const FRECUENCIA: Record<string, string> = { turno: "por turno", diaria: "diaria", semanal: "semanal", quincenal: "quincenal", mensual: "mensual", bimestral: "bimestral", cuatrimestral: "cuatrimestral", trimestral: "trimestral", semestral: "semestral", anual: "anual" };
+const dif = r.tiempos.diferenciaMin;
+---
+
+<Layout title={`Reporte ${r.codigo}`}>
+  <div class="no-print doc-barra">
+    <a class="btn-secondary" href={`/ordenes/${o.id}?completa=1`}>Volver a la orden</a>
+    <button class="btn-primary" onclick="window.print()">Imprimir o guardar PDF</button>
+  </div>
+
+  <article class="print-doc doc-hoja">
+    <DocCabecera titulo="Reporte de mantenimiento" subtitulo={equipoTxt} codigo={r.codigo} version={r.version} fecha={o.completadaEn ?? o.createdAt} />
+
+    <section class="doc-seccion">
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Equipo</th><td>{r.activo ? r.activo.nombre : "Sin equipo"}</td><th>Tipo</th><td>{r.tipoLabel}</td></tr>
+          <tr><th>Código</th><td>{r.activo?.codigo ?? "—"}</td><th>Estado</th><td>{r.estadoLabel}</td></tr>
+          <tr><th>Marca y modelo</th><td>{marcaTxt || "—"}</td><th>Plan</th><td>{r.plan ? `${r.plan.titulo} · ${FRECUENCIA[r.plan.frecuencia] ?? r.plan.frecuencia}` : "No programado"}</td></tr>
+          <tr><th>Ubicación</th><td>{r.ubicacion ?? "—"}</td><th>Técnico</th><td>{r.tecnico ?? "—"}</td></tr>
+          <tr><th>Sede</th><td>{r.sede ?? "—"}</td><th>Verificó</th><td>{r.verificador ?? "Pendiente"}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>1.</span> Tiempos</h2>
+      <div class="doc-cifras">
+        <div><span class="doc-etq">Inicio</span><b>{hora(r.tiempos.inicio)}</b><small>{r.tiempos.inicio ? fechaHora(r.tiempos.inicio).slice(0, 10) : "Sin iniciar"}</small></div>
+        <div><span class="doc-etq">Fin</span><b>{hora(r.tiempos.fin)}</b><small>{r.tiempos.fin ? fechaHora(r.tiempos.fin).slice(0, 10) : "Sin terminar"}</small></div>
+        <div><span class="doc-etq">Tiempo de trabajo</span><b>{etiquetaMinutos(r.tiempos.efectivoMin)}</b><small>Sin contar pausas</small></div>
+        <div><span class="doc-etq">En pausa</span><b>{etiquetaMinutos(r.tiempos.pausaMin)}</b><small>&nbsp;</small></div>
+        <div><span class="doc-etq">Estimado</span><b>{etiquetaMinutos(r.tiempos.estimadoMin)}</b><small>{dif == null ? " " : dif === 0 ? "Igual a lo estimado" : `${dif > 0 ? "+" : "−"}${etiquetaMinutos(Math.abs(dif))} contra lo estimado`}</small></div>
+      </div>
+      {r.tiempos.marcasSinSenal > 0 && <p class="doc-nota">{r.tiempos.marcasSinSenal} paso{r.tiempos.marcasSinSenal === 1 ? "" : "s"} se capturó sin señal y se envió después; la hora es la del momento en que se hizo.</p>}
+    </section>
+
+    {r.pasos.length > 0 && (
+      <section class="doc-seccion">
+        <h2 class="doc-h"><span>2.</span> Pasos</h2>
+        <table class="doc-tabla">
+          <thead><tr><th class="n">#</th><th>Paso</th><th>Resultado</th><th class="c">Hora</th><th class="n">Min</th><th>Lectura o nota</th></tr></thead>
+          <tbody>
+            {r.pasos.map((p) => (
+              <tr>
+                <td class="n">{p.n}</td>
+                <td>{p.texto}{p.critico && <span class="doc-critico"> ● Crítico</span>}</td>
+                <td>{p.estadoLabel}</td>
+                <td class="c">{p.hora ? hora(p.hora) : p.horaTexto ?? "—"}{p.sinSenal && <sup title="Capturado sin señal">*</sup>}</td>
+                <td class="n">{p.minutos != null ? Math.round(p.minutos) : "—"}</td>
+                <td>
+                  {p.valor != null && <span class="doc-valor">{p.valor}{p.unidad ? ` ${p.unidad}` : ""}{p.rango ? ` · normal ${p.rango}` : ""}{p.dentro === false ? " · fuera de rango" : ""}</span>}
+                  {p.nota && <span class="doc-nota-celda">{p.nota}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {r.tiempos.marcasSinSenal > 0 && <p class="doc-nota">* Capturado sin señal.</p>}
+      </section>
+    )}
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>{r.pasos.length ? "3." : "2."}</span> Trabajos realizados</h2>
+      <p class="doc-texto">{o.trabajosRealizados ?? "Sin registrar."}</p>
+      {o.causaRaiz && <><h3 class="doc-h3">Causa raíz</h3><p class="doc-texto">{o.causaRaiz}</p></>}
+      {o.solucionAplicada && <><h3 class="doc-h3">Solución aplicada</h3><p class="doc-texto">{o.solucionAplicada}</p></>}
+    </section>
+
+    {r.repuestos.length > 0 && (
+      <section class="doc-seccion">
+        <h2 class="doc-h">Repuestos usados</h2>
+        <table class="doc-tabla">
+          <thead><tr><th>Código</th><th>Repuesto</th><th class="n">Cantidad</th></tr></thead>
+          <tbody>{r.repuestos.map((x) => <tr><td>{x.codigo ?? "—"}</td><td>{x.nombre ?? "—"}</td><td class="n">{x.cantidad}{x.unidad ? ` ${x.unidad}` : ""}</td></tr>)}</tbody>
+        </table>
+      </section>
+    )}
+
+    {r.fotos.length > 0 && (
+      <section class="doc-seccion">
+        <h2 class="doc-h">Fotos</h2>
+        <div class="doc-fotos">
+          {r.fotos.map((f) => <figure><img src={`/api/adjuntos/${f.id}`} alt={f.nombre} loading="eager" /><figcaption>{f.categoria === "antes" ? "Antes" : f.categoria === "despues" ? "Después" : "Durante"}</figcaption></figure>)}
+        </div>
+      </section>
+    )}
+
+    {r.historial.length > 0 && (
+      <section class="doc-seccion">
+        <h2 class="doc-h">Historial</h2>
+        <table class="doc-tabla">
+          <thead><tr><th>Cuándo</th><th>Qué</th><th>Quién</th><th>Motivo</th></tr></thead>
+          <tbody>{r.historial.map((h) => <tr><td class="tn">{fechaHora(h.cuando)}</td><td>{h.titulo}</td><td>{h.quien}</td><td>{h.motivo ?? ""}</td></tr>)}</tbody>
+        </table>
+      </section>
+    )}
+
+    <section class="doc-seccion doc-firmas">
+      <div>
+        {o.firmaTecnicoR2 ? <img src={`/api/firmas/${o.id}/tecnico`} alt="Firma del técnico" /> : <div class="doc-firma-vacia"></div>}
+        <span class="doc-etq">Ejecutó</span>
+        <span>{o.firmaTecnicoNombre ?? r.tecnico ?? ""}</span>
+      </div>
+      <div>
+        {o.firmaJefeR2 ? <img src={`/api/firmas/${o.id}/jefe`} alt="Firma de quien verificó" /> : <div class="doc-firma-vacia"></div>}
+        <span class="doc-etq">Verificó</span>
+        <span>{o.firmaJefeNombre ?? r.verificador ?? ""}</span>
+      </div>
+    </section>
+
+    <DocFolio codigo={r.codigo} version={r.version} />
+  </article>
+</Layout>

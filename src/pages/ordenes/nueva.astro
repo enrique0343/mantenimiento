@@ -2,17 +2,71 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, usuarios, ubicaciones, sucursales } from "@/lib/schema";
+import { activos, usuarios, ubicaciones, sucursales, procedimientos } from "@/lib/schema";
 import { asc, eq, and, inArray } from "drizzle-orm";
+import { z } from "zod";
+import { queSigue, type Situacion } from "@/lib/resolver";
 import { parseArea, areaHref, AREAS, AREA_KEYS, activoAreaCondition } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
 export const prerender = false;
 
+const user = Astro.locals.user ?? null;
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const rawArea = url.searchParams.get("area");
 const area = parseArea(rawArea);
 if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
 
+// Quien llega desde la ficha de un equipo trae el equipo, no el área: el área
+// se deduce del equipo para que el formulario abra listo.
+const activoEnUrl = Number(url.searchParams.get("activo") ?? url.searchParams.get("activoId"));
+if (!area && Number.isFinite(activoEnUrl) && activoEnUrl > 0) {
+  const [delEquipo] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoEnUrl)).limit(1);
+  if (delEquipo) {
+    const destino = new URL(url);
+    destino.searchParams.set("area", rubroDeActivo(delEquipo.rubro, delEquipo.tipo));
+    return Astro.redirect(destino.pathname + destino.search);
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// Qué documento rige, según el tipo de orden (GO-GUI-011-2026, cap. 02)
+// La tabla del capítulo traducida al tipo de OT: el SOP opera la rutina, el
+// AOP atiende la desviación, el EOP la falla y el MOP la intervención.
+// ══════════════════════════════════════════════════════════════════════════
+const TIPOS_ORDEN = ["correctivo", "preventivo", "predictivo", "intervencion", "emergencia"] as const;
+type TipoOrden = (typeof TIPOS_ORDEN)[number];
+const SITUACION_DE_TIPO: Record<TipoOrden, Situacion> = {
+  preventivo: "preventivo",
+  predictivo: "desviacion",
+  correctivo: "falla",
+  intervencion: "intervencion",
+  emergencia: "falla",
+};
+
+// Sub-respuesta JSON de esta misma página: el formulario pregunta "¿qué rige
+// este equipo?" al cambiar el equipo o el tipo, en lugar de pedirle al usuario
+// que vaya a buscar el documento. Queda detrás del login igual que la página.
+if (Astro.url.searchParams.has("rige")) {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  if (!user) return json({ error: "No autenticado" }, 401);
+  const parsed = z
+    .object({
+      activo: z.coerce.number().int().positive(),
+      tipo: z.enum(TIPOS_ORDEN),
+      sucursal: z.coerce.number().int().positive().optional(),
+    })
+    .safeParse(Object.fromEntries(Astro.url.searchParams));
+  if (!parsed.success) return json({ error: "Parámetros inválidos" }, 400);
+  try {
+    const r = await queSigue(db, parsed.data.activo, SITUACION_DE_TIPO[parsed.data.tipo], parsed.data.sucursal ?? null);
+    return json({ ...r, situacion: SITUACION_DE_TIPO[parsed.data.tipo] });
+  } catch (e: any) {
+    return json({ error: String(e?.message ?? e) }, 500);
+  }
+}
 
 const activosList = await db
   .select({
@@ -45,7 +99,53 @@ const tecnicos = await db
 
 const ubicacionesJson = JSON.stringify(ubicacionesList);
 const activosJson = JSON.stringify(activosList);
-const preseleccion = url.searchParams.get("activoId");
+
+// ── Lo que manda la ficha del equipo: ?activo=&tipo=&procedimiento= ─────────
+// Con el equipo ya elegido podemos resolver su ubicación y su sucursal, de modo
+// que el formulario abra apuntando al equipo correcto y pueda consultar de
+// inmediato qué documento lo rige.
+const qp = Astro.url.searchParams;
+const qActivoId = Number(qp.get("activo") ?? qp.get("activoId"));
+const qProcId = Number(qp.get("procedimiento"));
+const qTipoRaw = qp.get("tipo") ?? "";
+const tipoInicial: TipoOrden = (TIPOS_ORDEN as readonly string[]).includes(qTipoRaw)
+  ? (qTipoRaw as TipoOrden)
+  : "correctivo";
+
+const preActivo =
+  Number.isFinite(qActivoId) && qActivoId > 0 ? activosList.find((a) => a.id === qActivoId) ?? null : null;
+const preUbicacion = preActivo?.ubicacionId
+  ? ubicacionesList.find((u) => u.id === preActivo.ubicacionId) ?? null
+  : null;
+
+// El procedimiento que trae la URL manda sobre el que resuelva el sistema: lo
+// eligió quien abrió la orden desde la ficha del equipo.
+let preProc: { id: number; codigoCorto: string; titulo: string; tipo: string } | null = null;
+if (Number.isFinite(qProcId) && qProcId > 0) {
+  try {
+    const [p] = await db
+      .select({
+        id: procedimientos.id,
+        codigoCorto: procedimientos.codigoCorto,
+        titulo: procedimientos.titulo,
+        tipo: procedimientos.tipo,
+      })
+      .from(procedimientos)
+      .where(and(eq(procedimientos.id, qProcId), eq(procedimientos.activo, true)))
+      .limit(1);
+    preProc = p ?? null;
+  } catch {
+    preProc = null;
+  }
+}
+
+const preJson = JSON.stringify({
+  activo: preActivo?.id ?? null,
+  ubicacion: preUbicacion?.id ?? null,
+  sucursal: preUbicacion?.sucursalId ?? null,
+  proc: preProc,
+});
+const preseleccion = qp.get("activoId") ?? qp.get("activo");
 const activoPreseleccionado = preseleccion ? activosList.find(a => String(a.id) === preseleccion)?.id : null;
 if (preseleccion && !activoPreseleccionado) return new Response("El equipo no está disponible en el área seleccionada.", { status: 400 });
 ---
@@ -76,10 +176,13 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
       <div>
         <label class="label">Tipo</label>
         <select class="input" id="tipo">
-          <option value="correctivo">🔧 Correctivo</option>
-          <option value="preventivo">🛡️ Preventivo</option>
-          <option value="predictivo">📊 Predictivo</option>
+          <option value="correctivo" selected={tipoInicial === "correctivo"}>Correctivo</option>
+          <option value="preventivo" selected={tipoInicial === "preventivo"}>Preventivo</option>
+          <option value="predictivo" selected={tipoInicial === "predictivo"}>Predictivo</option>
+          <option value="intervencion" selected={tipoInicial === "intervencion"}>Intervención (MOP)</option>
+          <option value="emergencia" selected={tipoInicial === "emergencia"}>Emergencia (EOP)</option>
         </select>
+        <p class="mt-1 text-xs text-slate-500">El tipo decide qué documento rige la orden y qué exige antes de iniciar o cerrar.</p>
       </div>
       <div>
         <label class="label">Prioridad</label>
@@ -98,7 +201,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
     </div>
 
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-      <h3 class="font-semibold text-slate-900 text-sm">📍 Lugar a intervenir</h3>
+      <h3 class="font-semibold text-slate-900 text-sm">Lugar a intervenir</h3>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label class="label text-xs">Sucursal *</label>
@@ -135,6 +238,22 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
       </div>
     </div>
 
+    <!-- ══ QUÉ RIGE ESTE EQUIPO · se resuelve al elegir equipo y tipo ══════ -->
+    <input type="hidden" id="procedimientoId" value={preProc ? String(preProc.id) : ""} />
+    <div id="rigeCard" class="hidden rounded-lg border-l-4 border-brand-500 bg-brand-50 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold text-slate-900">Qué rige este equipo</h3>
+        <span id="rigeBadge" class="hidden badge bg-white text-slate-600"></span>
+      </div>
+      <p id="rigeEncabezado" class="mt-1 text-sm text-slate-800"></p>
+      <ol id="rigeAcciones" class="mt-2 hidden space-y-2"></ol>
+      <p id="rigeAviso" class="mt-2 hidden rounded bg-amber-50 p-2 text-xs text-amber-800"></p>
+      <div class="mt-2 flex flex-wrap items-center gap-3">
+        <a id="rigeLink" class="hidden btn-secondary btn-sm" href="/procedimientos">Ver documento →</a>
+        <span id="rigeVinculo" class="text-[11px] text-slate-500"></span>
+      </div>
+    </div>
+
     <div>
       <label class="label">Asignar a</label>
       <select class="input" id="asignadoA">
@@ -152,16 +271,16 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
 
     <!-- Fotos del estado inicial (antes) -->
     <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
-      <h2 class="text-sm font-semibold text-slate-900">📷 Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
+      <h2 class="text-sm font-semibold text-slate-900">Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
       <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área antes de iniciar. Se guardarán como evidencia "antes" en la OT.</p>
       <div class="mt-2 flex flex-wrap gap-2">
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
           <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
-          📎 Seleccionar fotos
+          Seleccionar fotos
         </label>
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
           <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
-          📸 Cámara
+          Cámara
         </label>
       </div>
       <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
@@ -174,14 +293,15 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
     </div>
   </form>
 
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubicacionesJson, activosJson, area, activoPreseleccionado }) }}>
-    const { ubicacionesJson, activosJson, area, activoPreseleccionado } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubicacionesJson, activosJson, preJson, area, activoPreseleccionado }) }}>
+    const { ubicacionesJson, activosJson, preJson, area, activoPreseleccionado } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     document.getElementById("rubro")?.addEventListener("change", (event) => {
       const selected = event.target.value;
       if (selected) location.href = `/ordenes/nueva?area=${encodeURIComponent(selected)}`;
     });
     const UBICACIONES = JSON.parse(ubicacionesJson);
     const ACTIVOS = JSON.parse(activosJson);
+    const PRE = JSON.parse(preJson);
 
     const conEquipoCk = document.getElementById("conEquipo");
     const equipoBox = document.getElementById("equipoBox");
@@ -246,6 +366,159 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
       activoSel.value = String(equipoInicial.id);
     }
 
+    // ─── Qué rige este equipo ──────────────────────────────────────────────
+    // La pregunta no se le hace al usuario: al elegir equipo y tipo, el sistema
+    // resuelve el documento (SOP / AOP / EOP / MOP) y lo deja vinculado a la
+    // orden. Es referencia y registro: en emergencia se actúa con la hoja
+    // impresa del EOP, no con esta pantalla.
+    const tipoSel = document.getElementById("tipo");
+    const procInput = document.getElementById("procedimientoId");
+    const rigeCard = document.getElementById("rigeCard");
+    const rigeBadge = document.getElementById("rigeBadge");
+    const rigeEnc = document.getElementById("rigeEncabezado");
+    const rigeAcc = document.getElementById("rigeAcciones");
+    const rigeAviso = document.getElementById("rigeAviso");
+    const rigeLink = document.getElementById("rigeLink");
+    const rigeVinculo = document.getElementById("rigeVinculo");
+    const PARA_TIPO = {
+      preventivo: "la rutina de operación",
+      predictivo: "un valor fuera de rango",
+      correctivo: "una falla ya ocurrida",
+      intervencion: "intervenciones planificadas",
+      emergencia: "una emergencia en curso",
+    };
+    // El procedimiento que trajo la ficha del equipo manda, mientras siga
+    // siendo el mismo equipo.
+    let fijado = PRE.proc ? PRE.proc.id : null;
+    let rigeSeq = 0;
+
+    function limpiarRige() {
+      rigeBadge.classList.add("hidden");
+      rigeBadge.textContent = "";
+      rigeAcc.classList.add("hidden");
+      rigeAcc.innerHTML = "";
+      rigeAviso.classList.add("hidden");
+      rigeAviso.textContent = "";
+      rigeLink.classList.add("hidden");
+      rigeVinculo.textContent = "";
+    }
+
+    function textoFijado() {
+      return PRE.proc ? `Se vinculará ${PRE.proc.codigoCorto}, el que trae la ficha del equipo.` : "";
+    }
+
+    async function consultarRige() {
+      const activoId = conEquipoCk.checked ? activoSel.value : "";
+      const tipo = tipoSel.value;
+      // El procedimiento que trajo la URL deja de valer si cambia el equipo.
+      if (fijado && PRE.activo && activoId && Number(activoId) !== PRE.activo) fijado = null;
+      if (!activoId) {
+        rigeCard.classList.add("hidden");
+        limpiarRige();
+        procInput.value = "";
+        return;
+      }
+      const seq = ++rigeSeq;
+      const qs = new URLSearchParams({ rige: "1", activo: activoId, tipo });
+      if (sucSel.value) qs.set("sucursal", sucSel.value);
+      let j = null;
+      try {
+        const res = await fetch(`/ordenes/nueva?${qs.toString()}`, { headers: { accept: "application/json" } });
+        j = await res.json();
+      } catch (e) {
+        j = null;
+      }
+      if (seq !== rigeSeq) return;
+
+      rigeCard.classList.remove("hidden");
+      limpiarRige();
+      procInput.value = fijado ? String(fijado) : "";
+
+      if (!j || j.error) {
+        rigeEnc.textContent = "No se pudo consultar qué documento rige este equipo. Puedes crear la orden igual y vincularlo después.";
+        rigeVinculo.textContent = textoFijado();
+        return;
+      }
+
+      const doc = j.documento;
+      if (!doc) {
+        rigeEnc.textContent = `Este equipo no tiene todavía un documento que lo gobierne para ${PARA_TIPO[tipo] || "este tipo de orden"}.`;
+        if (j.aviso) {
+          rigeAviso.textContent = j.aviso;
+          rigeAviso.classList.remove("hidden");
+        }
+        rigeVinculo.textContent = textoFijado();
+        return;
+      }
+
+      rigeEnc.textContent = `Este equipo se rige por ${doc.codigoCorto} — ${doc.titulo} para ${PARA_TIPO[tipo] || "este tipo de orden"}.`;
+      rigeBadge.textContent = `${doc.codigoCorto} · v${doc.version}`;
+      rigeBadge.classList.remove("hidden");
+      rigeLink.href = `/procedimientos/${doc.id}`;
+      rigeLink.textContent = `Ver ${doc.codigoCorto} →`;
+      rigeLink.classList.remove("hidden");
+
+      // En una emergencia, las tres primeras acciones se ven aquí mismo.
+      if (tipo === "emergencia" && Array.isArray(j.primerasAcciones) && j.primerasAcciones.length > 0) {
+        j.primerasAcciones.forEach((acc, i) => {
+          const li = document.createElement("li");
+          li.className = "flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900";
+          const n = document.createElement("span");
+          n.className = "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-xs font-bold ";
+          n.textContent = String(i + 1);
+          const txt = document.createElement("span");
+          txt.textContent = acc;
+          li.appendChild(n);
+          li.appendChild(txt);
+          rigeAcc.appendChild(li);
+        });
+        rigeAcc.classList.remove("hidden");
+      }
+
+      const avisos = [];
+      if (j.aviso) avisos.push(j.aviso);
+      if (j.minutosParaActuar != null || j.minutosParaEscalar != null) {
+        avisos.push(`Reloj del AOP: ${j.minutosParaActuar ?? "—"} min para actuar, ${j.minutosParaEscalar ?? "—"} min para escalar.`);
+      }
+      if (tipo === "emergencia" && (!Array.isArray(j.primerasAcciones) || j.primerasAcciones.length === 0)) {
+        avisos.push(`${doc.codigoCorto} todavía no tiene escritas sus tres primeras acciones.`);
+      }
+      if (avisos.length > 0) {
+        rigeAviso.textContent = avisos.join(" ");
+        rigeAviso.classList.remove("hidden");
+      }
+
+      if (fijado && fijado !== doc.id) {
+        rigeVinculo.textContent = textoFijado();
+      } else {
+        procInput.value = String(doc.id);
+        rigeVinculo.textContent = `Al crear la orden queda vinculada a ${doc.codigoCorto}.`;
+      }
+    }
+
+    tipoSel.addEventListener("change", consultarRige);
+    activoSel.addEventListener("change", consultarRige);
+    conEquipoCk.addEventListener("change", consultarRige);
+    sucSel.addEventListener("change", consultarRige);
+    ubSel.addEventListener("change", consultarRige);
+
+    // Preselección: la ficha del equipo abre esta página ya apuntando al equipo.
+    if (PRE.activo) {
+      conEquipoCk.checked = true;
+      equipoBox.classList.remove("hidden");
+      activoSel.required = true;
+    }
+    if (PRE.sucursal) {
+      sucSel.value = String(PRE.sucursal);
+      sucSel.dispatchEvent(new Event("change"));
+    }
+    if (PRE.ubicacion) {
+      ubSel.value = String(PRE.ubicacion);
+      actualizarEquipos();
+    }
+    if (PRE.activo) activoSel.value = String(PRE.activo);
+    consultarRige();
+
     // ─── Fotos pendientes (se suben tras crear la OT) ──────────────────────
     const pendingFotos = [];
     const fotoFile = document.getElementById("fotoFile");
@@ -263,7 +536,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
         const rm = document.createElement("button");
         rm.type = "button";
         rm.textContent = "×";
-        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-white text-red-600 border border-red-600";
         rm.addEventListener("click", () => {
           const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
           thumb.remove();
@@ -306,11 +579,15 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
         if (items.length > 0) checklistEjecucion = JSON.stringify(items);
       }
 
+      const tipoElegido = v("tipo");
+      const procId = Number(document.getElementById("procedimientoId").value) || null;
+
       const payload = {
         rubro: area || v("rubro"),
         titulo: v("titulo"),
         descripcion: v("descripcion") || null,
-        tipo: v("tipo"),
+        tipo: tipoElegido,
+        procedimientoId: procId,
         prioridad: v("prioridad"),
         sucursalId: Number(sucursalId),
         ubicacionId: ubicacionId ? Number(ubicacionId) : null,
@@ -333,6 +610,15 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
       }
       const j = await res.json();
       const otId = j.orden.id;
+
+      // Si el MOP tenía plantilla, la orden ya nace con sus prerrequisitos y sus
+      // lecturas de liberación: hay que decirlo, de eso depende que pueda iniciarse.
+      if (j.mop) {
+        window.showToast?.(
+          `${j.mop.prerrequisitos} prerrequisito(s) y ${j.mop.liberaciones} lectura(s) de liberación aplicadas desde el MOP.`,
+          "success",
+        );
+      }
 
       // Subir fotos pendientes como categoría "antes"
       for (const f of pendingFotos) {

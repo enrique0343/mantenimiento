@@ -1,0 +1,90 @@
+---
+// «Ahora mismo» · la cadena de los cinco documentos como primera franja
+//
+// Una tarjeta por documento, en el orden en que la operación los recorre:
+// la ronda (SOP) destapa la desviación (AOP), que si escala se vuelve
+// emergencia (EOP); lo planificado va por intervención (MOP) y lo que no está
+// clasificado no lo gobierna nadie (SCP). Cada tarjeta responde su pregunta
+// con un número y dice qué hacer. La misma franja sirve al técnico y a la
+// jefatura: solo cambia el alcance de los datos.
+import { TONO, type BloqueAhora } from "@/lib/ahora";
+
+interface Props {
+  bloques: BloqueAhora[];
+  titulo?: string;
+  resumen?: { texto: string; tono: keyof typeof TONO };
+  /** Cuándo mostrar la lista de los primeros ítems de cada bloque. */
+  conDetalle?: boolean;
+}
+const { bloques, titulo = "Ahora mismo", resumen, conDetalle = true } = Astro.props;
+---
+
+<section class="mt-5">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h2 class="flex items-center gap-2 text-lg font-bold text-slate-900">
+      {titulo}
+      {resumen && <span class={`badge ${TONO[resumen.tono].badge}`}>{resumen.texto}</span>}
+    </h2>
+    <span class="text-[11px] text-slate-400">
+      SOP → AOP → EOP · MOP · SCP · la cadena del volumen GO-GUI-011-2026
+    </span>
+  </div>
+
+  <div class={`mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 ${bloques.length >= 5 ? "xl:grid-cols-5" : "lg:grid-cols-4"}`}>
+    {bloques.map((b) => {
+      const t = TONO[b.tono];
+      return (
+        <article class={`card flex flex-col border-l-4 p-4 ${t.borde}`}>
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="font-mono text-[10px] font-bold text-slate-400">{b.doc}</span>
+              </div>
+              <div class="mt-0.5 font-semibold text-slate-800">{b.titulo}</div>
+            </div>
+            <span class={`h-2.5 w-2.5 shrink-0 rounded-full ${t.punto}`}></span>
+          </div>
+
+          <div class={`mt-2 text-3xl font-bold ${t.numero}`}>
+            {b.numero != null ? b.numero : "—"}
+          </div>
+          <p class="mt-1 text-[11px] leading-snug text-slate-500">{b.pregunta}</p>
+          <p class="mt-2 text-xs leading-snug text-slate-700">{b.detalle}</p>
+
+          {conDetalle && b.items.length > 0 && (
+            <ul class="mt-2 space-y-1 border-t border-slate-100 pt-2">
+              {b.items.map((it) => (
+                <li>
+                  <a href={it.href} class="group block rounded px-1.5 py-1 hover:bg-slate-50">
+                    <div class="flex items-start gap-1.5">
+                      <span class={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${TONO[it.tono].punto}`}></span>
+                      <div class="min-w-0">
+                        <div class="truncate text-[11px] font-medium text-slate-700 group-hover:text-brand-700">{it.texto}</div>
+                        <div class="truncate text-[10px] text-slate-400">{it.meta}</div>
+                      </div>
+                    </div>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {b.accion && (
+            <a
+              href={b.href}
+              class={`mt-3 block rounded-lg px-3 py-2 text-center text-xs font-semibold transition-colors ${
+                b.tono === "urgente"
+                  ? "bg-white text-red-600 border border-red-600 hover:bg-slate-50"
+                  : b.tono === "atencion"
+                    ? "bg-white text-amber-800 border border-amber-500 hover:bg-slate-50"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+              }`}
+            >
+              {b.accion} →
+            </a>
+          )}
+        </article>
+      );
+    })}
+  </div>
+</section>

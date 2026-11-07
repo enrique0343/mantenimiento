@@ -1,0 +1,14 @@
+---
+// Pie de documento controlado · Sistema Visual Avante v2.0, A5.
+// El número de página (N DE T) lo pone @page al imprimir.
+interface Props {
+  codigo: string;
+  version?: string | number | null;
+  destino?: string;
+  soloImpresion?: boolean;
+}
+const { codigo, version, destino = "Uso interno", soloImpresion = false } = Astro.props;
+---
+<footer class:list={["doc-folio", { "solo-impresion": soloImpresion }]}>
+  <span>{codigo}{version != null ? ` · Versión ${version}` : ""} · {destino}</span>
+</footer>

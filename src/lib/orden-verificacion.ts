@@ -1,7 +1,11 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { ordenes, usuarios, adjuntos, planesMantenimiento, actividades } from './schema';
+import { ordenes, usuarios, adjuntos, planesMantenimiento, actividades, activos, ordenPrerrequisitos, ordenLiberaciones } from './schema';
 import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';
-import { parseChecklist, validarChecklistParaCierre, transicionesPermitidas, type EstadoOT } from './ordenes';
+import {
+  parseChecklist, validarChecklistParaCierre, validarLecturasChecklistParaCierre, transicionesPermitidas,
+  validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarCausaRaizParaCierre, puedeCerrarSinLectura,
+  type EstadoOT,
+} from './ordenes';
 import { siguienteFecha } from './frecuencias';
 import type { getDb } from './db';
 
@@ -36,6 +40,55 @@ function validarEvidencia(order: Orden, input: Record<string, any>) {
   const result = validarChecklistParaCierre(parseChecklist(raw));
   if (!result.ok) deny(result.error!, 400);
 }
+/**
+ * Reglas duras del volumen GO-GUI-011-2026 (cap. 02). «En una intervención, la
+ * orden no le deja empezar sin el permiso firmado ni cerrar sin las lecturas de
+ * liberación. En una emergencia [...] obliga a cerrar con un análisis de causa
+ * raíz.» Aplican a todos los roles: son la evidencia de FMS.10.00 y FMS.08.01.
+ * El único escape es el cierre sin lectura de un MOP, con motivo y por jefatura.
+ */
+async function validarInicioDocumental(db: DB, order: Orden, input: Record<string, any>) {
+  const tipo = (input.tipo ?? order.tipo) as string;
+  if (tipo !== 'intervencion') return;
+  const prerreqs = await db
+    .select({ texto: ordenPrerrequisitos.texto, tipo: ordenPrerrequisitos.tipo, obligatorio: ordenPrerrequisitos.obligatorio, cumplido: ordenPrerrequisitos.cumplido })
+    .from(ordenPrerrequisitos).where(eq(ordenPrerrequisitos.ordenId, order.id));
+  const v = validarPrerrequisitosParaIniciar(tipo, prerreqs);
+  if (!v.ok) deny(v.error!, 400);
+}
+async function validarCierreDocumental(db: DB, order: Orden, user: User, input: Record<string, any>, data: Record<string, any>, now: string, motivoSinLectura?: string | null) {
+  const tipo = (input.tipo ?? order.tipo) as string;
+  // Una OT que nunca se inició no tiene lecturas que exigir: el cierre
+  // administrativo de registros viejos sigue siendo posible.
+  if (order.iniciadaEn) {
+    const raw = input.checklistEjecucion !== undefined ? input.checklistEjecucion : order.checklistEjecucion;
+    const lect = validarLecturasChecklistParaCierre(parseChecklist(raw));
+    if (!lect.ok) deny(lect.error!, 400);
+  }
+  if (tipo === 'intervencion') {
+    const libs = await db
+      .select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, obligatoria: ordenLiberaciones.obligatoria, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
+      .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, order.id));
+    const v = validarLiberacionesParaCierre(tipo, libs);
+    if (!v.ok) {
+      const motivo = (motivoSinLectura ?? '').trim();
+      if (!motivo) deny(v.error!, 400);
+      if (!puedeCerrarSinLectura(user.rol as any)) deny('Solo la jefatura (admin o jefe) puede cerrar un MOP sin la lectura de liberación. Pide a tu jefatura que lo cierre con el motivo escrito.');
+      if (motivo.length < 20) deny('El motivo del cierre sin lectura tiene que explicar por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres).', 400);
+      Object.assign(data, { cierreSinLecturaPor: user.id, cierreSinLecturaEn: now, cierreSinLecturaMotivo: motivo });
+    }
+  }
+  let criticidad: string | null = null;
+  const activoFinal = input.activoId !== undefined ? input.activoId : order.activoId;
+  if (activoFinal) {
+    const [a] = await db.select({ criticidad: activos.criticidadOperacional }).from(activos).where(eq(activos.id, activoFinal)).limit(1);
+    criticidad = a?.criticidad ?? null;
+  }
+  const causa = input.causaRaiz !== undefined ? input.causaRaiz : order.causaRaiz;
+  const vc = validarCausaRaizParaCierre(tipo, criticidad, causa);
+  if (!vc.ok) deny(vc.error!, 400);
+}
+
 /** One transactional mutation, immutable snapshot and one-time PM advancement.
  * Completion remains `completada` (pending review); only independent approval closes.
  * Server identities/timestamps cannot be supplied by callers. */
@@ -48,7 +101,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     pmAvanzadoEn: order.estado === 'cerrada' ? (order.cerradoEn ?? order.completadaEn ?? now) : null,
   };
   const state = saved ?? initial;
-  const { accion, motivo, revisorId, revisorSuplenteId, reprogramarPreventivos, motivoReasignacion, horasTrabajadas, ...data } = input;
+  const { accion, motivo, revisorId, revisorSuplenteId, reprogramarPreventivos, motivoReasignacion, horasTrabajadas, cierreSinLecturaMotivo, ...data } = input;
   const stateData: Record<string, any> = {};
   let eventAction = 'edicion';
   let destination = input.estado ?? order.estado;
@@ -110,6 +163,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     if (!state.ejecutadoPor || !order.completadaEn) deny('No hay un ejecutor trazable. Devuelve la orden para documentar la ejecución; el historial anterior se conserva.', 409);
     if (!input.verificacionNotas?.trim() || input.verificacionNotas.trim().length < 10) deny('Describe la evidencia revisada y el resultado de la verificación (al menos 10 caracteres).', 400);
     validarEvidencia(order, {});
+    await validarCierreDocumental(db, order, user, {}, data, now, cierreSinLecturaMotivo);
     destination = 'cerrada'; eventAction = 'verificacion_cierre';
     Object.assign(data, { estado: destination, verificadoPor: user.id, verificadoEn: now, verificacionNotas: input.verificacionNotas.trim(), cerradoPor: user.id, cerradoEn: now });
   } else if (destination !== order.estado) {
@@ -120,6 +174,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
       data.pausadaEn = now; eventAction = 'bloqueo';
     }
     if (destination === 'en_proceso') {
+      await validarInicioDocumental(db, order, input);
       if (order.estado === 'en_espera' && order.pausadaEn) {
         data.tiempoPausadoMin = (order.tiempoPausadoMin ?? 0) + Math.max(0, Math.round((Date.parse(now) - Date.parse(order.pausadaEn)) / 60000));
         data.pausadaEn = null;
@@ -129,6 +184,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     }
     if (isComplete) {
       validarEvidencia(order, input);
+      await validarCierreDocumental(db, order, user, input, data, now, cierreSinLecturaMotivo);
       data.completadaEn = now; eventAction = 'ejecucion_completada';
       Object.assign(data, { verificadoPor: null, verificadoEn: null, verificacionNotas: null, cerradoPor: null, cerradoEn: null });
       stateData.ejecutadoPor = user.id;
@@ -218,26 +274,18 @@ export async function devolverOrdenDesdeTicket(db: DB, order: Orden, ticket: { i
   if (!results[1].length) deny('La orden cambió durante la devolución. Actualiza e inténtalo de nuevo.', 409);
 }
 
-/** Read-only bidirectional origin references. Labels come from the frozen round
- * configuration, never from today's editable template or inferred OT text. */
+/** La parada de ronda de la que nació la orden. Los textos salen de la foto del recorrido de ese turno. */
 export async function leerOrigenesRondaOrden(db: DB, id: number) {
   const rows = await db.all(sql`
-    SELECT l.execution_id AS executionId,l.point_id AS pointId,l.proposal_id AS proposalId,
-      e.name AS roundName,e.template_version AS templateVersion,e.scheduled_date AS scheduledDate,
-      e.shift,e.status AS roundStatus,e.location_id AS locationId,z.nombre AS zoneName,
-      e.site_id AS siteId,s.nombre AS siteName,e.snapshot_json AS snapshotJson,
-      p.kind,p.reason,p.executor_type AS executorType,p.provider_id AS providerId,
-      v.nombre AS providerName,p.assigned_to AS coordinatorId,u.nombre AS coordinatorName
-    FROM rondas_order_links l JOIN rondas_executions e ON e.id=l.execution_id
-    JOIN rondas_proposals p ON p.id=l.proposal_id
-    LEFT JOIN ubicaciones z ON z.id=e.location_id LEFT JOIN sucursales s ON s.id=e.site_id
-    LEFT JOIN proveedores v ON v.id=p.provider_id LEFT JOIN usuarios u ON u.id=p.assigned_to
-    WHERE l.order_id=${id} ORDER BY e.scheduled_date,e.id,l.point_id,l.proposal_id
+    SELECT e.id AS ejecucionId,l.punto_id AS puntoId,e.fecha,e.turno,s.nombre AS sede,l.resultado,l.valor,l.nota,
+      l.registrado_en AS registradoEn,e.recorrido_json AS recorridoJson,p.etiqueta AS etiquetaActual,u.nombre AS registradoPor
+    FROM ronda_lecturas l JOIN ronda_ejecuciones e ON e.id=l.ejecucion_id JOIN ronda_puntos p ON p.id=l.punto_id
+    LEFT JOIN sucursales s ON s.id=e.sucursal_id LEFT JOIN usuarios u ON u.id=l.registrado_por
+    WHERE l.orden_id=${id} ORDER BY e.fecha,e.turno,l.punto_id
   `) as any[];
-  return rows.map(({ snapshotJson, ...row }) => {
-    let point: any = null;
-    try { point = JSON.parse(snapshotJson)?.points?.find((p: any) => p.code === row.pointId || p.id === row.pointId); } catch { /* retain usable IDs if old configuration is unreadable */ }
-    return { ...row, pointLabel: point?.label ?? row.pointId, pointCriterion: point?.criterion ?? null,
-      href: `/rondas?execution=${row.executionId}` };
+  return rows.map(({ recorridoJson, etiquetaActual, ...row }) => {
+    let punto: any = null;
+    try { punto = (JSON.parse(recorridoJson) as any[])?.find((p) => p.id === row.puntoId); } catch { /* sin foto: se usa el texto actual */ }
+    return { ...row, etiqueta: punto?.etiqueta ?? etiquetaActual, href: `/ronda/${row.ejecucionId}` };
   });
 }

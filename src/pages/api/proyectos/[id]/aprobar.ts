@@ -53,26 +53,26 @@ export const POST: APIRoute = async (ctx) => {
       const [creador] = await db.select().from(usuarios).where(eq(usuarios.id, actual.creadoPor)).limit(1);
       if (creador?.email) {
         const env = (ctx.locals as any)?.runtime?.env ?? {};
-        const baseUrl = env.APP_URL || "https://mantenimiento-49c.pages.dev";
+        const baseUrl = env.APP_URL || "https://mantenimiento.complejoavante.dev";
         const url = `${baseUrl}/proyectos/${id}`;
         const primer = (creador.nombre ?? "").split(" ")[0] || creador.nombre;
         const titulo = parsed.data.decision === "aprobado" ? "Tu proyecto fue aprobado" : "Tu proyecto fue rechazado";
-        const color = parsed.data.decision === "aprobado" ? "#065f46" : "#991b1b";
-        const bg = parsed.data.decision === "aprobado" ? "#d1fae5" : "#fee2e2";
+        const color = parsed.data.decision === "aprobado" ? "#1F5740" : "#C03435";
+        const bg = parsed.data.decision === "aprobado" ? "#F2F4F7" : "#F2F4F7";
         ctx.locals.runtime.ctx.waitUntil(
           sendMail(ctx, {
             to: creador.email,
-            subject: `[${actual.codigo}] ${parsed.data.decision === "aprobado" ? "✅ Aprobado" : "❌ Rechazado"} — ${actual.titulo}`,
+            subject: `[${actual.codigo}] ${parsed.data.decision === "aprobado" ? "✓ Aprobado" : "✕ Rechazado"} — ${actual.titulo}`,
             html: emailLayout(
               titulo,
               `<p>Hola <strong>${primer}</strong>,</p>
                <p>El proyecto <strong>${actual.codigo} — ${actual.titulo}</strong> fue ${parsed.data.decision === "aprobado" ? "aprobado" : "rechazado"} por <strong>${user.nombre}</strong>.</p>
                <p style="margin:0 0 6px 0"><strong>Notas:</strong></p>
-               <p style="white-space:pre-wrap;background:${bg};padding:12px;border-left:3px solid ${color};border-radius:4px;margin:0 0 18px 0">${parsed.data.notas}</p>
+               <p style="white-space:pre-wrap;background:${bg};padding:12px;border-left:3px solid ${color};border-radius:2px;margin:0 0 18px 0">${parsed.data.notas}</p>
                ${parsed.data.decision === "aprobado"
                  ? `<p>Ya puedes proceder a planificar la ejecución: cargar presupuesto definitivo, hitos y generar OTs.</p>`
                  : `<p>Si crees que la decisión debe revisarse, puedes comentar el caso directamente con la jefatura.</p>`}
-               <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir proyecto →</a></p>`
+               <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir proyecto →</a></p>`
             ),
             tipo: "proyecto_decision",
             referencia: `proyecto:${id}`,

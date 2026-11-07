@@ -6,7 +6,7 @@ import { tickets, ordenes, ticketAdjuntos, adjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
-import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { conCodigo, validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
 
 export const prerender = false;
 
@@ -102,5 +102,5 @@ export const POST: APIRoute = async (ctx) => {
     });
   }
 
-  return Response.json({ orden, ticketId: id }, { status: 201 });
+  return Response.json({ orden: await conCodigo(db, orden), ticketId: id }, { status: 201 });
 };

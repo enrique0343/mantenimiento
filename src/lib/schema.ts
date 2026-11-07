@@ -167,15 +167,25 @@ export const activos = sqliteTable("activos", {
   slaMediaHoras: integer("sla_media_horas").notNull().default(72),
   slaBajaHoras: integer("sla_baja_horas").notNull().default(168),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // ── SCP · configuracion de sitio (Fase 47, GO-GUI-011-2026) ──
+  // "Cada sistema critico se registra como activo padre con sus componentes como hijos"
+  padreId: integer("padre_id"),
+  nivelJerarquia: text("nivel_jerarquia", { enum: ["sistema", "subsistema", "componente"] }).notNull().default("componente"),
+  // A que sistema critico pertenece: la llave para resolver que documento lo rige
+  sistema: text("sistema", { enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"] }),
+  scpProcedimientoId: integer("scp_procedimiento_id"),
+  scpVersionRef: text("scp_version_ref"),
 });
 
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // OT-MG0001 u OT-MB0001. Lo asigna un trigger al insertar (migración 0057): RETURNING no lo ve.
+  codigo: text("codigo"),
   rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
-  tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo"] }).notNull().default("correctivo"),
+  tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"] }).notNull().default("correctivo"),
   prioridad: text("prioridad", { enum: ["baja", "media", "alta", "urgente"] })
     .notNull()
     .default("media"),
@@ -226,6 +236,28 @@ export const ordenes = sqliteTable("ordenes", {
   // Vínculo opcional a un proyecto (la OT es una tarea de un proyecto)
   proyectoId: integer("proyecto_id").references((): any => proyectos.id, { onDelete: "set null" }),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // ── Biblioteca de procedimientos (Fase 47) ──
+  procedimientoId: integer("procedimiento_id"),
+  nivelRiesgo: text("nivel_riesgo", { enum: ["bajo", "medio", "alto"] }),
+  clasePrioridad: text("clase_prioridad", { enum: ["P1", "P2", "P3", "P4"] }),
+  // Indicadores 5 y 7: respuesta y reparacion. Editables hacia atras: en emergencia se registra despues.
+  horaAlarma: text("hora_alarma"),
+  horaLlegada: text("hora_llegada"),
+  horaMitigacion: text("hora_mitigacion"),
+  horaRestablecimiento: text("hora_restablecimiento"),
+  causaRaizVencimiento: text("causa_raiz_vencimiento"),
+  planReversa: text("plan_reversa"),
+  reversaEjecutada: integer("reversa_ejecutada", { mode: "boolean" }).notNull().default(false),
+  reversaNotas: text("reversa_notas"),
+  aopEventoId: integer("aop_evento_id"),
+  // Escape 1 — diferir una P1 vencida (alimenta el indicador de mantenimiento diferido)
+  riesgoAceptadoPor: integer("riesgo_aceptado_por"),
+  riesgoAceptadoEn: text("riesgo_aceptado_en"),
+  riesgoAceptadoNotas: text("riesgo_aceptado_notas"),
+  // Escape 2 — cerrar un MOP sin lectura de liberacion (distinto del anterior)
+  cierreSinLecturaPor: integer("cierre_sin_lectura_por"),
+  cierreSinLecturaEn: text("cierre_sin_lectura_en"),
+  cierreSinLecturaMotivo: text("cierre_sin_lectura_motivo"),
 });
 
 // ─── Comentarios ──────────────────────────────────────────────────────────────
@@ -417,6 +449,14 @@ export const variablesPredictivas = sqliteTable("variables_predictivas", {
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   notas: text("notas"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // ── Punto de ajuste del SCP (Fase 47) ──
+  tipoAtributo: text("tipo_atributo", { enum: ["punto_ajuste", "posicion_normal", "predictiva"] }).notNull().default("predictiva"),
+  valorNominal: real("valor_nominal"),
+  valorNominalTexto: text("valor_nominal_texto"),
+  fuente: text("fuente"),
+  fuenteReferencia: text("fuente_referencia"),
+  procedimientoId: integer("procedimiento_id"),
+  procedimientoVersion: text("procedimiento_version"),
 });
 
 export const emailLog = sqliteTable("email_log", {
@@ -440,6 +480,9 @@ export const mediciones = sqliteTable("mediciones", {
   usuarioId: integer("usuario_id").references(() => usuarios.id),
   notas: text("notas"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  ordenId: integer("orden_id"),
+  origen: text("origen", { enum: ["manual", "ronda", "sensor"] }).notNull().default("manual"),
+  ubicacionId: integer("ubicacion_id"),
 });
 
 export const ticketComentarios = sqliteTable("ticket_comentarios", {
@@ -461,7 +504,7 @@ export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
   frecuencia: text("frecuencia", {
-    enum: ["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"],
+    enum: ["turno", "diaria", "semanal", "quincenal", "mensual", "bimestral", "cuatrimestral", "trimestral", "semestral", "anual"],
   }).notNull(),
   proximaFecha: text("proxima_fecha").notNull(),
   alertaDiasAntes: integer("alerta_dias_antes").notNull().default(7),
@@ -477,6 +520,9 @@ export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   modalidad: text("modalidad", { enum: ["interno", "contratado", "mixto"] }).notNull().default("interno"),
   contratoId: integer("contrato_id"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  plantillaId: integer("plantilla_id"),
+  vecesPorDia: integer("veces_por_dia").notNull().default(1),
+  horasProgramadas: text("horas_programadas"),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -674,7 +720,7 @@ export const actividades = sqliteTable("actividades", {
   ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
   ubicacionDetalle: text("ubicacion_detalle"),
   frecuencia: text("frecuencia", {
-    enum: ["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"],
+    enum: ["turno", "diaria", "semanal", "quincenal", "mensual", "bimestral", "cuatrimestral", "trimestral", "semestral", "anual"],
   }).notNull(),
   proximaFecha: text("proxima_fecha").notNull(),
   alertaDiasAntes: integer("alerta_dias_antes").notNull().default(7),
@@ -688,6 +734,9 @@ export const actividades = sqliteTable("actividades", {
   ultimaEjecucion: text("ultima_ejecucion"),
   notas: text("notas"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  plantillaId: integer("plantilla_id"),
+  vecesPorDia: integer("veces_por_dia").notNull().default(1),
+  horasProgramadas: text("horas_programadas"),
 });
 
 export type ActividadCategoria = typeof actividadCategorias.$inferSelect;
@@ -729,6 +778,11 @@ export const cargasElectricas = sqliteTable("cargas_electricas", {
   notas: text("notas"),
   activa: integer("activa", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // Ramas del sistema electrico esencial (NFPA 99 cap. 6)
+  rama: text("rama", { enum: ["seguridad_vida", "critica", "equipos", "normal"] }),
+  circuito: text("circuito"),
+  servicioClinico: text("servicio_clinico"),
+  posicionNormal: text("posicion_normal", { enum: ["cerrado", "abierto", "auto"] }),
 });
 
 export type Subestacion = typeof subestaciones.$inferSelect;
@@ -920,6 +974,12 @@ export const checklistPlantillas = sqliteTable("checklist_plantillas", {
   descripcion: text("descripcion"),
   activa: integer("activa", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // ── SOP / MOP (Fase 47) ──
+  tipoDocumento: text("tipo_documento", { enum: ["sop", "mop"] }).notNull().default("sop"),
+  procedimientoId: integer("procedimiento_id"),
+  procedimientoVersion: text("procedimiento_version"),
+  nivelRiesgo: text("nivel_riesgo", { enum: ["bajo", "medio", "alto"] }),
+  planReversa: text("plan_reversa"),
 });
 export type ChecklistPlantilla = typeof checklistPlantillas.$inferSelect;
 
@@ -935,6 +995,16 @@ export const checklistPlantillaItems = sqliteTable("checklist_plantilla_items", 
   materiales: text("materiales"),
   orden: integer("orden").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // El sistema exige el valor medido y lo compara contra el SCP (Fase 47)
+  requiereValor: integer("requiere_valor", { mode: "boolean" }).notNull().default(false),
+  unidad: text("unidad"),
+  valorEsperadoMin: real("valor_esperado_min"),
+  valorEsperadoMax: real("valor_esperado_max"),
+  variableId: integer("variable_id"),
+  aopProcedimientoId: integer("aop_procedimiento_id"),
+  activoId: integer("activo_id"),
+  ubicacionId: integer("ubicacion_id"),
+  accionSiNoCumple: text("accion_si_no_cumple"),
 });
 export type ChecklistPlantillaItem = typeof checklistPlantillaItems.$inferSelect;
 
@@ -1128,6 +1198,9 @@ export const activoDocumentos = sqliteTable("activo_documentos", {
   categoria: text("categoria").default("ficha_tecnica"),
   usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  version: text("version"),
+  fechaVersion: text("fecha_version"),
+  asBuilt: integer("as_built", { mode: "boolean" }).notNull().default(false),
 });
 export type ActivoDocumento = typeof activoDocumentos.$inferSelect;
 
@@ -1149,6 +1222,14 @@ export const metricasKpi = sqliteTable("metricas_kpi", {
   preventivosProgramados: integer("preventivos_programados").notNull().default(0),
   numActivos: integer("num_activos").notNull().default(0),
   capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // Indicadores del volumen GO-GUI-011-2026 (Fase 47)
+  sistema: text("sistema"),
+  horasFueraRango: real("horas_fuera_rango"),
+  desviacionesAop: integer("desviaciones_aop"),
+  desviacionesEscaladas: integer("desviaciones_escaladas"),
+  mantenimientoDiferido: integer("mantenimiento_diferido"),
+  tiempoRespuestaHoras: real("tiempo_respuesta_horas"),
+  tiempoReparacionHoras: real("tiempo_reparacion_horas"),
 });
 export type MetricaKpi = typeof metricasKpi.$inferSelect;
 
@@ -1196,6 +1277,466 @@ export const raciAsignaciones = sqliteTable("raci_asignaciones", {
 });
 export type RaciAsignacion = typeof raciAsignaciones.$inferSelect;
 
+// ─── Biblioteca de procedimientos · GO-GUI-011-2026 (Fase 47) ────────────────
+// Cinco tipos de documento encadenados alrededor de un mismo sistema critico:
+//   SCP (como esta configurado) → SOP (se opera a diario) / AOP (se desvia)
+//   → EOP (ya fallo) → MOP (se cambia de estado sin dañar al paciente).
+// Catalogo UNICO con doble codificacion (cap. 2.4): el codigo corto va en el
+// activo y en la etiqueta; el institucional lo asigna control documental.
+
+export const procedimientos = sqliteTable("procedimientos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigoCorto: text("codigo_corto").notNull().unique(),
+  codigoInstitucional: text("codigo_institucional"),
+  tipo: text("tipo", { enum: ["scp", "sop", "mop", "eop", "aop"] }).notNull(),
+  sistema: text("sistema", {
+    enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"],
+  }).notNull(),
+  dominio: text("dominio"),
+  titulo: text("titulo").notNull(),
+  proposito: text("proposito"),
+  alcance: text("alcance"),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  heredadoDeId: integer("heredado_de_id"),
+  version: text("version").notNull().default("0.1"),
+  estado: text("estado", {
+    enum: ["borrador", "en_validacion", "vigente", "en_revision", "retirado"],
+  }).notNull().default("borrador"),
+  responsableId: integer("responsable_id").notNull().references(() => usuarios.id),
+  suplenteCargo: text("suplente_cargo"),
+  normaAdoptada: text("norma_adoptada"),
+  referencias: text("referencias"),
+  registro: text("registro"),
+  nivelRiesgo: text("nivel_riesgo", { enum: ["bajo", "medio", "alto"] }),
+  semanaValidacion: integer("semana_validacion"),
+  aprobadoPor: integer("aprobado_por").references(() => usuarios.id),
+  aprobadoEn: text("aprobado_en"),
+  proximaRevision: text("proxima_revision"),
+  r2Key: text("r2_key"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Campos "en azul": un SCP con una celda vacia es un SCP sin aprobar
+export const procedimientoCampos = sqliteTable("procedimiento_campos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  etiqueta: text("etiqueta").notNull(),
+  valor: text("valor"),
+  unidad: text("unidad"),
+  decideArea: text("decide_area"),
+  orden: integer("orden").notNull().default(0),
+});
+
+export const procedimientoValidaciones = sqliteTable("procedimiento_validaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  area: text("area").notNull(),
+  queConfirma: text("que_confirma"),
+  estado: text("estado", { enum: ["pendiente", "validado", "observado"] }).notNull().default("pendiente"),
+  fechaProgramada: text("fecha_programada").notNull(),
+  validadoPor: integer("validado_por").references(() => usuarios.id),
+  validadoEn: text("validado_en"),
+  metodoVerificacion: text("metodo_verificacion"),
+  observaciones: text("observaciones"),
+});
+
+export const procedimientoVersiones = sqliteTable("procedimiento_versiones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  version: text("version").notNull(),
+  fecha: text("fecha").notNull(),
+  cambio: text("cambio"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Motor unico de escalamiento para AOP y EOP
+export const procedimientoEscalamientos = sqliteTable("procedimiento_escalamientos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  orden: integer("orden").notNull().default(0),
+  minutos: integer("minutos").notNull(),
+  avisarCargo: text("avisar_cargo").notNull(),
+  accion: text("accion"),
+  esPasoAEop: integer("es_paso_a_eop", { mode: "boolean" }).notNull().default(false),
+});
+
+// Mapa de distribucion: una manejadora o un tablero sirve varias salas
+export const activoUbicacionesServidas = sqliteTable("activo_ubicaciones_servidas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  ubicacionId: integer("ubicacion_id").notNull().references(() => ubicaciones.id, { onDelete: "cascade" }),
+  rol: text("rol", { enum: ["sirve", "alimenta", "controla", "extrae"] }).notNull().default("sirve"),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ─── AOP · la condicion anormal que todavia no es emergencia ─────────────────
+export const aopFicha = sqliteTable("aop_ficha", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().unique().references(() => procedimientos.id, { onDelete: "cascade" }),
+  condicionUmbral: text("condicion_umbral"),
+  quienDetecta: text("quien_detecta"),
+  tiempoTolerable: text("tiempo_tolerable"),
+  decisionCasos: text("decision_casos"),
+  pasaAEop: text("pasa_a_eop"),
+});
+
+export const aopAcciones = sqliteTable("aop_acciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  orden: integer("orden").notNull().default(0),
+  accion: text("accion").notNull(),
+  resultadoEsperado: text("resultado_esperado"),
+});
+
+export const aopUmbrales = sqliteTable("aop_umbrales", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  variableId: integer("variable_id").references(() => variablesPredictivas.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").references(() => activos.id, { onDelete: "cascade" }),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  minAlerta: real("min_alerta"),
+  maxAlerta: real("max_alerta"),
+  minutosParaActuar: integer("minutos_para_actuar"),
+  minutosParaEscalar: integer("minutos_para_escalar"),
+  minutosEventoPersistente: integer("minutos_evento_persistente"),
+  eopProcedimientoId: integer("eop_procedimiento_id"),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Episodio de desviacion: tabla unica, de aqui sale el indicador 8
+export const aopEventos = sqliteTable("aop_eventos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").references(() => procedimientos.id),
+  umbralId: integer("umbral_id").references(() => aopUmbrales.id),
+  variableId: integer("variable_id").references(() => variablesPredictivas.id),
+  activoId: integer("activo_id").references(() => activos.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  valorDetectado: real("valor_detectado"),
+  unidad: text("unidad"),
+  detectadoEn: text("detectado_en").notNull(),
+  detectadoPor: integer("detectado_por").references(() => usuarios.id),
+  origen: text("origen", { enum: ["ronda", "sensor", "manual"] }).notNull().default("ronda"),
+  medicionId: integer("medicion_id"),
+  ordenId: integer("orden_id"),
+  estado: text("estado", {
+    enum: ["abierto", "en_correccion", "escalado", "paso_a_eop", "cerrado"],
+  }).notNull().default("abierto"),
+  actuarAntesDe: text("actuar_antes_de"),
+  escalarAntesDe: text("escalar_antes_de"),
+  escaladoEn: text("escalado_en"),
+  valorFinal: real("valor_final"),
+  normalizadoEn: text("normalizado_en"),
+  minutosFuera: integer("minutos_fuera"),
+  evaluacionRiesgo: text("evaluacion_riesgo"),
+  cerradoPor: integer("cerrado_por").references(() => usuarios.id),
+  cerradoEn: text("cerrado_en"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // De qué lectura de ronda salió la desviación (fase 52)
+  rondaLecturaId: integer("ronda_lectura_id"),
+  // De qué parada salió: un episodio por sede y parada, no por documento (fase 55)
+  rondaPuntoId: integer("ronda_punto_id"),
+});
+
+export const aopEventoAcciones = sqliteTable("aop_evento_acciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventoId: integer("evento_id").notNull().references(() => aopEventos.id, { onDelete: "cascade" }),
+  accion: text("accion").notNull(),
+  resultado: text("resultado"),
+  ejecutadoPor: integer("ejecutado_por").references(() => usuarios.id),
+  ejecutadoEn: text("ejecutado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ─── EOP · emergencia ────────────────────────────────────────────────────────
+export const eopFicha = sqliteTable("eop_ficha", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().unique().references(() => procedimientos.id, { onDelete: "cascade" }),
+  senalActivacion: text("senal_activacion"),
+  activaQuien: text("activa_quien"),
+  dirigeQuien: text("dirige_quien"),
+  dirigeFueraHorario: text("dirige_fuera_horario"),
+  accion1: text("accion_1"),
+  accion2: text("accion_2"),
+  accion3: text("accion_3"),
+  estabilizar: text("estabilizar"),
+  comunicar: text("comunicar"),
+  decidir: text("decidir"),
+  restablecer: text("restablecer"),
+  etiquetaHoraMitigacion: text("etiqueta_hora_mitigacion"),
+  minutosEscalarGerencia: integer("minutos_escalar_gerencia"),
+  horasCausaRaiz: integer("horas_causa_raiz").notNull().default(72),
+  ultimoSimulacroFuncional: text("ultimo_simulacro_funcional"),
+  proximoSimulacroFuncional: text("proximo_simulacro_funcional"),
+});
+
+export const eopSimulacros = sqliteTable("eop_simulacros", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  tipo: text("tipo", { enum: ["mesa", "funcional"] }).notNull(),
+  fecha: text("fecha").notNull(),
+  versionEnsayada: text("version_ensayada"),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  conducidoPor: integer("conducido_por").references(() => usuarios.id),
+  participantes: text("participantes"),
+  hallazgos: text("hallazgos"),
+  requiereActualizacion: integer("requiere_actualizacion", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// "Se imprime y se coloca en el cuarto tecnico y en el servicio clinico"
+export const eopColocaciones = sqliteTable("eop_colocaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  lugarDetalle: text("lugar_detalle"),
+  colocadoPor: integer("colocado_por").references(() => usuarios.id),
+  colocadoEn: text("colocado_en"),
+  verificadoEn: text("verificado_en"),
+  versionColocada: text("version_colocada"),
+});
+
+// ─── MOP · prerrequisitos que bloquean iniciar, liberaciones que bloquean cerrar ──
+export const plantillaPrerrequisitos = sqliteTable("plantilla_prerrequisitos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  plantillaId: integer("plantilla_id").notNull().references(() => checklistPlantillas.id, { onDelete: "cascade" }),
+  texto: text("texto").notNull(),
+  tipo: text("tipo", {
+    enum: ["permiso_trabajo", "icra", "notificacion", "loto", "espacio_confinado", "ventana", "instrumento", "reserva", "otro"],
+  }).notNull().default("otro"),
+  obligatorio: integer("obligatorio", { mode: "boolean" }).notNull().default(true),
+  cargoResponsable: text("cargo_responsable"),
+  orden: integer("orden").notNull().default(0),
+});
+
+export const plantillaLiberaciones = sqliteTable("plantilla_liberaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  plantillaId: integer("plantilla_id").notNull().references(() => checklistPlantillas.id, { onDelete: "cascade" }),
+  etiqueta: text("etiqueta").notNull(),
+  unidad: text("unidad"),
+  valorEsperado: text("valor_esperado"),
+  minAceptable: real("min_aceptable"),
+  maxAceptable: real("max_aceptable"),
+  obligatoria: integer("obligatoria", { mode: "boolean" }).notNull().default(true),
+  orden: integer("orden").notNull().default(0),
+});
+
+export const ordenPrerrequisitos = sqliteTable("orden_prerrequisitos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
+  texto: text("texto").notNull(),
+  tipo: text("tipo", {
+    enum: ["permiso_trabajo", "icra", "notificacion", "loto", "espacio_confinado", "ventana", "instrumento", "reserva", "otro"],
+  }).notNull().default("otro"),
+  obligatorio: integer("obligatorio", { mode: "boolean" }).notNull().default(true),
+  cumplido: integer("cumplido", { mode: "boolean" }).notNull().default(false),
+  cumplidoPor: integer("cumplido_por").references(() => usuarios.id),
+  cumplidoEn: text("cumplido_en"),
+  referencia: text("referencia"),
+  cargoResponsable: text("cargo_responsable"),
+  orden: integer("orden").notNull().default(0),
+});
+
+export const ordenLiberaciones = sqliteTable("orden_liberaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
+  etiqueta: text("etiqueta").notNull(),
+  unidad: text("unidad"),
+  valorEsperado: text("valor_esperado"),
+  minAceptable: real("min_aceptable"),
+  maxAceptable: real("max_aceptable"),
+  valorMedido: real("valor_medido"),
+  valorMedidoTexto: text("valor_medido_texto"),
+  conforme: integer("conforme", { mode: "boolean" }),
+  medidoPor: integer("medido_por").references(() => usuarios.id),
+  medidoEn: text("medido_en"),
+  obligatoria: integer("obligatoria", { mode: "boolean" }).notNull().default(true),
+  orden: integer("orden").notNull().default(0),
+});
+
+// Indicador 8 con grano de sala (metricas_kpi no lo tiene)
+export const metricasSala = sqliteTable("metricas_sala", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  periodo: text("periodo").notNull(),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  horasFueraRango: real("horas_fuera_rango").notNull().default(0),
+  desviaciones: integer("desviaciones").notNull().default(0),
+  desviacionesEscaladas: integer("desviaciones_escaladas").notNull().default(0),
+  capturadoEn: text("capturado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Un documento puede cubrir varias familias de equipo (la ronda por turno las recorre todas)
+export const procedimientoSistemas = sqliteTable("procedimiento_sistemas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  procedimientoId: integer("procedimiento_id").notNull().references(() => procedimientos.id, { onDelete: "cascade" }),
+  sistema: text("sistema").notNull(),
+});
+
+// ─── La ronda de turno (Fase 52) ─────────────────────────────────────────────
+// El SOP se ejecuta como una ronda: una plantilla de recorrido, una ejecución
+// por turno y una lectura por punto. Cada punto declara qué AOP lo rige, así
+// que la lectura fuera de rango abre sola el episodio con su reloj.
+export const rondas = sqliteTable("rondas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull(),
+  nombre: text("nombre").notNull(),
+  descripcion: text("descripcion"),
+  procedimientoId: integer("procedimiento_id").references(() => procedimientos.id),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id),
+  turnos: text("turnos").notNull().default('["06:00","14:00","22:00"]'),
+  minutosEstimados: integer("minutos_estimados"),
+  activa: integer("activa", { mode: "boolean" }).notNull().default(true),
+  creadoPor: integer("creado_por").references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  vigenteDesde: text("vigente_desde"),
+});
+
+export const rondaPuntos = sqliteTable("ronda_puntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  rondaId: integer("ronda_id").notNull().references(() => rondas.id, { onDelete: "cascade" }),
+  orden: integer("orden").notNull().default(0),
+  sistema: text("sistema").notNull(),
+  etiqueta: text("etiqueta").notNull(),
+  instruccion: text("instruccion"),
+  activoId: integer("activo_id").references(() => activos.id),
+  ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
+  variableId: integer("variable_id").references(() => variablesPredictivas.id),
+  requiereValor: integer("requiere_valor", { mode: "boolean" }).notNull().default(false),
+  unidad: text("unidad"),
+  minEsperado: real("min_esperado"),
+  maxEsperado: real("max_esperado"),
+  valorEsperadoTexto: text("valor_esperado_texto"),
+  fuente: text("fuente"),
+  aopProcedimientoId: integer("aop_procedimiento_id").references(() => procedimientos.id),
+  critico: integer("critico", { mode: "boolean" }).notNull().default(false),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  lineaSop: integer("linea_sop"),
+  minutosActuar: integer("minutos_actuar"),
+  minutosEscalar: integer("minutos_escalar"),
+});
+
+export const rondaEjecuciones = sqliteTable("ronda_ejecuciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  rondaId: integer("ronda_id").notNull().references(() => rondas.id, { onDelete: "cascade" }),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  fecha: text("fecha").notNull(),
+  turno: text("turno").notNull(),
+  estado: text("estado", { enum: ["en_curso", "completada"] }).notNull().default("en_curso"),
+  iniciadaEn: text("iniciada_en"),
+  iniciadaPor: integer("iniciada_por").references(() => usuarios.id),
+  completadaEn: text("completada_en"),
+  completadaPor: integer("completada_por").references(() => usuarios.id),
+  minutosRonda: integer("minutos_ronda"),
+  puntosTotal: integer("puntos_total").notNull().default(0),
+  puntosOk: integer("puntos_ok").notNull().default(0),
+  puntosFuera: integer("puntos_fuera").notNull().default(0),
+  puntosNoVerificados: integer("puntos_no_verificados").notNull().default(0),
+  notas: text("notas"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  recorridoJson: text("recorrido_json"),
+  firmaNombre: text("firma_nombre"),
+  recibidaEn: text("recibida_en"),
+});
+
+// La UNIQUE (ejecucion_id, punto_id) vive en la migración 0052: reanotar un
+// punto corrige la lectura en lugar de duplicarla.
+export const rondaLecturas = sqliteTable("ronda_lecturas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ejecucionId: integer("ejecucion_id").notNull().references(() => rondaEjecuciones.id, { onDelete: "cascade" }),
+  puntoId: integer("punto_id").notNull().references(() => rondaPuntos.id, { onDelete: "cascade" }),
+  resultado: text("resultado", { enum: ["ok", "fuera", "no_verificado"] }).notNull(),
+  valor: real("valor"),
+  valorTexto: text("valor_texto"),
+  nota: text("nota"),
+  medicionId: integer("medicion_id").references(() => mediciones.id),
+  aopEventoId: integer("aop_evento_id").references(() => aopEventos.id),
+  registradoPor: integer("registrado_por").references(() => usuarios.id),
+  registradoEn: text("registrado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+  ordenId: integer("orden_id"),
+});
+
+// El libro de la ronda: cada toque con su hora real y su hora de llegada. No se edita ni se borra.
+export const rondaMarcas = sqliteTable("ronda_marcas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ejecucionId: integer("ejecucion_id").notNull().references(() => rondaEjecuciones.id),
+  puntoId: integer("punto_id").notNull().references(() => rondaPuntos.id),
+  resultado: text("resultado", { enum: ["ok", "fuera", "no_verificado"] }).notNull(),
+  valor: real("valor"),
+  nota: text("nota"),
+  aopEventoId: integer("aop_evento_id"),
+  ocurridoEn: text("ocurrido_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  sinSenal: integer("sin_senal", { mode: "boolean" }).notNull().default(false),
+  ajustado: integer("ajustado", { mode: "boolean" }).notNull().default(false),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  opId: text("op_id"),
+});
+
+// La revisión semanal de la jefatura: congela los números de la semana. No se edita ni se borra.
+export const rondaRevisiones = sqliteTable("ronda_revisiones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sucursalId: integer("sucursal_id").notNull().references(() => sucursales.id),
+  semana: text("semana").notNull(),
+  esperadas: integer("esperadas").notNull(),
+  completas: integer("completas").notNull(),
+  conNovedad: integer("con_novedad").notNull(),
+  incompletas: integer("incompletas").notNull(),
+  noHechas: integer("no_hechas").notNull(),
+  observaciones: text("observaciones"),
+  revisadaPor: integer("revisada_por").notNull().references(() => usuarios.id),
+  revisadaNombre: text("revisada_nombre").notNull(),
+  revisadaEn: text("revisada_en").notNull(),
+});
+
+// ─── Modo técnico (Fase 54) ──────────────────────────────────────────────────
+// Solo-agregar: la marca de cada paso con su hora real en el celular y la hora
+// en que llegó al servidor. De aquí sale el tiempo por paso del reporte.
+export const ordenPasoMarcas = sqliteTable("orden_paso_marcas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
+  pasoIdx: integer("paso_idx").notNull(),
+  pasoTexto: text("paso_texto").notNull(),
+  estado: text("estado").notNull(),
+  valor: text("valor"),
+  nota: text("nota"),
+  ocurridoEn: text("ocurrido_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  sinSenal: integer("sin_senal", { mode: "boolean" }).notNull().default(false),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  opId: text("op_id"),
+});
+
+// Cada operación del celular se aplica una sola vez aunque la red la reintente.
+export const campoOperaciones = sqliteTable("campo_operaciones", {
+  opId: text("op_id").primaryKey(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  tipo: text("tipo").notNull(),
+  ordenId: integer("orden_id"),
+  capturadoEn: text("capturado_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  resultado: text("resultado").notNull(),
+  detalle: text("detalle"),
+  payload: text("payload"),
+});
+
+export type Ronda = typeof rondas.$inferSelect;
+export type RondaPunto = typeof rondaPuntos.$inferSelect;
+export type RondaEjecucion = typeof rondaEjecuciones.$inferSelect;
+export type RondaLectura = typeof rondaLecturas.$inferSelect;
+
+export type Procedimiento = typeof procedimientos.$inferSelect;
+export type ProcedimientoValidacion = typeof procedimientoValidaciones.$inferSelect;
+export type AopUmbral = typeof aopUmbrales.$inferSelect;
+export type AopEvento = typeof aopEventos.$inferSelect;
+export type EopFicha = typeof eopFicha.$inferSelect;
+export type OrdenPrerrequisito = typeof ordenPrerrequisitos.$inferSelect;
+export type OrdenLiberacion = typeof ordenLiberaciones.$inferSelect;
 // ─── Conjuntos operativos y trazabilidad de composición ──────────────────────
 export const conjuntos = sqliteTable("conjuntos", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -8,6 +8,7 @@ import {
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { toCsv, csvResponse, rangoFechas } from "@/lib/csv";
+import { consolidadoMantenimiento } from "@/lib/reporte-mantenimiento";
 
 export const prerender = false;
 
@@ -19,6 +20,35 @@ export const GET: APIRoute = async (ctx) => {
   const { desde, hasta } = rangoFechas(url);
   const db = getDb(ctx);
 
+  if (tipo === "mantenimiento") {
+    const q = url.searchParams;
+    const { filas } = await consolidadoMantenimiento(db, {
+      desde, hasta,
+      sede: Number(q.get("sede")) || null,
+      tecnico: Number(q.get("tecnico")) || null,
+      rubro: q.get("area"),
+      tipo: q.get("tipo"),
+    });
+    const cols = [
+      { key: "registro", label: "Orden" },
+      { key: "codigo", label: "Código equipo" },
+      { key: "equipo", label: "Equipo" },
+      { key: "ubicacion", label: "Ubicación" },
+      { key: "sede", label: "Sede" },
+      { key: "tecnico", label: "Técnico" },
+      { key: "tipoLabel", label: "Tipo" },
+      { key: "inicio", label: "Inicio" },
+      { key: "fin", label: "Fin" },
+      { key: "efectivoMin", label: "Minutos de trabajo" },
+      { key: "pausaMin", label: "Minutos en pausa" },
+      { key: "estimadoMin", label: "Minutos estimados" },
+      { key: "pasos", label: "Pasos" },
+      { key: "novedades", label: "Novedades" },
+      { key: "estadoLabel", label: "Estado" },
+    ];
+    return csvResponse(`mantenimiento_${stamp()}.csv`, toCsv(filas, cols));
+  }
+
   if (tipo === "ordenes") {
     const conds: any[] = [];
     if (desde) conds.push(gte(ordenes.createdAt, desde));
@@ -28,7 +58,7 @@ export const GET: APIRoute = async (ctx) => {
 
     const rows = await db
       .select({
-        id: ordenes.id,
+        codigo: ordenes.codigo,
         titulo: ordenes.titulo,
         tipo: ordenes.tipo,
         prioridad: ordenes.prioridad,
@@ -57,7 +87,7 @@ export const GET: APIRoute = async (ctx) => {
       .orderBy(desc(ordenes.id));
 
     const cols = [
-      { key: "id", label: "OT" },
+      { key: "codigo", label: "OT" },
       { key: "titulo", label: "Título" },
       { key: "tipo", label: "Tipo" },
       { key: "prioridad", label: "Prioridad" },
@@ -153,14 +183,19 @@ export const GET: APIRoute = async (ctx) => {
         motivo: movimientosInventario.motivo,
         referencia: movimientosInventario.referencia,
         ordenId: movimientosInventario.ordenId,
+        ordenCodigo: ordenes.codigo,
         usuario: usuarios.nombre,
         notas: movimientosInventario.notas,
       })
       .from(movimientosInventario)
       .leftJoin(items, eq(items.id, movimientosInventario.itemId))
       .leftJoin(usuarios, eq(usuarios.id, movimientosInventario.usuarioId))
+      .leftJoin(ordenes, eq(ordenes.id, movimientosInventario.ordenId))
       .where(conds.length ? and(...conds) : undefined)
       .orderBy(desc(movimientosInventario.id));
+
+    // Un repuesto de orden guarda la referencia "orden:<id>": en el archivo se lee el código.
+    const filas = rows.map((r) => (r.ordenCodigo && r.referencia === `orden:${r.ordenId}` ? { ...r, referencia: r.ordenCodigo } : r));
 
     const cols = [
       { key: "fecha", label: "Fecha" },
@@ -171,11 +206,11 @@ export const GET: APIRoute = async (ctx) => {
       { key: "cantidad", label: "Cantidad" },
       { key: "motivo", label: "Motivo" },
       { key: "referencia", label: "Referencia" },
-      { key: "ordenId", label: "OT" },
+      { key: "ordenCodigo", label: "OT" },
       { key: "usuario", label: "Usuario" },
       { key: "notas", label: "Notas" },
     ];
-    return csvResponse(`movimientos_${stamp()}.csv`, toCsv(rows, cols));
+    return csvResponse(`movimientos_${stamp()}.csv`, toCsv(filas, cols));
   }
 
   if (tipo === "requisiciones") {
@@ -222,7 +257,7 @@ export const GET: APIRoute = async (ctx) => {
 
     const rows = await db
       .select({
-        ordenId: encuestasSatisfaccion.ordenId,
+        ordenCodigo: ordenes.codigo,
         otTitulo: ordenes.titulo,
         equipo: activos.nombre,
         destinatario: encuestasSatisfaccion.destinatarioNombre,
@@ -239,7 +274,7 @@ export const GET: APIRoute = async (ctx) => {
       .orderBy(desc(encuestasSatisfaccion.id));
 
     const cols = [
-      { key: "ordenId", label: "OT" },
+      { key: "ordenCodigo", label: "OT" },
       { key: "otTitulo", label: "Título OT" },
       { key: "equipo", label: "Equipo" },
       { key: "destinatario", label: "Solicitante" },

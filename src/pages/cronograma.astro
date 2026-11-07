@@ -94,7 +94,7 @@ const items: Item[] = [
     ubicacion: r.ub?.nombre ?? r.a?.ubicacion ?? null,
     asignado: r.u?.nombre ?? null,
     asignadoId: r.p.asignadoA ?? null,
-    icono: "🛠",
+    icono: "",
     yaGenerada: !!(r.p.ultimaGeneracion && r.p.ultimaGeneracion.slice(0, 10) >= r.p.proximaFecha),
   })),
   ...actRows.map((r): Item => ({
@@ -109,7 +109,7 @@ const items: Item[] = [
     ubicacion: r.ub?.nombre ?? r.a.ubicacionDetalle ?? null,
     asignado: r.u?.nombre ?? null,
     asignadoId: r.a.asignadoA ?? null,
-    icono: r.c?.icono ?? "📌",
+    icono: r.c?.icono ?? "",
     yaGenerada: !!(r.a.ultimaGeneracion && r.a.ultimaGeneracion.slice(0, 10) >= r.a.proximaFecha),
   })),
 ].sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -214,29 +214,29 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       <h1 class="text-2xl font-bold">Cronograma de mantenimiento</h1>
       <p class="mt-1 text-sm text-slate-500">
         {planRows.length} plan(es) por equipo · {actRows.length} actividad(es) recurrente(s)
-        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· {sedeActiva.nombre}</span>}
         {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2 text-sm">
       <select id="sedeFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por sede">
-        <option value="">🏢 Todas las sedes</option>
+        <option value="">Todas las sedes</option>
         {sucursalesList.map((s) => (
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
       <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por área">
-        <option value="">🏷 Todas las áreas</option>
+        <option value="">Todas las áreas</option>
         {RUBRO_KEYS.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
       <a href={areaHref("/planificador", dominio)} class="btn-secondary">Planificador mensual</a>
-      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📊 Gantt</a>
-      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan</a>
-      <a href={areaHref("/actividades", dominio)} class="btn-secondary">📌 Actividades</a>
+      <a href={`/gantt${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">Gantt</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">Plan</a>
+      <a href={areaHref("/actividades", dominio)} class="btn-secondary">Actividades</a>
       {(user.rol === "admin" || user.rol === "jefe") && (
-        <a href={areaHref("/planes", dominio)} class="btn-secondary">🛠 Gestionar planes</a>
+        <a href={areaHref("/planes", dominio)} class="btn-secondary">Gestionar planes</a>
       )}
     </div>
   </div>
@@ -299,15 +299,15 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
                 </div>
                 {(r.sucursal || r.ubicacion) && (
                   <div class="text-xs text-slate-500">
-                    {r.sucursal && <span>🏢 {r.sucursal}</span>}
-                    {r.ubicacion && <span> · 📍 {r.ubicacion}</span>}
+                    {r.sucursal && <span>{r.sucursal}</span>}
+                    {r.ubicacion && <span> · {r.ubicacion}</span>}
                   </div>
                 )}
                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                   <span class="capitalize">{r.frecuencia}</span>
                   {puedeAsignar ? (
                     <label class="inline-flex items-center gap-1 normal-case">
-                      <span aria-hidden="true">👤</span>
+                      
                       <select
                         class="asignar-sel rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-700 hover:border-slate-300 focus:border-brand-500 focus:outline-none"
                         data-tipo={r.tipo}
@@ -321,14 +321,14 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
                       </select>
                     </label>
                   ) : (
-                    r.asignado && <span class="normal-case">· 👤 {r.asignado}</span>
+                    r.asignado && <span class="normal-case">· {r.asignado}</span>
                   )}
                 </div>
                 {puedeGenerar && (
                   r.yaGenerada
                     ? <div class="mt-2 text-[11px] text-emerald-700 font-medium">✓ OT ya generada para este ciclo</div>
                     : <button class="generar-ot-btn mt-2 px-2 py-1 rounded bg-brand-600 text-white text-[11px] font-medium hover:bg-brand-700 disabled:opacity-50" data-tipo={r.tipo} data-id={r.id}>
-                        ⚡ Generar OT ahora
+                        Generar OT ahora
                       </button>
                 )}
               </li>
@@ -341,7 +341,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
 
   <!-- Vista anual -->
   <div class="card mt-6 p-5">
-    <h2 class="font-semibold text-slate-900">📆 Vista anual de preventivos (12 meses)</h2>
+    <h2 class="font-semibold text-slate-900">Vista anual de preventivos (12 meses)</h2>
     <p class="text-xs text-slate-500">Proyección de mantenimientos programados por mes. Barra roja = mes con colisión de equipos críticos.</p>
     <div class="mt-4 flex items-end gap-1.5 overflow-x-auto pb-2">
       {meses.map((m) => {
@@ -363,7 +363,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
 
   <!-- Colisiones de equipos críticos -->
   <div class="card mt-4 p-5">
-    <h2 class="font-semibold text-slate-900">⚠ Colisiones de equipos críticos</h2>
+    <h2 class="font-semibold text-slate-900">Colisiones de equipos críticos</h2>
     <p class="text-xs text-slate-500">Semanas con 2 o más equipos críticos programados a la vez — evita dejarlos fuera de servicio simultáneamente.</p>
     {colisiones.length === 0 ? (
       <p class="mt-3 text-sm text-emerald-700">✓ Sin colisiones detectadas en los próximos 12 meses.</p>
@@ -402,7 +402,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
             // Redirige a la nueva OT
             location.href = areaHref(`/ordenes/${j.orden.id}`, area);
           } else {
-            window.showToast?.("✗ " + (j.error ?? "Error al generar OT"), "error");
+            window.showToast?.("✕ " + (j.error ?? "Error al generar OT"), "error");
             btn.disabled = false;
             btn.textContent = labelOriginal;
           }
