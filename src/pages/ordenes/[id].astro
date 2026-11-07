@@ -2828,7 +2828,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   )}
 
   <!-- ══ MOP y EOP: prerrequisitos, liberaciones, horas y plan de reversa ══ -->
-  <script define:vars={{ otId: o.id }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
+    const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const g = (x) => document.getElementById(x);
 
     function aviso(el, texto, ok) {

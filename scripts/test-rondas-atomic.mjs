@@ -119,7 +119,7 @@ for(const scenario of [
   eq((await f.save()).status,200);
   const snapshot=f.sqlite.prepare('SELECT equipment_snapshot_json FROM rondas_executions').get().equipment_snapshot_json;
   eq(JSON.parse(snapshot)[0].planes[0].overdue,true);
-  f.sqlite.exec("INSERT INTO ordenes(titulo,tipo,estado,activo_id,plan_id,asignado_a,creado_por,completada_en,verificado_por,verificado_en,trabajos_realizados,verificacion_notas) VALUES('Completed while round open','preventivo','cerrada',1,1,2,1,'2026-10-01T12:00:00Z',3,'2026-10-02T12:00:00Z','Servicio documentado','Revisión documentada'); UPDATE planes_mantenimiento SET proxima_fecha='2099-11-01' WHERE id=1");
+  f.sqlite.exec("INSERT INTO ordenes(titulo,tipo,estado,activo_id,plan_id,asignado_a,creado_por,completada_en,verificado_por,verificado_en,trabajos_realizados,verificacion_notas) VALUES('Completed while round open','preventivo','cerrada',1,1,2,1,'"+new Date(Date.now()-86400000).toISOString()+"',3,'"+new Date().toISOString()+"','Servicio documentado','Revisión documentada'); UPDATE planes_mantenimiento SET proxima_fecha='2099-11-01' WHERE id=1");
   eq((await f.save('ac',1)).status,200);
   eq(f.sqlite.prepare('SELECT COUNT(*) n FROM rondas_proposals').get().n,1,'frozen overdue snapshot cannot create a new recovery action after live verified maintenance');
   eq(f.sqlite.prepare('SELECT equipment_snapshot_json FROM rondas_executions').get().equipment_snapshot_json,snapshot,'original inspection snapshot remains immutable during the live recheck');
