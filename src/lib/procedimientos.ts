@@ -59,7 +59,7 @@ export const TIPO_PROC: Record<TipoProc, TipoProcInfo> = {
   scp: {
     label: "SCP",
     nombre: "Configuración de sitio",
-    icono: "🗺️",
+    icono: "",
     color: "bg-sky-100 text-sky-700",
     borde: "border-sky-300",
     pregunta: "¿Cómo está configurado este sistema cuando todo está normal?",
@@ -68,7 +68,7 @@ export const TIPO_PROC: Record<TipoProc, TipoProcInfo> = {
   sop: {
     label: "SOP",
     nombre: "Rutina de operación",
-    icono: "🔁",
+    icono: "",
     color: "bg-emerald-100 text-emerald-700",
     borde: "border-emerald-300",
     pregunta: "¿Qué se verifica cada turno, cada día, cada mes?",
@@ -77,7 +77,7 @@ export const TIPO_PROC: Record<TipoProc, TipoProcInfo> = {
   mop: {
     label: "MOP",
     nombre: "Intervención programada",
-    icono: "🔧",
+    icono: "",
     color: "bg-amber-100 text-amber-700",
     borde: "border-amber-300",
     pregunta: "¿Cómo se cambia el estado del sistema sin dañar al paciente?",
@@ -86,7 +86,7 @@ export const TIPO_PROC: Record<TipoProc, TipoProcInfo> = {
   eop: {
     label: "EOP",
     nombre: "Emergencia",
-    icono: "🚨",
+    icono: "",
     color: "bg-red-100 text-red-700",
     borde: "border-red-300",
     pregunta: "¿Qué se hace cuando el sistema ya falló?",
@@ -95,7 +95,7 @@ export const TIPO_PROC: Record<TipoProc, TipoProcInfo> = {
   aop: {
     label: "AOP",
     nombre: "Condición anormal",
-    icono: "⚠️",
+    icono: "",
     color: "bg-orange-100 text-orange-700",
     borde: "border-orange-300",
     pregunta: "¿Qué se hace cuando un valor se sale de rango y aún no es emergencia?",
@@ -113,13 +113,13 @@ export interface SistemaInfo {
 }
 
 export const SISTEMAS: SistemaInfo[] = [
-  { value: "electrico", label: "Energía eléctrica", icono: "⚡", color: "bg-yellow-100 text-yellow-800" },
-  { value: "hvac", label: "Climatización", icono: "❄️", color: "bg-cyan-100 text-cyan-800" },
-  { value: "gases", label: "Gases medicinales", icono: "🫁", color: "bg-indigo-100 text-indigo-800" },
-  { value: "agua", label: "Agua", icono: "💧", color: "bg-blue-100 text-blue-800" },
-  { value: "incendios", label: "Protección contra incendios", icono: "🧯", color: "bg-red-100 text-red-800" },
-  { value: "ascensores", label: "Ascensores", icono: "🛗", color: "bg-slate-100 text-slate-700" },
-  { value: "otro", label: "Otro", icono: "📋", color: "bg-slate-100 text-slate-600" },
+  { value: "electrico", label: "Energía eléctrica", icono: "", color: "bg-yellow-100 text-yellow-800" },
+  { value: "hvac", label: "Climatización", icono: "", color: "bg-cyan-100 text-cyan-800" },
+  { value: "gases", label: "Gases medicinales", icono: "", color: "bg-indigo-100 text-indigo-800" },
+  { value: "agua", label: "Agua", icono: "", color: "bg-blue-100 text-blue-800" },
+  { value: "incendios", label: "Protección contra incendios", icono: "", color: "bg-red-100 text-red-800" },
+  { value: "ascensores", label: "Ascensores", icono: "", color: "bg-slate-100 text-slate-700" },
+  { value: "otro", label: "Otro", icono: "", color: "bg-slate-100 text-slate-600" },
 ];
 
 export const sistemaInfo = (s: string | null | undefined): SistemaInfo =>
@@ -137,31 +137,31 @@ export interface EstadoProcInfo {
 export const ESTADO_PROC: Record<EstadoProc, EstadoProcInfo> = {
   borrador: {
     label: "Borrador",
-    icono: "✏️",
+    icono: "",
     color: "bg-slate-100 text-slate-600",
     descripcion: "Escrito pero sin dueño, sin calendario o sin campos completos.",
   },
   en_validacion: {
     label: "En validación",
-    icono: "🔍",
+    icono: "",
     color: "bg-amber-100 text-amber-700",
     descripcion: "Con dueño y calendario; cada área confirma lo que le toca.",
   },
   vigente: {
     label: "Vigente",
-    icono: "✅",
+    icono: "✓",
     color: "bg-emerald-100 text-emerald-700",
     descripcion: "Validado por todas las áreas, con código institucional y cargado en el sistema.",
   },
   en_revision: {
     label: "En revisión",
-    icono: "🔄",
+    icono: "",
     color: "bg-blue-100 text-blue-700",
     descripcion: "Vigente pero con una versión nueva en preparación.",
   },
   retirado: {
     label: "Retirado",
-    icono: "📦",
+    icono: "",
     color: "bg-slate-200 text-slate-500",
     descripcion: "Fuera de uso; se conserva como historial.",
   },

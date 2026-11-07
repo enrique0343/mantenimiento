@@ -1649,6 +1649,37 @@ export const rondaLecturas = sqliteTable("ronda_lecturas", {
   registradoEn: text("registrado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Modo técnico (Fase 54) ──────────────────────────────────────────────────
+// Solo-agregar: la marca de cada paso con su hora real en el celular y la hora
+// en que llegó al servidor. De aquí sale el tiempo por paso del reporte.
+export const ordenPasoMarcas = sqliteTable("orden_paso_marcas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().references(() => ordenes.id, { onDelete: "cascade" }),
+  pasoIdx: integer("paso_idx").notNull(),
+  pasoTexto: text("paso_texto").notNull(),
+  estado: text("estado").notNull(),
+  valor: text("valor"),
+  nota: text("nota"),
+  ocurridoEn: text("ocurrido_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  sinSenal: integer("sin_senal", { mode: "boolean" }).notNull().default(false),
+  usuarioId: integer("usuario_id").references(() => usuarios.id),
+  opId: text("op_id"),
+});
+
+// Cada operación del celular se aplica una sola vez aunque la red la reintente.
+export const campoOperaciones = sqliteTable("campo_operaciones", {
+  opId: text("op_id").primaryKey(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  tipo: text("tipo").notNull(),
+  ordenId: integer("orden_id"),
+  capturadoEn: text("capturado_en").notNull(),
+  recibidoEn: text("recibido_en").notNull(),
+  resultado: text("resultado").notNull(),
+  detalle: text("detalle"),
+  payload: text("payload"),
+});
+
 export type Ronda = typeof rondas.$inferSelect;
 export type RondaPunto = typeof rondaPuntos.$inferSelect;
 export type RondaEjecucion = typeof rondaEjecuciones.$inferSelect;

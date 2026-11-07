@@ -8,6 +8,7 @@ import {
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { toCsv, csvResponse, rangoFechas } from "@/lib/csv";
+import { consolidadoMantenimiento } from "@/lib/reporte-mantenimiento";
 
 export const prerender = false;
 
@@ -18,6 +19,35 @@ export const GET: APIRoute = async (ctx) => {
   const url = new URL(ctx.request.url);
   const { desde, hasta } = rangoFechas(url);
   const db = getDb(ctx);
+
+  if (tipo === "mantenimiento") {
+    const q = url.searchParams;
+    const { filas } = await consolidadoMantenimiento(db, {
+      desde, hasta,
+      sede: Number(q.get("sede")) || null,
+      tecnico: Number(q.get("tecnico")) || null,
+      rubro: q.get("area"),
+      tipo: q.get("tipo"),
+    });
+    const cols = [
+      { key: "registro", label: "Registro" },
+      { key: "codigo", label: "Código equipo" },
+      { key: "equipo", label: "Equipo" },
+      { key: "ubicacion", label: "Ubicación" },
+      { key: "sede", label: "Sede" },
+      { key: "tecnico", label: "Técnico" },
+      { key: "tipoLabel", label: "Tipo" },
+      { key: "inicio", label: "Inicio" },
+      { key: "fin", label: "Fin" },
+      { key: "efectivoMin", label: "Minutos de trabajo" },
+      { key: "pausaMin", label: "Minutos en pausa" },
+      { key: "estimadoMin", label: "Minutos estimados" },
+      { key: "pasos", label: "Pasos" },
+      { key: "novedades", label: "Novedades" },
+      { key: "estadoLabel", label: "Estado" },
+    ];
+    return csvResponse(`mantenimiento_${stamp()}.csv`, toCsv(filas, cols));
+  }
 
   if (tipo === "ordenes") {
     const conds: any[] = [];

@@ -51,7 +51,7 @@ const TIPOS_UB = [
         data-tab={t}
         class:list={["tab-btn px-4 py-2 text-sm font-medium rounded-t-md", t === "empresa" ? "bg-brand-50 text-brand-700 border border-b-white border-slate-200" : "text-slate-600 hover:bg-slate-100"]}
       >
-        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : t === "correo" ? "Correo electrónico" : t === "compras" ? "🛒 Destinatarios compras" : "📋 Plantillas checklist"}
+        {t === "empresa" ? "Empresa" : t === "sucursales" ? "Sucursales" : t === "correo" ? "Correo electrónico" : t === "compras" ? "Destinatarios compras" : "Plantillas checklist"}
       </button>
     ))}
   </div>
@@ -109,7 +109,7 @@ const TIPOS_UB = [
         <div class="flex flex-col gap-2">
           <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100 border border-brand-200 w-fit">
             <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" class="hidden" />
-            📎 Subir / reemplazar logo
+            Subir / reemplazar logo
           </label>
           {emp?.logoR2Key && (
             <button id="logoDel" class="text-xs text-red-600 hover:underline w-fit">Eliminar logo</button>
@@ -370,7 +370,7 @@ const TIPOS_UB = [
   <!-- Tab: Plantillas de checklist (SOP/MOP ejecutables) -->
   <div id="tab-checklists" class="tab-panel mt-4 hidden">
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">📋 Plantillas de checklist (SOP / MOP)</h2>
+      <h2 class="font-semibold text-slate-900">Plantillas de checklist (SOP / MOP)</h2>
       <p class="mt-1 text-sm text-slate-600">
         Son la <strong>parte ejecutable</strong> del documento: los pasos que la orden de trabajo copia, con
         criterio de aceptación, punto crítico, lectura exigida, tiempo estimado y materiales (requisitos JCI).
@@ -445,7 +445,7 @@ const TIPOS_UB = [
       const el = document.getElementById("proveedorEstado");
       if (!el) return;
       if (j.proveedor === "ninguno") {
-        el.innerHTML = `<span class="text-amber-700">⚠ Sin configurar — los emails no se enviarán</span>`;
+        el.innerHTML = `<span class="text-amber-700">Sin configurar — los emails no se enviarán</span>`;
       } else {
         el.innerHTML = `<span class="text-emerald-700">✓ Activo: ${j.nombre}</span>`;
       }
@@ -459,7 +459,7 @@ const TIPOS_UB = [
       const res = await fetch("/api/email/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ to }) });
       const j = await res.json().catch(() => ({}));
       if (res.ok) { msg.textContent = `✓ Email enviado vía ${j.nombreProveedor ?? "proveedor"}`; msg.className = "text-sm text-emerald-600"; }
-      else { msg.textContent = "✗ " + (j.error ?? "Error desconocido"); msg.className = "text-sm text-red-600"; }
+      else { msg.textContent = "✕ " + (j.error ?? "Error desconocido"); msg.className = "text-sm text-red-600"; }
       msg.classList.remove("hidden");
     });
   </script>
@@ -513,7 +513,7 @@ const TIPOS_UB = [
       setTimeout(() => location.reload(), 800);
     } else {
       logoMsg.className = "mt-2 text-sm text-red-600";
-      logoMsg.textContent = "✗ " + (j.error ?? "Error al subir");
+      logoMsg.textContent = "✕ " + (j.error ?? "Error al subir");
     }
   });
   document.getElementById("logoDel")?.addEventListener("click", async () => {

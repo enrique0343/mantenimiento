@@ -44,7 +44,7 @@ const hoy = new Date().toISOString().slice(0, 10);
         <label class="label">Categoría</label>
         <select class="input" id="categoriaId">
           <option value="">— Seleccionar —</option>
-          {cats.map((c) => <option value={c.id} data-area={c.rubro}>{c.icono} {c.nombre}</option>)}
+          {cats.map((c) => <option value={c.id} data-area={c.rubro}>{c.nombre}</option>)}
         </select>
       </div>
       <div class="sm:col-span-2">

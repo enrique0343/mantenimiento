@@ -198,16 +198,16 @@ const PRESETS = [
 const presetsJson = JSON.stringify(PRESETS);
 
 const SECCIONES = [
-  { id: "escalar", titulo: "Vencidas para escalar", icono: "🚨", lista: porEscalar, nota: "El tiempo tolerable se agotó: avisar al nivel superior o pasar al EOP." },
-  { id: "actuar", titulo: "Por actuar", icono: "⏱️", lista: porActuar, nota: "Detectadas y sin una sola acción registrada." },
-  { id: "correccion", titulo: "En corrección", icono: "🔧", lista: enCorreccion, nota: "Alguien está ejecutando las acciones inmediatas." },
+  { id: "escalar", titulo: "Vencidas para escalar", icono: "", lista: porEscalar, nota: "El tiempo tolerable se agotó: avisar al nivel superior o pasar al EOP." },
+  { id: "actuar", titulo: "Por actuar", icono: "", lista: porActuar, nota: "Detectadas y sin una sola acción registrada." },
+  { id: "correccion", titulo: "En corrección", icono: "", lista: enCorreccion, nota: "Alguien está ejecutando las acciones inmediatas." },
 ];
 ---
 
 <Layout title="AOP · desviaciones">
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">🌡️ AOP · condición anormal</h1>
+      <h1 class="text-2xl font-bold">AOP · condición anormal</h1>
       <p class="mt-1 max-w-2xl text-sm text-slate-500">
         Una lectura fuera de rango con un reloj corriendo. No es todavía una emergencia, pero tiene
         tiempo tolerable y criterio de paso al EOP. Ordenado por urgencia del reloj.
@@ -241,7 +241,6 @@ const SECCIONES = [
 
   {abiertas.length === 0 && (
     <div class="card mt-6 p-10 text-center">
-      <div class="text-4xl">✅</div>
       <h2 class="mt-3 font-semibold text-slate-800">Ninguna desviación abierta</h2>
       <p class="mx-auto mt-1 max-w-md text-sm text-slate-500">
         Cuando una lectura de la ronda sale de la banda de operación, se abre aquí con su reloj.
@@ -290,8 +289,8 @@ const SECCIONES = [
               )}
 
               <div class="mt-2 text-xs text-slate-500">
-                📍 {f.sala ?? "Sin sala"}{f.sede ? ` · ${f.sede}` : ""}
-                {f.equipo && <span class="block">⚙️ {f.equipo}{f.equipoCodigo ? ` (${f.equipoCodigo})` : ""}</span>}
+                {f.sala ?? "Sin sala"}{f.sede ? ` · ${f.sede}` : ""}
+                {f.equipo && <span class="block">{f.equipo}{f.equipoCodigo ? ` (${f.equipoCodigo})` : ""}</span>}
               </div>
 
               <div class="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
@@ -332,7 +331,7 @@ const SECCIONES = [
   {cerradasHoy.length > 0 && (
     <section class="mt-7">
       <div class="flex flex-wrap items-baseline gap-2">
-        <h2 class="font-semibold text-slate-700">✅ Cerradas hoy</h2>
+        <h2 class="font-semibold text-slate-700">✓ Cerradas hoy</h2>
         <span class="badge bg-slate-100 text-slate-600">{cerradasHoy.length}</span>
       </div>
       <div class="card mt-3 overflow-x-auto">
@@ -374,7 +373,7 @@ const SECCIONES = [
 
   {indicador8.length > 0 && (
     <section class="mt-7">
-      <h2 class="font-semibold text-slate-700">📊 Indicador 8 · horas fuera de rango por sala ({periodo})</h2>
+      <h2 class="font-semibold text-slate-700">Indicador 8 · horas fuera de rango por sala ({periodo})</h2>
       <div class="card mt-3 overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500">
@@ -405,9 +404,9 @@ const SECCIONES = [
 
   <section class="mt-7">
     <div class="flex flex-wrap items-baseline gap-2">
-      <h2 class="font-semibold text-slate-700">🎚️ Umbrales sobre los activos</h2>
+      <h2 class="font-semibold text-slate-700">Umbrales sobre los activos</h2>
       <span class="badge bg-slate-100 text-slate-600">{umbralesUI.length}</span>
-      <span class="text-xs text-slate-400">Los AOP no ocupan filas del plan: viven como umbrales sobre los activos.</span>
+      <span class="text-xs text-slate-400">{puedeAdmin && "Actuar y escalar van en minutos; vacío significa sin plazo. El cambio aplica a las desviaciones nuevas. "}Los AOP no ocupan filas del plan: viven como umbrales sobre los activos.</span>
     </div>
     {umbralesRows.length === 0 ? (
       <p class="card mt-3 p-4 text-sm text-slate-500">
@@ -436,12 +435,23 @@ const SECCIONES = [
                 <td class="px-3 py-2 text-slate-700">{r.varNombre ?? "—"}</td>
                 <td class="px-3 py-2 text-slate-600">{r.sala ?? r.equipo ?? "—"}</td>
                 <td class="px-3 py-2 tabular-nums">{fmtRango(r.u.minAlerta, r.u.maxAlerta, r.varUnidad)}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosParaActuar)}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosParaEscalar)}</td>
+                <td class="px-3 py-2 text-right tabular-nums">
+                  {puedeAdmin
+                    ? <input class="input ml-auto w-24 text-right umbralActuar" type="number" min="0" step="1" inputmode="numeric" value={r.u.minutosParaActuar ?? ""} placeholder="Sin plazo" aria-label={`Minutos para actuar en ${r.codigoAop ?? "este umbral"}`} data-id={r.u.id} />
+                    : fmtDuracion(r.u.minutosParaActuar)}
+                </td>
+                <td class="px-3 py-2 text-right tabular-nums">
+                  {puedeAdmin
+                    ? <input class="input ml-auto w-24 text-right umbralEscalar" type="number" min="0" step="1" inputmode="numeric" value={r.u.minutosParaEscalar ?? ""} placeholder="Sin plazo" aria-label={`Minutos para escalar en ${r.codigoAop ?? "este umbral"}`} data-id={r.u.id} />
+                    : fmtDuracion(r.u.minutosParaEscalar)}
+                </td>
                 <td class="px-3 py-2 text-right tabular-nums">{fmtDuracion(r.u.minutosEventoPersistente)}</td>
                 {puedeAdmin && (
                   <td class="px-3 py-2 text-right">
-                    <button class="btn-secondary btn-sm bajaUmbral" data-id={r.u.id}>Dar de baja</button>
+                    <div class="flex justify-end gap-2">
+                      <button class="btn-primary btn-sm guardarUmbral" data-id={r.u.id}>Guardar</button>
+                      <button class="btn-secondary btn-sm bajaUmbral" data-id={r.u.id}>Dar de baja</button>
+                    </div>
                   </td>
                 )}
               </tr>
@@ -771,6 +781,23 @@ const SECCIONES = [
           err.textContent = typeof j.error === "string" ? j.error : "No se pudo crear el umbral";
           err.classList.remove("hidden");
         }
+      });
+
+      document.querySelectorAll(".guardarUmbral").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const id = b.getAttribute("data-id");
+          const valor = (sel) => {
+            const v = document.querySelector(sel + '[data-id="' + id + '"]')?.value?.trim();
+            return v === "" || v === undefined ? null : Number(v);
+          };
+          const res = await fetch("/api/aop/umbrales", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: Number(id), minutosParaActuar: valor(".umbralActuar"), minutosParaEscalar: valor(".umbralEscalar") }),
+          });
+          if (res.ok) window.showToast?.("Reloj guardado", "success");
+          else window.showToast?.("No se pudo guardar el reloj", "error");
+        });
       });
 
       document.querySelectorAll(".bajaUmbral").forEach((b) => {

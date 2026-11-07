@@ -63,17 +63,17 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
       <a href="/electrico" class="text-xs text-slate-400 hover:text-slate-600">← Control eléctrico</a>
-      <h1 class="mt-1 text-2xl font-bold">⚡ {row.sub.nombre}</h1>
+      <h1 class="mt-1 text-2xl font-bold">{row.sub.nombre}</h1>
       <p class="mt-1 text-sm text-slate-500">
-        🏢 {row.s?.nombre ?? "Sin sede"}
+        {row.s?.nombre ?? "Sin sede"}
         {row.sub.codigo && <span class="ml-2 font-mono text-xs border border-slate-200 rounded px-1.5 py-0.5">{row.sub.codigo}</span>}
-        {row.sub.ubicacionDetalle && <span class="ml-2">📍 {row.sub.ubicacionDetalle}</span>}
+        {row.sub.ubicacionDetalle && <span class="ml-2">{row.sub.ubicacionDetalle}</span>}
       </p>
     </div>
     {esAdmin && (
       <div class="flex gap-2">
-        <button id="editSubBtn" class="btn-secondary">✎ Editar</button>
-        <button id="delSubBtn" class="btn-danger">🗑 Dar de baja</button>
+        <button id="editSubBtn" class="btn-secondary">Editar</button>
+        <button id="delSubBtn" class="btn-danger">Dar de baja</button>
       </div>
     )}
   </div>
@@ -114,7 +114,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
       <div class={`h-full rounded-full ${sem.bar} transition-all`} style={`width:${pctBar}%`}></div>
     </div>
     {resumen.pctUso >= 100 && (
-      <p class="mt-2 text-xs text-red-600 font-medium">⚠ Esta subestación supera el límite de carga recomendado. Evita conectar equipos adicionales y evalúa redistribuir cargas.</p>
+      <p class="mt-2 text-xs text-red-600 font-medium">Esta subestación supera el límite de carga recomendado. Evita conectar equipos adicionales y evalúa redistribuir cargas.</p>
     )}
   </div>
 
@@ -132,7 +132,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
     tableros.map((tab) => (
       <div class="card mt-3 overflow-hidden">
         <div class="flex items-center justify-between bg-slate-50 px-4 py-2 border-b border-slate-100">
-          <span class="text-sm font-semibold text-slate-700">🔌 {tab}</span>
+          <span class="text-sm font-semibold text-slate-700">{tab}</span>
           <span class="text-xs text-slate-400">
             {fmtKw(porTablero.get(tab)!.reduce((s, r) => s + kwDeCarga(r.c), 0))} kW
           </span>
@@ -177,8 +177,8 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
                         data-fases={r.c.fases}
                         data-activo={r.c.activoId ?? ""}
                         data-notas={r.c.notas ?? ""}
-                      >✎ Editar</button>
-                      <button class="del-carga-btn text-xs text-red-600 hover:underline" data-id={r.c.id} data-nombre={r.c.nombre}>🗑</button>
+                      >Editar</button>
+                      <button class="del-carga-btn text-xs text-red-600 hover:underline" data-id={r.c.id} data-nombre={r.c.nombre}>Eliminar</button>
                     </td>
                   )}
                 </tr>
@@ -202,7 +202,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
       <!-- Modal carga (crear/editar) -->
       <div id="cargaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
         <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
-          <h3 id="cargaModalTitle" class="text-lg font-semibold text-slate-900">🔌 Agregar carga</h3>
+          <h3 id="cargaModalTitle" class="text-lg font-semibold text-slate-900">Agregar carga</h3>
           <input type="hidden" id="c_id" />
           <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
@@ -266,7 +266,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
       <!-- Modal editar subestación -->
       <div id="editSubModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
         <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-semibold text-slate-900">✎ Editar subestación</h3>
+          <h3 class="text-lg font-semibold text-slate-900">Editar subestación</h3>
           <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div class="sm:col-span-2">
               <label class="label text-xs">Nombre *</label>
@@ -322,7 +322,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
       // ── Cargas ──
       const cargaModal = $("cargaModal");
       const openCargaNew = () => {
-        $("cargaModalTitle").textContent = "🔌 Agregar carga";
+        $("cargaModalTitle").textContent = "Agregar carga";
         $("c_id").value = "";
         ["c_nombre", "c_tablero", "c_kw", "c_amp", "c_volt", "c_notas"].forEach((i) => ($(i).value = ""));
         $("c_activo").value = "";
@@ -336,7 +336,7 @@ const tableros = [...porTablero.keys()].sort((a, b) => a.localeCompare(b, "es"))
 
       document.querySelectorAll(".edit-carga-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
-          $("cargaModalTitle").textContent = "✎ Editar carga";
+          $("cargaModalTitle").textContent = "Editar carga";
           $("c_id").value = btn.dataset.id;
           $("c_nombre").value = btn.dataset.nombre;
           $("c_tablero").value = btn.dataset.tablero;

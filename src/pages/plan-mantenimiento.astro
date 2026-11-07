@@ -1,5 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import {
   planesMantenimiento, activos, usuarios, sucursales, ubicaciones,
@@ -136,7 +138,7 @@ const catsPlanes = [...planesPorCategoria.keys()].sort((a, b) => a.localeCompare
 
 const actsPorCategoria = new Map<string, typeof actRows>();
 for (const r of actRows) {
-  const cat = r.c ? `${r.c.icono ?? ""} ${r.c.nombre}`.trim() : "📋 Sin categoría";
+  const cat = r.c ? `${r.c.icono ?? ""} ${r.c.nombre}`.trim() : "Sin categoría";
   const arr = actsPorCategoria.get(cat) ?? [];
   arr.push(r);
   actsPorCategoria.set(cat, arr);
@@ -180,18 +182,18 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
   <!-- Barra de control (no se imprime) -->
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📄 {dominio ? `Plan de ${rubroLabel(dominio)}` : "Plan Anual de Mantenimiento"}</h1>
+      <h1 class="text-2xl font-bold">{dominio ? `Plan de ${rubroLabel(dominio)}` : "Plan Anual de Mantenimiento"}</h1>
       <p class="mt-1 text-sm text-slate-500">Documento institucional generado con los datos reales del sistema.</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <select id="sedeSel" class="input w-auto text-sm py-1.5">
-        <option value="">🏢 Todas las sedes</option>
+        <option value="">Todas las sedes</option>
         {sucursalesList.map((s) => (
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
-      {puedeEditar && <button id="editDocBtn" class="btn-secondary">✎ Editar textos</button>}
-      <button id="printBtn" class="btn-primary">🖨 Imprimir / PDF</button>
+      {puedeEditar && <button id="editDocBtn" class="btn-secondary">Editar textos</button>}
+      <button id="printBtn" class="btn-primary">Imprimir / PDF</button>
       <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">← Cronograma</a>
     </div>
   </div>
@@ -216,29 +218,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
 
   <!-- Documento -->
   <div class="print-doc card mt-4 p-6 sm:p-8">
-    <!-- Portada / encabezado documental -->
-    <div class="border-2 border-slate-800 rounded-lg overflow-hidden">
-      <div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-300">
-        <div class="p-4 flex items-center gap-3">
-          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-xl">⚙️</div>
-          <div>
-            <div class="font-bold text-slate-900 text-sm leading-tight">Avante</div>
-            <div class="text-[11px] text-slate-500">Complejo Hospitalario</div>
-          </div>
-        </div>
-        <div class="p-4 text-center">
-          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">
-            {dominio ? `Plan de Mantenimiento — ${rubroLabel(dominio)}` : "Plan Anual de Mantenimiento"}
-          </div>
-          <div class="text-xs text-slate-500 mt-0.5">Vigencia {anio}{sedeActiva ? ` · ${sedeActiva.nombre}` : " · Todas las sedes"}</div>
-        </div>
-        <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
-          <div><span class="text-slate-400">Código:</span> <span class="font-mono font-semibold">{docCodigo}</span></div>
-          <div><span class="text-slate-400">Versión:</span> {docVersion}</div>
-          <div><span class="text-slate-400">Generado:</span> {fechaGeneracion}</div>
-        </div>
-      </div>
-    </div>
+    <DocCabecera titulo={dominio ? `Plan de mantenimiento: ${rubroLabel(dominio)}` : "Plan anual de mantenimiento"} subtitulo={`Vigencia ${anio}${sedeActiva ? ` · ${sedeActiva.nombre}` : " · Todas las sedes"}`} codigo={docCodigo} version={docVersion} fecha={hoy} />
 
     <!-- 1. Introducción -->
     <h3 class="mt-7 text-base font-bold text-slate-900">1. Introducción</h3>
@@ -402,13 +382,14 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
       {docCodigo} · Versión {docVersion} · Documento generado desde la plataforma de mantenimiento el {fechaGeneracion} por {user.nombre} ·
       Las fechas mostradas corresponden a la próxima ejecución programada de cada rutina · Fechas en rojo indican rutinas vencidas.
     </div>
+    <DocFolio codigo={docCodigo} version={docVersion} />
   </div>
 
   <!-- Modal editar textos del documento -->
   {puedeEditar && (
     <div id="docModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-slate-900">✎ Textos del documento</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Textos del documento</h3>
         <p class="mt-1 text-xs text-slate-500">Estos textos se guardan y aparecen en cada generación del plan.</p>
         <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div><label class="label text-xs">Código del documento</label><input id="d_codigo" class="input" value={docCodigo} /></div>
@@ -437,7 +418,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
     @media print {
       .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
       main { padding: 0 !important; }
-      .print-doc { border: none !important; box-shadow: none !important; margin-top: 0 !important; }
+      .print-doc { border: none !important;  margin-top: 0 !important; }
       .avoid-break { break-inside: avoid; }
       body { background: white !important; }
     }

@@ -132,7 +132,7 @@ const dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
             {c.planes.slice(0, 3).map((p) => (
               <a href={areaHref(`/activos/${p.a?.id}`, area ?? p.a?.rubro)} title={`Plan: ${p.p.titulo}`}
                  class="block truncate rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 hover:bg-purple-200">
-                🛡 {p.p.titulo}
+                {p.p.titulo}
               </a>
             ))}
             {c.ots.slice(0, 3).map((r) => (

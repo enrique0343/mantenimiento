@@ -114,16 +114,16 @@ const ubJson = JSON.stringify(ubRows);
 
           <!-- Fotos del estado actual -->
           <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
-            <h3 class="text-sm font-semibold text-slate-900">📷 Fotos del problema <span class="text-slate-400 font-normal">(opcional, recomendado)</span></h3>
+            <h3 class="text-sm font-semibold text-slate-900">Fotos del problema <span class="text-slate-400 font-normal">(opcional, recomendado)</span></h3>
             <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área. Nos ayudará a diagnosticar más rápido y servirán como evidencia "antes" del trabajo.</p>
             <div class="mt-2 flex flex-wrap gap-2">
               <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
                 <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
-                📎 Seleccionar fotos
+                Seleccionar fotos
               </label>
               <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
                 <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
-                📸 Cámara
+                Cámara
               </label>
             </div>
             <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
@@ -172,7 +172,7 @@ const ubJson = JSON.stringify(ubRows);
           const rm = document.createElement("button");
           rm.type = "button";
           rm.textContent = "×";
-          rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+          rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-white text-red-600 border border-red-600";
           rm.addEventListener("click", () => {
             const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
             thumb.remove();

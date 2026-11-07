@@ -1,5 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import {
   activos, ubicaciones, sucursales, proveedores, usuarios,
@@ -84,33 +86,13 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
       <a href={areaHref(`/activos/${a.id}`, area)} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
-      <h1 class="mt-1 text-2xl font-bold">📄 Hoja de vida del equipo</h1>
+      <h1 class="mt-1 text-2xl font-bold">Hoja de vida del equipo</h1>
     </div>
-    <button onclick="window.print()" class="btn-primary">🖨 Imprimir / PDF</button>
+    <button onclick="window.print()" class="btn-primary">Imprimir / PDF</button>
   </div>
 
   <div class="print-doc card mt-4 p-6 sm:p-8">
-    <!-- Encabezado -->
-    <div class="border-2 border-slate-800 rounded-lg overflow-hidden">
-      <div class="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-300">
-        <div class="p-4 flex items-center gap-3">
-          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white text-xl">⚙️</div>
-          <div>
-            <div class="font-bold text-slate-900 text-sm leading-tight">Avante</div>
-            <div class="text-[11px] text-slate-500">Complejo Hospitalario</div>
-          </div>
-        </div>
-        <div class="p-4 text-center">
-          <div class="text-sm font-bold text-slate-900 uppercase tracking-wide">Hoja de vida {area === "infraestructura" ? "de instalación" : area === "aires" ? "de unidad" : "de equipo"}</div>
-          <div class="text-xs text-slate-500 mt-0.5">JCI FMS.07 — historial de inspección, prueba y mantenimiento</div>
-        </div>
-        <div class="p-4 text-[11px] text-slate-600 space-y-0.5">
-          <div><span class="text-slate-400">Código:</span> <span class="font-mono font-semibold">{a.codigo}</span></div>
-          {a.numeroActivo && <div><span class="text-slate-400">Nº activo:</span> {a.numeroActivo}</div>}
-          <div><span class="text-slate-400">Generado:</span> {fmtFechaSolo(hoy)}</div>
-        </div>
-      </div>
-    </div>
+    <DocCabecera titulo={`Hoja de vida ${area === "infraestructura" ? "de instalación" : area === "aires" ? "de unidad" : "del equipo"}`} subtitulo="JCI FMS.07: historial de inspección, prueba y mantenimiento" codigo={a.codigo} fecha={hoy} />
 
     <!-- 1. Identificación -->
     <h3 class="mt-6 text-base font-bold text-slate-900">1. Identificación {area === "infraestructura" ? "de la instalación" : area === "aires" ? "de la unidad" : "del equipo"}</h3>
@@ -139,7 +121,7 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
         <span class="text-xs text-slate-400 block">Inspección de aceptación</span>
         {a.aceptacionFecha ? (
           <span class={a.aceptacionResultado === "aprobado" ? "text-emerald-700" : a.aceptacionResultado === "condicionado" ? "text-amber-700" : "text-red-700"}>
-            {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "⚠ Condicionado" : "✗ Rechazado"} · {fmt(a.aceptacionFecha)}
+            {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "Condicionado" : "✕ Rechazado"} · {fmt(a.aceptacionFecha)}
           </span>
         ) : (
           <span class="text-slate-400">Sin registro</span>
@@ -155,7 +137,7 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
     <!-- 2. Planes preventivos -->
     <h3 class="mt-6 text-base font-bold text-slate-900">2. Planes de mantenimiento preventivo</h3>
     {planes.length === 0 ? (
-      <p class="mt-2 text-sm text-red-600">⚠ Este equipo no tiene planes preventivos registrados.</p>
+      <p class="mt-2 text-sm text-red-600">Este equipo no tiene planes preventivos registrados.</p>
     ) : (
       <table class="mt-2 w-full text-left text-xs">
         <thead class="text-slate-500 border-b border-slate-200">
@@ -261,13 +243,14 @@ const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
       Hoja de vida generada desde la plataforma de mantenimiento el {fmtDT(new Date().toISOString())} por {user.nombre} ·
       Equipo {a.codigo} · Documento de evidencia del programa de gestión de equipo (JCI FMS.07).
     </div>
+    <DocFolio codigo={a.codigo} />
   </div>
 
   <style is:global>
     @media print {
       .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
       main { padding: 0 !important; }
-      .print-doc { border: none !important; box-shadow: none !important; margin-top: 0 !important; }
+      .print-doc { border: none !important;  margin-top: 0 !important; }
       body { background: white !important; }
       table { break-inside: auto; }
       tr { break-inside: avoid; }

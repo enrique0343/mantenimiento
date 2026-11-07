@@ -22,11 +22,11 @@ export const TIPO_LABEL: Record<TipoOT, string> = {
 };
 
 export const TIPO_ICONO: Record<TipoOT, string> = {
-  preventivo: "🗓",
-  correctivo: "🔧",
-  predictivo: "📈",
-  intervencion: "🛠",
-  emergencia: "🚨",
+  preventivo: "",
+  correctivo: "",
+  predictivo: "",
+  intervencion: "",
+  emergencia: "",
 };
 
 export const ESTADOS_OT = [
@@ -65,7 +65,7 @@ export const TIPO_COLOR: Record<TipoOT, string> = {
   correctivo: "bg-orange-100 text-orange-700",
   predictivo: "bg-sky-100 text-sky-700",
   intervencion: "bg-indigo-100 text-indigo-700",
-  emergencia: "bg-red-600 text-white",
+  emergencia: "bg-white text-red-600 border border-red-600 ",
 };
 
 // ── Clase de prioridad P1–P4 del plan maestro de 52 semanas (cap. 02) ────────
@@ -98,7 +98,7 @@ export const CLASE_PRIORIDAD_HORAS: Record<ClasePrioridad, number | null> = {
 };
 
 export const CLASE_PRIORIDAD_COLOR: Record<ClasePrioridad, string> = {
-  P1: "bg-red-600 text-white",
+  P1: "bg-white text-red-600 border border-red-600 ",
   P2: "bg-orange-100 text-orange-800",
   P3: "bg-blue-100 text-blue-700",
   P4: "bg-slate-100 text-slate-600",
@@ -403,14 +403,14 @@ export const PRERREQ_LABEL: Record<PrerrequisitoTipo, string> = {
 };
 
 export const PRERREQ_ICONO: Record<PrerrequisitoTipo, string> = {
-  permiso_trabajo: "📝",
-  icra: "🦠",
-  notificacion: "📣",
-  loto: "🔒",
-  espacio_confinado: "⛑",
-  ventana: "🕐",
-  instrumento: "📏",
-  reserva: "🔋",
+  permiso_trabajo: "",
+  icra: "",
+  notificacion: "",
+  loto: "",
+  espacio_confinado: "",
+  ventana: "",
+  instrumento: "",
+  reserva: "",
   otro: "•",
 };
 

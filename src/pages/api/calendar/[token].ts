@@ -107,7 +107,7 @@ export const GET: APIRoute = async (ctx) => {
     const eq = r.a ? `${r.a.codigo} - ${r.a.nombre}` : "";
     addEvent(
       `ot-${r.o.id}`,
-      `🛠 OT #${r.o.id}: ${r.o.titulo} [${r.o.prioridad}]`,
+      `OT #${r.o.id}: ${r.o.titulo} [${r.o.prioridad}]`,
       target,
       false,
       `${eq}${r.o.descripcion ? "\n" + r.o.descripcion : ""}`,
@@ -119,7 +119,7 @@ export const GET: APIRoute = async (ctx) => {
     const eq = r.a ? `${r.a.codigo} - ${r.a.nombre}` : "";
     addEvent(
       `plan-${r.p.id}-${r.p.proximaFecha}`,
-      `🔧 Preventivo: ${r.p.titulo}`,
+      `Preventivo: ${r.p.titulo}`,
       r.p.proximaFecha,
       true,
       `Plan ${r.p.frecuencia} · ${eq}`,
@@ -130,7 +130,7 @@ export const GET: APIRoute = async (ctx) => {
   for (const a of acts) {
     addEvent(
       `act-${a.id}-${a.proximaFecha}`,
-      `📌 ${a.titulo}`,
+      `${a.titulo}`,
       a.proximaFecha,
       true,
       `Actividad ${a.frecuencia}${a.descripcion ? "\n" + a.descripcion : ""}`,

@@ -53,8 +53,8 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
     const otTitulo = ot?.titulo ?? "tu solicitud";
 
     const stars = [1, 2, 3, 4, 5].map((n) => {
-      const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😬" : n === 4 ? "🙂" : "😎";
-      return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;border:1px solid #e2e8f0;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#64748b">${n}</span></a>`;
+      const emoji = String(n);
+      return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#F2F4F7;color:#1A1A1A;text-decoration:none;border-radius:2px;border:1px solid #BDC6D8;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#6B7280">${n}</span></a>`;
     }).join("");
 
     try {
@@ -69,11 +69,11 @@ export async function enviarRecordatoriosEncuestas(ctx: APIContext): Promise<{ e
            <p>Cuando un solicitante no califica, perdemos tres cosas: no sabemos si ${tecCorto} hizo un buen trabajo o uno mediocre, no podemos detectar a tiempo un patrón si algo está fallando en el equipo o el área, y no tenemos cómo reconocer al técnico cuando lo merece ni cómo corregirlo cuando hace falta.</p>
            <p><strong>Tu clic, aunque sea uno solo, resuelve las tres cosas.</strong></p>
            <div style="text-align:center;margin:22px 0">${stars}</div>
-           <p style="text-align:center;font-weight:600;color:#0a4082;margin:8px 0 18px 0">Diez segundos. Un solo toque.</p>
+           <p style="text-align:center;font-weight:600;color:#23417D;margin:8px 0 18px 0">Diez segundos. Un solo toque.</p>
            <p>Si ${tecCorto} hizo bien su trabajo, díselo con un <strong>4 o un 5</strong>. Lo lee él, lo ve su jefatura, queda en su evaluación. Si algo no quedó bien, díselo con un <strong>1, 2 o 3</strong>. Llega a Mantenimiento esta misma semana, no en el reporte mensual.</p>
            <p><em>Lo que no podemos hacer es mejorar lo que no se nos cuenta.</em></p>
-           <p style="font-size:13px;color:#475569;background:#fef9c3;padding:12px;border-left:3px solid #ca8a04;border-radius:4px;margin:18px 0">Este es el último correo que recibirás sobre la OT #${otId}. Si no respondes en las próximas <strong>24 horas</strong>, archivamos el caso sin calificación y no te volveremos a escribir. Pero la próxima vez que algo falle en tu área, vamos a llegar con un poco menos de información sobre cómo atenderte mejor.</p>
-           <p style="margin:18px 0;text-align:center"><a href="${encuestaUrl}" style="display:inline-block;padding:12px 28px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px">Calificar ahora →</a></p>
+           <p style="font-size:13px;color:#4A4A4A;background:#F2F4F7;padding:12px;border-left:3px solid #8A6420;border-radius:2px;margin:18px 0">Este es el último correo que recibirás sobre la OT #${otId}. Si no respondes en las próximas <strong>24 horas</strong>, archivamos el caso sin calificación y no te volveremos a escribir. Pero la próxima vez que algo falle en tu área, vamos a llegar con un poco menos de información sobre cómo atenderte mejor.</p>
+           <p style="margin:18px 0;text-align:center"><a href="${encuestaUrl}" style="display:inline-block;padding:12px 28px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:600;font-size:15px">Calificar ahora →</a></p>
            <p style="margin-top:18px"><em>Gracias por construir Avante con nosotros, hasta en los detalles pequeños.</em></p>`
         ),
         tipo: "encuesta_recordatorio",

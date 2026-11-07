@@ -140,7 +140,7 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
                   <span class="uppercase text-slate-400">Valor nominal</span>{" "}
                   <span class="font-mono">{nominal}</span>
                   {v.fuente ? (
-                    <span class="block text-slate-500">📘 {v.fuente}{v.fuenteReferencia && <span class="text-slate-400"> · {v.fuenteReferencia}</span>}</span>
+                    <span class="block text-slate-500">{v.fuente}{v.fuenteReferencia && <span class="text-slate-400"> · {v.fuenteReferencia}</span>}</span>
                   ) : (
                     <span class="badge ml-1 bg-blue-50 text-[10px] text-blue-700" title="Campo en azul: norma por adoptar">Norma por adoptar</span>
                   )}
@@ -161,9 +161,9 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
             <svg viewBox="0 0 400 120" class="mt-4 w-full" style="height:120px">
               {/* zonas */}
               {v.maxCritico != null && v.minCritico != null && (
-                <line x1="0" x2="400" y1="60" y2="60" stroke="#cbd5e1" stroke-dasharray="3,3" stroke-width="1" />
+                <line x1="0" x2="400" y1="60" y2="60" stroke="#BDC6D8" stroke-dasharray="3,3" stroke-width="1" />
               )}
-              <path d={chart.path} fill="none" stroke="#0284c7" stroke-width="2" />
+              <path d={chart.path} fill="none" stroke="#23417D" stroke-width="2" />
               {chart.points.map((p) => (
                 <circle cx={p.x} cy={p.y} r="3" class:list={[
                   p.estado === "critico" ? "fill-red-500" :

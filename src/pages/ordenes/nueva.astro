@@ -176,11 +176,11 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
       <div>
         <label class="label">Tipo</label>
         <select class="input" id="tipo">
-          <option value="correctivo" selected={tipoInicial === "correctivo"}>🔧 Correctivo</option>
-          <option value="preventivo" selected={tipoInicial === "preventivo"}>🛡️ Preventivo</option>
-          <option value="predictivo" selected={tipoInicial === "predictivo"}>📊 Predictivo</option>
-          <option value="intervencion" selected={tipoInicial === "intervencion"}>🛠 Intervención (MOP)</option>
-          <option value="emergencia" selected={tipoInicial === "emergencia"}>🚨 Emergencia (EOP)</option>
+          <option value="correctivo" selected={tipoInicial === "correctivo"}>Correctivo</option>
+          <option value="preventivo" selected={tipoInicial === "preventivo"}>Preventivo</option>
+          <option value="predictivo" selected={tipoInicial === "predictivo"}>Predictivo</option>
+          <option value="intervencion" selected={tipoInicial === "intervencion"}>Intervención (MOP)</option>
+          <option value="emergencia" selected={tipoInicial === "emergencia"}>Emergencia (EOP)</option>
         </select>
         <p class="mt-1 text-xs text-slate-500">El tipo decide qué documento rige la orden y qué exige antes de iniciar o cerrar.</p>
       </div>
@@ -201,7 +201,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
     </div>
 
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-      <h3 class="font-semibold text-slate-900 text-sm">📍 Lugar a intervenir</h3>
+      <h3 class="font-semibold text-slate-900 text-sm">Lugar a intervenir</h3>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label class="label text-xs">Sucursal *</label>
@@ -242,7 +242,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
     <input type="hidden" id="procedimientoId" value={preProc ? String(preProc.id) : ""} />
     <div id="rigeCard" class="hidden rounded-lg border-l-4 border-brand-500 bg-brand-50 p-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-sm font-semibold text-slate-900">📋 Qué rige este equipo</h3>
+        <h3 class="text-sm font-semibold text-slate-900">Qué rige este equipo</h3>
         <span id="rigeBadge" class="hidden badge bg-white text-slate-600"></span>
       </div>
       <p id="rigeEncabezado" class="mt-1 text-sm text-slate-800"></p>
@@ -271,16 +271,16 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
 
     <!-- Fotos del estado inicial (antes) -->
     <div class="rounded-lg border-l-4 border-blue-300 bg-blue-50 p-3">
-      <h2 class="text-sm font-semibold text-slate-900">📷 Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
+      <h2 class="text-sm font-semibold text-slate-900">Fotos del estado inicial (antes) <span class="text-slate-400 font-normal">(opcional)</span></h2>
       <p class="mt-1 text-xs text-slate-500">Adjunta fotos del equipo o área antes de iniciar. Se guardarán como evidencia "antes" en la OT.</p>
       <div class="mt-2 flex flex-wrap gap-2">
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-brand-700 text-sm font-medium hover:bg-brand-50 border border-brand-200">
           <input type="file" id="fotoFile" accept="image/*" multiple class="hidden" />
-          📎 Seleccionar fotos
+          Seleccionar fotos
         </label>
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white text-slate-700 text-sm font-medium hover:bg-slate-100 border border-slate-300">
           <input type="file" id="fotoCamara" accept="image/*" capture="environment" multiple class="hidden" />
-          📸 Cámara
+          Cámara
         </label>
       </div>
       <div id="fotosPreview" class="mt-3 flex flex-wrap gap-2"></div>
@@ -464,7 +464,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
           const li = document.createElement("li");
           li.className = "flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900";
           const n = document.createElement("span");
-          n.className = "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white";
+          n.className = "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-xs font-bold ";
           n.textContent = String(i + 1);
           const txt = document.createElement("span");
           txt.textContent = acc;
@@ -536,7 +536,7 @@ if (preseleccion && !activoPreseleccionado) return new Response("El equipo no es
         const rm = document.createElement("button");
         rm.type = "button";
         rm.textContent = "×";
-        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-red-600";
+        rm.className = "absolute top-0.5 right-0.5 bg-black/60 text-xs w-5 h-5 rounded-full flex items-center justify-center hover:bg-white text-red-600 border border-red-600";
         rm.addEventListener("click", () => {
           const i = pendingFotos.indexOf(f); if (i >= 0) pendingFotos.splice(i, 1);
           thumb.remove();

@@ -86,18 +86,18 @@ export const POST: APIRoute = async (ctx) => {
           subject: `[Soporte ${tipoLabel}] Nuevo ticket #${row.id}: ${row.asunto}`,
           html: emailLayout(
             `Nuevo ticket de soporte`,
-            `<h2 style="margin:0 0 8px 0;color:#0a4082;font-size:18px">${row.asunto}</h2>
-             <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 16px 0">${row.descripcion}</p>
+            `<h2 style="margin:0 0 8px 0;color:#23417D;font-size:18px">${row.asunto}</h2>
+             <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 16px 0">${row.descripcion}</p>
              <table style="width:100%;font-size:13px;border-collapse:collapse;margin:8px 0">
-               <tr><td style="padding:4px 0;color:#64748b;width:130px">Solicitante:</td><td><strong>${row.solicitanteNombre}</strong> &lt;${row.solicitanteEmail}&gt;</td></tr>
-               ${row.solicitanteTelefono ? `<tr><td style="padding:4px 0;color:#64748b">Teléfono:</td><td>${row.solicitanteTelefono}</td></tr>` : ""}
-               <tr><td style="padding:4px 0;color:#64748b">Tipo:</td><td>${tipoLabel}</td></tr>
-               ${sucursalNombre ? `<tr><td style="padding:4px 0;color:#64748b">Sucursal:</td><td>${sucursalNombre}</td></tr>` : ""}
-               ${row.ubicacion ? `<tr><td style="padding:4px 0;color:#64748b">Ubicación:</td><td>${row.ubicacion}</td></tr>` : ""}
-               <tr><td style="padding:4px 0;color:#64748b">Prioridad:</td><td><strong>${row.prioridad}</strong></td></tr>
-               <tr><td style="padding:4px 0;color:#64748b">SLA:</td><td>${row.slaHoras}h</td></tr>
+               <tr><td style="padding:4px 0;color:#6B7280;width:130px">Solicitante:</td><td><strong>${row.solicitanteNombre}</strong> &lt;${row.solicitanteEmail}&gt;</td></tr>
+               ${row.solicitanteTelefono ? `<tr><td style="padding:4px 0;color:#6B7280">Teléfono:</td><td>${row.solicitanteTelefono}</td></tr>` : ""}
+               <tr><td style="padding:4px 0;color:#6B7280">Tipo:</td><td>${tipoLabel}</td></tr>
+               ${sucursalNombre ? `<tr><td style="padding:4px 0;color:#6B7280">Sucursal:</td><td>${sucursalNombre}</td></tr>` : ""}
+               ${row.ubicacion ? `<tr><td style="padding:4px 0;color:#6B7280">Ubicación:</td><td>${row.ubicacion}</td></tr>` : ""}
+               <tr><td style="padding:4px 0;color:#6B7280">Prioridad:</td><td><strong>${row.prioridad}</strong></td></tr>
+               <tr><td style="padding:4px 0;color:#6B7280">SLA:</td><td>${row.slaHoras}h</td></tr>
              </table>
-             <p style="margin-top:18px"><a href="${ticketUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver ticket y asignar →</a></p>`
+             <p style="margin-top:18px"><a href="${ticketUrl}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Ver ticket y asignar →</a></p>`
           ),
           tipo: "ticket_nuevo",
           referencia: `ticket:${row.id}`,
@@ -117,10 +117,10 @@ export const POST: APIRoute = async (ctx) => {
           `Recibimos tu solicitud`,
           `<p>Hola <strong>${row.solicitanteNombre}</strong>,</p>
            <p>Gracias por tomarte el tiempo de reportarnos lo que está ocurriendo. Tu solicitud ya quedó en manos del equipo de Operaciones y la atenderemos con el cuidado que merece.</p>
-           <p>La registramos con el código <a href="${trackUrl}" style="font-family:monospace;background:#f1f5f9;padding:2px 8px;border-radius:4px;color:#0a4082;text-decoration:none;font-weight:600">${row.trackingToken}</a>, para que puedas darle seguimiento cuando lo necesites.</p>
+           <p>La registramos con el código <a href="${trackUrl}" style="font-variant-numeric:tabular-nums;background:#F2F4F7;padding:2px 8px;border-radius:2px;color:#23417D;text-decoration:none;font-weight:600">${row.trackingToken}</a>, para que puedas darle seguimiento cuando lo necesites.</p>
            <p>Trabajaremos para darte una respuesta dentro de las próximas <strong>${row.slaHoras} horas</strong>. Si el caso lo requiere, te contactaremos antes.</p>
-           <p style="margin:18px 0"><a href="${trackUrl}" style="display:inline-block;padding:10px 22px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver estado de mi ticket →</a></p>
-           <p style="font-size:13px;color:#64748b">Si lo prefieres, también puedes consultar tu ticket o cualquier otro desde <a href="${baseUrl2}/soporte/track" style="color:#0a4082">el portal de soporte</a> usando tu código.</p>
+           <p style="margin:18px 0"><a href="${trackUrl}" style="display:inline-block;padding:10px 22px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Ver estado de mi ticket →</a></p>
+           <p style="font-size:13px;color:#6B7280">Si lo prefieres, también puedes consultar tu ticket o cualquier otro desde <a href="${baseUrl2}/soporte/track" style="color:#23417D">el portal de soporte</a> usando tu código.</p>
            <p style="margin-top:20px"><em>Estamos para servirte.</em></p>`
         ),
         tipo: "ticket_confirmacion",

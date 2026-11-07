@@ -308,14 +308,14 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       <p class="text-sm text-slate-500">Vista ejecutiva · ventana: últimos 30 días / año en curso</p>
     </div>
     <div class="flex flex-wrap gap-2">
-      <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>📄 Reporte JCI (PDF)</button>
-      <a href="/reportes" class="btn-secondary">📑 Reportes CSV</a>
+      <button id="pdfBtn" class="btn-secondary" disabled={!hayMetricas}>Reporte JCI (PDF)</button>
+      <a href="/reportes" class="btn-secondary">Reportes CSV</a>
     </div>
   </div>
 
   <!-- Aviso de línea base: KPIs reiniciados a partir de la fecha de corte. -->
   <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-    <div class="font-semibold">ℹ️ Línea base de KPIs: {fmtFechaSolo(KPI_BASELINE_DATE)}</div>
+    <div class="font-semibold">Línea base de KPIs: {fmtFechaSolo(KPI_BASELINE_DATE)}</div>
     <p class="mt-1 text-xs text-amber-800/90">
       Por retrasos y cambios de sistema que impidieron cerrar OTs/tickets a tiempo, los indicadores de mantenimiento
       (Cumplimiento SLA, MTTR, MTBF, Backlog vencido) cuentan únicamente OTs creadas a partir de esa fecha; el
@@ -328,7 +328,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
   <section id="diferidoSection" class="card mt-4 border-l-4 p-5" class:list={[diferidas.length === 0 ? "border-emerald-500" : "border-red-500"]}>
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0">
-        <h2 class="font-semibold text-slate-900">🧨 Mantenimiento diferido</h2>
+        <h2 class="font-semibold text-slate-900">Mantenimiento diferido</h2>
         <p class="mt-0.5 text-xs text-slate-500">
           GO-GUI-011-2026 §2.3: toda orden <strong>P1</strong> vencida más de {DIAS_DIFERIDO} días
           <strong>sin riesgo aceptado por escrito</strong>. Entran las de vencimiento anterior al {fmtFechaSoloCompacta(corteDiferido)}
@@ -387,7 +387,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
                   <td class="px-3 py-2 align-top text-right">
                     <button type="button" class="riesgo-btn btn-secondary btn-sm whitespace-nowrap"
                       data-id={String(d.id)} data-titulo={d.titulo} data-dias={String(d.diasVencida)}>
-                      ✍ Aceptar riesgo por escrito
+                      Aceptar riesgo por escrito
                     </button>
                   </td>
                 )}
@@ -401,7 +401,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
     {diferidoAceptado.length > 0 && (
       <details class="mt-4 rounded-md border border-slate-200 bg-slate-50/60 p-3">
         <summary class="cursor-pointer text-xs font-semibold text-slate-700">
-          🗄 Riesgos aceptados por escrito ({diferidoAceptado.length}) — fuera del indicador, con la traza intacta
+          Riesgos aceptados por escrito ({diferidoAceptado.length}) — fuera del indicador, con la traza intacta
         </summary>
         <ul class="mt-2 space-y-2 text-[11px]">
           {diferidoAceptado.map((r) => (
@@ -430,7 +430,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
   <section class="card mt-4 p-5">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="font-semibold text-slate-900">⏱ Indicadores 5 y 7 — respuesta y reparación por sistema</h2>
+        <h2 class="font-semibold text-slate-900">Indicadores 5 y 7 — respuesta y reparación por sistema</h2>
         <p class="mt-0.5 text-xs text-slate-500">
           Respuesta = hora de llegada − hora de alarma · Reparación = hora de restablecimiento − hora de alarma
           (si no hay hora de alarma se usa la creación de la OT). Agrupado por el sistema del procedimiento y, cuando la OT
@@ -499,7 +499,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       <div class="border-b border-slate-100 px-5 py-3">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 class="text-sm font-semibold text-slate-900">🌡 Indicador 8 — horas fuera de rango por sala</h2>
+            <h2 class="text-sm font-semibold text-slate-900">Indicador 8 — horas fuera de rango por sala</h2>
             <p class="mt-0.5 text-[11px] text-slate-500">
               Desviaciones AOP del año en curso, calculadas por el motor AOP. Control de Infecciones recibe el resumen mensual.
             </p>
@@ -544,7 +544,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       <div class="border-b border-slate-100 px-5 py-3">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 class="text-sm font-semibold text-slate-900">🧰 Indicador 1 — cumplimiento del preventivo por dominio</h2>
+            <h2 class="text-sm font-semibold text-slate-900">Indicador 1 — cumplimiento del preventivo por dominio</h2>
             <p class="mt-0.5 text-[11px] text-slate-500">OT preventivas cerradas a tiempo sobre programadas, por los cuatro dominios del plan maestro.</p>
           </div>
           <div class="shrink-0 text-right">
@@ -588,13 +588,13 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
   <section class="card mt-4 p-5">
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">📊 Indicadores JCI con tendencia</h2>
+        <h2 class="font-semibold text-slate-900">Indicadores JCI con tendencia</h2>
         <p class="text-xs text-slate-500">Snapshot mensual persistido — evidencia auditable de "medir y mejorar" (FMS). {ultimoPeriodo ? `Último período: ${mesLabel(ultimoPeriodo)}` : ""}</p>
       </div>
       {esAdmin && (
         <div class="flex flex-wrap gap-2">
-          <button id="capturarBtn" class="btn-secondary text-xs">📸 Capturar mes actual</button>
-          <button id="recalcularBtn" class="btn-secondary text-xs">♻ Recalcular 12 meses</button>
+          <button id="capturarBtn" class="btn-secondary text-xs">Capturar mes actual</button>
+          <button id="recalcularBtn" class="btn-secondary text-xs">Recalcular 12 meses</button>
         </div>
       )}
     </div>
@@ -738,7 +738,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
           <div class="flex min-w-[40px] flex-1 flex-col items-center gap-1">
             <div class="flex flex-1 items-end gap-0.5">
               <div class="w-3 rounded-t bg-emerald-500" style={`height:${hC}px`} title={`${t.completadas} completadas`}></div>
-              <div class="w-3 rounded-t bg-red-400" style={`height:${hX}px`} title={`${t.correctivas} correctivos`}></div>
+              <div class="w-3 rounded-t bg-slate-400" style={`height:${hX}px`} title={`${t.correctivas} correctivos`}></div>
             </div>
             <div class="text-[9px] text-slate-500 capitalize whitespace-nowrap">{t.mes}</div>
           </div>
@@ -747,7 +747,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
     </div>
     <div class="mt-2 flex gap-4 text-xs text-slate-600">
       <span><span class="inline-block h-3 w-3 rounded bg-emerald-500"></span> Completadas</span>
-      <span><span class="inline-block h-3 w-3 rounded bg-red-400"></span> Correctivos</span>
+      <span><span class="inline-block h-3 w-3 rounded bg-slate-400"></span> Correctivos</span>
     </div>
   </div>
 
@@ -762,7 +762,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
           { k: "completada", l: "Completadas", c: "bg-emerald-500" },
           { k: "verificada", l: "Verificadas", c: "bg-teal-500" },
           { k: "cerrada", l: "Cerradas", c: "bg-slate-700" },
-          { k: "cancelada", l: "Canceladas", c: "bg-red-400" },
+          { k: "cancelada", l: "Canceladas", c: "bg-slate-400" },
         ].map((s) => {
           const v = get(s.k);
           const w = total > 0 ? (v / total) * 100 : 0;
@@ -868,6 +868,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
     </div>
   </div>
 
+  <script is:inline src="/js/pdf-avante.js"></script>
   <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }) }}>
     const { metricasJson, periodos, scopeLabels, scopes } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     // Tabs de alcance
@@ -892,7 +893,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Capturando…";
       const r = await fetch("/api/cron/snapshot-kpis");
-      if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "📸 Capturar mes actual"; }
+      if (r.ok) location.reload(); else { alert("Error al capturar"); btn.disabled = false; btn.textContent = "Capturar mes actual"; }
     });
     document.getElementById("recalcularBtn")?.addEventListener("click", async (e) => {
       const go = window.confirmAction
@@ -902,80 +903,51 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Recalculando…";
       const r = await fetch("/api/metricas/recalcular", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ meses: 12 }) });
-      if (r.ok) location.reload(); else { alert("Error al recalcular"); btn.disabled = false; btn.textContent = "♻ Recalcular 12 meses"; }
+      if (r.ok) location.reload(); else { alert("Error al recalcular"); btn.disabled = false; btn.textContent = "Recalcular 12 meses"; }
     });
 
     // ── PDF ──
-    async function loadJsPdf() {
-      if (window.jspdf) return window.jspdf;
-      await new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js";
-        s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-      });
-      return window.jspdf;
-    }
     function mesLbl(p) {
       const [y, m] = p.split("-").map(Number);
       const d = new Date(Date.UTC(y, m - 1, 1));
       return d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(y).slice(2);
     }
     const KPIS = [
-      { key: "cumplimientoPreventivo", label: "Cumpl. preventivo (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "disponibilidadPct", label: "Disponibilidad (%)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "mttrHoras", label: "MTTR (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "mtbfHoras", label: "MTBF (h)", fmt: (v) => v == null ? "-" : (Math.round(v * 10) / 10).toString() },
-      { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v) => v == null ? "-" : String(v) },
-      { key: "costoPorActivo", label: "Costo por activo ($)", fmt: (v) => v == null ? "-" : Number(v).toFixed(0) },
+      { key: "cumplimientoPreventivo", label: "Cumpl. preventivo (%)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "disponibilidadPct", label: "Disponibilidad (%)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "mttrHoras", label: "MTTR (h)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "mtbfHoras", label: "MTBF (h)", fmt: (v) => v == null ? "—" : (Math.round(v * 10) / 10).toString() },
+      { key: "backlogCorrectivos", label: "Backlog correctivos", fmt: (v) => v == null ? "—" : String(v) },
+      { key: "costoPorActivo", label: "Costo por activo ($)", fmt: (v) => v == null ? "—" : Number(v).toFixed(0) },
     ];
 
     document.getElementById("pdfBtn")?.addEventListener("click", async () => {
-      const { serie } = JSON.parse(metricasJson);
-      let empresa = "Mantenimiento";
-      try { const r = await fetch("/api/empresa"); if (r.ok) empresa = (await r.json()).empresa?.nombre ?? empresa; } catch {}
-      const { jsPDF } = await loadJsPdf();
-      const doc = new jsPDF({ unit: "mm", format: "a4" });
-      const W = doc.internal.pageSize.getWidth();
-      const M = 10;
-      let y = M;
-      const cols = periodos.slice(-6); // últimos 6 meses para que quepan
-
-      doc.setFontSize(14); doc.setFont("helvetica", "bold");
-      doc.text("Reporte de indicadores JCI", M, y); y += 6;
-      doc.setFontSize(9); doc.setFont("helvetica", "normal");
-      doc.text(`${empresa} · Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })}`, M, y); y += 7;
-
-      const labelW = 45;
-      const colW = (W - M * 2 - labelW) / cols.length;
-      for (const scope of scopes) {
-        if (y > 250) { doc.addPage(); y = M; }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(11);
-        doc.text(scopeLabels[scope], M, y); y += 5;
-        // Cabecera de meses
-        doc.setFontSize(8); doc.setFont("helvetica", "bold");
-        cols.forEach((p, i) => doc.text(mesLbl(p), M + labelW + i * colW + colW - 2, y, { align: "right" }));
-        y += 1; doc.setDrawColor(200); doc.line(M, y, W - M, y); y += 4;
-        doc.setFont("helvetica", "normal");
-        for (const kpi of KPIS) {
-          doc.setFont("helvetica", "bold"); doc.text(kpi.label, M, y); doc.setFont("helvetica", "normal");
-          cols.forEach((p, i) => {
-            const row = serie[scope]?.[p];
-            const v = row ? kpi.fmt(row[kpi.key]) : "·";
-            doc.text(String(v), M + labelW + i * colW + colW - 2, y, { align: "right" });
-          });
-          y += 5;
-          if (y > 285) { doc.addPage(); y = M; }
+      const boton = document.getElementById("pdfBtn");
+      const texto = boton.textContent;
+      boton.disabled = true; boton.textContent = "Generando…";
+      try {
+        const { serie } = JSON.parse(metricasJson);
+        const cols = periodos.slice(-6); // últimos 6 meses para que quepan
+        const P = await window.pdfAvante.crear({ titulo: "Reporte de indicadores JCI", subtitulo: `${mesLbl(cols[0])} a ${mesLbl(cols[cols.length - 1])}` });
+        for (const scope of scopes) {
+          P.nivel1(null, scopeLabels[scope]);
+          P.tabla(
+            [{ titulo: "Indicador", w: 3 }, ...cols.map((c) => ({ titulo: mesLbl(c), w: 1, alinear: "right" }))],
+            KPIS.map((kpi) => [kpi.label, ...cols.map((c) => { const row = serie[scope]?.[c]; return row ? kpi.fmt(row[kpi.key]) : "—"; })]),
+          );
         }
-        y += 4;
+        P.guardar(`indicadores-jci-${new Date().toISOString().slice(0, 10)}.pdf`);
+      } catch (e) {
+        window.showToast?.("No se pudo generar el PDF. Revisa tu conexión.", "error");
+      } finally {
+        boton.disabled = false; boton.textContent = texto;
       }
-      doc.save(`indicadores-jci-${new Date().toISOString().slice(0, 10)}.pdf`);
     });
   </script>
   {puedeAceptarRiesgo && (
     <div id="riesgoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5">
-        <h3 class="text-lg font-semibold text-slate-900">✍ Aceptar riesgo por escrito</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Aceptar riesgo por escrito</h3>
         <p class="mt-1 text-sm text-slate-500">
           La OT sale del indicador de mantenimiento diferido y la aceptación queda registrada con tu nombre,
           la fecha y estas notas. No se puede borrar.

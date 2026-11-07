@@ -10,7 +10,7 @@ export interface GrupoCategorias {
 export const CATEGORIAS_INVENTARIO: GrupoCategorias[] = [
   {
     grupo: "Mantenimiento general",
-    icono: "🔧",
+    icono: "",
     items: [
       "Filtros HVAC / aire",
       "Refrigerantes y gases (R-410A, R-22, etc.)",
@@ -31,7 +31,7 @@ export const CATEGORIAS_INVENTARIO: GrupoCategorias[] = [
   },
   {
     grupo: "Mantenimiento biomédico",
-    icono: "🩺",
+    icono: "",
     items: [
       "Filtros HEPA / médicos",
       "Sensores médicos (SpO₂, ECG, temperatura)",

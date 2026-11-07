@@ -12,7 +12,7 @@
 //   MOP  se interviene planificado  -> permiso, bloqueo, liberacion medida
 
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { activos, procedimientos, procedimientoSistemas, aopFicha, eopFicha, aopUmbrales } from "@/lib/schema";
+import { activos, procedimientos, procedimientoSistemas, aopFicha, eopFicha, aopUmbrales, ubicaciones } from "@/lib/schema";
 
 export type Sistema = "electrico" | "hvac" | "gases" | "agua" | "incendios" | "ascensores" | "otro";
 export type Situacion = "falla" | "desviacion" | "preventivo" | "intervencion";
@@ -186,7 +186,12 @@ export async function queRigeEsteActivo(db: any, activoId: number, sucursalId?: 
   };
 }
 
+const DOC_DE_AREA_CRITICA = /quir[oó]fano|[aá]reas? cr[ií]ticas?|aislamiento|almac[eé]n est[eé]ril|cirug[ií]a/i;
+const AREA_CRITICA = /quir[oó]fano|\buci\b|\bucin\b|intensiv|aislamiento|est[eé]ril|ceye|cirug[ií]a|neonat/i;
+
 export interface QueSigue {
+  /** El documento no se escribió para el lugar donde está este equipo. */
+  fueraDeAlcance?: boolean;
   documento: ProcedimientoRige | null;
   /** Las tres primeras acciones del EOP, que se saben de memoria */
   primerasAcciones: string[];
@@ -237,6 +242,20 @@ export async function queSigue(
   };
   if (doc.estado !== "vigente") {
     out.aviso = `Atención: ${doc.codigoCorto} está en estado "${doc.estado}", todavía no aprobado.`;
+  }
+  // Todos los aires comparten los mismos documentos, pero varios se escribieron
+  // para áreas críticas. Fuera de ellas se muestran como guía y se dice por qué.
+  if (DOC_DE_AREA_CRITICA.test(doc.titulo)) {
+    const [lugar] = await db
+      .select({ nombre: ubicaciones.nombre })
+      .from(activos)
+      .innerJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+      .where(eq(activos.id, activoId))
+      .limit(1);
+    if (!lugar || !AREA_CRITICA.test(lugar.nombre)) {
+      out.fueraDeAlcance = true;
+      out.aviso = `${doc.codigoCorto} está escrito para áreas críticas${lugar ? ` y este equipo está en ${lugar.nombre}` : ""}: úsalo como guía, sin los plazos ni la gravedad de un quirófano.`;
+    }
   }
 
   if (tipo === "eop") {

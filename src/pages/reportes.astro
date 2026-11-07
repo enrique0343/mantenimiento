@@ -12,7 +12,7 @@ const reportes = [
   {
     tipo: "ordenes",
     titulo: "Órdenes de trabajo",
-    icono: "📋",
+    icono: "",
     descripcion: "Lista completa de OTs con su estado, equipo, asignado, tiempos y solución aplicada.",
     fechas: true,
     estado: true,
@@ -20,35 +20,35 @@ const reportes = [
   {
     tipo: "equipos",
     titulo: "Equipos / Activos",
-    icono: "🛠",
+    icono: "",
     descripcion: "Catálogo completo de equipos con ubicación, SLA, datos biomédicos y estado.",
     fechas: false,
   },
   {
     tipo: "inventario",
     titulo: "Inventario",
-    icono: "📦",
+    icono: "",
     descripcion: "Stock actual, mínimos, máximos, alertas de bajo stock y cantidad sugerida a comprar.",
     fechas: false,
   },
   {
     tipo: "movimientos",
     titulo: "Movimientos de inventario",
-    icono: "📊",
+    icono: "",
     descripcion: "Entradas, salidas y ajustes de stock con su origen (recepción, OT, manual).",
     fechas: true,
   },
   {
     tipo: "requisiciones",
     titulo: "Requisiciones de compra",
-    icono: "🛒",
+    icono: "",
     descripcion: "Solicitudes de compra con su estado, proveedor y monto.",
     fechas: true,
   },
   {
     tipo: "encuestas",
     titulo: "Encuestas de satisfacción",
-    icono: "⭐",
+    icono: "★",
     descripcion: "Calificaciones recibidas por OT cerrada, con comentarios del solicitante.",
     fechas: true,
   },
@@ -61,14 +61,21 @@ const reportes = [
       <h1 class="text-2xl font-bold">Reportes</h1>
       <p class="text-sm text-slate-500">Descarga datos en formato Excel/CSV. Incluye encabezados con UTF-8 (compatible con Office y Google Sheets).</p>
     </div>
-    <a href="/kpis" class="btn-secondary">📊 Ver KPIs</a>
+    <a href="/kpis" class="btn-secondary">Ver KPIs</a>
   </div>
+
+  <a href="/reportes/mantenimiento" class="card mt-6 flex items-center justify-between gap-4 p-5">
+    <div>
+      <h2 class="font-semibold text-slate-900">Reporte de mantenimiento</h2>
+      <p class="mt-1 text-sm text-slate-500">Lo ejecutado en un periodo con sus tiempos reales: inicio, fin, trabajo, pausas y novedades. Se imprime o se descarga.</p>
+    </div>
+    <span class="btn-primary shrink-0">Abrir</span>
+  </a>
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     {reportes.map((r) => (
       <div class="card p-5">
         <div class="flex items-start gap-3">
-          <span class="text-3xl">{r.icono}</span>
           <div class="flex-1">
             <h2 class="font-semibold text-slate-900">{r.titulo}</h2>
             <p class="mt-1 text-sm text-slate-500">{r.descripcion}</p>
@@ -102,14 +109,14 @@ const reportes = [
               </select>
             </div>
           )}
-          <button type="submit" class="btn-primary w-full">⬇ Descargar CSV</button>
+          <button type="submit" class="btn-primary w-full">Descargar CSV</button>
         </form>
       </div>
     ))}
   </div>
 
   <div class="mt-6 card p-4 text-xs text-slate-500">
-    <p><strong>💡 Tip:</strong> Los archivos CSV se abren directo en Excel, Numbers o Google Sheets. Si los acentos se ven raros en Excel viejo, abre el archivo desde "Datos → Obtener datos externos" e indica encoding UTF-8.</p>
+    <p><strong>Tip:</strong> Los archivos CSV se abren directo en Excel, Numbers o Google Sheets. Si los acentos se ven raros en Excel viejo, abre el archivo desde "Datos → Obtener datos externos" e indica encoding UTF-8.</p>
   </div>
 
   <script>

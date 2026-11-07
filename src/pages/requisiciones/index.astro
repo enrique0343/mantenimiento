@@ -33,7 +33,7 @@ const conteos = rows.reduce<Record<string, number>>((acc, r) => {
       <p class="text-sm text-slate-500">{rows.length} en total</p>
     </div>
     <div class="flex gap-2">
-      <a href="/inventario" class="btn-secondary">📦 Inventario</a>
+      <a href="/inventario" class="btn-secondary">Inventario</a>
       {puedeCrear && <a href="/requisiciones/nueva" class="btn-primary">+ Nueva requisición</a>}
     </div>
   </div>
@@ -77,7 +77,7 @@ const conteos = rows.reduce<Record<string, number>>((acc, r) => {
               <td class="px-4 py-2 text-right font-mono">{r.r.total != null ? `$${r.r.total.toFixed(2)}` : "—"}</td>
               <td class="px-4 py-2 text-xs">
                 {r.r.origen === "auto_stock_minimo"
-                  ? <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">⚠ Auto</span>
+                  ? <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">Auto</span>
                   : <span class="text-slate-500">Manual</span>}
               </td>
               <td class="px-4 py-2 text-slate-600">{r.u?.nombre ?? "—"}</td>

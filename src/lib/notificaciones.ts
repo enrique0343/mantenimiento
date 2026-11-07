@@ -111,7 +111,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
       "Estamos trabajando en tu solicitud",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>Buenas noticias. Tu orden ya está en marcha.</p>
-       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico asignado:</strong> ${asg.nombre}</li>` : ""}
          <li><strong>Inicio del trabajo:</strong> ${fechaInicio}</li>
@@ -119,7 +119,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
        </ul>
        <p>${primerNombreTec ? `${primerNombreTec} está atendiendo personalmente tu solicitud` : "El equipo está atendiendo personalmente tu solicitud"} y te confirmaremos por este medio cuando el trabajo quede completado.</p>
        <p>Si durante la ejecución necesitas dar acceso a un área, aclarar un detalle del reporte original o compartir información adicional con el técnico, puedes hacerlo desde la orden.</p>
-       <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">${linkLabel}</a></p>
+       <p style="margin:18px 0"><a href="${url}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">${linkLabel}</a></p>
        <p style="margin-top:18px"><em>Gracias por reportarlo. Cada solicitud que llega nos ayuda a mantener Avante en su mejor forma.</em></p>`
     ),
     tipo: "ot_iniciada",
@@ -128,7 +128,7 @@ export async function notificarOTIniciada(ctx: APIContext, orden: OrdenLite) {
 
   if (sol.telegramChatId) {
     await sendTelegram(env, sol.telegramChatId,
-      `🛠 <b>Iniciado:</b> OT #${orden.id} - ${orden.titulo}\n${asg ? `Técnico: ${asg.nombre}` : ""}`,
+      `<b>Iniciado:</b> OT #${orden.id} - ${orden.titulo}\n${asg ? `Técnico: ${asg.nombre}` : ""}`,
       { linkUrl: url, linkLabel: "Ver orden" }
     );
   }
@@ -171,19 +171,19 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
       "Trabajo ejecutado; pendiente de verificación",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>El técnico registró la ejecución. Una persona autorizada distinta del ejecutor debe comprobar el trabajo antes del cierre.</p>
-       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          ${asg ? `<li><strong>Técnico responsable:</strong> ${asg.nombre}</li>` : ""}
          <li><strong>Fecha de ejecución:</strong> ${fechaCierre}</li>
-         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">Pendiente de verificación</span></li>
+         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#F2F4F7;color:#1F5740;border-radius:99px;font-weight:600">Pendiente de verificación</span></li>
        </ul>
        ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
-         <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
+         <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
        <p style="margin-top:18px"><strong>Tu validación nos importa.</strong> Tú conoces el área mejor que nadie. Si al verificar notas que el problema original persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
        <p>Si todo quedó conforme, no necesitas hacer nada. El cierre requiere verificación independiente; el silencio no lo confirma.</p>
        <p style="margin:18px 0">
-         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">${linkLabel}</a>
-         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
+         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500;margin-right:8px">${linkLabel}</a>
+         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#C03435;border:1px solid #C03435;border-radius:2px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
        </p>
        <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. La evidencia de ejecución y revisión quedará en el historial.</em></p>`
     ),
@@ -193,7 +193,7 @@ export async function notificarOTCompletada(ctx: APIContext, orden: OrdenLite) {
 
   if (sol.telegramChatId) {
     await sendTelegram(env, sol.telegramChatId,
-      `🔎 <b>Pendiente de verificación:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
+      `<b>Pendiente de verificación:</b> OT #${orden.id} - ${orden.titulo}${orden.solucionAplicada ? `\n<i>Solución:</i> ${orden.solucionAplicada}` : ""}`,
       { linkUrl: url, linkLabel: "Ver orden" }
     );
   }
@@ -252,8 +252,8 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
 
   // Botones grandes con las 5 calificaciones (acceso directo)
   const stars = [1, 2, 3, 4, 5].map((n) => {
-    const emoji = n === 1 ? "😞" : n === 2 ? "😕" : n === 3 ? "😬" : n === 4 ? "🙂" : "😎";
-    return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;border:1px solid #e2e8f0;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#64748b">${n}</span></a>`;
+    const emoji = String(n);
+    return `<a href="${encuestaUrl}?c=${n}" style="display:inline-block;margin:0 4px;padding:10px 14px;background:#F2F4F7;color:#1A1A1A;text-decoration:none;border-radius:2px;border:1px solid #BDC6D8;font-size:18px">${emoji}<br/><span style="font-size:11px;color:#6B7280">${n}</span></a>`;
   }).join("");
 
   // CORREO COMBINADO: cierre + encuesta en un solo mensaje
@@ -264,19 +264,19 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
       "Tu solicitud quedó resuelta",
       `<p>Hola <strong>${primerNombreSol}</strong>,</p>
        <p>Te confirmamos que tu orden ya fue atendida.</p>
-       <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
+       <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${orden.id} — ${orden.titulo}</h3>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
          <li><strong>Técnico responsable:</strong> ${nombreTec}</li>
          <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
-         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#d1fae5;color:#065f46;border-radius:99px;font-weight:600">✓ completada</span></li>
+         <li><strong>Estado:</strong> <span style="display:inline-block;padding:2px 10px;background:#F2F4F7;color:#1F5740;border-radius:99px;font-weight:600">✓ completada</span></li>
        </ul>
        ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
-         <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
+         <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 18px 0">${orden.solucionAplicada}</p>` : ""}
 
-       <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+       <hr style="border:none;border-top:1px solid #BDC6D8;margin:24px 0" />
 
-       <p style="margin:0 0 8px 0;text-align:center;font-weight:600;color:#0a4082;font-size:16px">¿Cómo te atendimos?</p>
-       <p style="margin:0 0 14px 0;text-align:center;font-size:13px;color:#64748b">Tu calificación define el próximo cambio en Mantenimiento. Solo te toma 10 segundos.</p>
+       <p style="margin:0 0 8px 0;text-align:center;font-weight:600;color:#23417D;font-size:16px">¿Cómo te atendimos?</p>
+       <p style="margin:0 0 14px 0;text-align:center;font-size:13px;color:#6B7280">Tu calificación define el próximo cambio en Mantenimiento. Solo te toma 10 segundos.</p>
        <div style="text-align:center;margin:8px 0 22px 0">${stars}</div>
        <p style="margin:0 0 6px 0"><strong>Qué pasa con tu voto:</strong></p>
        <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
@@ -284,12 +284,12 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
          <li>Si calificas con <strong>1, 2 o 3</strong>, entra al tablero de mejoras de Mantenimiento como caso a revisar esta semana.</li>
        </ul>
 
-       <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
+       <hr style="border:none;border-top:1px solid #BDC6D8;margin:24px 0" />
 
        <p style="margin-top:14px"><strong>Tu validación nos importa.</strong> Si al verificar notas que el problema persiste o que algo no quedó como esperabas, repórtalo dentro de las próximas <strong>48 horas</strong> y la reabriremos sin necesidad de generar un nuevo ticket.</p>
        <p style="margin:18px 0">
-         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;margin-right:8px">${tk?.trackingToken ? "Ver estado de tu solicitud →" : "Ver detalle de la orden →"}</a>
-         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#dc2626;border:1px solid #dc2626;border-radius:6px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
+         <a href="${url}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500;margin-right:8px">${tk?.trackingToken ? "Ver estado de tu solicitud →" : "Ver detalle de la orden →"}</a>
+         ${inconformidadUrl ? `<a href="${inconformidadUrl}" style="display:inline-block;padding:10px 20px;background:#fff;color:#C03435;border:1px solid #C03435;border-radius:2px;text-decoration:none;font-weight:500">Reportar inconformidad →</a>` : ""}
        </p>
        <p style="margin-top:18px"><em>Gracias por confiar en nosotros para resolver tu solicitud. Cada orden cerrada es una oportunidad de hacerlo mejor la próxima vez.</em></p>`
     ),
@@ -343,23 +343,23 @@ export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) 
         `<p>Hola <strong>${primerNombre}</strong>,</p>
          <p>Te avisamos que <strong>${nombreTec}</strong> acaba de cerrar la <strong>OT #${orden.id} — ${orden.titulo}</strong>.</p>
 
-         <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:15px">Datos del cierre</h3>
+         <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:15px">Datos del cierre</h3>
          <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7;font-size:14px">
            <li><strong>Técnico:</strong> ${nombreTec}</li>
            <li><strong>Tipo:</strong> ${orden.tipo} · <strong>Prioridad:</strong> ${orden.prioridad}</li>
-           ${tipoEquipo ? `<li><strong>Especialidad:</strong> ${tipoEquipo === "biomedico" ? "🩺 Biomédico" : "🔧 General"}</li>` : ""}
+           ${tipoEquipo ? `<li><strong>Especialidad:</strong> ${tipoEquipo === "biomedico" ? "Biomédico" : "General"}</li>` : ""}
            <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
            <li><strong>Horas trabajadas:</strong> ${horas}</li>
            ${sol ? `<li><strong>Solicitante:</strong> ${sol.nombre} &lt;${sol.email}&gt;</li>` : ""}
          </ul>
 
          ${orden.trabajosRealizados ? `<p style="margin:0 0 6px 0"><strong>Trabajos realizados:</strong></p>
-           <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 14px 0;font-size:13px">${orden.trabajosRealizados}</p>` : ""}
+           <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 14px 0;font-size:13px">${orden.trabajosRealizados}</p>` : ""}
          ${orden.solucionAplicada ? `<p style="margin:0 0 6px 0"><strong>Solución aplicada:</strong></p>
-           <p style="white-space:pre-wrap;background:#f0fdf4;padding:12px;border-left:3px solid #16a34a;border-radius:4px;margin:0 0 14px 0;font-size:13px">${orden.solucionAplicada}</p>` : ""}
+           <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #1F5740;border-radius:2px;margin:0 0 14px 0;font-size:13px">${orden.solucionAplicada}</p>` : ""}
 
-         <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
-         <p style="font-size:13px;color:#64748b;margin-top:14px">Esto es un aviso para tu monitoreo. El solicitante ya recibió la encuesta de satisfacción y tiene 48h para reportar inconformidad si algo no quedó bien.</p>`
+         <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+         <p style="font-size:13px;color:#6B7280;margin-top:14px">Esto es un aviso para tu monitoreo. El solicitante ya recibió la encuesta de satisfacción y tiene 48h para reportar inconformidad si algo no quedó bien.</p>`
       ),
       tipo: "ot_cerrada_jefe",
       referencia: `orden:${orden.id}`,
@@ -413,14 +413,14 @@ export async function notificarProyectoCreado(ctx: APIContext, proyecto: Proyect
           "Nuevo proyecto a evaluar",
           `<p>Hola <strong>${primer}</strong>,</p>
            <p>Se ha registrado un nuevo proyecto que requiere tu revisión y aprobación.</p>
-           <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
+           <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
            <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
              <li><strong>Prioridad:</strong> ${proyecto.prioridad}</li>
              <li><strong>Estado:</strong> En evaluación</li>
            </ul>
            ${proyecto.descripcion ? `<p style="margin:0 0 6px 0"><strong>Descripción:</strong></p>
-             <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${proyecto.descripcion}</p>` : ""}
-           <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Revisar proyecto →</a></p>`
+             <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 18px 0">${proyecto.descripcion}</p>` : ""}
+           <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Revisar proyecto →</a></p>`
         ),
         tipo: "proyecto_creado", referencia: `proyecto:${proyecto.id}`,
       }).catch(() => {})
@@ -456,7 +456,7 @@ export async function notificarProyectoEnEjecucion(ctx: APIContext, proyecto: Pr
         `<p>Hola <strong>${primer}</strong>,</p>
          <p>El proyecto <strong>${proyecto.codigo} — ${proyecto.titulo}</strong> fue aprobado y entra en ejecución. Eres su responsable.</p>
          <p>Desde el detalle del proyecto puedes generar las OTs hijas, registrar avance de hitos y dar seguimiento al presupuesto.</p>
-         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir proyecto →</a></p>
+         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir proyecto →</a></p>
          <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
       ),
       tipo: "proyecto_en_ejecucion", referencia: `proyecto:${proyecto.id}`,
@@ -490,10 +490,10 @@ export async function notificarProyectoCompletado(ctx: APIContext, proyecto: Pro
         "Proyecto completado",
         `<p>Hola <strong>${primer}</strong>,</p>
          <p>Te informamos que el proyecto originado por tu reporte <strong>Ticket #${t.id}</strong> ha sido completado.</p>
-         <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
+         <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">${proyecto.codigo} — ${proyecto.titulo}</h3>
          ${proyecto.notasCierre ? `<p style="margin:0 0 6px 0"><strong>Notas de cierre:</strong></p>
-           <p style="white-space:pre-wrap;background:#f0fdf4;padding:12px;border-left:3px solid #16a34a;border-radius:4px;margin:0 0 18px 0">${proyecto.notasCierre}</p>` : ""}
-         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Ver mi reporte →</a></p>
+           <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #1F5740;border-radius:2px;margin:0 0 18px 0">${proyecto.notasCierre}</p>` : ""}
+         <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Ver mi reporte →</a></p>
          <p style="margin-top:14px"><em>Gracias por confiar en el equipo de mantenimiento.</em></p>`
       ),
       tipo: "proyecto_completado", referencia: `proyecto:${proyecto.id}`,

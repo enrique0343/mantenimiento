@@ -15,9 +15,9 @@ const rows = await db
   .orderBy(desc(usuarios.id));
 
 const ESP_LABEL: Record<string, string> = {
-  general: "🔧 General",
-  biomedico: "🩺 Biomédico",
-  ambos: "🔧🩺 Ambos",
+  general: "General",
+  biomedico: "Biomédico",
+  ambos: "Ambos",
 };
 
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
@@ -76,9 +76,9 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
         <label class="label">Especialidad</label>
         <select class="input" id="f_especialidad">
           <option value="">— Sin asignar —</option>
-          <option value="general">🔧 General</option>
-          <option value="biomedico">🩺 Biomédico</option>
-          <option value="ambos">🔧🩺 Ambos</option>
+          <option value="general">General</option>
+          <option value="biomedico">Biomédico</option>
+          <option value="ambos">Ambos</option>
         </select>
         <p class="mt-1 text-xs text-slate-500">Para jefes/técnicos: filtra qué OTs y tickets verá.</p>
       </div>
@@ -166,14 +166,14 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
                 data-tarifa={u.tarifaHora ?? 0}
                 data-sucursal={u.sucursalId ?? ""}
                 data-activo={u.activo ? "1" : "0"}
-              >✎ Editar</button>
+              >Editar</button>
               <button
                 class="pwd-btn ml-3 text-xs text-amber-600 hover:underline"
                 data-id={u.id}
                 data-nombre={u.nombre}
-              >🔑 Contraseña</button>
+              >Contraseña</button>
               {u.id !== user.id && u.activo && (
-                <button class="del-btn ml-3 text-xs text-red-600 hover:underline" data-id={u.id} data-nombre={u.nombre}>🗑 Desactivar</button>
+                <button class="del-btn ml-3 text-xs text-red-600 hover:underline" data-id={u.id} data-nombre={u.nombre}>Desactivar</button>
               )}
             </td>
           </tr>
@@ -206,9 +206,9 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
           <label class="label">Especialidad</label>
           <select class="input" id="e_especialidad">
             <option value="">— Sin asignar —</option>
-            <option value="general">🔧 General</option>
-            <option value="biomedico">🩺 Biomédico</option>
-            <option value="ambos">🔧🩺 Ambos</option>
+            <option value="general">General</option>
+            <option value="biomedico">Biomédico</option>
+            <option value="ambos">Ambos</option>
           </select>
         </div>
         <div>

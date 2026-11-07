@@ -7,6 +7,8 @@
 // los simulacros (cap. 06: «un EOP sin simulacro es una hipótesis») y la
 // constancia de que el papel está colgado donde toca.
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import {
   eopColocaciones,
@@ -127,7 +129,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
   <div class="no-print">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 class="text-2xl font-bold">🚨 EOP · operación en emergencia</h1>
+        <h1 class="text-2xl font-bold">EOP · operación en emergencia</h1>
         <p class="mt-1 max-w-3xl text-sm text-slate-500">
           El EOP empieza cuando el sistema <strong>ya falló</strong>: prioriza estabilizar antes que
           diagnosticar y cabe en una página. No se ejecuta desde esta pantalla —
@@ -145,22 +147,22 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
         <div class="text-[11px] text-slate-400">{nVigentes} vigente{nVigentes === 1 ? "" : "s"} · 5 en el volumen</div>
       </div>
       <div class="card p-3">
-        <div class="text-[11px] uppercase tracking-wide text-slate-500">⏰ Simulacro anual vencido</div>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">Simulacro anual vencido</div>
         <div class:list={["mt-0.5 text-2xl font-bold", nVencidos > 0 ? "text-red-600" : "text-emerald-600"]}>{nVencidos}</div>
         <div class="text-[11px] text-slate-400">funcional en sitio, una vez al año</div>
       </div>
       <div class="card p-3">
-        <div class="text-[11px] uppercase tracking-wide text-slate-500">🧪 Sin ensayo de mesa</div>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">Sin ensayo de mesa</div>
         <div class:list={["mt-0.5 text-2xl font-bold", nSinMesa > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinMesa}</div>
         <div class="text-[11px] text-slate-400">de la versión cargada</div>
       </div>
       <div class="card p-3">
-        <div class="text-[11px] uppercase tracking-wide text-slate-500">📌 Sin copia colocada</div>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">Sin copia colocada</div>
         <div class:list={["mt-0.5 text-2xl font-bold", nSinColocar > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinColocar}</div>
         <div class="text-[11px] text-slate-400">cuarto técnico y servicio clínico</div>
       </div>
       <div class="card p-3">
-        <div class="text-[11px] uppercase tracking-wide text-slate-500">📄 Sin ficha redactada</div>
+        <div class="text-[11px] uppercase tracking-wide text-slate-500">Sin ficha redactada</div>
         <div class:list={["mt-0.5 text-2xl font-bold", nSinFicha > 0 ? "text-amber-600" : "text-emerald-600"]}>{nSinFicha}</div>
         <div class="text-[11px] text-slate-400">señal, acciones y escalamiento</div>
       </div>
@@ -180,7 +182,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
         {docs.map((d) => (
           <a href={`#doc-${d.p.id}`} class="btn-secondary btn-sm">
             {sistemaInfo(d.p.sistema).icono} {d.p.codigoCorto}
-            {d.vencidoAnual && <span class="ml-1 text-red-600">⏰</span>}
+            {d.vencidoAnual && <span class="ml-1 text-red-600">●</span>}
           </a>
         ))}
       </nav>
@@ -189,6 +191,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
 
   {docs.map((d) => (
     <section id={`doc-${d.p.id}`} class="eop-doc card print-doc mt-5 p-5">
+      <DocCabecera soloImpresion titulo={d.p.titulo} subtitulo={sistemaInfo(d.p.sistema).label} codigo={d.p.codigoCorto} version={d.p.version} />
       <!-- ══ Cabecera documental ══ -->
       <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3">
         <div>
@@ -207,7 +210,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
           </div>
         </div>
         <div class="no-print flex gap-2">
-          <button class="btn-secondary btn-sm imprimir" data-doc={d.p.id}>🖨️ Imprimir ficha</button>
+          <button class="btn-secondary btn-sm imprimir" data-doc={d.p.id}>Imprimir ficha</button>
           <a href={`/procedimientos/${d.p.id}`} class="btn-secondary btn-sm">Abrir documento</a>
         </div>
       </div>
@@ -252,7 +255,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
               <ol class="mt-2 space-y-2">
                 {d.acciones.map((a, i) => (
                   <li class="flex gap-3 rounded-lg border-2 border-red-300 bg-red-50 p-3">
-                    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-600 text-base font-bold text-white">
+                    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-base font-bold ">
                       {i + 1}
                     </span>
                     <span class="text-base font-semibold leading-snug text-slate-900">{a}</span>
@@ -339,7 +342,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
       <div class="no-print mt-5 border-t border-slate-200 pt-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm font-semibold text-slate-700">
-            🧪 Simulacros — «un EOP sin simulacro es una hipótesis»
+            Simulacros — «un EOP sin simulacro es una hipótesis»
           </h3>
           {esAdmin && (
             <button class="btn-secondary btn-sm nuevoSimulacro" data-doc={d.p.id}>+ Registrar simulacro</button>
@@ -417,7 +420,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
       <div class="no-print mt-5 border-t border-slate-200 pt-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm font-semibold text-slate-700">
-            📌 Constancias de colocación — se imprime y se cuelga
+            Constancias de colocación — se imprime y se cuelga
           </h3>
           {esAdmin && (
             <button class="btn-secondary btn-sm nuevaColocacion" data-doc={d.p.id}>+ Registrar colocación</button>
@@ -580,7 +583,7 @@ const nVigentes = docs.filter((d) => d.p.estado === "vigente").length;
       .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
       main { padding: 0 !important; }
       body { background: white !important; }
-      .print-doc { border: none !important; box-shadow: none !important; margin-top: 0 !important; }
+      .print-doc { border: none !important;  margin-top: 0 !important; }
       .eop-doc { break-after: page; }
       .eop-doc:last-of-type { break-after: auto; }
       body.solo-uno .eop-doc { display: none !important; }

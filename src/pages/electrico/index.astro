@@ -66,7 +66,7 @@ const totalDisponible = filas.reduce((s, f) => s + f.resumen.disponibleKw, 0);
 <Layout title="Control eléctrico">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">⚡ Control eléctrico</h1>
+      <h1 class="text-2xl font-bold">Control eléctrico</h1>
       <p class="mt-1 text-sm text-slate-500">
         {filas.length} subestación(es) · {fmtKw(totalInstalado)} kW instalados · {fmtKw(totalDisponible)} kW disponibles
       </p>
@@ -78,7 +78,6 @@ const totalDisponible = filas.reduce((s, f) => s + f.resumen.disponibleKw, 0);
 
   {filas.length === 0 && (
     <div class="card mt-6 p-10 text-center">
-      <div class="text-4xl">⚡</div>
       <h2 class="mt-3 font-semibold text-slate-800">Sin subestaciones registradas</h2>
       <p class="mt-1 text-sm text-slate-500 max-w-md mx-auto">
         Registra las subestaciones o puntos de alimentación de cada sede y luego agrega las cargas conectadas
@@ -91,7 +90,7 @@ const totalDisponible = filas.reduce((s, f) => s + f.resumen.disponibleKw, 0);
   {sedes.map((sede) => (
     <div class="mt-6">
       <h2 class="font-semibold text-slate-700 flex items-center gap-2">
-        🏢 {sede}
+        {sede}
         <span class="badge bg-slate-100 text-slate-600">{porSede.get(sede)!.length} punto(s)</span>
       </h2>
       <div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
@@ -143,7 +142,7 @@ const totalDisponible = filas.reduce((s, f) => s + f.resumen.disponibleKw, 0);
   {esAdmin && (
     <div id="subModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-slate-900">⚡ Nueva subestación / punto de alimentación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Nueva subestación / punto de alimentación</h3>
         <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="sm:col-span-2">
             <label class="label text-xs">Sede *</label>

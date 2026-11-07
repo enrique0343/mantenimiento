@@ -91,7 +91,7 @@ const dias = diasParaFecha(a.proximaFecha);
           <h2 class="font-semibold text-slate-900">Checklist plantilla</h2>
           <p class="text-xs text-slate-500">Se copia a cada OT generada para que el técnico lo ejecute.</p>
           <ul class="mt-3 space-y-1 text-sm">
-            {checklist.map((it) => <li class="flex items-start gap-2"><span class="text-slate-400">▢</span> {it.texto}</li>)}
+            {checklist.map((it) => <li class="flex items-start gap-2"><span class="text-slate-400">□</span> {it.texto}</li>)}
           </ul>
         </div>
       )}
@@ -102,8 +102,8 @@ const dias = diasParaFecha(a.proximaFecha);
         <div class="card p-5">
           <h2 class="font-semibold text-slate-900">Acciones</h2>
           <div class="mt-3 space-y-2">
-            <button id="generarBtn" class="btn-primary w-full justify-center text-sm">⚡ Generar OT ahora</button>
-            <button id="reprogramarBtn" class="btn-secondary w-full justify-center text-sm">📅 Reprogramar próxima fecha</button>
+            <button id="generarBtn" class="btn-primary w-full justify-center text-sm">Generar OT ahora</button>
+            <button id="reprogramarBtn" class="btn-secondary w-full justify-center text-sm">Reprogramar próxima fecha</button>
             <button id="darBajaBtn" class="text-xs text-red-500 hover:underline">Dar de baja la actividad</button>
           </div>
           <p id="actMsg" class="mt-2 hidden text-xs"></p>

@@ -91,7 +91,7 @@ export async function procesarContratosVencimiento(ctx: APIContext): Promise<{
       : equipos.map((e) => `${escapeHtml(e.codigo)} — ${escapeHtml(e.nombre)}`).join("<br>");
 
     const urgencia = umbral === 30 ? "URGENTE" : umbral === 60 ? "Importante" : "Aviso";
-    const colorAcento = umbral === 30 ? "#dc2626" : umbral === 60 ? "#ea580c" : "#0a4082";
+    const colorAcento = umbral === 30 ? "#C03435" : umbral === 60 ? "#A27628" : "#23417D";
 
     // Destinatarios: admins + responsable interno (si existe y no es admin ya en la lista)
     const dests = [...admins];
@@ -105,16 +105,16 @@ export async function procesarContratosVencimiento(ctx: APIContext): Promise<{
       `Contrato por vencer en ${d} día${d === 1 ? "" : "s"}`,
       `<p>El contrato <strong>${escapeHtml(c.nombre)}</strong> vence el <strong>${fmtFechaLarga(c.fechaFin)}</strong> (${d} día${d === 1 ? "" : "s"} restantes).</p>
        <table style="margin:14px 0;border-collapse:collapse;width:100%">
-         <tr><td style="padding:6px 0;color:#64748b;font-size:13px">Código:</td><td style="padding:6px 0;font-weight:bold">${c.codigo}</td></tr>
-         <tr><td style="padding:6px 0;color:#64748b;font-size:13px">Proveedor:</td><td style="padding:6px 0">${escapeHtml(prov?.nombre ?? "—")}</td></tr>
-         <tr><td style="padding:6px 0;color:#64748b;font-size:13px">Tipo:</td><td style="padding:6px 0">${c.tipo}</td></tr>
-         <tr><td style="padding:6px 0;color:#64748b;font-size:13px">Costo:</td><td style="padding:6px 0">$${(c.costo ?? 0).toFixed(2)} (${c.periodicidadCosto})</td></tr>
-         <tr><td style="padding:6px 0;color:#64748b;font-size:13px;vertical-align:top">Equipos cubiertos:</td><td style="padding:6px 0">${equiposTexto}</td></tr>
+         <tr><td style="padding:6px 0;color:#6B7280;font-size:13px">Código:</td><td style="padding:6px 0;font-weight:bold">${c.codigo}</td></tr>
+         <tr><td style="padding:6px 0;color:#6B7280;font-size:13px">Proveedor:</td><td style="padding:6px 0">${escapeHtml(prov?.nombre ?? "—")}</td></tr>
+         <tr><td style="padding:6px 0;color:#6B7280;font-size:13px">Tipo:</td><td style="padding:6px 0">${c.tipo}</td></tr>
+         <tr><td style="padding:6px 0;color:#6B7280;font-size:13px">Costo:</td><td style="padding:6px 0">$${(c.costo ?? 0).toFixed(2)} (${c.periodicidadCosto})</td></tr>
+         <tr><td style="padding:6px 0;color:#6B7280;font-size:13px;vertical-align:top">Equipos cubiertos:</td><td style="padding:6px 0">${equiposTexto}</td></tr>
        </table>
-       <p style="margin:14px 0;padding:10px 14px;border-left:3px solid ${colorAcento};background:#f8fafc;font-size:14px">
+       <p style="margin:14px 0;padding:10px 14px;border-left:3px solid ${colorAcento};background:#F2F4F7;font-size:14px">
          Te recomendamos contactar al proveedor para iniciar la renovación cuanto antes y evitar quedar sin cobertura.
        </p>
-       <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:${colorAcento};color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir contrato →</a></p>`
+       <p style="margin:18px 0"><a href="${link}" style="display:inline-block;padding:10px 20px;background:${colorAcento};color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir contrato →</a></p>`
     );
 
     for (const dst of dests) {

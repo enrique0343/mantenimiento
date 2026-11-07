@@ -328,7 +328,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 ---
 
 <Layout title={`Orden #${o.id}`}>
-  <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
+  <a href={user.rol === "tecnico" ? "/campo" : areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
 
   {conjuntoOrigen && <section class="card mt-4 border-l-4 border-brand-500 p-4 text-sm">
     <p class="font-medium">Conjunto registrado al vincular esta orden</p>
@@ -380,10 +380,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
     <div class="flex gap-2">
       {user.rol === "admin" && (
-        <button id="historialBtn" type="button" class="btn-secondary text-sm">📜 Historial</button>
+        <button id="historialBtn" type="button" class="btn-secondary text-sm">Historial</button>
       )}
       {user.rol === "admin" && !conjuntoOrigen && (
-        <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">🗑 Eliminar OT</button>
+        <button id="deleteOtBtn" type="button" class="btn-secondary text-sm text-red-600 hover:bg-red-50">Eliminar OT</button>
       )}
     </div>
 
@@ -394,7 +394,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <div id="historialModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div class="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between">
-          <h2 class="font-bold text-lg">📜 Historial de la OT #{o.id}</h2>
+          <h2 class="font-bold text-lg">Historial de la OT #{o.id}</h2>
           <button id="closeHistorial" class="text-slate-400 hover:text-slate-600 text-xl">×</button>
         </div>
         <div id="historialContent" class="p-5">
@@ -406,7 +406,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
       const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const ACCION_ICON = {
-        create: "➕", update: "✏️", estado: "🔄", asignacion: "👤", delete: "🗑",
+        create: "", update: "", estado: "", asignacion: "", delete: "",
       };
       const ACCION_LABEL = {
         create: "Creación", update: "Edición", estado: "Cambio de estado",
@@ -443,7 +443,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           // Origen
           if (j.ticketOrigen) {
             html += `<div class="mb-5 rounded-lg border-l-4 border-blue-400 bg-blue-50 p-4 text-sm">
-              <p class="text-xs font-semibold text-blue-700 uppercase mb-1">📨 Origen: Ticket público</p>
+              <p class="text-xs font-semibold text-blue-700 uppercase mb-1">Origen: Ticket público</p>
               <p><strong>Solicitante:</strong> ${escHtml(j.ticketOrigen.solicitanteNombre)}</p>
               <p><strong>Email:</strong> <a href="mailto:${escHtml(j.ticketOrigen.solicitanteEmail)}" class="text-blue-600 hover:underline">${escHtml(j.ticketOrigen.solicitanteEmail)}</a></p>
               ${j.ticketOrigen.solicitanteTelefono ? `<p><strong>Teléfono:</strong> ${escHtml(j.ticketOrigen.solicitanteTelefono)}</p>` : ""}
@@ -452,7 +452,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>`;
           } else if (j.creador) {
             html += `<div class="mb-5 rounded-lg border-l-4 border-slate-300 bg-slate-50 p-4 text-sm">
-              <p class="text-xs font-semibold text-slate-600 uppercase mb-1">📝 OT creada manualmente</p>
+              <p class="text-xs font-semibold text-slate-600 uppercase mb-1">OT creada manualmente</p>
               <p><strong>Por:</strong> ${escHtml(j.creador.nombre)} <span class="text-slate-500">&lt;${escHtml(j.creador.email)}&gt;</span></p>
               <p class="text-xs text-slate-500 mt-1">Fecha: ${fmtDate(j.orden.createdAt)}</p>
             </div>`;
@@ -514,18 +514,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
   {fase47Error && (
     <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
-      <strong>⚠ No se pudieron leer los prerrequisitos ni las lecturas de liberación.</strong> La ficha de la orden sigue operativa, pero las tarjetas del MOP y del EOP van vacías.
+      <strong>No se pudieron leer los prerrequisitos ni las lecturas de liberación.</strong> La ficha de la orden sigue operativa, pero las tarjetas del MOP y del EOP van vacías.
       <pre class="mt-1 whitespace-pre-wrap text-xs">{fase47Error}</pre>
     </div>
   )}
   {estadoActual === "abierta" && (
     <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
-      <strong>⚠ OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
+      <strong>OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
     </div>
   )}
   {estadoActual === "en_espera" && (
     <div class="card mt-4 border-l-4 border-purple-500 bg-purple-50 p-4 text-sm text-purple-800">
-      <strong>⏸ OT en espera.</strong> La OT está pausada pendiente de compra u otro insumo.
+      <strong>OT en espera.</strong> La OT está pausada pendiente de compra u otro insumo.
       {solicitudesVinculadas.length > 0 && (
         <span> Solicitudes vinculadas: {solicitudesVinculadas.map((s) => (
           <a href={`/solicitudes-compra/${s.id}`} class="ml-1 font-medium underline">{s.codigo} ({s.estado})</a>
@@ -585,19 +585,19 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 inicioBloqueado ? "cursor-not-allowed bg-slate-200 text-slate-500" :
                 s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
                 s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
-                s === "verificada" ? "bg-teal-600 text-white hover:bg-teal-700" :
+                s === "verificada" ? "bg-brand-600 text-white hover:bg-brand-800" :
                 s === "en_espera" ? "bg-purple-600 text-white hover:bg-purple-700" :
                 "bg-brand-600 text-white hover:bg-brand-700",
               ]}
             >
-              {s === "abierta" ? "↺ Reabrir" :
-               s === "en_proceso" ? (estadoActual === "cerrada" ? "↺ Reabrir con motivo" : ["completada", "verificada"].includes(estadoActual) ? "↩ Devolver con motivo" : estadoActual === "en_espera" ? "▶ Reanudar" : "▶ Iniciar") :
-               s === "en_espera" ? "⏸ Poner en espera" :
+              {s === "abierta" ? "Reabrir" :
+               s === "en_proceso" ? (estadoActual === "cerrada" ? "Reabrir con motivo" : ["completada", "verificada"].includes(estadoActual) ? "Devolver con motivo" : estadoActual === "en_espera" ? "› Reanudar" : "› Iniciar") :
+               s === "en_espera" ? "Poner en espera" :
                s === "completada" ? "✓ Enviar a verificación" :
                s === "verificada" ? "✓✓ Verificar y cerrar" :
-               s === "cerrada" ? "🔒 Cerrar definitivamente" :
+               s === "cerrada" ? "Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
-              {inicioBloqueado && <span class="ml-1">🔒</span>}
+              {inicioBloqueado && <span class="ml-1"></span>}
             </button>
             );
           })}
@@ -618,7 +618,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {(docRige || rige || rigeError || esMop || esEop) && (
         <div class:list={["card p-5 border-l-4", docRige ? "border-brand-500" : "border-amber-500"]}>
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <h2 class="font-semibold text-slate-900">📋 Procedimiento que rige</h2>
+            <h2 class="font-semibold text-slate-900">Procedimiento que rige</h2>
             <span class="flex flex-wrap items-center gap-2">
               {docRige && <span class={`badge ${TIPO_PROC[tipoDocRige].color}`}>{TIPO_PROC[tipoDocRige].icono} {TIPO_PROC[tipoDocRige].label}</span>}
               {docRige && <span class={`badge ${estadoInfo(docRige.estado).color}`}>{estadoInfo(docRige.estado).label}</span>}
@@ -644,7 +644,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   <ol class="mt-1.5 space-y-2">
                     {accionesRige.map((acc, i) => (
                       <li class="flex gap-3 rounded-lg bg-red-50 p-3 text-sm text-red-900">
-                        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white">{i + 1}</span>
+                        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-xs font-bold ">{i + 1}</span>
                         <span>{acc}</span>
                       </li>
                     ))}
@@ -658,7 +658,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               )}
 
               {!docEsVinculado && rige?.aviso && (
-                <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">⚠ {rige.aviso}</p>
+                <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">{rige.aviso}</p>
               )}
 
               {/* Lo que este documento exige ya vive en las tarjetas de abajo:
@@ -680,7 +680,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 )}
                 {docSugerido && puedeConfigurarMop && (
                   <button id="rigeVincular" type="button" class="btn-primary btn-sm" data-proc={docSugerido.id}>
-                    🔗 Vincular {docSugerido.codigoCorto} a esta orden
+                    Vincular {docSugerido.codigoCorto} a esta orden
                   </button>
                 )}
               </div>
@@ -698,13 +698,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     : rige?.aviso ?? "Regístralo en Procedimientos para que el sistema pueda decir qué rige."
                   : "La orden no está sobre un equipo registrado, así que el sistema no puede resolver qué documento la rige. Asígnale el equipo y se resolverá solo."}
               </p>
-              {puedeVerProcs && <a href="/procedimientos" class="btn-secondary btn-sm mt-2">📋 Ir a Procedimientos</a>}
+              {puedeVerProcs && <a href="/procedimientos" class="btn-secondary btn-sm mt-2">Ir a Procedimientos</a>}
             </div>
           )}
 
           {rigeError && (
             <p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-              ⚠ No se pudo resolver qué procedimiento rige esta orden. La ficha sigue operativa. {rigeError}
+              No se pudo resolver qué procedimiento rige esta orden. La ficha sigue operativa. {rigeError}
             </p>
           )}
         </div>
@@ -714,7 +714,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {puedeConfigurarMop && (
         <div class="card p-5">
           <div class="flex items-center justify-between gap-2">
-            <h2 class="font-semibold text-slate-900">🏷 Clasificación del procedimiento</h2>
+            <h2 class="font-semibold text-slate-900">Clasificación del procedimiento</h2>
             <span id="clasifMsg" class="text-xs text-slate-400"></span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
@@ -758,7 +758,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraEop && (
         <div class="card p-5 border-l-4 border-red-500">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="font-semibold text-slate-900">🚨 Emergencia · los tres tiempos</h2>
+            <h2 class="font-semibold text-slate-900">Emergencia · los tres tiempos</h2>
             <span id="eopMsg" class="text-xs text-slate-400"></span>
           </div>
           <p class="mt-1 text-xs text-slate-600">
@@ -810,11 +810,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             </div>
           </div>
           {(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && (
-            <p class="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠ La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
+            <p class="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
           )}
           {o.causaRaizVencimiento && (
             <p class:list={["mt-3 rounded px-3 py-2 text-xs", causaVencida ? "bg-red-50 text-red-700 font-medium" : "bg-blue-50 text-blue-700"]}>
-              {causaVencida ? "⛔" : "🕐"} Análisis de causa raíz: plazo de {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}.
+              Análisis de causa raíz: plazo de {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}.
               {causaVencida
                 ? " VENCIDO y sin causa raíz escrita. Documéntalo hoy e informa al Comité de Seguridad."
                 : o.causaRaiz ? " Ya hay causa raíz registrada." : " Escríbelo en «Ejecución del trabajo» antes del plazo."}
@@ -827,10 +827,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraMop && (
         <div class="card p-5 border-l-4 border-indigo-500">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="font-semibold text-slate-900">🔐 Prerrequisitos de la intervención</h2>
+            <h2 class="font-semibold text-slate-900">Prerrequisitos de la intervención</h2>
             <span class="text-xs text-slate-500">
               {prerreqCumplidos} / {prerrequisitos.length} cumplidos
-              {bloqueoInicio.faltantes.length > 0 && <span class="ml-2 rounded bg-red-600 px-1.5 py-0.5 font-medium text-white">⛔ {bloqueoInicio.faltantes.length} bloquea{bloqueoInicio.faltantes.length === 1 ? "" : "n"} el inicio</span>}
+              {bloqueoInicio.faltantes.length > 0 && <span class="ml-2 rounded bg-white text-red-600 border border-red-600 px-1.5 py-0.5 font-medium ">{bloqueoInicio.faltantes.length} bloquea{bloqueoInicio.faltantes.length === 1 ? "" : "n"} el inicio</span>}
               <span id="prerreqMsg" class="ml-2 text-slate-400"></span>
             </span>
           </div>
@@ -839,7 +839,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </p>
           {esMop && bloqueoInicio.faltantes.length > 0 && estadoActual === "abierta" && (
             <div class="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800">
-              <strong>⛔ Esta orden no se puede iniciar todavía.</strong> Falta{bloqueoInicio.faltantes.length === 1 ? "" : "n"}:
+              <strong>Esta orden no se puede iniciar todavía.</strong> Falta{bloqueoInicio.faltantes.length === 1 ? "" : "n"}:
               <ul class="mt-1 list-disc pl-5">
                 {bloqueoInicio.faltantes.map((f) => <li>{f}</li>)}
               </ul>
@@ -883,7 +883,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                       </div>
                       {puedeRegistrarMop && (
                         pre.cumplido ? (
-                          <button type="button" class="prerreq-toggle btn-secondary text-xs" data-id={pre.id} data-cumplido="0">↺ Revertir</button>
+                          <button type="button" class="prerreq-toggle btn-secondary text-xs" data-id={pre.id} data-cumplido="0">Revertir</button>
                         ) : (
                           <button type="button" class="prerreq-toggle btn-primary text-xs" data-id={pre.id} data-cumplido="1">✓ Marcar cumplido</button>
                         )
@@ -927,7 +927,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraMop && (
         <div class="card p-5">
           <div class="flex items-center justify-between gap-2">
-            <h2 class="font-semibold text-slate-900">↩ Plan de reversa</h2>
+            <h2 class="font-semibold text-slate-900">Plan de reversa</h2>
             <span id="reversaMsg" class="text-xs text-slate-400"></span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
@@ -969,7 +969,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {row.activo && (
         <div class="card p-5 border-l-4 border-blue-400">
           <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir</h2>
+            <h2 class="font-semibold text-slate-900">Lugar a intervenir</h2>
             {puedeAsignarActivo && (
               <button id="editActivoBtn" type="button" class="text-xs text-brand-600 hover:underline">Cambiar equipo</button>
             )}
@@ -982,16 +982,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   {row.activo.codigo} · {row.activo.nombre}
                 </a>
                 <span class="ml-2 text-xs text-slate-500">
-                  {row.activo.tipo === "biomedico" ? "🩺 Biomédico" : "🔧 General"}
+                  {row.activo.tipo === "biomedico" ? "Biomédico" : "General"}
                 </span>
               </div>
             </div>
             <div>
-              <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+              <div class="text-xs uppercase text-slate-500">Sucursal</div>
               <div class="mt-0.5">{row.sucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
             </div>
             <div>
-              <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+              <div class="text-xs uppercase text-slate-500">Ubicación</div>
               <div class="mt-0.5">
                 {row.ubicacion?.nombre ?? row.activo.ubicacion ?? <span class="text-slate-400">—</span>}
                 {row.ubicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({row.ubicacion.tipo})</span>}
@@ -1009,20 +1009,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           {puedeAsignarActivo && (
             <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
               <div>
-                <label class="label text-xs">1️⃣ Sucursal</label>
+                <label class="label text-xs">1. Sucursal</label>
                 <select id="sucSel" class="input text-sm">
                   <option value="">— Selecciona —</option>
                   {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
                 </select>
               </div>
               <div>
-                <label class="label text-xs">2️⃣ Ubicación</label>
+                <label class="label text-xs">2. Ubicación</label>
                 <select id="ubSel" class="input text-sm" disabled>
                   <option value="">Selecciona la sucursal</option>
                 </select>
               </div>
               <div>
-                <label class="label text-xs">3️⃣ Equipo</label>
+                <label class="label text-xs">3. Equipo</label>
                 <select id="activoSelect" class="input text-sm" disabled>
                   <option value="">Selecciona la ubicación</option>
                 </select>
@@ -1041,7 +1041,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <div class="card p-5 border-l-4 border-slate-300">
           <div class="flex items-center justify-between">
             <div>
-              <h2 class="font-semibold text-slate-900">📍 Lugar a intervenir (sin equipo)</h2>
+              <h2 class="font-semibold text-slate-900">Lugar a intervenir (sin equipo)</h2>
               <p class="text-xs text-slate-400 italic mt-0.5">Trabajo general — no asociado a un equipo registrado</p>
             </div>
             <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
@@ -1049,11 +1049,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           {(ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
             <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
               <div>
-                <div class="text-xs uppercase text-slate-500">🏢 Sucursal</div>
+                <div class="text-xs uppercase text-slate-500">Sucursal</div>
                 <div class="mt-0.5">{ordenSucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
               </div>
               <div>
-                <div class="text-xs uppercase text-slate-500">📍 Ubicación</div>
+                <div class="text-xs uppercase text-slate-500">Ubicación</div>
                 <div class="mt-0.5">
                   {ordenUbicacion?.nombre ?? <span class="text-slate-400">—</span>}
                   {ordenUbicacion?.tipo && <span class="ml-1 text-xs text-slate-400 capitalize">({ordenUbicacion.tipo})</span>}
@@ -1061,7 +1061,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </div>
               {(o as any).ubicacionDetalle && (
                 <div class="col-span-2">
-                  <div class="text-xs uppercase text-slate-500">📝 Detalle</div>
+                  <div class="text-xs uppercase text-slate-500">Detalle</div>
                   <div class="mt-0.5 text-slate-700">{(o as any).ubicacionDetalle}</div>
                 </div>
               )}
@@ -1069,20 +1069,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           )}
           <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
-              <label class="label text-xs">1️⃣ Sucursal</label>
+              <label class="label text-xs">1. Sucursal</label>
               <select id="sucSel" class="input text-sm">
                 <option value="">— Selecciona —</option>
                 {sucursalesLista.map((s) => <option value={s.id}>{s.nombre}</option>)}
               </select>
             </div>
             <div>
-              <label class="label text-xs">2️⃣ Ubicación</label>
+              <label class="label text-xs">2. Ubicación</label>
               <select id="ubSel" class="input text-sm" disabled>
                 <option value="">Selecciona la sucursal</option>
               </select>
             </div>
             <div>
-              <label class="label text-xs">3️⃣ Equipo</label>
+              <label class="label text-xs">3. Equipo</label>
               <select id="activoSelect" class="input text-sm" disabled>
                 <option value="">Selecciona la ubicación</option>
               </select>
@@ -1100,7 +1100,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <div class="card p-5 border-l-4 border-blue-300">
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="font-semibold text-slate-900">📷 Foto del estado inicial (antes)</h2>
+            <h2 class="font-semibold text-slate-900">Foto del estado inicial (antes)</h2>
             <p class="mt-1 text-xs text-slate-500">Opcional: toma esta foto al llegar al sitio, antes de pulsar "Iniciar". Sirve como evidencia del estado en que se recibió el equipo.</p>
           </div>
           <span class="text-xs text-slate-500">{adjsAntes.length} foto(s)</span>
@@ -1111,7 +1111,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             {adjsAntes.map((a) => (
               <div class="relative group rounded bg-slate-50 p-2 text-xs">
                 {puedeSubirAntes && (
-                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-white text-red-600 border border-red-600 w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
                 )}
                 {a.contentType.startsWith("image/") && (
                   <a href={`/api/adjuntos/${a.id}`} target="_blank">
@@ -1129,7 +1129,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <form class="upForm mt-3" data-categoria="antes">
             <label class="block">
               <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
-              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">📷 {adjsAntes.length === 0 ? "Tomar foto del estado inicial" : "Agregar otra foto"}</span>
+              <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center">{adjsAntes.length === 0 ? "Tomar foto del estado inicial" : "Agregar otra foto"}</span>
             </label>
             <button type="submit" class="hidden">Subir</button>
           </form>
@@ -1138,7 +1138,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
       <!-- Línea de tiempo de la OT -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">⏱ Tiempos</h2>
+        <h2 class="font-semibold text-slate-900">Tiempos</h2>
         <div class="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div>
             <div class="text-xs uppercase text-slate-500">Asignado</div>
@@ -1161,14 +1161,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class:list={["mt-3 rounded px-3 py-2 text-xs", estadoActual === "en_espera" ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700"]}>
             {o.completadaEn ? (
               <>
-                ⏱ Duración real: <strong>{((new Date(o.completadaEn).getTime() - new Date(o.iniciadaEn).getTime()) / 3600_000).toFixed(2)} h</strong>
+                Duración real: <strong>{((new Date(o.completadaEn).getTime() - new Date(o.iniciadaEn).getTime()) / 3600_000).toFixed(2)} h</strong>
                 {(o.tiempoPausadoMin ?? 0) > 0 && <> · Pausado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>}
                 {o.horasTrabajadas != null && <> · Registradas: <strong>{Number(o.horasTrabajadas).toFixed(2)} h</strong></>}
               </>
             ) : estadoActual === "en_espera" ? (
-              <>⏸ OT pausada{o.pausadaEn ? ` desde ${fmt(o.pausadaEn)}` : ""}. Tiempo pausado acumulado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>
+              <>OT pausada{o.pausadaEn ? ` desde ${fmt(o.pausadaEn)}` : ""}. Tiempo pausado acumulado: <strong>{((o.tiempoPausadoMin ?? 0) / 60).toFixed(1)} h</strong></>
             ) : (
-              <>⏱ En proceso desde {fmt(o.iniciadaEn)} — el cronómetro corre.</>
+              <>En proceso desde {fmt(o.iniciadaEn)} — el cronómetro corre.</>
             )}
           </div>
         )}
@@ -1182,19 +1182,19 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <div class="flex items-center gap-2 text-xs">
               <span class="text-slate-500">{progreso.hechos} / {progreso.total}</span>
               {progreso.desviaciones > 0 && (
-                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">⚠ {progreso.desviaciones} desviación{progreso.desviaciones === 1 ? "" : "es"}</span>
+                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">{progreso.desviaciones} desviación{progreso.desviaciones === 1 ? "" : "es"}</span>
               )}
               {progreso.pendientes > 0 && (
-                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">⏳ {progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
+                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">{progreso.pendientes} pendiente{progreso.pendientes === 1 ? "" : "s"}</span>
               )}
               {progreso.bloqueantesAbiertos > 0 && (
-                <span class="px-1.5 py-0.5 rounded bg-red-600 text-white font-medium">🔴 {progreso.bloqueantesAbiertos} crítico{progreso.bloqueantesAbiertos === 1 ? "" : "s"} en desviación</span>
+                <span class="px-1.5 py-0.5 rounded bg-white text-red-600 border border-red-600 font-medium">{progreso.bloqueantesAbiertos} crítico{progreso.bloqueantesAbiertos === 1 ? "" : "s"} en desviación</span>
               )}
               {progreso.valoresFaltantes > 0 && (
-                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">📏 {progreso.valoresFaltantes} sin lectura</span>
+                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">{progreso.valoresFaltantes} sin lectura</span>
               )}
               {progreso.fueraDeRango > 0 && (
-                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">📉 {progreso.fueraDeRango} fuera de rango</span>
+                <span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">{progreso.fueraDeRango} fuera de rango</span>
               )}
               <span id="ckAutosave" class="text-slate-400"></span>
             </div>
@@ -1202,7 +1202,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
-          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Las líneas marcadas <strong>📏 lectura obligatoria</strong> piden un número: <strong>la orden no se completa sin él</strong> (márcala N/A si de verdad no se midió). Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
+          <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Las líneas marcadas <strong>lectura obligatoria</strong> piden un número: <strong>la orden no se completa sin él</strong> (márcala N/A si de verdad no se midió). Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => {
               const filaColor =
@@ -1213,14 +1213,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               return (
                 <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
                   <div class="text-sm font-medium text-slate-900">
-                    {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">🔴 CRÍTICO</span>}
+                    {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">CRÍTICO</span>}
                     {it.texto}
                   </div>
                   {(it.criterio || it.minutos || it.materiales) && (
                     <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                      {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">🎯 Criterio: {it.criterio}</span>}
-                      {it.minutos && <span class="text-slate-500">⏱ {it.minutos} min</span>}
-                      {it.materiales && <span class="text-slate-500">🧰 {it.materiales}</span>}
+                      {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">Criterio: {it.criterio}</span>}
+                      {it.minutos && <span class="text-slate-500">{it.minutos} min</span>}
+                      {it.materiales && <span class="text-slate-500">{it.materiales}</span>}
                     </div>
                   )}
                   {it.requiereValor ? (() => {
@@ -1230,7 +1230,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                         <div class="flex flex-wrap items-end gap-2">
                           <div>
                             <label class="mb-1 block text-xs font-medium text-slate-700">
-                              📏 Lectura obligatoria{it.unidad ? ` (${it.unidad})` : ""}
+                              Lectura obligatoria{it.unidad ? ` (${it.unidad})` : ""}
                             </label>
                             <input class="ck-num input text-sm w-28" type="number" step="any" data-idx={idx}
                                    data-min={it.esperadoMin ?? ""} data-max={it.esperadoMax ?? ""} data-unidad={it.unidad ?? ""}
@@ -1240,9 +1240,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">Rango normal: {ev.rangoTexto}</span>
                           )}
                           <span class="ck-rango text-xs font-medium" data-idx={idx}>
-                            {!ev.tiene ? <span class="text-amber-700">⏳ Sin lectura — bloquea el cierre</span>
-                              : ev.dentro === true ? <span class="text-emerald-700">✅ Dentro del rango</span>
-                              : ev.dentro === false ? <span class="text-red-700">⛔ FUERA DE RANGO — no libera el sistema</span>
+                            {!ev.tiene ? <span class="text-amber-700">Sin lectura — bloquea el cierre</span>
+                              : ev.dentro === true ? <span class="text-emerald-700">✓ Dentro del rango</span>
+                              : ev.dentro === false ? <span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>
                               : <span class="text-slate-500">Registrado</span>}
                           </span>
                         </div>
@@ -1268,12 +1268,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   {puedeEditar ? (
                     <div class="mt-2 flex flex-wrap gap-1">
                       {(["pendiente","ok","na","desviacion"] as const).map((e) => {
-                        const labels = { pendiente: "⏳ Pendiente", ok: "✅ OK", na: "⊘ N/A", desviacion: "⚠ Desviación" };
+                        const labels = { pendiente: "Pendiente", ok: "✓ OK", na: "⊘ N/A", desviacion: "Desviación" };
                         const colors = {
                           pendiente: it.estado === e ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
-                          ok: it.estado === e ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+                          ok: it.estado === e ? "bg-brand-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
                           na: it.estado === e ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
-                          desviacion: it.estado === e ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+                          desviacion: it.estado === e ? "bg-white text-amber-800 border border-amber-500 " : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
                         };
                         return (
                           <button type="button" class={`ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`} data-idx={idx} data-estado={e}>{labels[e]}</button>
@@ -1282,7 +1282,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     </div>
                   ) : (
                     <div class="mt-1 text-xs">
-                      Estado: <span class="font-medium">{it.estado === "ok" ? "✅ OK" : it.estado === "na" ? "⊘ N/A" : it.estado === "desviacion" ? "⚠ Desviación" : "⏳ Pendiente"}</span>
+                      Estado: <span class="font-medium">{it.estado === "ok" ? "✓ OK" : it.estado === "na" ? "⊘ N/A" : it.estado === "desviacion" ? "Desviación" : "Pendiente"}</span>
                     </div>
                   )}
                   <div class:list={["ck-nota-wrap mt-2", it.estado !== "desviacion" && "hidden"]} data-idx={idx}>
@@ -1310,11 +1310,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraMop && (
         <div class="card p-5 border-l-4 border-emerald-500">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="font-semibold text-slate-900">📐 Lecturas de liberación</h2>
+            <h2 class="font-semibold text-slate-900">Lecturas de liberación</h2>
             <span class="text-xs text-slate-500">
               {liberacionesConLectura} / {liberaciones.length} medidas
-              {liberacionesNoConformes > 0 && <span class="ml-2 rounded bg-red-600 px-1.5 py-0.5 font-medium text-white">⚠ {liberacionesNoConformes} fuera de rango</span>}
-              {bloqueoCierre.faltantes.length > 0 && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">⛔ {bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el cierre</span>}
+              {liberacionesNoConformes > 0 && <span class="ml-2 rounded bg-white text-red-600 border border-red-600 px-1.5 py-0.5 font-medium ">{liberacionesNoConformes} fuera de rango</span>}
+              {bloqueoCierre.faltantes.length > 0 && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">{bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el cierre</span>}
               <span id="liberMsg" class="ml-2 text-slate-400"></span>
             </span>
           </div>
@@ -1323,7 +1323,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </p>
           {esMop && bloqueoCierre.faltantes.length > 0 && (
             <div class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>⛔ Esta orden no se puede cerrar todavía.</strong> Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
+              <strong>Esta orden no se puede cerrar todavía.</strong> Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
               <ul class="mt-1 list-disc pl-5">
                 {bloqueoCierre.faltantes.map((f) => <li>{f}</li>)}
               </ul>
@@ -1334,7 +1334,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           )}
           {o.cierreSinLecturaMotivo && (
             <div class="mt-3 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>⚠ Cerrada sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}
+              <strong>Cerrada sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}
               <p class="mt-1 whitespace-pre-wrap">{o.cierreSinLecturaMotivo}</p>
             </div>
           )}
@@ -1358,10 +1358,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                             ? <span class="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">OBLIGATORIA</span>
                             : <span class="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">opcional</span>}
                           {lib.conforme === true && <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">✓ CONFORME</span>}
-                          {lib.conforme === false && <span class="ml-2 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">✕ FUERA DE RANGO</span>}
+                          {lib.conforme === false && <span class="ml-2 rounded bg-white text-red-600 border border-red-600 px-1.5 py-0.5 text-[10px] font-semibold ">✕ FUERA DE RANGO</span>}
                         </div>
                         <div class="mt-0.5 text-xs text-slate-600">
-                          {lib.valorEsperado && <span class="mr-2">🎯 Esperado: {lib.valorEsperado}</span>}
+                          {lib.valorEsperado && <span class="mr-2">Esperado: {lib.valorEsperado}</span>}
                           {(lib.minAceptable != null || lib.maxAceptable != null) && (
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
                               Rango: {lib.minAceptable != null ? lib.minAceptable : "—"} a {lib.maxAceptable != null ? lib.maxAceptable : "—"}{lib.unidad ? ` ${lib.unidad}` : ""}
@@ -1432,7 +1432,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           )}
           {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && bloqueoCierre.faltantes.length > 0 && (
             <div class="mt-3 flex justify-end">
-              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">⚠ Cerrar sin lectura (requiere motivo)</button>
+              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">Cerrar sin lectura (requiere motivo)</button>
             </div>
           )}
         </div>
@@ -1473,7 +1473,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div>
             <label class="label">Horas trabajadas</label>
             <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
-            <p class="mt-1 text-xs text-slate-500">🔒 Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
+            <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
           </div>
           {puedeEditar && (
             <div class="flex items-center gap-2 flex-wrap">
@@ -1558,7 +1558,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {(user.rol === "admin" || user.rol === "jefe") && (costoManoObra > 0 || totalRepuestos > 0) && (
         <div class="card p-5 border-l-4 border-emerald-500">
           <div class="flex items-center justify-between">
-            <h2 class="font-semibold text-slate-900">💰 Costo de la OT</h2>
+            <h2 class="font-semibold text-slate-900">Costo de la OT</h2>
             <span class="text-xs text-slate-500">Estimado</span>
           </div>
           <dl class="mt-3 space-y-1.5 text-sm">
@@ -1580,7 +1580,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </dl>
           {tarifaTecnico === 0 && row.asignado && (
             <p class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-700">
-              ⚠ El técnico asignado no tiene tarifa horaria configurada. Configúrala en <a href="/usuarios" class="font-medium underline">Usuarios</a> para calcular el costo de mano de obra.
+              El técnico asignado no tiene tarifa horaria configurada. Configúrala en <a href="/usuarios" class="font-medium underline">Usuarios</a> para calcular el costo de mano de obra.
             </p>
           )}
         </div>
@@ -1591,7 +1591,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <div class="card p-5 border-l-4 border-emerald-300">
           <div class="flex items-center justify-between">
             <div>
-              <h2 class="font-semibold text-slate-900">📸 Foto del estado final (después)</h2>
+              <h2 class="font-semibold text-slate-900">Foto del estado final (después)</h2>
               <p class="mt-1 text-xs text-slate-500">Opcional: foto del estado final como evidencia del cierre. Recomendable cuando hubo intervención visible (cambio de pieza, reparación), pero no es obligatoria para completar.</p>
             </div>
             <span class="text-xs text-slate-500">{adjsDespues.length} foto(s)</span>
@@ -1602,7 +1602,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               {adjsDespues.map((a) => (
                 <div class="relative group rounded bg-slate-50 p-2 text-xs">
                   {puedeEditar && (
-                    <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                    <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-white text-red-600 border border-red-600 w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
                   )}
                   {a.contentType.startsWith("image/") && (
                     <a href={`/api/adjuntos/${a.id}`} target="_blank">
@@ -1620,7 +1620,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <form class="upForm mt-3" data-categoria="despues">
               <label class="block">
                 <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
-                <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center bg-emerald-600 hover:bg-emerald-700">📸 {adjsDespues.length === 0 ? "Tomar foto del estado final" : "Agregar otra foto"}</span>
+                <span class="btn-primary w-full justify-center py-3 cursor-pointer block text-center bg-emerald-600 hover:bg-emerald-700">{adjsDespues.length === 0 ? "Tomar foto del estado final" : "Agregar otra foto"}</span>
               </label>
               <button type="submit" class="hidden">Subir</button>
             </form>
@@ -1683,7 +1683,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {verComprasSection && (
         <div class="card p-5">
           <div class="flex items-center justify-between mb-2">
-            <h2 class="font-semibold text-slate-900">🛒 Compras</h2>
+            <h2 class="font-semibold text-slate-900">Compras</h2>
             {puedeSolicitarCompra && (
               <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`} class="text-xs text-brand-600 hover:underline font-medium">
                 + Nueva solicitud
@@ -1694,7 +1694,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           {!puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
             <div class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
               {estadoActual === "abierta"
-                ? <>⚠ Pulsa <strong>"Iniciar"</strong> para activar la OT y poder solicitar compras de contingencia.</>
+                ? <>Pulsa <strong>"Iniciar"</strong> para activar la OT y poder solicitar compras de contingencia.</>
                 : <>Esta OT está en estado <strong>{ESTADO_LABEL[estadoActual]}</strong>. Solo se pueden generar solicitudes mientras la OT está en proceso o en espera.</>
               }
             </div>
@@ -1722,7 +1722,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           {puedeSolicitarCompra && solicitudesVinculadas.length === 0 && (
             <a href={`/solicitudes-compra/nueva?ordenId=${o.id}`}
                class="mt-2 flex items-center justify-center gap-2 rounded-lg border border-dashed border-purple-300 p-3 text-sm text-purple-600 hover:bg-purple-50 no-underline">
-              🛒 Solicitar compra de contingencia
+              Solicitar compra de contingencia
             </a>
           )}
         </div>
@@ -1746,7 +1746,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           </form>
         ) : (
           <p class="mt-3 text-xs text-slate-400">
-            {estadoActual === "abierta" ? "⚠ Inicia la OT para agregar comentarios" : "Comentarios bloqueados en este estado"}
+            {estadoActual === "abierta" ? "Inicia la OT para agregar comentarios" : "Comentarios bloqueados en este estado"}
           </p>
         )}
       </div>
@@ -1759,8 +1759,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <p class="text-xs text-slate-500">Para subir manuales, facturas u otros archivos. Las fotos antes/después están en sus secciones correspondientes.</p>
     <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
       {([
-        { key: "documento", label: "📄 Documentos", color: "bg-amber-50", items: adjsDocumento },
-        { key: "general", label: "📎 General", color: "bg-slate-50", items: adjsGeneral },
+        { key: "documento", label: "Documentos", color: "bg-amber-50", items: adjsDocumento },
+        { key: "general", label: "General", color: "bg-slate-50", items: adjsGeneral },
       ] as const).map((cat) => (
         <div class={`${cat.color} rounded-lg p-3`}>
           <div class="mb-2 flex items-center justify-between">
@@ -1772,7 +1772,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             {cat.items.map((a) => (
               <li class="relative group rounded bg-white p-2 text-xs">
                 {puedeEditar && (
-                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-red-500 text-white w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
+                  <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-white text-red-600 border border-red-600 w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
                 )}
                 {a.contentType.startsWith("image/") && (
                   <a href={`/api/adjuntos/${a.id}`} target="_blank">
@@ -1790,7 +1790,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <form class="upForm mt-2 space-y-1" data-categoria={cat.key}>
               <label class="block">
                 <input type="file" accept="image/*,application/pdf" capture="environment" class="hidden upFile" />
-                <span class="btn-secondary w-full justify-center py-2 text-xs cursor-pointer block text-center">📷 Tomar foto / subir archivo</span>
+                <span class="btn-secondary w-full justify-center py-2 text-xs cursor-pointer block text-center">Tomar foto / subir archivo</span>
               </label>
               <button type="submit" class="hidden">Subir</button>
             </form>
@@ -1805,7 +1805,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
       <h2 class="font-semibold text-slate-900">Firmas digitales</h2>
-      <button id="pdfBtn" class="btn-primary text-sm">📄 Descargar PDF</button>
+      <a href={`/ordenes/${o.id}/reporte`} class="btn-primary text-sm">Reporte de mantenimiento</a>
     </div>
     <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
       {(["tecnico", "jefe", "solicitante"] as const).map((rol) => {
@@ -2089,9 +2089,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const isActive = it.estado === e;
         const colors = {
           pendiente: isActive ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
-          ok: isActive ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
+          ok: isActive ? "bg-brand-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
           na: isActive ? "bg-slate-500 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
-          desviacion: isActive ? "bg-amber-600 text-white" : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
+          desviacion: isActive ? "bg-white text-amber-800 border border-amber-500 " : "bg-white text-amber-700 border border-amber-300 hover:bg-amber-50",
         };
         btn.className = `ck-estado-btn text-xs px-2 py-1 rounded-md font-medium transition ${colors[e]}`;
       });
@@ -2107,12 +2107,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     let ckSaveTimer = null;
     function programarGuardadoChecklist() {
       const ind = $("ckAutosave");
-      if (ind) { ind.textContent = "⏳ Guardando…"; ind.className = "text-amber-600"; }
+      if (ind) { ind.textContent = "Guardando…"; ind.className = "text-amber-600"; }
       if (ckSaveTimer) clearTimeout(ckSaveTimer);
       ckSaveTimer = setTimeout(async () => {
         const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
         if (ind) {
-          ind.textContent = r ? "✓ Guardado" : "⚠ Sin guardar";
+          ind.textContent = r ? "✓ Guardado" : "Sin guardar";
           ind.className = r ? "text-emerald-600" : "text-red-600";
           setTimeout(() => { ind.textContent = ""; }, 2000);
         }
@@ -2195,9 +2195,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
       if (etiqueta) {
         etiqueta.innerHTML =
-          !ev.tiene ? '<span class="text-amber-700">⏳ Sin lectura — bloquea el cierre</span>' :
-          ev.dentro === true ? '<span class="text-emerald-700">✅ Dentro del rango</span>' :
-          ev.dentro === false ? '<span class="text-red-700">⛔ FUERA DE RANGO — no libera el sistema</span>' :
+          !ev.tiene ? '<span class="text-amber-700">Sin lectura — bloquea el cierre</span>' :
+          ev.dentro === true ? '<span class="text-emerald-700">✓ Dentro del rango</span>' :
+          ev.dentro === false ? '<span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>' :
           '<span class="text-slate-500">Registrado</span>';
       }
       // Constancia escrita en las notas de la línea. Se regenera en cada
@@ -2307,7 +2307,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     async function ejecutarGuardado() {
       if (inFlight) { pending = true; return; }
       inFlight = true;
-      setIndicador("guardando", "⏳ Guardando…");
+      setIndicador("guardando", "Guardando…");
       const payload = leerEjecPayload();
       // Backup local antes de mandar al servidor
       guardarLocal(payload);
@@ -2318,10 +2318,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           setIndicador("guardado", "✓ Guardado");
           setTimeout(() => { if (ejecIndicador?.dataset.status === "guardado") setIndicador("idle", ""); }, 2000);
         } else {
-          setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+          setIndicador("offline", "Sin conexión — guardado localmente");
         }
       } catch {
-        setIndicador("offline", "⚠ Sin conexión — guardado localmente");
+        setIndicador("offline", "Sin conexión — guardado localmente");
       } finally {
         inFlight = false;
         if (pending) { pending = false; ejecutarGuardado(); }
@@ -2330,7 +2330,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     function programarGuardado() {
       // Mostrar inmediatamente que hay cambios pendientes
-      setIndicador("guardando", "✏️ Editando…");
+      setIndicador("guardando", "Editando…");
       // Backup local instantáneo
       guardarLocal(leerEjecPayload());
       // Debounce 1.5s
@@ -2454,7 +2454,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const err = $("upErr");
       err.classList.add("hidden");
       const btn = form.querySelector("button[type=submit]");
-      if (btn) { btn.disabled = true; btn.textContent = "⏳ Subiendo…"; }
+      if (btn) { btn.disabled = true; btn.textContent = "Subiendo…"; }
       try {
         const fd = new FormData();
         fd.append("file", file);
@@ -2464,14 +2464,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           const j = await res.json().catch(() => ({}));
           err.textContent = j.error || "Error al subir";
           err.classList.remove("hidden");
-          if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
+          if (btn) { btn.disabled = false; btn.textContent = "Subir / Tomar foto"; }
           return;
         }
         location.reload();
       } catch (e) {
         err.textContent = "Error de red al subir";
         err.classList.remove("hidden");
-        if (btn) { btn.disabled = false; btn.textContent = "📷 Subir / Tomar foto"; }
+        if (btn) { btn.disabled = false; btn.textContent = "Subir / Tomar foto"; }
       }
     }
 
@@ -2504,9 +2504,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     });
   </script>
 
-  <!-- Firmas + PDF -->
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ordenData: { id: o.id, titulo: o.titulo, descripcion: o.descripcion, tipo: o.tipo, prioridad: o.prioridad, estado: o.estado, createdAt: o.createdAt, completadaEn: o.completadaEn, vencimiento: o.vencimiento, trabajosRealizados: o.trabajosRealizados, causaRaiz: o.causaRaiz, solucionAplicada: o.solucionAplicada, horasTrabajadas: o.horasTrabajadas, verificacionNotas: o.verificacionNotas, firmaTecnicoNombre: o.firmaTecnicoNombre, firmaJefeNombre: o.firmaJefeNombre, firmaSolicitanteNombre: o.firmaSolicitanteNombre, firmaTecnicoR2: o.firmaTecnicoR2, firmaJefeR2: o.firmaJefeR2, firmaSolicitanteR2: o.firmaSolicitanteR2 }, activoData: row.activo, asignadoData: row.asignado, repuestos: repuestosRows.map(r => ({ codigo: r.it?.codigo, nombre: r.it?.nombre, unidad: r.it?.unidad, cantidad: r.rep.cantidad, precio: r.rep.precioUnitario })), totalRepuestos, checklistItems, adjs: adjs.map(a => ({ id: a.id, nombre: a.nombre, categoria: a.categoria, contentType: a.contentType })) }) }}>
-    const { id, ordenData, activoData, asignadoData, repuestos, totalRepuestos, checklistItems, adjs } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <!-- Firmas -->
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id }) }}>
+    const { id } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (s) => document.getElementById(s);
     const modal = $("firmaModal");
     const canvas = $("firmaCanvas");
@@ -2516,7 +2516,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     function clearCanvas() {
       ctx.fillStyle = "#fff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = "#0f172a";
+      ctx.strokeStyle = "#1A1A1A";
       ctx.lineWidth = 2;
       ctx.lineCap = "round";
     }
@@ -2564,253 +2564,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       location.reload();
     });
     clearCanvas();
-
-    // ── PDF ───────────────────────────────────────────────────────────────────
-    async function loadJsPdf() {
-      if (window.jspdf) return window.jspdf;
-      await new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js";
-        s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-      });
-      return window.jspdf;
-    }
-
-    async function fetchEmpresa() {
-      try { const r = await fetch("/api/empresa"); if (r.ok) { const j = await r.json(); return j.empresa; } } catch {}
-      return null;
-    }
-
-    async function fetchImageAsDataURL(url) {
-      try {
-        const r = await fetch(url);
-        if (!r.ok) return null;
-        const blob = await r.blob();
-        return await new Promise((resolve) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(fr.result);
-          fr.readAsDataURL(blob);
-        });
-      } catch { return null; }
-    }
-
-    function fmt(s) { return s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "—"; }
-
-    $("pdfBtn").addEventListener("click", async () => {
-      $("pdfBtn").disabled = true;
-      $("pdfBtn").textContent = "Generando...";
-      try {
-        const { jsPDF } = await loadJsPdf();
-        const empresa = await fetchEmpresa();
-        const doc = new jsPDF({ unit: "mm", format: "a4" });
-        const W = 210, M = 14;
-        let y = M;
-
-        // Header
-        doc.setFillColor(10, 64, 130);
-        doc.rect(0, 0, W, 22, "F");
-        doc.setTextColor(255);
-        doc.setFontSize(16); doc.setFont("helvetica", "bold");
-        doc.text(empresa?.nombre ?? "Mantenimiento", M, 12);
-        doc.setFontSize(10); doc.setFont("helvetica", "normal");
-        doc.text(`Orden de Trabajo #${ordenData.id}`, M, 18);
-        doc.setTextColor(0);
-        y = 30;
-
-        // Info empresa
-        if (empresa) {
-          doc.setFontSize(8); doc.setTextColor(100);
-          if (empresa.nit) doc.text(`NIT: ${empresa.nit}`, W - M, 8, { align: "right" });
-          if (empresa.direccion) doc.text(empresa.direccion, W - M, 12, { align: "right" });
-          if (empresa.telefono) doc.text(`Tel: ${empresa.telefono}`, W - M, 16, { align: "right" });
-          doc.setTextColor(0);
-        }
-
-        // Titulo OT
-        doc.setFontSize(14); doc.setFont("helvetica", "bold");
-        doc.text(ordenData.titulo, M, y); y += 8;
-
-        // Tabla datos
-        doc.setFontSize(9); doc.setFont("helvetica", "normal");
-        const rows = [
-          ["Tipo", ordenData.tipo, "Prioridad", ordenData.prioridad],
-          ["Estado", ordenData.estado, "Creada", fmt(ordenData.createdAt)],
-          ["Equipo", activoData ? `${activoData.codigo} - ${activoData.nombre}` : "Sin equipo", "Vencimiento", fmt(ordenData.vencimiento)],
-          ["Asignado", asignadoData?.nombre ?? "—", "Completada", fmt(ordenData.completadaEn)],
-        ];
-        rows.forEach((r) => {
-          doc.setFont("helvetica", "bold"); doc.text(r[0] + ":", M, y);
-          doc.setFont("helvetica", "normal"); doc.text(String(r[1] ?? "—"), M + 28, y);
-          doc.setFont("helvetica", "bold"); doc.text(r[2] + ":", W / 2, y);
-          doc.setFont("helvetica", "normal"); doc.text(String(r[3] ?? "—"), W / 2 + 28, y);
-          y += 5;
-        });
-        y += 3;
-
-        // Descripcion
-        if (ordenData.descripcion) {
-          doc.setFont("helvetica", "bold"); doc.text("Descripción", M, y); y += 5;
-          doc.setFont("helvetica", "normal");
-          const lines = doc.splitTextToSize(ordenData.descripcion, W - M * 2);
-          doc.text(lines, M, y); y += lines.length * 4 + 3;
-        }
-
-        // Trabajos realizados
-        if (ordenData.trabajosRealizados) {
-          if (y > 250) { doc.addPage(); y = M; }
-          doc.setFont("helvetica", "bold"); doc.text("Trabajos realizados", M, y); y += 5;
-          doc.setFont("helvetica", "normal");
-          const lines = doc.splitTextToSize(ordenData.trabajosRealizados, W - M * 2);
-          doc.text(lines, M, y); y += lines.length * 4 + 3;
-        }
-
-        if (ordenData.causaRaiz) {
-          doc.setFont("helvetica", "bold"); doc.text("Causa raíz: ", M, y);
-          doc.setFont("helvetica", "normal");
-          const lines = doc.splitTextToSize(ordenData.causaRaiz, W - M * 2 - 20);
-          doc.text(lines, M + 20, y); y += Math.max(lines.length * 4, 5) + 1;
-        }
-        if (ordenData.solucionAplicada) {
-          doc.setFont("helvetica", "bold"); doc.text("Solución: ", M, y);
-          doc.setFont("helvetica", "normal");
-          const lines = doc.splitTextToSize(ordenData.solucionAplicada, W - M * 2 - 20);
-          doc.text(lines, M + 20, y); y += Math.max(lines.length * 4, 5) + 1;
-        }
-        if (ordenData.horasTrabajadas != null) {
-          doc.setFont("helvetica", "bold"); doc.text(`Horas trabajadas: `, M, y);
-          doc.setFont("helvetica", "normal"); doc.text(`${ordenData.horasTrabajadas}`, M + 35, y); y += 6;
-        }
-
-        // Checklist
-        if (checklistItems && checklistItems.length > 0) {
-          if (y > 240) { doc.addPage(); y = M; }
-          doc.setFont("helvetica", "bold"); doc.text("Checklist", M, y); y += 5;
-          doc.setFont("helvetica", "normal");
-          checklistItems.forEach((it) => {
-            const mark = it.estado === "ok" ? "[OK]" : it.estado === "na" ? "[N/A]" : it.estado === "desviacion" ? "[DESV]" : "[ ]";
-            doc.text(`${mark} ${it.texto}${it.bloqueante ? " (CRITICO)" : ""}`, M, y); y += 4.5;
-            const det = [it.criterio ? `Criterio: ${it.criterio}` : "", it.valorMedido ? `Medido: ${it.valorMedido}` : ""].filter(Boolean).join("   |   ");
-            if (det) {
-              doc.setTextColor(110); doc.setFontSize(8);
-              const lines = doc.splitTextToSize(det, W - M * 2 - 6);
-              doc.text(lines, M + 6, y); y += lines.length * 3.6;
-              doc.setFontSize(10); doc.setTextColor(0);
-            }
-            if (it.notas) {
-              doc.setTextColor(110); doc.setFontSize(8);
-              const lines = doc.splitTextToSize(`Nota: ${it.notas}`, W - M * 2 - 6);
-              doc.text(lines, M + 6, y); y += lines.length * 3.6;
-              doc.setFontSize(10); doc.setTextColor(0);
-            }
-            if (y > 280) { doc.addPage(); y = M; }
-          });
-          y += 2;
-        }
-
-        // Repuestos
-        if (repuestos && repuestos.length > 0) {
-          if (y > 240) { doc.addPage(); y = M; }
-          doc.setFont("helvetica", "bold"); doc.text("Repuestos consumidos", M, y); y += 5;
-          doc.setFontSize(8);
-          doc.text("Item", M, y); doc.text("Cant.", 140, y); doc.text("Precio", 160, y); doc.text("Subt.", 185, y); y += 4;
-          doc.setLineWidth(0.2); doc.line(M, y - 2, W - M, y - 2);
-          doc.setFont("helvetica", "normal");
-          repuestos.forEach((r) => {
-            doc.text(`${r.codigo ?? ""} ${r.nombre ?? ""}`.slice(0, 60), M, y);
-            doc.text(String(r.cantidad), 140, y);
-            doc.text(r.precio != null ? `$${r.precio.toFixed(2)}` : "—", 160, y);
-            doc.text(r.precio != null ? `$${(r.precio * r.cantidad).toFixed(2)}` : "—", 185, y);
-            y += 4.5;
-            if (y > 280) { doc.addPage(); y = M; }
-          });
-          if (totalRepuestos > 0) {
-            doc.setFont("helvetica", "bold");
-            doc.text(`Total: $${totalRepuestos.toFixed(2)}`, W - M, y, { align: "right" }); y += 6;
-          }
-          doc.setFontSize(9);
-        }
-
-        // Verificacion
-        if (ordenData.verificacionNotas) {
-          if (y > 250) { doc.addPage(); y = M; }
-          doc.setFont("helvetica", "bold"); doc.text("Verificación", M, y); y += 5;
-          doc.setFont("helvetica", "normal");
-          const lines = doc.splitTextToSize(ordenData.verificacionNotas, W - M * 2);
-          doc.text(lines, M, y); y += lines.length * 4 + 3;
-        }
-
-        // Imagenes (antes/despues) - max 4
-        const imgs = adjs.filter(a => (a.categoria === "antes" || a.categoria === "despues") && a.contentType.startsWith("image/")).slice(0, 4);
-        if (imgs.length > 0) {
-          if (y > 200) { doc.addPage(); y = M; }
-          doc.setFont("helvetica", "bold"); doc.text("Evidencia fotográfica", M, y); y += 5;
-          for (let i = 0; i < imgs.length; i++) {
-            const a = imgs[i];
-            const dataUrl = await fetchImageAsDataURL(`/api/adjuntos/${a.id}`);
-            if (!dataUrl) continue;
-            try {
-              const x = M + (i % 2) * 90;
-              const yy = y + Math.floor(i / 2) * 65;
-              if (yy + 60 > 280) { doc.addPage(); y = M; continue; }
-              doc.addImage(dataUrl, "JPEG", x, yy, 80, 55);
-              doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-              doc.text(`${a.categoria}: ${a.nombre.slice(0, 30)}`, x, yy + 60);
-              doc.setFontSize(9);
-            } catch {}
-          }
-          y += Math.ceil(imgs.length / 2) * 65 + 5;
-        }
-
-        // Firmas
-        if (y > 220) { doc.addPage(); y = M; }
-        doc.setFont("helvetica", "bold"); doc.setFontSize(10);
-        doc.text("Firmas", M, y); y += 5;
-
-        const firmas = [
-          { rol: "tecnico", nombre: ordenData.firmaTecnicoNombre, r2: ordenData.firmaTecnicoR2, label: "Técnico" },
-          { rol: "jefe", nombre: ordenData.firmaJefeNombre, r2: ordenData.firmaJefeR2, label: "Jefe / Supervisor" },
-          { rol: "solicitante", nombre: ordenData.firmaSolicitanteNombre, r2: ordenData.firmaSolicitanteR2, label: "Solicitante" },
-        ];
-        const colW = (W - M * 2) / 3;
-        for (let i = 0; i < firmas.length; i++) {
-          const f = firmas[i];
-          const x = M + i * colW;
-          doc.setLineWidth(0.3); doc.rect(x, y, colW - 4, 35);
-          if (f.r2) {
-            const dataUrl = await fetchImageAsDataURL(`/api/firmas/${ordenData.id}/${f.rol}`);
-            if (dataUrl) try { doc.addImage(dataUrl, "PNG", x + 2, y + 2, colW - 8, 22); } catch {}
-          }
-          doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-          doc.text(f.label, x + 2, y + 30);
-          doc.setFont("helvetica", "normal"); doc.setFontSize(7);
-          doc.text(f.nombre ?? "—", x + 2, y + 33);
-        }
-        y += 40;
-
-        // Footer
-        const pages = doc.internal.getNumberOfPages();
-        for (let p = 1; p <= pages; p++) {
-          doc.setPage(p);
-          doc.setFontSize(7); doc.setTextColor(120);
-          doc.text(`Generado ${new Date().toLocaleString("es", { timeZone: "America/El_Salvador" })} · Página ${p}/${pages}`, W / 2, 290, { align: "center" });
-        }
-
-        doc.save(`OT-${ordenData.id}.pdf`);
-      } catch (e) {
-        console.error(e);
-        alert("Error al generar PDF");
-      }
-      $("pdfBtn").disabled = false;
-      $("pdfBtn").textContent = "📄 Descargar PDF";
-    });
   </script>
 
   <!-- Modal: cerrar un MOP sin la lectura de liberación (escape con motivo) -->
   {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && (
     <div id="sinLecturaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5">
-        <h3 class="text-lg font-semibold text-slate-900">⚠ Cerrar sin lectura de liberación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Cerrar sin lectura de liberación</h3>
         <p class="mt-1 text-sm text-slate-600">
           El MOP exige medir antes de devolver el sistema a servicio. Este es el <strong>único escape</strong>, y queda registrado con tu nombre y la hora. Explica por qué no se pudo medir y con qué evidencia se libera el sistema.
         </p>
@@ -2966,13 +2726,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       let t = null;
       inp.addEventListener("input", () => {
         if (t) clearTimeout(t);
-        aviso(g("prerreqMsg"), "⏳ Guardando…", true);
+        aviso(g("prerreqMsg"), "Guardando…", true);
         t = setTimeout(async () => {
           const r = await llamar(`/api/ordenes/${otId}/prerrequisitos`, "PATCH", {
             itemId: Number(inp.dataset.id),
             referencia: inp.value.trim() || null,
           });
-          aviso(g("prerreqMsg"), r.ok ? "✓ Referencia guardada" : "⚠ Sin guardar", r.ok);
+          aviso(g("prerreqMsg"), r.ok ? "✓ Referencia guardada" : "Sin guardar", r.ok);
         }, 900);
       });
     });

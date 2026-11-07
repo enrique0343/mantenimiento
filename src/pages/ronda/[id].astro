@@ -109,7 +109,6 @@ const criticosPendientes = puntos.filter((p) => p.critico && !porPunto.has(p.id)
     <div>
       <a href="/ronda" class="text-xs text-slate-400 hover:text-brand-600">← Ronda de turno</a>
       <div class="mt-1 flex items-center gap-2">
-        <span class="text-2xl">🧭</span>
         <h1 class="text-2xl font-bold text-slate-900">{fila.sede ?? "Sede"}</h1>
         <span class={`badge ${cerrada ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
           {cerrada ? "Ronda cerrada" : "Ronda en curso"}
@@ -349,7 +348,7 @@ const criticosPendientes = puntos.filter((p) => p.critico && !porPunto.has(p.id)
     // Borde de la tarjeta
     const art = document.querySelector('[data-punto="' + puntoId + '"]');
     if (art) {
-      art.className = art.className.replace(/border-l-[a-z0-9-]+/g, "").trim() + " " +
+      art.className = art.className.replace(/border-l-(?!4\b)[a-z0-9-]+/g, "").trim() + " " +
         (data.resultado === "fuera" ? "border-l-orange-500" : data.resultado === "ok" ? "border-l-emerald-500" : "border-l-slate-400");
     }
     // Qué hacer

@@ -94,15 +94,15 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
       </div>
       <div class="flex gap-2 flex-wrap">
         {puedeEditar && (
-          <button id="btnEditar" class="btn-secondary text-sm">✏️ Editar</button>
+          <button id="btnEditar" class="btn-secondary text-sm">Editar</button>
         )}
         {puedeEnviar && (
-          <button id="btnEnviar" class="btn-primary text-sm">📤 Enviar a compras</button>
+          <button id="btnEnviar" class="btn-primary text-sm">Enviar a compras</button>
         )}
         {puedeResolver && (
           <>
-            <button id="btnComprada" class="btn-success text-sm">✅ Marcar comprada</button>
-            <button id="btnRechazada" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">❌ Rechazar</button>
+            <button id="btnComprada" class="btn-success text-sm">✓ Marcar comprada</button>
+            <button id="btnRechazada" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50">✕ Rechazar</button>
           </>
         )}
         {(esBorrador || sol.estado === "enviada") && esAdmin && (
@@ -166,11 +166,11 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
       <div class="mt-3 flex flex-wrap gap-2">
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-sm font-medium hover:bg-brand-100">
           <input type="file" id="fileInput" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple class="hidden" />
-          📎 Agregar archivos
+          Agregar archivos
         </label>
         <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">
           <input type="file" id="cameraInput" accept="image/*" capture="environment" multiple class="hidden" />
-          📸 Cámara
+          Cámara
         </label>
       </div>
     )}
@@ -203,7 +203,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
 
   <!-- Botón PDF -->
   <div class="flex gap-2 mt-2">
-    <button id="btnPdf" class="btn-secondary text-sm">📄 Descargar PDF</button>
+    <button id="btnPdf" class="btn-secondary text-sm">Descargar PDF</button>
   </div>
 
   <!-- Modal editar -->
@@ -266,6 +266,7 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   </div>
 </Layout>
 
+<script is:inline src="/js/pdf-avante.js"></script>
 <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ solJson, itemsJson, adjJson, destJson, id }) }}>
   const { solJson, itemsJson, adjJson, destJson, id } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const sol = JSON.parse(solJson);
@@ -276,75 +277,30 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   // ─── PDF ──────────────────────────────────────────────────────────────────
   // Helper: descarga el logo de la empresa y lo convierte a data URL.
   // Si no hay logo configurado, retorna null y el PDF sale sin él.
-  async function cargarLogoBase64() {
-    try {
-      const res = await fetch("/api/empresa/logo");
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      return await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve({ data: reader.result, type: blob.type });
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(blob);
-      });
-    } catch { return null; }
-  }
 
   document.getElementById("btnPdf")?.addEventListener("click", async () => {
-    const { jsPDF } = await import("https://esm.sh/jspdf@2.5.1");
-    const doc = new jsPDF();
-    const w = doc.internal.pageSize.width;
-    let y = 20;
-
-    // Logo en esquina superior derecha (si existe)
-    const logo = await cargarLogoBase64();
-    if (logo && logo.data) {
-      try {
-        // Formato: detecta PNG/JPEG/SVG por mime
-        const fmt = logo.type.includes("png") ? "PNG" : logo.type.includes("jpeg") ? "JPEG" : "PNG";
-        // Imagen 35mm ancho x 18mm alto, esquina superior derecha
-        doc.addImage(logo.data, fmt, w - 14 - 35, 8, 35, 18);
-      } catch (e) { console.warn("logo PDF:", e); }
+    const boton = document.getElementById("btnPdf");
+    const textoBoton = boton.textContent;
+    boton.disabled = true; boton.textContent = "Generando…";
+    try {
+      const fecha = new Date(Date.parse(sol.createdAt) - 6 * 3600000).toISOString();
+      const P = await window.pdfAvante.crear({ titulo: "Solicitud de compra", subtitulo: sol.titulo, codigo: sol.codigo, fecha: `${fecha.slice(8, 10)}/${fecha.slice(5, 7)}/${fecha.slice(0, 4)}` });
+      P.etiqueta("Estado");
+      P.texto(sol.estado, { despues: 3 });
+      P.etiqueta("Solicitud");
+      P.texto(sol.titulo, { estilo: "semibold", pt: 12, despues: 2 });
+      if (sol.descripcion) P.texto(sol.descripcion, { despues: 4 });
+      P.nivel1(null, "Ítems solicitados");
+      P.tabla(
+        [{ titulo: "#", w: 1 }, { titulo: "Descripción", w: 9 }, { titulo: "Cantidad", w: 2, alinear: "right" }, { titulo: "Unidad", w: 2, alinear: "right" }],
+        items.map((it, i) => [String(i + 1), it.descripcion, String(it.cantidad), it.unidad ?? "—"]),
+      );
+      P.guardar(`${sol.codigo}.pdf`);
+    } catch (e) {
+      alert("No se pudo generar el PDF. Revisa tu conexión.");
+    } finally {
+      boton.disabled = false; boton.textContent = textoBoton;
     }
-
-    doc.setFontSize(16); doc.setFont(undefined, "bold");
-    doc.text(`Solicitud de Compra ${sol.codigo}`, 14, y); y += 8;
-    doc.setFontSize(10); doc.setFont(undefined, "normal");
-    doc.text(`Estado: ${sol.estado}`, 14, y); y += 6;
-    doc.text(`Fecha: ${new Date(sol.createdAt).toLocaleString("es", { timeZone: "America/El_Salvador" })}`, 14, y); y += 10;
-
-    // Si pusimos logo, dejamos espacio vertical para no chocar con el título
-    if (logo && logo.data && y < 32) y = 32;
-
-    doc.setFont(undefined, "bold"); doc.text(sol.titulo, 14, y); y += 7;
-    if (sol.descripcion) {
-      doc.setFont(undefined, "normal"); doc.setFontSize(9);
-      const lines = doc.splitTextToSize(sol.descripcion, w - 28);
-      doc.text(lines, 14, y); y += lines.length * 5 + 4;
-    }
-
-    // Tabla de ítems
-    y += 2;
-    doc.setFontSize(11); doc.setFont(undefined, "bold");
-    doc.text("Ítems solicitados", 14, y); y += 7;
-    doc.setFontSize(9); doc.setFont(undefined, "bold");
-    doc.text("#", 14, y); doc.text("Descripción", 22, y);
-    doc.text("Cant.", w - 50, y, { align: "right" });
-    doc.text("Unidad", w - 14, y, { align: "right" }); y += 5;
-    doc.setFont(undefined, "normal");
-    doc.setDrawColor(200); doc.line(14, y, w - 14, y); y += 3;
-
-    items.forEach((item, i) => {
-      doc.text(String(i + 1), 14, y);
-      const descLines = doc.splitTextToSize(item.descripcion, w - 80);
-      doc.text(descLines, 22, y);
-      doc.text(String(item.cantidad), w - 50, y, { align: "right" });
-      doc.text(item.unidad ?? "—", w - 14, y, { align: "right" });
-      y += Math.max(descLines.length * 5, 7);
-      if (y > 270) { doc.addPage(); y = 20; }
-    });
-
-    doc.save(`${sol.codigo}.pdf`);
   });
 
   // ─── Editar ───────────────────────────────────────────────────────────────
@@ -456,13 +412,13 @@ const baseUrl = (Astro.locals as any)?.runtime?.env?.APP_URL || "https://manteni
   let accionResultado = "";
   document.getElementById("btnComprada")?.addEventListener("click", () => {
     accionResultado = "comprada";
-    document.getElementById("modalResultadoTitulo").textContent = "✅ Marcar como comprada";
+    document.getElementById("modalResultadoTitulo").textContent = "✓ Marcar como comprada";
     (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });
   document.getElementById("btnRechazada")?.addEventListener("click", () => {
     accionResultado = "rechazada";
-    document.getElementById("modalResultadoTitulo").textContent = "❌ Rechazar solicitud";
+    document.getElementById("modalResultadoTitulo").textContent = "✕ Rechazar solicitud";
     (document.getElementById("notasResultado")).value = "";
     modalResultado?.classList.remove("hidden");
   });

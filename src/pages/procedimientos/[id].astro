@@ -93,9 +93,9 @@ const hoy = hoyISO();
 const revisionVencida = p.proximaRevision != null && p.proximaRevision < hoy;
 
 const ESTADO_VAL = {
-  pendiente: { label: "Pendiente", color: "bg-slate-100 text-slate-600", icono: "⏳" },
-  validado: { label: "Validado", color: "bg-emerald-100 text-emerald-700", icono: "✅" },
-  observado: { label: "Observado", color: "bg-amber-100 text-amber-700", icono: "📝" },
+  pendiente: { label: "Pendiente", color: "bg-slate-100 text-slate-600", icono: "" },
+  validado: { label: "Validado", color: "bg-emerald-100 text-emerald-700", icono: "✓" },
+  observado: { label: "Observado", color: "bg-amber-100 text-amber-700", icono: "" },
 } as const;
 
 const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
@@ -122,15 +122,15 @@ const veredictoJson = JSON.stringify(veredicto);
       {esAdmin && (
         <div class="flex flex-wrap gap-2">
           {p.estado !== "vigente" && (
-            <button id="vigenciaBtn" class="btn-primary btn-sm">✅ Poner en vigencia</button>
+            <button id="vigenciaBtn" class="btn-primary btn-sm">✓ Poner en vigencia</button>
           )}
           {p.estado === "borrador" && (
-            <button class="estado-btn btn-secondary btn-sm" data-estado="en_validacion">🔍 Enviar a validación</button>
+            <button class="estado-btn btn-secondary btn-sm" data-estado="en_validacion">Enviar a validación</button>
           )}
           {p.estado === "vigente" && (
-            <button class="estado-btn btn-secondary btn-sm" data-estado="en_revision">🔄 Abrir revisión</button>
+            <button class="estado-btn btn-secondary btn-sm" data-estado="en_revision">Abrir revisión</button>
           )}
-          <button id="editarBtn" class="btn-secondary btn-sm">✎ Editar cabecera</button>
+          <button id="editarBtn" class="btn-secondary btn-sm">Editar cabecera</button>
         </div>
       )}
     </div>
@@ -237,12 +237,12 @@ const veredictoJson = JSON.stringify(veredicto);
 
     {veredicto.ok ? (
       <p class="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
-        ✅ Cumple la regla del capítulo 8.1: todos los campos en azul tienen valor y ninguna área queda pendiente.
+        ✓ Cumple la regla del capítulo 8.1: todos los campos en azul tienen valor y ninguna área queda pendiente.
         Puede entrar en vigencia.
       </p>
     ) : (
       <div class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-        <p class="font-semibold">🚫 No puede entrar en vigencia todavía</p>
+        <p class="font-semibold">No puede entrar en vigencia todavía</p>
         <ul class="mt-1 list-disc space-y-1 pl-5 text-xs">
           {veredicto.motivos.map((m) => <li>{m}</li>)}
         </ul>
@@ -259,7 +259,7 @@ const veredictoJson = JSON.stringify(veredicto);
   <div class="card mt-4 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">🔵 Campos en azul</h2>
+        <h2 class="font-semibold text-slate-900">Campos en azul</h2>
         <p class="text-xs text-slate-500">
           Los números son de las normas; estos valores son de Avante.
           <span id="camposResumen" class:list={["font-semibold", avance.camposFaltan > 0 ? "text-amber-700" : "text-emerald-700"]}>
@@ -315,7 +315,7 @@ const veredictoJson = JSON.stringify(veredicto);
                 <td class="px-3 py-2 align-middle text-xs text-slate-500">{c.decideArea ?? "—"}</td>
                 {esAdmin && (
                   <td class="px-3 py-2 align-middle text-right">
-                    <button class="campo-del text-xs text-red-600 hover:underline" data-cid={c.id} data-etq={c.etiqueta}>🗑</button>
+                    <button class="campo-del text-xs text-red-600 hover:underline" data-cid={c.id} data-etq={c.etiqueta}>Eliminar</button>
                   </td>
                 )}
               </tr>
@@ -335,7 +335,7 @@ const veredictoJson = JSON.stringify(veredicto);
   <div class="card mt-4 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">🧾 Matriz de validación por área</h2>
+        <h2 class="font-semibold text-slate-900">Matriz de validación por área</h2>
         <p class="text-xs text-slate-500">
           Fecha, responsable y método de verificación por documento (cap. 8.1).
           {semana && <span> Este documento se valida en la {semana.label.toLowerCase()}.</span>}
@@ -387,7 +387,7 @@ const veredictoJson = JSON.stringify(veredicto);
                   ) : (
                     <span class="text-slate-400">sin confirmar</span>
                   )}
-                  {v.observaciones && <div class="mt-0.5 text-[11px] text-amber-700">📝 {v.observaciones}</div>}
+                  {v.observaciones && <div class="mt-0.5 text-[11px] text-amber-700">{v.observaciones}</div>}
                 </td>
                 {esAdmin && (
                   <td class="px-3 py-2 text-right">
@@ -405,7 +405,7 @@ const veredictoJson = JSON.stringify(veredicto);
                                 data-vid={v.id} data-area={v.area}>Reabrir</button>
                       )}
                       <button class="val-del rounded px-1.5 py-1 text-[11px] text-red-600 hover:underline"
-                              data-vid={v.id} data-area={v.area}>🗑</button>
+                              data-vid={v.id} data-area={v.area}>Eliminar</button>
                     </div>
                   </td>
                 )}
@@ -420,7 +420,7 @@ const veredictoJson = JSON.stringify(veredicto);
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <!-- Historial de versiones -->
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">🕑 Historial de versiones</h2>
+      <h2 class="font-semibold text-slate-900">Historial de versiones</h2>
       <p class="text-xs text-slate-500">
         Ningún cambio de un SCP se ejecuta sin actualizar antes el SCP y los MOP afectados (cap. 2.4).
       </p>
@@ -443,7 +443,7 @@ const veredictoJson = JSON.stringify(veredicto);
 
     <!-- Escalamientos -->
     <div class="card p-5">
-      <h2 class="font-semibold text-slate-900">📞 Escalamientos</h2>
+      <h2 class="font-semibold text-slate-900">Escalamientos</h2>
       <p class="text-xs text-slate-500">A quién se avisa y en cuántos minutos, si la condición no se corrige.</p>
       {escalamientos.length === 0 && (
         <p class="mt-3 text-sm text-slate-400">
@@ -554,7 +554,7 @@ const veredictoJson = JSON.stringify(veredicto);
       <!-- Modal editar cabecera -->
       <div id="editModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
         <div class="card max-h-[90vh] w-full max-w-xl overflow-y-auto p-5">
-          <h3 class="text-lg font-semibold text-slate-900">✎ Cabecera documental</h3>
+          <h3 class="text-lg font-semibold text-slate-900">Cabecera documental</h3>
           <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label class="label text-xs" for="e_inst">Código institucional</label>

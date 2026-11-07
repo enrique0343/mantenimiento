@@ -1,0 +1,108 @@
+---
+// Reporte consolidado de mantenimiento: lo ejecutado en un periodo, con sus tiempos reales.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { asc, eq } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { sucursales, usuarios } from "@/lib/schema";
+import { consolidadoMantenimiento, etiquetaMinutos, TIPO_ORDEN } from "@/lib/reporte-mantenimiento";
+import { AREA_KEYS, AREAS, parseArea } from "@/lib/areas";
+
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!["admin", "jefe", "visualizador"].includes(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const q = Astro.url.searchParams;
+const hoy = new Date(Date.now() - 6 * 3_600_000).toISOString().slice(0, 10);
+const hace30 = new Date(Date.now() - 6 * 3_600_000 - 30 * 86_400_000).toISOString().slice(0, 10);
+const fechaValida = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+const desde = fechaValida(q.get("desde")) ?? hace30;
+const hasta = fechaValida(q.get("hasta")) ?? hoy;
+const sede = Number(q.get("sede")) || null;
+const tecnico = Number(q.get("tecnico")) || null;
+const rubro = parseArea(q.get("area"));
+const tipo = q.get("tipo") && TIPO_ORDEN[q.get("tipo") as string] ? q.get("tipo") : null;
+const { filas, resumen } = await consolidadoMantenimiento(db, { desde, hasta, sede, rubro, tecnico, tipo });
+const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
+const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.rol, "tecnico")).orderBy(asc(usuarios.nombre));
+const parametros = new URLSearchParams({ desde, hasta });
+if (sede) parametros.set("sede", String(sede));
+if (tecnico) parametros.set("tecnico", String(tecnico));
+if (rubro) parametros.set("area", rubro);
+if (tipo) parametros.set("tipo", tipo);
+const fmt = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+const fechaHora = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const s = new Date(Date.parse(iso) - 6 * 3_600_000).toISOString();
+  return `${s.slice(8, 10)}/${s.slice(5, 7)} ${s.slice(11, 16)}`;
+};
+const difTotal = resumen.estimadoMin ? resumen.realContraEstimadoMin - resumen.estimadoMin : null;
+---
+
+<Layout title="Reporte de mantenimiento">
+  <div class="no-print">
+    <div class="doc-barra">
+      <div>
+        <h1 class="text-2xl font-semibold">Reporte de mantenimiento</h1>
+        <p class="text-sm text-slate-500">Lo ejecutado en el periodo, con los tiempos que el técnico capturó al trabajar.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary" href={`/api/reportes/mantenimiento?${parametros}`}>Descargar CSV</a>
+        <button class="btn-primary" onclick="window.print()">Imprimir o guardar PDF</button>
+      </div>
+    </div>
+    <form method="get" class="card mt-4 grid grid-cols-2 gap-3 p-4 md:grid-cols-6">
+      <div><label class="label" for="desde">Desde</label><input class="input" id="desde" type="date" name="desde" value={desde} /></div>
+      <div><label class="label" for="hasta">Hasta</label><input class="input" id="hasta" type="date" name="hasta" value={hasta} /></div>
+      <div><label class="label" for="sede">Sede</label><select class="input" id="sede" name="sede"><option value="">Todas</option>{sedes.map((s) => <option value={s.id} selected={s.id === sede}>{s.nombre}</option>)}</select></div>
+      <div><label class="label" for="area">Área</label><select class="input" id="area" name="area"><option value="">Todas</option>{AREA_KEYS.map((k) => <option value={k} selected={k === rubro}>{AREAS[k].label}</option>)}</select></div>
+      <div><label class="label" for="tecnico">Técnico</label><select class="input" id="tecnico" name="tecnico"><option value="">Todos</option>{tecnicos.map((t) => <option value={t.id} selected={t.id === tecnico}>{t.nombre}</option>)}</select></div>
+      <div><label class="label" for="tipo">Tipo</label><select class="input" id="tipo" name="tipo"><option value="">Todos</option>{Object.entries(TIPO_ORDEN).map(([k, v]) => <option value={k} selected={k === tipo}>{v}</option>)}</select></div>
+      <div class="col-span-2 md:col-span-6"><button class="btn-primary" type="submit">Aplicar</button></div>
+    </form>
+  </div>
+
+  <article class="print-doc doc-hoja doc-ancha mt-4">
+    <DocCabecera titulo="Reporte de mantenimiento" subtitulo={`Del ${fmt(desde)} al ${fmt(hasta)}`} fecha={hoy} />
+    <section class="doc-seccion">
+      <div class="doc-cifras">
+        <div><span class="doc-etq">Órdenes ejecutadas</span><b>{resumen.ordenes}</b></div>
+        <div><span class="doc-etq">Tiempo de trabajo</span><b>{etiquetaMinutos(resumen.minutosEfectivos)}</b></div>
+        <div><span class="doc-etq">Promedio por orden</span><b>{etiquetaMinutos(resumen.promedioMin)}</b></div>
+        <div><span class="doc-etq">Contra lo estimado</span><b>{difTotal == null ? "—" : `${difTotal > 0 ? "+" : difTotal < 0 ? "−" : ""}${etiquetaMinutos(Math.abs(difTotal))}`}</b></div>
+        <div><span class="doc-etq">Novedades</span><b>{resumen.novedades}</b></div>
+      </div>
+    </section>
+    <section class="doc-seccion">
+      {filas.length === 0 ? <p class="doc-texto">No hay órdenes ejecutadas en este periodo.</p> : (
+        <div class="overflow-x-auto">
+          <table class="doc-tabla">
+            <thead><tr><th>Registro</th><th style="min-width:180px">Equipo</th><th style="min-width:130px">Ubicación</th><th>Técnico</th><th>Tipo</th><th class="c">Inicio</th><th class="c">Fin</th><th class="n">Trabajo</th><th class="n">Pausa</th><th class="n">Estimado</th><th class="n">Novedades</th><th>Estado</th></tr></thead>
+            <tbody>
+              {filas.map((x) => (
+                <tr>
+                  <td class="tn"><a class="no-underline" href={`/ordenes/${x.id}/reporte`}>{x.registro}</a></td>
+                  <td>{x.codigo ? `${x.codigo} · ${x.equipo}` : x.titulo}</td>
+                  <td>{[x.ubicacion, x.sede].filter(Boolean).join(" · ") || "—"}</td>
+                  <td>{x.tecnico ?? "—"}</td>
+                  <td>{x.tipoLabel}</td>
+                  <td class="c tn">{fechaHora(x.inicio)}</td>
+                  <td class="c tn">{fechaHora(x.fin)}</td>
+                  <td class="n">{etiquetaMinutos(x.efectivoMin)}</td>
+                  <td class="n">{x.pausaMin ? etiquetaMinutos(x.pausaMin) : "—"}</td>
+                  <td class="n">{etiquetaMinutos(x.estimadoMin)}</td>
+                  <td class="n">{x.novedades || "—"}</td>
+                  <td>{x.estadoLabel}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+    <p class="doc-nota">Fuente: registros del Modo técnico y de la ficha de cada orden. Corte: {fmt(hoy)}.</p>
+    <DocFolio codigo="Reporte de mantenimiento" />
+  </article>
+</Layout>

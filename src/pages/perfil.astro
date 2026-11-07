@@ -19,7 +19,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
 
   <!-- Telegram -->
   <div class="card mt-6 p-5">
-    <h2 class="font-semibold text-slate-900">📱 Notificaciones por Telegram</h2>
+    <h2 class="font-semibold text-slate-900">Notificaciones por Telegram</h2>
     <p class="mt-1 text-sm text-slate-600">Recibe en Telegram las notificaciones de OTs asignadas, cambios de estado y vencimientos.</p>
 
     {u.telegramChatId ? (
@@ -29,7 +29,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
             <div class="text-sm font-semibold text-emerald-700">✓ Telegram enlazado</div>
             <div class="text-xs text-slate-500">Chat ID: <code>{u.telegramChatId}</code></div>
           </div>
-          <button id="tgUnlink" class="btn-secondary text-sm">🔕 Desenlazar</button>
+          <button id="tgUnlink" class="btn-secondary text-sm">Desenlazar</button>
         </div>
       </div>
     ) : (
@@ -42,7 +42,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
           <li>El bot confirmará el enlace. Vuelve aquí y refresca esta página.</li>
         </ol>
         <p class="rounded bg-amber-50 p-2 text-xs text-amber-700">
-          ⚠ Para que esto funcione, el admin debe configurar la variable <code>TELEGRAM_BOT_TOKEN</code> en Cloudflare Pages y el webhook del bot apuntando a <code>{baseUrl}/api/telegram/webhook</code>.
+          Para que esto funcione, el admin debe configurar la variable <code>TELEGRAM_BOT_TOKEN</code> en Cloudflare Pages y el webhook del bot apuntando a <code>{baseUrl}/api/telegram/webhook</code>.
         </p>
       </div>
     )}
@@ -50,7 +50,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
 
   <!-- Calendario .ics -->
   <div class="card mt-6 p-5">
-    <h2 class="font-semibold text-slate-900">📅 Suscribir mi calendario</h2>
+    <h2 class="font-semibold text-slate-900">Suscribir mi calendario</h2>
     <p class="mt-1 text-sm text-slate-600">Sincroniza tus OTs, planes preventivos y actividades con Google Calendar, Outlook o Apple Calendar.</p>
 
     {calendarUrl ? (
@@ -59,7 +59,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
           <label class="label text-xs">URL de suscripción (privada — no la compartas)</label>
           <div class="mt-1 flex gap-2">
             <input id="calUrl" class="input flex-1 font-mono text-xs" readonly value={calendarUrl} />
-            <button id="calCopy" class="btn-secondary text-sm">📋 Copiar</button>
+            <button id="calCopy" class="btn-secondary text-sm">Copiar</button>
           </div>
         </div>
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-3 text-xs text-slate-600">
@@ -76,7 +76,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
             <div class="text-slate-500">Pegar URL en "+ Agregar calendario"</div>
           </div>
         </div>
-        <button id="calRegen" class="btn-secondary text-xs">🔄 Regenerar URL (invalida la actual)</button>
+        <button id="calRegen" class="btn-secondary text-xs">Regenerar URL (invalida la actual)</button>
       </div>
     ) : (
       <div class="mt-4 rounded-lg border border-slate-200 p-4">
@@ -104,7 +104,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
       navigator.clipboard.writeText(inp.value);
       const btn = document.getElementById("calCopy")!;
       btn.textContent = "✓ Copiado";
-      setTimeout(() => (btn.textContent = "📋 Copiar"), 2000);
+      setTimeout(() => (btn.textContent = "Copiar"), 2000);
     });
 
     // Calendario: generar / regenerar

@@ -135,7 +135,7 @@ export async function puntosDeRonda(db: Db, rondaId: number): Promise<RondaPunto
  */
 export async function abrirEjecucion(
   db: Db,
-  input: { rondaId: number; sucursalId: number; fecha: string; turno: string; usuarioId?: number | null },
+  input: { rondaId: number; sucursalId: number; fecha: string; turno: string; usuarioId?: number | null; momento?: string },
 ): Promise<{ ejecucion: RondaEjecucion; yaExistia: boolean }> {
   const existente = await buscarEjecucion(db, input);
   if (existente) return { ejecucion: existente, yaExistia: true };
@@ -150,7 +150,7 @@ export async function abrirEjecucion(
         fecha: input.fecha,
         turno: input.turno,
         estado: "en_curso",
-        iniciadaEn: ahoraISO(),
+        iniciadaEn: input.momento ?? ahoraISO(),
         iniciadaPor: input.usuarioId ?? null,
         puntosTotal: total,
         puntosNoVerificados: total,
@@ -234,6 +234,8 @@ export async function registrarLectura(
     valorTexto?: string | null;
     nota?: string | null;
     usuarioId?: number | null;
+    /** Hora real en el celular; sin ella manda el reloj del servidor. */
+    momento?: string;
   },
 ): Promise<ResultadoLectura> {
   const [punto] = await db.select().from(rondaPuntos).where(eq(rondaPuntos.id, input.puntoId)).limit(1);
@@ -242,6 +244,7 @@ export async function registrarLectura(
   if (!ejec) throw new Error("La ronda no existe");
 
   const valor = input.valor ?? null;
+  const momento = input.momento ?? ahoraISO();
   // Un número fuera del rango normal manda sobre lo que marcó el botón.
   const fuera = input.resultado === "fuera" || (input.resultado === "ok" && fueraDeRango(punto, valor));
   const resultado: "ok" | "fuera" | "no_verificado" = input.resultado === "no_verificado" ? "no_verificado" : fuera ? "fuera" : "ok";
@@ -260,7 +263,7 @@ export async function registrarLectura(
       .values({
         variableId: punto.variableId,
         valor,
-        fecha: ahoraISO(),
+        fecha: momento,
         estadoAlerta: ev.banda,
         usuarioId: input.usuarioId ?? null,
         origen: "ronda",
@@ -308,6 +311,7 @@ export async function registrarLectura(
       sucursalId: ejec.sucursalId,
       valorDetectado: valor,
       unidad: punto.unidad ?? null,
+      detectadoEn: momento,
       detectadoPor: input.usuarioId ?? null,
       origen: "ronda",
       medicionId,
@@ -325,7 +329,7 @@ export async function registrarLectura(
     medicionId,
     aopEventoId: eventoId,
     registradoPor: input.usuarioId ?? null,
-    registradoEn: ahoraISO(),
+    registradoEn: momento,
   };
   const [lectura] = await db
     .insert(rondaLecturas)
@@ -390,6 +394,7 @@ export async function cerrarEjecucion(
   ejecucionId: number,
   usuarioId: number | null,
   notas?: string | null,
+  momento?: string,
 ): Promise<ResultadoCierre> {
   const [ejec] = await db.select().from(rondaEjecuciones).where(eq(rondaEjecuciones.id, ejecucionId)).limit(1);
   if (!ejec) return { ok: false, error: "La ronda no existe" };
@@ -407,7 +412,7 @@ export async function cerrarEjecucion(
     };
   }
 
-  const ahora = ahoraISO();
+  const ahora = momento ?? ahoraISO();
   await recontarEjecucion(db, ejecucionId);
   await db
     .update(rondaEjecuciones)

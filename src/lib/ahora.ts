@@ -142,7 +142,7 @@ async function bloqueRonda(db: Db, opts: OpcionesAhora): Promise<BloqueAhora> {
   const info = await infoRonda(db, opts.sucursalId);
   const base = {
     doc: "SOP" as const,
-    icono: "🧭",
+    icono: "",
     titulo: "Ronda de turno",
     pregunta: "¿Se hizo la ronda de este turno?",
     href: "/ronda",
@@ -239,7 +239,7 @@ async function bloqueDesviaciones(db: Db, opts: OpcionesAhora): Promise<BloqueAh
 
   const base = {
     doc: "AOP" as const,
-    icono: "⏱",
+    icono: "",
     titulo: "Desviaciones",
     pregunta: "¿Hay algo fuera de rango con el reloj corriendo?",
     href: "/aop",
@@ -287,7 +287,7 @@ async function bloqueEmergencias(db: Db, opts: OpcionesAhora): Promise<BloqueAho
 
   const base = {
     doc: "EOP" as const,
-    icono: "🚨",
+    icono: "",
     titulo: "Emergencias",
     pregunta: "¿Hay algo ya fallado ahora mismo?",
     href: "/ordenes?tipo=emergencia",
@@ -331,7 +331,7 @@ async function bloqueIntervenciones(db: Db, opts: OpcionesAhora): Promise<Bloque
 
   const base = {
     doc: "MOP" as const,
-    icono: "🛠",
+    icono: "",
     titulo: "Intervenciones",
     pregunta: "¿Alguna no puede arrancar porque falta un permiso?",
     href: "/ordenes?tipo=intervencion",
@@ -406,7 +406,7 @@ async function bloqueCobertura(db: Db): Promise<BloqueAhora> {
 
   const base = {
     doc: "SCP" as const,
-    icono: "🗺",
+    icono: "",
     titulo: "Equipos gobernados",
     pregunta: "¿Qué equipos no están todavía bajo ningún documento?",
     href: "/activos/clasificar",

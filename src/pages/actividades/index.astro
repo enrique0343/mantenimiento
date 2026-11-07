@@ -98,7 +98,7 @@ const proximas = rowsRaw.filter((r) => estadoFecha(r.a.proximaFecha, r.a.alertaD
                 <a class="text-brand-700 hover:underline" href={areaHref(`/actividades/${r.a.id}`, area ?? r.a.rubro)}>{r.a.codigo}</a>
               </td>
               <td class="px-4 py-2">{r.a.titulo}</td>
-              <td class="px-4 py-2 text-sm">{r.c?.icono} {r.c?.nombre ?? "—"}</td>
+              <td class="px-4 py-2 text-sm">{r.c?.nombre ?? "—"}</td>
               <td class="px-4 py-2 text-slate-600">{r.s?.nombre ?? "—"}</td>
               <td class="px-4 py-2 text-slate-600 capitalize">{FRECUENCIA_LABEL[r.a.frecuencia]}</td>
               <td class:list={["px-4 py-2 text-xs", ESTADO_FECHA_COLOR[st]]}>

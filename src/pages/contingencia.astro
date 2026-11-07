@@ -38,7 +38,7 @@ const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" :
 <Layout title="Contingencia">
   <div class="flex flex-wrap items-start justify-between gap-2">
     <div>
-      <h1 class="text-2xl font-bold">🚨 Plan de contingencia</h1>
+      <h1 class="text-2xl font-bold">Plan de contingencia</h1>
       <p class="text-sm text-slate-500">Continuidad de servicio (JCI FMS.9): respaldo de equipos críticos y protocolo de escalación.</p>
     </div>
   </div>
@@ -52,7 +52,7 @@ const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" :
   <!-- Críticos fuera de servicio ahora -->
   {fueraServicio.length > 0 && (
     <div class="card mt-6 overflow-hidden border-l-4 border-amber-400">
-      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-amber-700">⚠ Equipos críticos fuera de servicio ahora</h2></div>
+      <div class="px-5 pt-4 pb-2"><h2 class="font-semibold text-amber-700">Equipos críticos fuera de servicio ahora</h2></div>
       <table class="w-full text-left text-sm">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr><th class="px-4 py-2">Equipo</th><th class="px-4 py-2">Estado</th><th class="px-4 py-2">Respaldo disponible</th></tr>
@@ -81,7 +81,7 @@ const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" :
   <!-- Críticos sin respaldo -->
   <div class="card mt-6 overflow-hidden border-l-4 border-red-400">
     <div class="px-5 pt-4 pb-2">
-      <h2 class="font-semibold text-red-700">🔴 Equipos críticos sin respaldo ({sinRespaldo.length})</h2>
+      <h2 class="font-semibold text-red-700">Equipos críticos sin respaldo ({sinRespaldo.length})</h2>
       <p class="text-xs text-slate-500">Riesgo de continuidad: configura un equipo de respaldo desde la ficha de cada equipo.</p>
     </div>
     {sinRespaldo.length === 0 ? (
@@ -102,7 +102,7 @@ const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" :
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">📞 Protocolo de escalación</h2>
+        <h2 class="font-semibold text-slate-900">Protocolo de escalación</h2>
         <p class="text-xs text-slate-500">A quién recurrir y en qué tiempo cuando un equipo crítico falla.</p>
       </div>
       <button id="nivelNewBtn" class="btn-primary text-sm">+ Nivel</button>
@@ -144,7 +144,7 @@ const fmtMin = (m: number | null) => m == null ? "—" : m === 0 ? "Inmediato" :
                 <li class="flex items-start justify-between gap-3 rounded border border-slate-200 p-3 text-sm" data-nivel-id={n.id}>
                   <div class="min-w-0 flex-1">
                     <div class="font-medium text-slate-800">Nivel {n.nivel} · escalar tras {fmtMin(n.minutosParaEscalar)}</div>
-                    {(n.contactoNombre || n.contactoCargo) && <div class="text-slate-600">👤 {[n.contactoCargo, n.contactoNombre].filter(Boolean).join(" — ")}</div>}
+                    {(n.contactoNombre || n.contactoCargo) && <div class="text-slate-600">{[n.contactoCargo, n.contactoNombre].filter(Boolean).join(" — ")}</div>}
                     {(n.contactoTelefono || n.contactoEmail) && <div class="text-xs text-slate-500">{[n.contactoTelefono, n.contactoEmail].filter(Boolean).join(" · ")}</div>}
                     {n.accion && <div class="mt-0.5 text-xs text-slate-600">→ {n.accion}</div>}
                   </div>

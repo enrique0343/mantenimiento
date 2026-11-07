@@ -176,7 +176,7 @@ export const POST: APIRoute = async (ctx) => {
             "Nueva orden para ti",
             `<p>Hola <strong>${primerNombre}</strong>,</p>
              <p>Contamos contigo para esta orden. Te dejamos los detalles abajo.</p>
-             <h3 style="margin:18px 0 10px 0;color:#0a4082;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
+             <h3 style="margin:18px 0 10px 0;color:#23417D;font-size:16px">Orden #${row.id} — ${row.titulo}</h3>
              <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7">
                <li><strong>Tipo:</strong> ${row.tipo}</li>
                <li><strong>Prioridad:</strong> ${row.prioridad}</li>
@@ -184,9 +184,9 @@ export const POST: APIRoute = async (ctx) => {
                ${ubicacionTexto ? `<li><strong>Ubicación:</strong> ${ubicacionTexto}</li>` : ""}
              </ul>
              ${row.descripcion ? `<p style="margin:0 0 6px 0"><strong>Lo que reportaron:</strong></p>
-               <p style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-left:3px solid #0a4082;border-radius:4px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
-             <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#0a4082;color:#fff;border-radius:6px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
-             <p style="font-size:13px;color:#475569;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
+               <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 18px 0">${row.descripcion}</p>` : ""}
+             <p style="margin:18px 0"><a href="${otUrl}" style="display:inline-block;padding:10px 20px;background:#23417D;color:#fff;border-radius:2px;text-decoration:none;font-weight:500">Abrir orden →</a></p>
+             <p style="font-size:13px;color:#4A4A4A;margin-top:18px">Si encuentras algo distinto a lo descrito al llegar al sitio, regístralo en la orden antes de iniciar el trabajo. Si necesitas apoyo o materiales adicionales, escríbele directamente a tu jefatura.</p>
              <p style="margin-top:14px"><em>Gracias por mantener Avante funcionando.</em></p>`
           ),
           tipo: "ot_asignada",
@@ -197,7 +197,7 @@ export const POST: APIRoute = async (ctx) => {
 
       if (u?.telegramChatId) {
         const p = sendTelegram(env, u.telegramChatId,
-          `🔔 <b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
+          `<b>Nueva OT asignada</b>\n#${row.id} - ${row.titulo}\nPrioridad: ${row.prioridad}${row.vencimiento ? `\nVence: ${fmtFechaCompacta(row.vencimiento)}` : ""}`,
           { linkUrl: otUrl, linkLabel: "Abrir orden" }
         );
         if (wait) wait(p); else await p;

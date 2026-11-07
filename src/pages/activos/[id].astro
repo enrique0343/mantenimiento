@@ -1,6 +1,7 @@
 ---
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
+import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
 import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
@@ -378,22 +379,22 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       <div class="flex items-center gap-2">
         <h1 class="text-2xl font-bold">{a.nombre}</h1>
         <span class="badge bg-brand-50 text-brand-700">{AREAS[area].label}</span>
-        <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">⚑ {CRITICIDAD_LABEL[criticidad]}</span>
+        <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">{CRITICIDAD_LABEL[criticidad]}</span>
       </div>
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
     {canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
-        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">✎ Editar</a>
-        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">🗑 Eliminar</button>}
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
+        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>
+        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">Eliminar</button>}
       </div>
     )}
     {!canEdit && (
       <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">📄 Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">📜 Historial</a>
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
       </div>
     )}
   </div>
@@ -402,7 +403,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   {sigueFalla && (
     <div class="mt-4 rounded-lg border-2 border-red-400 bg-red-50 p-5" id="que-sigue">
       <div class="text-[11px] font-bold uppercase tracking-wide text-red-700">
-        🚨 Este equipo está {a.estado} · qué sigue ahora
+        Este equipo está {a.estado} · qué sigue ahora
       </div>
       <h2 class="mt-0.5 text-xl font-bold text-red-800">{sigueFalla.encabezado}</h2>
 
@@ -420,7 +421,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
           {sigueFalla.aviso && (
             <p class="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-sm font-medium text-amber-800">
-              ⚠ {sigueFalla.aviso}
+              {sigueFalla.aviso}
             </p>
           )}
 
@@ -430,7 +431,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <ol class="mt-2 space-y-2">
                 {sigueFalla.primerasAcciones.map((acc, i) => (
                   <li class="flex gap-3 rounded-lg border-2 border-red-300 bg-white p-3">
-                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-600 text-lg font-bold text-white">
+                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-red-600 border border-red-600 text-lg font-bold ">
                       {i + 1}
                     </span>
                     <span class="self-center text-base font-semibold leading-snug text-slate-900">{acc}</span>
@@ -440,29 +441,29 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             </Fragment>
           ) : (
             <p class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-              ⚠ El {sigueFalla.documento.codigoCorto} no tiene redactadas sus primeras acciones. Un EOP sin
+              El {sigueFalla.documento.codigoCorto} no tiene redactadas sus primeras acciones. Un EOP sin
               primeras acciones no se puede ejecutar de memoria: complétalo en la ficha del documento.
             </p>
           )}
 
           <div class="mt-4 flex flex-wrap gap-2">
             <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia&procedimiento=${sigueFalla.documento.id}`} class="btn-primary">
-              🚨 Abrir orden de emergencia
+              Abrir orden de emergencia
             </a>
             <a href={`/procedimientos/${sigueFalla.documento.id}`} class="btn-secondary">
               Ver el {sigueFalla.documento.codigoCorto} completo
             </a>
-            <a href="/eop" class="btn-secondary">🖨 Hoja imprimible</a>
+            <a href="/eop" class="btn-secondary">Hoja imprimible</a>
           </div>
         </Fragment>
       ) : (
         <Fragment>
           <p class="mt-2 text-sm font-medium text-red-800">{sigueFalla.aviso}</p>
           <div class="mt-4 flex flex-wrap gap-2">
-            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia`} class="btn-primary">🚨 Abrir orden de emergencia</a>
+            <a href={`/ordenes/nueva?activo=${a.id}&tipo=emergencia`} class="btn-primary">Abrir orden de emergencia</a>
             {canJefe && sistemaResuelto && (
               <a href={`/procedimientos?nuevo=1&sistema=${sistemaResuelto}&tipo=eop`} class="btn-secondary">
-                📋 Registrar el EOP que falta
+                Registrar el EOP que falta
               </a>
             )}
           </div>
@@ -476,13 +477,13 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     <div class="card mt-4 border-slate-300 p-5" id="rige">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="font-semibold text-slate-900">🧭 Qué rige este equipo</h2>
+          <h2 class="font-semibold text-slate-900">Qué rige este equipo</h2>
           <p class="text-xs text-slate-500">
             Nadie tiene que buscar el documento: el sistema resuelve el juego de cinco que gobierna a toda la
             familia de este equipo y en qué estado está cada eslabón.
           </p>
         </div>
-        <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">🛡 Cobertura del sistema</a>
+        <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">Cobertura del sistema</a>
       </div>
 
       <!-- El sistema resuelto y de dónde salió -->
@@ -577,7 +578,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           </p>
           {canJefe && (
             <a href={`/procedimientos?nuevo=1&sistema=${rige.sistema}`} class="btn-secondary btn-sm mt-2 inline-block">
-              📋 Registrarlo en la biblioteca
+              Registrarlo en la biblioteca
             </a>
           )}
         </div>
@@ -709,12 +710,12 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div><div class="text-xs uppercase text-slate-500">Categoria</div><div>{a.categoria ?? "-"}</div></div>
         <div>
           <div class="text-xs uppercase text-slate-500">Sucursal</div>
-          <div>{sucursalInfo ? <span class="font-medium">🏢 {sucursalInfo.nombre}</span> : "-"}</div>
+          <div>{sucursalInfo ? <span class="font-medium">{sucursalInfo.nombre}</span> : "-"}</div>
         </div>
         <div>
           <div class="text-xs uppercase text-slate-500">Ubicación</div>
           <div>
-            {ubicacionInfo ? <span><span class="font-medium">📍 {ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
+            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
             {a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
           </div>
         </div>
@@ -728,27 +729,27 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             {a.vidaUtilAnios ? <span>{a.vidaUtilAnios} años{finVida && <span class="text-xs text-slate-500"> · fin {fmt(finVida)}</span>}</span> : "-"}
           </div>
           {vidaRem != null && !vidaVencida && vidaRem < 2 && (
-            <div class="mt-0.5 text-xs text-amber-600">⚠ Quedan ~{vidaRem.toFixed(1)} años de vida útil</div>
+            <div class="mt-0.5 text-xs text-amber-600">Quedan ~{vidaRem.toFixed(1)} años de vida útil</div>
           )}
         </div>
         <div><div class="text-xs uppercase text-slate-500">Valor de adquisición</div><div>{a.valorAdquisicion != null ? `$${a.valorAdquisicion.toFixed(2)}` : "-"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Responsable</div><div>{responsableInfo ? `👤 ${responsableInfo.nombre}` : "-"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Responsable</div><div>{responsableInfo ? `${responsableInfo.nombre}` : "-"}</div></div>
         <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Descripcion</div><div class="whitespace-pre-wrap">{a.descripcion ?? "-"}</div></div>
       </div>
 
       {vidaVencida && (
         <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          ⏳ Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Considere evaluar su reemplazo.
+          Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Considere evaluar su reemplazo.
         </div>
       )}
 
       <div class="mt-5 border-t border-slate-200 pt-4">
-        <h3 class="font-semibold text-amber-700">⏱ SLA del equipo</h3>
+        <h3 class="font-semibold text-amber-700">SLA del equipo</h3>
         <div class="mt-2 grid grid-cols-4 gap-3 text-sm">
-          <div><div class="text-xs uppercase text-slate-500">🔴 Urgente</div><div class="font-mono">{a.slaUrgenteHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟠 Alta</div><div class="font-mono">{a.slaAltaHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟡 Media</div><div class="font-mono">{a.slaMediaHoras} h</div></div>
-          <div><div class="text-xs uppercase text-slate-500">🟢 Baja</div><div class="font-mono">{a.slaBajaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Urgente</div><div class="font-mono">{a.slaUrgenteHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Alta</div><div class="font-mono">{a.slaAltaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Media</div><div class="font-mono">{a.slaMediaHoras} h</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Baja</div><div class="font-mono">{a.slaBajaHoras} h</div></div>
         </div>
       </div>
 
@@ -766,11 +767,14 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     </div>
 
     <div class="card p-5">
-      <h2 class="font-semibold">QR / Identificacion</h2>
+      <h2 class="font-semibold">Identificación</h2>
       <div class="mt-3">
-        <div class="text-xs uppercase text-slate-500">Codigo QR</div>
-        <div class="font-mono text-xs">{a.qrCode ?? "-"}</div>
+        <div class="text-xs uppercase text-slate-500">Código interno</div>
+        <div class="font-mono text-xs">{a.codigo}</div>
       </div>
+      {ESCANEO_ACTIVOS_HABILITADO
+        ? <div class="mt-3"><div class="text-xs uppercase text-slate-500">Código de etiqueta</div><div class="font-mono text-xs">{a.qrCode ?? "-"}</div></div>
+        : <p class="mt-3 text-xs text-slate-500">Etiqueta GS1 Data Matrix: pendiente. Por ahora el equipo se encuentra por sede y ubicación.</p>}
       <div class="mt-3">
         <div class="text-xs uppercase text-slate-500">Estado</div>
         <div class="capitalize">{a.estado}</div>
@@ -779,7 +783,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
     {contratosActivo.length > 0 && (
       <div class="card p-5">
-        <h2 class="font-semibold">📜 Contratos de mantenimiento</h2>
+        <h2 class="font-semibold">Contratos de mantenimiento</h2>
         <ul class="mt-3 space-y-2 text-sm">
           {contratosActivo.map(({ c, prov, colorBadge, labelBadge }) => (
             <li class="border-l-2 border-slate-200 pl-3">
@@ -797,7 +801,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   </div>
 
   <div class="mt-4 flex flex-wrap gap-2">
-    <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">📊 Mantenimiento predictivo</a>
+    <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">Mantenimiento predictivo</a>
   </div>
 
   <!-- Configuración de sitio (SCP) — GO-GUI-011-2026 cap. 03 -->
@@ -805,7 +809,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     <div class="card p-5" id="scp">
       <div class="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 class="font-semibold text-slate-900">🧩 Configuración de sitio (SCP)</h2>
+          <h2 class="font-semibold text-slate-900">Configuración de sitio (SCP)</h2>
           <p class="text-xs text-slate-500">Cómo está configurado este sistema cuando todo está normal. La versión del SCP es un atributo del activo.</p>
         </div>
         <span class={`badge ${NIVEL_COLOR[nivel]}`} title="Nivel en la jerarquía del SCP">{NIVEL_LABEL[nivel]}</span>
@@ -813,7 +817,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
       {faltaScp && (
         <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          ⚠ Este activo es de nivel <strong>sistema</strong> y no tiene un SCP vinculado. Un sistema crítico sin
+          Este activo es de nivel <strong>sistema</strong> y no tiene un SCP vinculado. Un sistema crítico sin
           configuración de sitio escrita deja sin referencia a sus SOP, MOP y AOP (FMS.08.00).
         </div>
       )}
@@ -834,7 +838,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <div class="uppercase">Versión en el activo</div>
               <div class="font-mono text-slate-700">{a.scpVersionRef ?? "—"}</div>
               {a.scpVersionRef && a.scpVersionRef !== scpInfo.version && (
-                <div class="mt-0.5 text-amber-600">⚠ El SCP ya va en v{scpInfo.version}: actualice la referencia del activo.</div>
+                <div class="mt-0.5 text-amber-600">El SCP ya va en v{scpInfo.version}: actualice la referencia del activo.</div>
               )}
             </div>
             <div>
@@ -849,8 +853,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
       {canEdit && (
         <div class="mt-4 flex flex-wrap gap-2">
-          <button id="jerModalBtn" class="btn-secondary btn-sm">✎ Jerarquía y SCP</button>
-          <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">⚙ Puntos de ajuste</a>
+          <button id="jerModalBtn" class="btn-secondary btn-sm">Jerarquía y SCP</button>
+          <a href={`/activos/${a.id}/predictivo`} class="btn-secondary btn-sm">Puntos de ajuste</a>
         </div>
       )}
     </div>
@@ -859,7 +863,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     <div class="card p-5" id="componentes">
       <div class="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 class="font-semibold text-slate-900">🧱 Componentes ({componentes.length})</h2>
+          <h2 class="font-semibold text-slate-900">Componentes ({componentes.length})</h2>
           <p class="text-xs text-slate-500">Cada sistema crítico se registra como activo padre con sus componentes como hijos.</p>
         </div>
       </div>
@@ -913,7 +917,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <div class="card mt-6 p-5" id="puntos-ajuste">
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">🎯 Puntos de ajuste del SCP</h2>
+        <h2 class="font-semibold text-slate-900">Puntos de ajuste del SCP</h2>
         <p class="text-xs text-slate-500">
           Los puntos de ajuste se cargan como atributos con valor normal, mínimo y máximo. Una posición normal
           («selector en AUTO») se registra como texto.
@@ -984,7 +988,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <div class="card mt-6 p-5" id="mapa-distribucion">
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div>
-        <h2 class="font-semibold text-slate-900">🗺 Mapa de distribución ({servidasRows.length})</h2>
+        <h2 class="font-semibold text-slate-900">Mapa de distribución ({servidasRows.length})</h2>
         <p class="text-xs text-slate-500">Qué salas depende de este activo: una manejadora sirve varias salas, un tablero alimenta varios servicios (FMS.08.00).</p>
       </div>
       {canEdit && <button id="servBtn" class="btn-primary btn-sm">+ Agregar ubicación</button>}
@@ -1036,10 +1040,10 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <span class={`badge text-[10px] ${ROL_SERVIDA_COLOR[(rel.rol ?? "sirve") as RolUbicacionServida]}`}>
                 {ROL_SERVIDA_LABEL[(rel.rol ?? "sirve") as RolUbicacionServida]}
               </span>
-              <span class="ml-2 font-medium text-slate-800">📍 {u.nombre}</span>
+              <span class="ml-2 font-medium text-slate-800">{u.nombre}</span>
               <span class="ml-1 text-xs capitalize text-slate-400">({u.tipo})</span>
               <div class="text-xs text-slate-500">
-                {s?.nombre && <span>🏢 {s.nombre}</span>}
+                {s?.nombre && <span>{s.nombre}</span>}
                 {rel.notas && <span class="ml-2">{rel.notas}</span>}
               </div>
             </div>
@@ -1054,7 +1058,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   {canEdit && (
     <div id="jerModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-slate-900">🧩 Jerarquía y configuración de sitio</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Jerarquía y configuración de sitio</h3>
         <p class="mt-1 text-xs text-slate-500">
           La jerarquía admite {PROFUNDIDAD_MAXIMA} niveles: sistema → subsistema → componente. Un activo no puede
           colgar de sí mismo ni de uno de sus propios componentes.
@@ -1109,15 +1113,15 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <h2 class="font-semibold">🔎 Inspección de aceptación (entrada en servicio)</h2>
+      <h2 class="font-semibold">Inspección de aceptación (entrada en servicio)</h2>
       {canEdit && (
-        <button id="acepBtn" class="btn-secondary text-sm">{a.aceptacionFecha ? "✎ Editar registro" : "+ Registrar aceptación"}</button>
+        <button id="acepBtn" class="btn-secondary text-sm">{a.aceptacionFecha ? "Editar registro" : "+ Registrar aceptación"}</button>
       )}
     </div>
     {a.aceptacionFecha ? (
       <div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
         <span class={`badge ${a.aceptacionResultado === "aprobado" ? "bg-emerald-100 text-emerald-700" : a.aceptacionResultado === "condicionado" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
-          {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "⚠ Aprobado con condiciones" : "✗ Rechazado"}
+          {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "Aprobado con condiciones" : "✕ Rechazado"}
         </span>
         <span class="text-slate-600">Fecha: <span class="font-medium">{a.aceptacionFecha.split("-").reverse().join("/")}</span></span>
         {aceptadoPorNombre && <span class="text-slate-500 text-xs">Registrado por {aceptadoPorNombre}</span>}
@@ -1133,7 +1137,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   {canEdit && (
     <div id="acepModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-md p-5">
-        <h3 class="text-lg font-semibold text-slate-900">🔎 Inspección de aceptación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Inspección de aceptación</h3>
         <p class="mt-1 text-xs text-slate-500">Prueba inicial de funcionamiento, integridad y accesorios al recibir/instalar el equipo.</p>
         <div class="mt-4 space-y-3">
           <div>
@@ -1144,8 +1148,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             <label class="label text-xs">Resultado *</label>
             <select id="acep_resultado" class="input">
               <option value="aprobado" selected={a.aceptacionResultado === "aprobado" || !a.aceptacionResultado}>✓ Aprobado — apto para servicio</option>
-              <option value="condicionado" selected={a.aceptacionResultado === "condicionado"}>⚠ Aprobado con condiciones</option>
-              <option value="rechazado" selected={a.aceptacionResultado === "rechazado"}>✗ Rechazado — no entra en servicio</option>
+              <option value="condicionado" selected={a.aceptacionResultado === "condicionado"}>Aprobado con condiciones</option>
+              <option value="rechazado" selected={a.aceptacionResultado === "rechazado"}>✕ Rechazado — no entra en servicio</option>
             </select>
           </div>
           <div>
@@ -1199,7 +1203,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="font-semibold">📄 Documentos del equipo</h2>
+        <h2 class="font-semibold">Documentos del equipo</h2>
         <p class="text-xs text-slate-500">Planos, unifilares y diagramas de válvulas se adjuntan al activo; los <strong>as-built</strong> son la configuración vigente del SCP.</p>
       </div>
       {canEdit && <button id="docUploadBtn" class="btn-primary text-sm">+ Subir documento</button>}
@@ -1241,7 +1245,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <a href={`/api/activos/documento/${d.id}`} target="_blank" class="font-medium text-brand-700 hover:underline">{d.nombre}</a>
               {d.asBuilt && (
                 <span class="badge ml-2 bg-indigo-100 text-[10px] text-indigo-700" title="Plano o esquema as-built: refleja la instalación tal como está construida (SCP)">
-                  📐 As-built
+                  As-built
                 </span>
               )}
               <div class="text-xs text-slate-500">
@@ -1262,7 +1266,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <div class="card mt-6 p-5" id="contingencia">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="font-semibold text-slate-900">🔁 Continuidad — equipos de respaldo</h2>
+        <h2 class="font-semibold text-slate-900">Continuidad — equipos de respaldo</h2>
         <p class="text-xs text-slate-500">Plan de contingencia (JCI FMS.9): a qué equipo recurrir si este sale de servicio.</p>
       </div>
       {canJefe && <button id="respaldoBtn" class="btn-primary text-sm">+ Vincular respaldo</button>}
@@ -1270,7 +1274,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
     {fueraDeServicio && respaldosRows.length > 0 && (
       <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-        ⚠ Este equipo está <strong>{a.estado}</strong>.
+        Este equipo está <strong>{a.estado}</strong>.
         {respaldosOperativos.length > 0
           ? <span> Respaldo operativo disponible: <strong>{respaldosOperativos.map((r) => r.eq_.codigo).join(", ")}</strong>.</span>
           : <span> <strong>Ningún respaldo está operativo en este momento.</strong></span>}
@@ -1278,7 +1282,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     )}
     {fueraDeServicio && respaldosRows.length === 0 && criticidad === "alta" && (
       <div class="mt-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
-        🔴 Equipo crítico fuera de servicio y <strong>sin respaldo configurado</strong>. Riesgo de continuidad.
+        Equipo crítico fuera de servicio y <strong>sin respaldo configurado</strong>. Riesgo de continuidad.
       </div>
     )}
 
@@ -1332,7 +1336,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     <div class="card mt-6 p-5" id="calibraciones">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="font-semibold text-purple-700">🔬 Calibraciones</h2>
+          <h2 class="font-semibold text-purple-700">Calibraciones</h2>
           <p class="text-xs text-slate-500">Trazabilidad metrológica (JCI FMS.8 / MINSAL): certificado, laboratorio acreditado, patrón y resultado.</p>
         </div>
         {canEdit && <button id="calNewBtn" class="btn-primary text-sm">+ Registrar calibración</button>}
@@ -1353,7 +1357,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <label class="label">Laboratorio</label>
               <select id="c_lab" class="input">
                 <option value="">— Externo / no listado —</option>
-                {laboratorios.map((l) => <option value={l.id}>{l.nombre}{l.acred ? " ✔ acreditado" : ""}</option>)}
+                {laboratorios.map((l) => <option value={l.id}>{l.nombre}{l.acred ? " ✓ acreditado" : ""}</option>)}
               </select>
             </div>
             <div>
@@ -1479,7 +1483,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           </select>
         </div>
         <div class="sm:col-span-2 border-t border-slate-200 pt-3 mt-1">
-          <label class="label">📋 Plantilla de checklist <span class="text-slate-400 font-normal">(opcional pero recomendada)</span></label>
+          <label class="label">Plantilla de checklist <span class="text-slate-400 font-normal">(opcional pero recomendada)</span></label>
           <select class="input" id="p_plantilla">
             <option value="">— Sin plantilla (checklist vacío) —</option>
           </select>
@@ -1510,13 +1514,13 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                 <div class="flex-1">
                   <div class="font-medium">{r.p.titulo}</div>
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                    <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">📅 {r.p.frecuencia}</span>
+                    <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">{r.p.frecuencia}</span>
                     <span class="rounded bg-blue-100 px-2 py-0.5 text-blue-700">Próxima: <strong>{fmt(r.p.proximaFecha)}</strong></span>
                     {r.u
-                      ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">👤 {r.u.nombre}</span>
-                      : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">👤 Sin asignar</span>
+                      ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">{r.u.nombre}</span>
+                      : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">Sin asignar</span>
                     }
-                    {r.p.prioridad && <span class="rounded bg-slate-100 px-2 py-0.5 capitalize text-slate-600">⚡ {r.p.prioridad}</span>}
+                    {r.p.prioridad && <span class="rounded bg-slate-100 px-2 py-0.5 capitalize text-slate-600">{r.p.prioridad}</span>}
                   </div>
                   {r.p.ultimaGeneracion && <div class="mt-1 text-xs text-slate-400">Última OT generada: {fmt(r.p.ultimaGeneracion)}</div>}
                   {r.p.descripcion && <div class="mt-1 text-sm text-slate-600">{r.p.descripcion}</div>}
@@ -1527,7 +1531,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                   </span>
                   {canEdit && (
                     <>
-                      <button data-id={r.p.id} data-edit class="btn-secondary text-xs">✎ Editar</button>
+                      <button data-id={r.p.id} data-edit class="btn-secondary text-xs">Editar</button>
                       <button data-id={r.p.id} data-pause class="btn-secondary text-xs">{r.p.activo ? "Pausar" : "Activar"}</button>
                       <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>
                     </>
@@ -1616,7 +1620,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <!-- Historial de cambios (audit) -->
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
-      <h2 class="font-semibold">📋 Historial de cambios</h2>
+      <h2 class="font-semibold">Historial de cambios</h2>
       <span class="text-xs text-slate-500">{auditRows.length} {auditRows.length === 1 ? "evento" : "eventos"}</span>
     </div>
     {auditRows.length === 0 ? (
@@ -1625,7 +1629,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {auditRows.map((r) => {
           const cambios = parsearCambios(r.a.cambios);
-          const accionLabel = r.a.accion === "create" ? "✨ Creó" : r.a.accion === "delete" ? "🗑 Eliminó" : "✎ Modificó";
+          const accionLabel = r.a.accion === "create" ? "Creó" : r.a.accion === "delete" ? "Eliminó" : "Modificó";
           const accionColor = r.a.accion === "create" ? "bg-emerald-50 text-emerald-700"
             : r.a.accion === "delete" ? "bg-red-50 text-red-700"
             : "bg-blue-50 text-blue-700";

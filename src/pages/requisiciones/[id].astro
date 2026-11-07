@@ -43,7 +43,7 @@ const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") &&
       <div class="flex items-center gap-3">
         <h1 class="text-2xl font-bold font-mono">{req.numero}</h1>
         <span class={`badge ${REQ_COLOR[estado]}`}>{REQ_LABEL[estado]}</span>
-        {req.origen === "auto_stock_minimo" && <span class="badge bg-amber-100 text-amber-700">⚠ Auto stock mínimo</span>}
+        {req.origen === "auto_stock_minimo" && <span class="badge bg-amber-100 text-amber-700">Auto stock mínimo</span>}
       </div>
       <p class="mt-1 text-sm text-slate-500">
         Solicitada {fmt(req.fechaSolicitud)} por {r.u?.nombre ?? "—"}
@@ -52,11 +52,11 @@ const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") &&
     </div>
     <div class="flex flex-wrap gap-2">
       {transiciones.map((t) => (
-        <button data-trans={t} class:list={["btn-secondary text-sm", t === "aprobada" && "!bg-emerald-600 !text-white", t === "rechazada" && "!bg-red-600 !text-white", t === "enviada" && "!bg-brand-600 !text-white"]}>
+        <button data-trans={t} class:list={["btn-secondary text-sm", t === "aprobada" && "!bg-brand-600 !text-white", t === "rechazada" && "!bg-white text-red-600 border border-red-600 !", t === "enviada" && "!bg-brand-600 !text-white"]}>
           {REQ_LABEL[t]}
         </button>
       ))}
-      {puedeRecibir && <button id="recibirBtn" class="btn-primary text-sm">📥 Recibir</button>}
+      {puedeRecibir && <button id="recibirBtn" class="btn-primary text-sm">Recibir</button>}
     </div>
   </div>
 
@@ -128,7 +128,7 @@ const puedeRecibir = (estado === "aprobada" || estado === "recibida_parcial") &&
   {puedeRecibir && (
     <div id="recibirModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div class="card max-w-2xl w-full p-5">
-        <h3 class="font-semibold text-lg">📥 Recibir mercancía</h3>
+        <h3 class="font-semibold text-lg">Recibir mercancía</h3>
         <p class="mt-1 text-sm text-slate-500">Indica las cantidades efectivamente recibidas. Se sumarán al inventario.</p>
         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>

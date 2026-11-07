@@ -43,15 +43,15 @@ const juegoDe: Record<string, (typeof juegos)[number]> = {};
 for (const j of juegos) juegoDe[j.sistema] = j;
 
 const SIS_ICONO: Record<string, string> = {
-  electrico: "⚡",
-  hvac: "❄️",
-  gases: "🫁",
-  agua: "💧",
-  incendios: "🧯",
-  ascensores: "🛗",
-  otro: "📦",
+  electrico: "",
+  hvac: "",
+  gases: "",
+  agua: "",
+  incendios: "",
+  ascensores: "",
+  otro: "",
 };
-const etiquetaFamilia = (k: string) => `${SIS_ICONO[k] ?? "📦"} ${SISTEMA_LABEL[k as Sistema] ?? k}`;
+const etiquetaFamilia = (k: string) => `${SIS_ICONO[k] ?? ""} ${SISTEMA_LABEL[k as Sistema] ?? k}`;
 /** "AOP, EOP" — los tipos que le faltan a la familia, en corto. */
 const faltanCortos = (j?: (typeof juegos)[number]) =>
   (j?.faltantes ?? []).map((f) => f.split(" ")[0]).join(", ");
@@ -159,7 +159,7 @@ const CRIT = [
         data-sis="otro"
         title="Equipos que no pertenecen a un sistema crítico: no heredan juego"
       >
-        📦 Otro · {porFamilia["otro"]?.total ?? 0} equipos · sin juego propio
+        Otro · {porFamilia["otro"]?.total ?? 0} equipos · sin juego propio
       </button>
     </div>
   </div>
@@ -182,8 +182,8 @@ const CRIT = [
       <select id="fFamilia" class="input text-sm">
         <option value="">Todas</option>
         {SISTEMAS_PROC.map((k) => <option value={k}>{etiquetaFamilia(k)}</option>)}
-        <option value="__pendiente__">⚠ Sugeridas por confirmar</option>
-        <option value="__sinresolver__">✖ Sin resolver</option>
+        <option value="__pendiente__">Sugeridas por confirmar</option>
+        <option value="__sinresolver__">✕ Sin resolver</option>
       </select>
     </div>
     <div>
@@ -205,7 +205,7 @@ const CRIT = [
       </select>
     </div>
     <div class="flex flex-wrap items-center gap-2">
-      <button id="marcarVisible" type="button" class="btn-secondary btn-sm">☑ Marcar todo lo visible</button>
+      <button id="marcarVisible" type="button" class="btn-secondary btn-sm">Marcar todo lo visible</button>
       <button id="aceptarSug" type="button" class="btn-secondary btn-sm">✓ Aceptar todas las sugerencias visibles</button>
       <span class="text-xs text-slate-500"><span id="visibles">{filas.length}</span> visibles</span>
     </div>

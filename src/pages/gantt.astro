@@ -106,7 +106,7 @@ for (const r of planRows) {
     if (mi >= 0 && mi < 12) counts[mi]++;
   });
   filas.push({
-    icono: "🛠",
+    icono: "",
     titulo: r.p.titulo,
     contexto: r.a ? `${r.a.codigo} · ${r.a.nombre}` : "",
     sede: r.s?.nombre ?? null,
@@ -125,7 +125,7 @@ for (const r of actRows) {
     if (mi >= 0 && mi < 12) counts[mi]++;
   });
   filas.push({
-    icono: r.c?.icono ?? "📌",
+    icono: r.c?.icono ?? "",
     titulo: r.a.titulo,
     contexto: r.a.codigo + (r.c ? ` · ${r.c.nombre}` : ""),
     sede: r.s?.nombre ?? null,
@@ -155,28 +155,28 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
 <Layout title="Cronograma Gantt">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">📊 Cronograma Gantt — 12 meses</h1>
+      <h1 class="text-2xl font-bold">Cronograma Gantt — 12 meses</h1>
       <p class="mt-1 text-sm text-slate-500">
         {filas.length} rutina(s) proyectadas según su frecuencia
-        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· 🏢 {sedeActiva.nombre}</span>}
+        {sedeActiva && <span class="ml-1 font-medium text-brand-700">· {sedeActiva.nombre}</span>}
         {dominio && <span class="ml-1 font-medium text-brand-700">· {RUBROS[dominio].icono} {rubroLabel(dominio)}</span>}
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <select id="sedeSel" class="input w-auto text-sm py-1.5">
-        <option value="">🏢 Todas las sedes</option>
+        <option value="">Todas las sedes</option>
         {sucursalesList.map((s) => (
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
       <select id="dominioSel" class="input w-auto text-sm py-1.5">
-        <option value="">🏷 Todas las áreas</option>
+        <option value="">Todas las áreas</option>
         {RUBRO_KEYS.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
-      <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">📅 Vista por fechas</a>
-      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">📄 Plan anual</a>
+      <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">Vista por fechas</a>
+      <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">Plan anual</a>
     </div>
   </div>
 
@@ -204,11 +204,11 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
               <tr class="hover:bg-slate-50 group">
                 <td class="sticky left-0 bg-white group-hover:bg-slate-50 px-3 py-1.5 z-10 border-r border-slate-100">
                   <a href={f.link} class="font-medium text-slate-800 hover:text-brand-700 block truncate max-w-[260px]" title={f.titulo}>
-                    {f.icono} {f.titulo} {f.critico && <span title="Equipo crítico">⚠</span>}
+                    {f.icono} {f.titulo} {f.critico && <span title="Equipo crítico" class="text-red-600">●</span>}
                   </a>
                   <div class="text-[10px] text-slate-400 truncate max-w-[260px]">
                     {f.contexto}{f.sede && !sedeActiva ? ` · ${f.sede}` : ""}
-                    <span class={`ml-1 font-semibold ${f.vencido ? "text-red-600" : "text-slate-500"}`}>{f.vencido ? `⏰ ${fmt(f.proximaFecha)}` : fmt(f.proximaFecha)}</span>
+                    <span class={`ml-1 font-semibold ${f.vencido ? "text-red-600" : "text-slate-500"}`}>{f.vencido ? `${fmt(f.proximaFecha)}` : fmt(f.proximaFecha)}</span>
                   </div>
                 </td>
                 <td class="px-1 py-1.5 text-center text-[10px] font-mono text-slate-400">{FREC_ABREV[f.frecuencia] ?? "?"}</td>
@@ -216,7 +216,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
                   <td class={`px-1 py-1.5 text-center ${i === 0 ? "bg-brand-50/40" : ""}`}>
                     {c > 0 && (
                       <span
-                        class={`inline-flex items-center justify-center min-w-[22px] h-5 rounded-md text-[10px] font-bold text-white px-1 ${f.vencido && i === 0 ? "bg-red-500" : f.critico ? "bg-amber-500" : "bg-brand-500"}`}
+                        class={`inline-flex items-center justify-center min-w-[22px] h-5 rounded-md text-[10px] font-bold px-1 ${f.vencido && i === 0 ? "bg-white text-red-600 border border-red-600" : f.critico ? "bg-amber-500" : "bg-brand-500"}`}
                         title={`${c} mantenimiento(s) en ${meses[i].label}`}
                       >
                         {c > 1 ? `${c}×` : "●"}

@@ -84,7 +84,7 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZo
               <p class="mt-1 text-sm text-slate-600">
                 Tu orden fue marcada como <strong>resuelta</strong>. Tienes <strong>{horasRestantes} horas</strong> para reportar inconformidad y reabrirla automáticamente. Después, deberás crear un nuevo ticket.
               </p>
-              <button id="btnAbrirIncon" class:list={["mt-3 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700", abrirInconformidad ? "hidden" : ""]}>
+              <button id="btnAbrirIncon" class:list={["mt-3 px-4 py-2 rounded-lg bg-white text-red-600 border border-red-600 text-sm font-medium hover:bg-slate-50", abrirInconformidad ? "hidden" : ""]}>
                 Reportar inconformidad
               </button>
               <form id="formIncon" class:list={["mt-3 space-y-2", abrirInconformidad ? "" : "hidden"]}>
@@ -93,7 +93,7 @@ const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZo
                 <p class="text-xs text-slate-500">Sé específico: nos ayuda a resolver más rápido. Mínimo 10 caracteres.</p>
                 <p id="errIncon" class="hidden text-sm text-red-600"></p>
                 <div class="flex gap-2">
-                  <button type="submit" class="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                  <button type="submit" class="px-4 py-2 rounded-lg bg-white text-red-600 border border-red-600 text-sm font-medium hover:bg-slate-50">
                     Enviar y reabrir orden
                   </button>
                   <button type="button" id="btnCancelIncon" class="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm hover:bg-slate-50">
