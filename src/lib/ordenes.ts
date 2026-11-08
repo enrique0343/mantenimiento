@@ -312,12 +312,7 @@ export function evaluarValorChecklist(it: ChecklistItem): {
   const numero = valorDe(leido);
   const tieneMin = it.esperadoMin !== undefined && it.esperadoMin !== null;
   const tieneMax = it.esperadoMax !== undefined && it.esperadoMax !== null;
-  const u = it.unidad ? ` ${it.unidad}` : "";
-  const rangoTexto = tieneMin && tieneMax
-    ? `${it.esperadoMin} a ${it.esperadoMax}${u}`
-    : tieneMin ? `≥ ${it.esperadoMin}${u}`
-    : tieneMax ? `≤ ${it.esperadoMax}${u}`
-    : null;
+  const rangoTexto = rangoLiberacionTexto(it.esperadoMin, it.esperadoMax, it.unidad);
   let dentro: boolean | null = null;
   if (numero !== null && (tieneMin || tieneMax)) {
     dentro = (!tieneMin || numero >= (it.esperadoMin as number)) && (!tieneMax || numero <= (it.esperadoMax as number));
@@ -530,7 +525,9 @@ export function evaluarConformeLiberacion(
   return (!tieneMin || v >= Number(min)) && (!tieneMax || v <= Number(max));
 }
 
-// Texto del rango normal de una liberación: «8 a 12 A», «≥ 8 A», «≤ 12 A».
+// Texto del rango normal de una liberación o de un paso: «8 a 12 A», «≥ 8 A»,
+// «≤ 12 A». Cada límite como se vuelve a escribir (textoDeNumero): 12.345 no sale
+// «12.345», que se leería de dos formas.
 export function rangoLiberacionTexto(
   min: number | null | undefined,
   max: number | null | undefined,
@@ -539,9 +536,10 @@ export function rangoLiberacionTexto(
   const u = unidad ? ` ${unidad}` : "";
   const tieneMin = min !== null && min !== undefined;
   const tieneMax = max !== null && max !== undefined;
-  if (tieneMin && tieneMax) return `${min} a ${max}${u}`;
-  if (tieneMin) return `≥ ${min}${u}`;
-  if (tieneMax) return `≤ ${max}${u}`;
+  const limite = (v: unknown) => (Number.isFinite(Number(v)) ? textoDeNumero(Number(v)) : String(v));
+  if (tieneMin && tieneMax) return `${limite(min)} a ${limite(max)}${u}`;
+  if (tieneMin) return `≥ ${limite(min)}${u}`;
+  if (tieneMax) return `≤ ${limite(max)}${u}`;
   return null;
 }
 

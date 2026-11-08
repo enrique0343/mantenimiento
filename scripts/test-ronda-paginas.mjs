@@ -228,11 +228,17 @@ try {
   await hasta(() => !$('#aviso-pagina').classList.contains('hidden'), 'el aviso');
   ok($('#aviso-pagina').textContent === 'Hora inválida: «25:00». Usa HH:MM, por ejemplo 06:00.', 'Una hora inválida llega a la pantalla tal cual');
 
+  const avisos = [];
+  const toastDeAntes = w.showToast;
+  w.showToast = (m, tipo) => { avisos.push(m); toastDeAntes?.(m, tipo); };
   d.querySelector('[data-accion="hace-ronda"][data-sede="1"]').click();
   await hasta(() => !$('#confirmModal').classList.contains('hidden'), 'la confirmación');
   ok(/no hace ronda/.test($('#confirmTitle').textContent) && /No se copia ni se borra nada/.test($('#confirmMsg').textContent), 'Marcar que no hace ronda explica lo que hace');
+  // Con señal, la ronda que ya empezó no se termina sola: se puede terminar mientras el técnico siga dentro de ella.
+  ok(/La que ya empezó se puede terminar mientras el técnico siga dentro de ella\./.test($('#confirmMsg').textContent) && !/se termina\./.test($('#confirmMsg').textContent), `Dice lo que pasa con la ronda que ya empezó: «${$('#confirmMsg').textContent}»`);
   $('#confirmOk').click();
   await hasta(() => /No hace ronda/.test(d.querySelector('[data-sede-fila="1"]')?.textContent ?? ''), 'la sede marcada');
+  ok(avisos.some((m) => /^Sede Uno no hace ronda desde el turno de las? \d\d:\d\d del \d\d\/\d\d\/\d{4}\.$/.test(m)), `El aviso dice el turno con su artículo: ${JSON.stringify(avisos)}`);
   ok(sqlite.prepare('SELECT hace_ronda h FROM sucursales WHERE id=1').get().h === 0 && /Esta sede sí hace ronda/.test(d.querySelector('[data-sede-fila="1"]').textContent), 'Un botón por sede lo cambia');
   ok(d.querySelector('[data-accion="crear-propio"][data-sede="1"]'), 'Sin copiar el modelo');
   ok(erroresScript.filter((m) => !/Not implemented/.test(m)).length === 0, `Sin errores de script: ${erroresScript.join(' | ')}`);
@@ -271,7 +277,7 @@ try {
     ok(texto(porId(doc, 'turnos-estado')) === 'Los turnos nuevos entran a las 19:00 del 10/11/2026. Hasta entonces siguen los de antes; el de las 14:00 dura hasta esa hora.', `La pantalla dice cuándo entran los turnos nuevos y qué turno llega hasta esa hora: «${texto(porId(doc, 'turnos-estado'))}»`);
     ok(attr(porId(doc, 'r_turnos'), 'value') === '07:00, 19:00', 'Y deja editar los que se guardaron');
     const sedeDos = texto(nodos(doc, (n) => attr(n, 'data-sede-fila') === '2')[0]);
-    ok(/No hace ronda · desde el turno 14:00 del 10\/11\/2026; el turno de ahora sigue como estaba/.test(sedeDos), `La marca dice desde qué turno entra: «${sedeDos}»`);
+    ok(/No hace ronda · desde el turno de las 14:00 del 10\/11\/2026; el turno de ahora sigue como estaba/.test(sedeDos), `La marca dice desde qué turno entra, con su artículo: «${sedeDos}»`);
     doc = await ver('ronda.astro.mjs', '/ronda');
     const filaSede = (nombre) => texto(nodos(doc, (n) => n.tagName === 'li' && /turno \d\d:\d\d/.test(texto(n)) && texto(n).includes(nombre))[0]);
     ok(/Sede Uno\s*turno 06:00/.test(filaSede('Sede Uno')) && /En curso/.test(filaSede('Sede Uno')), `El tablero sigue en la ronda de las 06:00, en curso: «${filaSede('Sede Uno')}»`);
@@ -408,11 +414,16 @@ try {
     const ronda = (await g.call(g.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
     ok(ronda.turno === '01:00', `A la 01:20 corre la ronda de la 01:00: ${ronda.turno}`);
     const clave = { rondaId: ronda.rondaId, sucursalId: 1, fecha: ronda.fecha, turno: '01:00' };
+    const temp = ronda.puntos.find((pt) => /^Quirófanos · temperatura/.test(pt.texto));
+    const hum = ronda.puntos.find((pt) => /humedad/.test(pt.texto) && pt.pideValor);
     // Capturado sin señal desde la 01:05; llega a la 01:20.
     let resto = [
       { opId: 'k15-iniciar', tipo: 'ronda.iniciar', at: en('01:05', 1), ...clave },
       ...ronda.puntos.map((pt, k) => ({ opId: `k15-lectura-${k}`, tipo: 'ronda.lectura', at: en('01:06', 1), ...clave, puntoId: pt.id, resultado: 'ok', ...(pt.pideValor ? { valor: pt.max ?? pt.min ?? 1 } : {}) })),
-      { opId: 'k15-cerrar', tipo: 'ronda.cerrar', at: en('01:10', 1), ...clave, firma: true, notas: 'Sin novedades.' },
+      // P14 · Con tres decimales: la temperatura se corrige a 12.345, en rango; la humedad sale de rango con 12.345.
+      { opId: 'k15-temp-12345', tipo: 'ronda.lectura', at: en('01:07', 1), ...clave, puntoId: temp.id, resultado: 'ok', valor: 12.345 },
+      { opId: 'k15-hum-12345', tipo: 'ronda.lectura', at: en('01:07', 1), ...clave, puntoId: hum.id, resultado: 'ok', valor: 12.345 },
+      { opId: 'k15-cerrar', tipo: 'ronda.cerrar', at: en('01:10', 1), ...clave, firma: true, notas: 'Queda la humedad baja en quirófanos.' },
     ];
     while (resto.length) { const x = await g.call(g.app.sync.POST, '/api/campo/sync', { method: 'POST', rol: 'tecnico', data: { ops: resto.slice(0, 20) } }); ok(x.body.resultados.every((y) => y.ok), `Lo anotado entra: ${JSON.stringify(x.body.resultados.filter((y) => !y.ok))}`); resto = resto.slice(x.body.resultados.length); }
     const id = g.sqlite.prepare("SELECT id FROM ronda_ejecuciones WHERE turno='01:00'").get().id;
@@ -424,6 +435,45 @@ try {
     ok(/01:06 · Prueba tecnico · (En rango|Conforme)[^·]* · capturada sin señal, llegó a la 01:20/.test(t), `Cada marca «llegó a la 01:20»: ${t.match(/01:06 ·.{0,90}/)?.[0]}`);
     ok(!/llegó a las 01|a las 01:0/.test(t), 'Sin «a las 01:…»');
     ok(/Normal: 12\.3450–22 °C/.test(t), `El valor normal, «12.3450–22 °C»: ${t.match(/Normal: 12.{0,20}/)?.[0]}`);
+    // P14 · El valor de cada parada y el de cada marca, escritos con textoDeNumero: «12.3450», no «12.345».
+    ok(t.includes('12.3450 °C') && t.includes(`12.3450${hum.unidad ? ` ${hum.unidad}` : ''}`), `El valor de la parada, «12.3450»: ${t.match(/.{0,30}12\.345.{0,30}/g)?.join(' | ')}`);
+    ok(/01:07 · Prueba tecnico · En rango 12\.3450/.test(t) && /01:07 · Prueba tecnico · Fuera de rango 12\.3450/.test(t), `Y el de cada marca: ${t.match(/01:07 ·.{0,60}/g)?.join(' | ')}`);
+    ok(!/12\.345(?!0)/.test(t), 'Ningún «12.345», que se leería de dos formas');
+    // /ronda: «inició a la 01:05» (K15) y la desviación «leído 12.3450» (K7).
+    const tab = await contenedor.renderToResponse(await cargar('ronda.astro.mjs'), { partial: false, request: new Request('https://local.test/ronda'), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } });
+    const tt = texto(parseHtml(await tab.text()));
+    ok(/inició a la 01:05/.test(tt), `El tablero dice «inició a la 01:05»: ${tt.match(/.{0,40}inició.{0,30}/)?.[0]}`);
+    ok(/leído 12\.3450/.test(tt) && !/leído 12\.345(?!0)/.test(tt), `La desviación, «leído 12.3450»: ${tt.match(/.{0,30}leído.{0,20}/)?.[0]}`);
+  } finally { await g.close(); }
+}
+// ── P18 · Si el servidor no trae el aviso, la pantalla dice desde qué turno entran, con su artículo ──
+{
+  const D = '2026-11-10';
+  const en = (hhmm) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`)).toISOString();
+  fijarReloj(en('10:40'));
+  const g = await setupConjuntos({ beforeMigration, modules: { puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede Uno',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const contenedor = await experimental_AstroContainer.create();
+    const html = await (await contenedor.renderToResponse(await cargar('ronda/puntos.astro.mjs'), { partial: false, request: new Request('https://local.test/ronda/puntos'), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } })).text();
+    const { JSDOM } = createRequire(import.meta.url)('jsdom');
+    const url = 'https://local.test/ronda/puntos';
+    const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true, beforeParse: (win) => {
+      win.fetch = async (destino, init = {}) => {
+        const u = new URL(destino, url);
+        if (u.pathname !== '/api/ronda-turno/puntos') return new Response('{}', { status: 404 });
+        const j = await (await g.app.puntos[init.method](g.ctx(u.pathname, { method: init.method, data: init.body ? JSON.parse(init.body) : undefined, rol: 'jefe' }))).json();
+        delete j.aviso;
+        return Response.json(j);
+      };
+    } });
+    const d = dom.window.document;
+    d.getElementById('r_turnos').value = '06:30, 14:30, 22:30';
+    d.getElementById('form-turnos').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 200 && !/^Guardado/.test(d.getElementById('turnos-estado').textContent); i++) await new Promise((r) => setTimeout(r, 15));
+    ok(d.getElementById('turnos-estado').textContent === 'Guardado: 06:30, 14:30, 22:30. Entran desde el turno de las 14:30 del 10/11/2026.', `Sin aviso del servidor, «el turno de las 14:30»: «${d.getElementById('turnos-estado').textContent}»`);
+    dom.window.close();
   } finally { await g.close(); }
 }
 console.log(`PASS test-ronda-paginas: ${checks} verificaciones; pantallas construidas, migraciones reales.`);

@@ -39,13 +39,25 @@ async function criticidadDeActivo(db: DB, activoId: number | null | undefined): 
   const [a] = await db.select({ criticidad: activos.criticidadOperacional }).from(activos).where(eq(activos.id, activoId)).limit(1);
   return a?.criticidad ?? null;
 }
-/** La causa ya se guardó antes en la orden: cada evento guarda la orden antes y después del cambio, con su causa raíz. */
-async function causaYaGuardada(db: DB, ordenId: number, causa: string): Promise<boolean> {
-  const filas = await db.all(sql`
-    SELECT json_extract(evidencia_json, '$.antes.causaRaiz') AS causa FROM orden_verificacion_eventos WHERE orden_id = ${ordenId}
-    UNION SELECT json_extract(evidencia_json, '$.despues.causaRaiz') FROM orden_verificacion_eventos WHERE orden_id = ${ordenId}
-  `) as Array<{ causa: unknown }>;
-  return filas.some((f) => textoComparable(f.causa) === causa);
+/**
+ * La causa raíz que llega sin soloCambios (pestaña de producción, celular de la
+ * jefatura, API) es vieja si está vacía o es igual a una que ya se guardó antes
+ * en la orden, y además los trabajos o la solución traen un cambio (K13) o la
+ * última escritura de la causa no es de esta cuenta (K16). Cada evento guarda la
+ * orden antes y después del cambio, con su causa raíz y quién lo hizo: la última
+ * escritura es el evento más nuevo en que la causa cambió. Sin ninguno, una causa
+ * guardada cuenta como de otra cuenta.
+ */
+async function causaVieja(db: DB, order: Orden, user: User, causa: string, conTrabajos: boolean): Promise<boolean> {
+  const eventos = (await db.all(sql`
+    SELECT actor_id AS actorId, json_extract(evidencia_json, '$.antes.causaRaiz') AS antes, json_extract(evidencia_json, '$.despues.causaRaiz') AS despues
+    FROM orden_verificacion_eventos WHERE orden_id = ${order.id} ORDER BY id DESC
+  `) as Array<{ actorId: number | null; antes: unknown; despues: unknown }>)
+    .map((e) => ({ actorId: e.actorId, antes: textoComparable(e.antes), despues: textoComparable(e.despues) }));
+  if (causa && !eventos.some((e) => e.antes === causa || e.despues === causa)) return false;
+  if (conTrabajos) return true;
+  const ultima = eventos.find((e) => e.antes !== e.despues);
+  return ultima ? ultima.actorId !== user.id : textoComparable(order.causaRaiz) !== '';
 }
 /** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
 const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -137,8 +149,11 @@ const MENSAJE_PASO_CAMBIO = 'Un paso del checklist cambió mientras tanto. Reví
 /** Un punto ya marcado: con estado y con la hora o las iniciales de quien lo marcó. */
 const puntoMarcado = (p: Record<string, unknown> | null) => !!p && p.estado !== 'pendiente' && (!!p.hora || !!p.iniciales);
 /**
- * Sin base (una pestaña vieja): un punto guardado ya marcado no se pisa con uno
- * que llega pendiente y sin hora; los demás puntos, como llegaron. Devuelve el
+ * Sin base (la pestaña de producción, o el celular sin `antes`): un punto
+ * guardado ya marcado no se pisa con uno que llega sin hora y sin iniciales, en
+ * cualquier estado (K18): quien lo manda no lo vio marcado, y queda entero como
+ * está guardado. El que llega con la hora o las iniciales (la pestaña lo vio
+ * marcado o lo marca el celular) y los demás puntos, como llegaron. Devuelve el
  * checklist con lo conservado, o undefined si no hubo que conservar nada.
  */
 function conservarMarcados(guardadoRaw: string | null, nuevoRaw: unknown): string | undefined {
@@ -147,7 +162,7 @@ function conservarMarcados(guardadoRaw: string | null, nuevoRaw: unknown): strin
   let conserva = false;
   const lista = nuevo.map((punto, i) => {
     const llega = puntoNormal(punto);
-    if (!llega || llega.estado !== 'pendiente' || llega.hora || !puntoMarcado(puntoNormal(guardado[i]))) return punto;
+    if (!llega || llega.hora || llega.iniciales || !puntoMarcado(puntoNormal(guardado[i]))) return punto;
     conserva = true;
     return guardado[i];
   });
@@ -253,9 +268,10 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   delete input.soloCambios;
   let checklistFusionado = false;
   let pasosSinAplicar: number[] = [];
+  let pasoCambio: ErrorVerificacion | null = null;
   if (input.checklistEjecucion !== undefined) {
     // Con su base, la ficha se fusiona por punto. Sin ella (pestaña vieja o
-    // celular), un punto ya marcado en el celular no vuelve a pendiente.
+    // celular), un punto ya marcado no se pisa con uno que llega sin su firma.
     let fusion: string | undefined;
     if (checklistBase !== undefined) {
       const r = fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase);
@@ -263,30 +279,32 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     } else fusion = conservarMarcados(order.checklistEjecucion, input.checklistEjecucion);
     // Un paso que chocó queda como está guardado y lo demás se aplica (K11). Si
     // la misma solicitud envía, verifica, cierra o devuelve la orden, no se aplica
-    // nada: quien la envía revisa antes ese paso.
+    // nada: quien la envía revisa antes ese paso. El 409 sale después de las
+    // reglas de quién puede tocar la orden.
     const cambiaEstado = (input.estado !== undefined && input.estado !== order.estado) || input.accion !== undefined;
     if (pasosSinAplicar.length && cambiaEstado) {
-      throw new ErrorVerificacion(MENSAJE_PASO_CAMBIO, 409, 'paso-cambio', { pasos: pasosSinAplicar, orden: { checklistEjecucion: order.checklistEjecucion } });
+      pasoCambio = new ErrorVerificacion(MENSAJE_PASO_CAMBIO, 409, 'paso-cambio', { pasos: pasosSinAplicar, orden: { checklistEjecucion: order.checklistEjecucion } });
     }
     if (fusion !== undefined) { input.checklistEjecucion = fusion; checklistFusionado = true; }
     if (mismoChecklist(input.checklistEjecucion, order.checklistEjecucion)) { igualAlGuardado('checklistEjecucion'); checklistFusionado = false; }
   }
   // La causa raíz es de la jefatura, en cualquier estado. Igual a la guardada no
-  // es un cambio, tampoco de la jefatura: no se escribe ni deja evento.
-  // La pestaña de antes de esta versión la manda junto con los trabajos al
-  // autoguardar, como la pintó al abrir. Si los trabajos o la solución traen un
-  // cambio, la causa vacía no borra la guardada, e igual a una que ya se guardó
-  // antes en esta orden es vieja (no se escribe ni pasa a los trabajos). Si
-  // llegan iguales a lo guardado, el único cambio es la causa: es de la persona y
-  // sigue las reglas de siempre (K13). La ficha nueva la manda sola.
+  // es un cambio, tampoco de la jefatura: no se escribe ni deja evento. Sola, de
+  // quien no es jefatura, se rechaza.
+  // La pestaña de antes de esta versión la manda junto con los trabajos, como la
+  // pintó al abrir. Vieja (causaVieja: vacía o ya guardada antes, con los trabajos
+  // cambiados o con la última escritura de otra cuenta), no borra ni pisa la
+  // guardada: no se escribe, no deja evento ni pasa a los trabajos (K16). La misma
+  // cuenta sí vuelve a su causa anterior. La ficha nueva la manda con soloCambios:
+  // con él sigue las reglas de siempre.
   if (input.causaRaiz !== undefined) {
     const causa = textoComparable(input.causaRaiz);
-    const conTrabajos = !soloCambios && ['trabajosRealizados', 'solucionAplicada']
+    const conTrabajos = ['trabajosRealizados', 'solucionAplicada']
       .some((key) => input[key] !== undefined && textoComparable(input[key]) !== textoComparable((order as any)[key]));
     if (causa === textoComparable(order.causaRaiz)) igualAlGuardado('causaRaiz');
-    else if (conTrabajos && (!causa || await causaYaGuardada(db, order.id, causa))) igualAlGuardado('causaRaiz');
+    else if (!manager(user) && !llegaEjecucion) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
+    else if (!soloCambios && await causaVieja(db, order, user, causa, conTrabajos)) igualAlGuardado('causaRaiz');
     else if (!manager(user)) {
-      if (!llegaEjecucion) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
       // Una pestaña vieja del técnico guarda la causa junto con los trabajos: se
       // guarda lo demás, y lo que escribió como causa queda en los trabajos, igual
       // que con un celular viejo.
@@ -391,12 +409,15 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   if (!manager(user) && !onlySelfAssignment && editsAssignment) deny('Solo la jefatura puede cambiar la asignación.');
   if (editsMetadata && !manager(user)) deny('Solo la jefatura puede modificar los datos de la orden.');
   if (user.rol === 'tecnico' && !isReview && !isReturn && !onlySelfAssignment && order.asignadoA !== user.id && !(order.estado === 'abierta' && !order.asignadoA && destination === 'en_proceso')) deny('La orden debe estar asignada a ti para registrar ejecución o cambiar su estado.');
-  if (editsExecution && !(manager(user) || (user.rol === 'tecnico' && order.asignadoA === user.id))) deny('No puedes registrar ejecución en esta orden.');
+  // Un paso que chocó también es ejecución que se quiso registrar.
+  if ((editsExecution || pasosSinAplicar.length > 0) && !(manager(user) || (user.rol === 'tecnico' && order.asignadoA === user.id))) deny('No puedes registrar ejecución en esta orden.');
   if (editsExecution && !['en_proceso', 'en_espera'].includes(order.estado)) deny(order.estado === 'abierta' ? 'Inicia la orden antes de registrar su ejecución.' : 'Devuelve o reabre la orden antes de cambiar evidencia de ejecución.', 409);
   if ((isReturn || isReview) && (editsExecution || editsAssignment || editsMetadata)) deny('La revisión o devolución debe enviarse separada de cambios de ejecución, equipo o asignación.', 400);
   if (input.verificacionNotas !== undefined && !isReview) deny('Las notas de verificación solo se registran al verificar.', 400);
   if (!manager(user) && !['tecnico'].includes(user.rol) && !isReturn && !isReview) deny('No tienes permisos para modificar órdenes.');
   if (['completada','verificada','cerrada','cancelada'].includes(order.estado) && (editsMetadata || editsAssignment)) deny('Devuelve o reabre la orden antes de cambiar sus datos.', 409);
+  // Con quién puede tocar la orden ya revisado, el paso que chocó (K11), antes de las reglas del envío o la verificación.
+  if (pasoCambio) throw pasoCambio;
   if (input.vencimiento !== undefined && input.vencimiento !== order.vencimiento && !motivo?.trim()) deny('Registra el motivo de la reprogramación.', 400);
   // Enviada o cerrada, la causa raíz ya es evidencia del cierre: la jefatura la
   // corrige, pero no la deja vacía ni más corta. En proceso guarda un borrador.

@@ -827,6 +827,10 @@ try {
   [r] = await enviar([op('orden.paso', hace(3.5), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: ' 1,200 ' })]);
   ok(r.ok && paso9502(3).estado === 'ok' && paso9502(3).valorMedido === '1,200', `El mismo «1,200» que ya estaba no se rechaza: ${JSON.stringify(r)}`);
   igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9502 AND paso_idx=3 ORDER BY id DESC LIMIT 1').v, '1,200', 'Y en el libro queda como estaba');
+  // Lo guardado también se compara recortado: con «1,200 » guardado, «1,200» no es un cambio.
+  sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=9502').run(JSON.stringify(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9502').c).map((x, i) => (i === 3 ? { ...x, valorMedido: '1,200 ', estado: 'pendiente' } : x))));
+  [r] = await enviar([op('orden.paso', hace(3.45), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: '1,200' })]);
+  ok(r.ok && paso9502(3).estado === 'ok' && paso9502(3).valorMedido === '1,200', `Con «1,200 » guardado, «1,200» tampoco se rechaza: ${JSON.stringify(r)}`);
   [r] = await enviar([op('orden.paso', hace(3.4), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: '1,200' })]);
   ok(r.ok && paso9502(2).estado === 'ok' && paso9502(2).valorMedido === '1,200', `En un paso con rango, tampoco: ${JSON.stringify(r)}`);
   [r] = await enviar([op('orden.paso', hace(3.3), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: '1,250' })]);
@@ -1046,6 +1050,74 @@ try {
   const k1 = (await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
   igual(JSON.stringify([k1.fecha, k1.turno, k1.turnos]), JSON.stringify([antesK1.fecha, antesK1.turno, antesK1.turnos]), 'El turno de ahora sigue con los turnos que rigen');
   igual(JSON.stringify(k1.turnosProximos), JSON.stringify({ desde: new Date(entraK1).toISOString(), turnos: ['06:00', '18:00'] }), 'Y los nuevos llegan con la hora en que entran');
+
+  // ── K17: cada marca del celular lleva el paso como lo mostraba justo antes («antes»). Si la ficha cambió ese paso
+  // mientras tanto, la marca no lo pisa: se rechaza con su frase y no se escribe nada ──
+  const PASOS_K17 = JSON.stringify([
+    { texto: 'Revisar la unión de la línea de oxígeno', bloqueante: true, criterio: 'Sin fugas', estado: 'pendiente' },
+    { texto: 'Avisar a enfermería', estado: 'pendiente' },
+    { texto: 'Medir la presión de la línea', requiereValor: true, unidad: 'psi', esperadoMin: 50, esperadoMax: 55, estado: 'pendiente' },
+  ]);
+  const SIN_MARCA = { estado: 'pendiente', valor: null, nota: null };
+  const ckDe = (id) => one('SELECT checklist_ejecucion c FROM ordenes WHERE id=?', id).c;
+  const pasoDe = (id, i) => JSON.parse(ckDe(id))[i];
+  const marcasDe = (id, i) => one('SELECT count(*) n FROM orden_paso_marcas WHERE orden_id=? AND paso_idx=?', id, i).n;
+  const eventosDe = (id) => one('SELECT count(*) n FROM orden_verificacion_eventos WHERE orden_id=?', id).n;
+  // La jefatura cambia un paso en la ficha nueva: manda el checklist con su base y solo lo que cambió.
+  const enLaFicha = async (id, i, cambios) => {
+    const base = ckDe(id);
+    const nuevo = JSON.stringify(JSON.parse(base).map((x, k) => (k === i ? { ...x, ...cambios } : x)));
+    const res = await call(app.order.PATCH, `/api/ordenes/${id}`, { method: 'PATCH', id, data: { checklistEjecucion: nuevo, checklistBase: base, soloCambios: true }, rol: 'jefe' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+  };
+  seed(9601, { checklist: PASOS_K17 });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9601 })]);
+  // 10:00 el técnico marca «ok» sin señal; 10:05 la jefatura marca la desviación en la ficha; 10:20 vuelve la señal.
+  await enLaFicha(9601, 0, { estado: 'desviacion', notas: 'Fuga confirmada por el jefe de turno.' });
+  const guardadoK17 = ckDe(9601), eventosK17 = eventosDe(9601);
+  [r] = await enviar([op('orden.paso', hace(20), { ordenId: 9601, idx: 0, texto: 'Revisar la unión de la línea de oxígeno', estado: 'ok', antes: SIN_MARCA })]);
+  igual(r.error, 'El paso 1 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.', `La marca de antes no pisa la desviación de la ficha: ${JSON.stringify(r)}`);
+  ok(pasoDe(9601, 0).estado === 'desviacion' && pasoDe(9601, 0).notas === 'Fuga confirmada por el jefe de turno.', `El paso queda con la desviación y su nota: ${JSON.stringify(pasoDe(9601, 0))}`);
+  ok(ckDe(9601) === guardadoK17 && eventosDe(9601) === eventosK17, 'No se escribe nada en la orden ni en su historial');
+  igual(marcasDe(9601, 0), 0, 'Ni queda en el libro de marcas');
+  igual(one('SELECT resultado r FROM campo_operaciones WHERE op_id=?', r.opId).r, 'rechazada', 'Es un rechazo más del celular');
+  igual(app.campo.pasoCambioEnLaFicha(false, 0), r.error, 'La frase sale de un solo lugar');
+  // «antes» igual a lo guardado: la marca se aplica.
+  await enviar([op('orden.paso', hace(19), { ordenId: 9601, idx: 1, texto: 'Avisar a enfermería', estado: 'ok', antes: SIN_MARCA })]);
+  ok(pasoDe(9601, 1).estado === 'ok' && pasoDe(9601, 1).hora && pasoDe(9601, 1).iniciales && marcasDe(9601, 1) === 1, `Con «antes» igual a lo guardado, se aplica: ${JSON.stringify(pasoDe(9601, 1))}`);
+  // La jefatura solo agregó una nota: el «ok» del celular se aplica y la nota queda.
+  await enLaFicha(9601, 2, { notas: 'Usar el manómetro calibrado.' });
+  [r] = await enviar([op('orden.paso', hace(18), { ordenId: 9601, idx: 2, texto: 'Medir la presión de la línea', estado: 'ok', valor: '52,5', antes: SIN_MARCA })]);
+  ok(r.ok && pasoDe(9601, 2).estado === 'ok' && pasoDe(9601, 2).valorMedido === 52.5 && pasoDe(9601, 2).notas === 'Usar el manómetro calibrado.', `La nota de la jefatura queda con la marca: ${JSON.stringify(r)} ${JSON.stringify(pasoDe(9601, 2))}`);
+  // Con la desviación en pie, la orden no se envía como si el paso estuviera bien.
+  [r] = await enviar([op('orden.terminar', hace(17), { ordenId: 9601 })]);
+  ok(!r.ok && one('SELECT estado FROM ordenes WHERE id=9601').estado === 'en_proceso', `Con el punto crítico en desviación no se envía: ${r.error}`);
+  // Dos marcas seguidas sin señal en el mismo paso, sin cambios en la ficha: se aplican las dos.
+  seed(9602, { checklist: PASOS_K17 });
+  await enviar([op('orden.iniciar', hace(16), { ordenId: 9602 })]);
+  const dos = await enviar([
+    op('orden.paso', hace(15), { ordenId: 9602, idx: 1, texto: 'Avisar a enfermería', estado: 'desviacion', nota: 'Enfermería no contesta', antes: SIN_MARCA }),
+    op('orden.paso', hace(14), { ordenId: 9602, idx: 1, texto: 'Avisar a enfermería', estado: 'ok', antes: { estado: 'desviacion', valor: null, nota: 'Enfermería no contesta' } }),
+  ]);
+  ok(dos.every((y) => y.ok) && pasoDe(9602, 1).estado === 'ok' && marcasDe(9602, 1) === 2, `Las dos marcas seguidas se aplican: ${JSON.stringify(dos)} ${JSON.stringify(pasoDe(9602, 1))}`);
+  // Los dos escribieron en la misma clave: la nota de la jefatura no se pisa con la del técnico, ni su lectura con la de él.
+  await enLaFicha(9602, 2, { notas: 'Usar el manómetro calibrado.' });
+  [r] = await enviar([op('orden.paso', hace(13.8), { ordenId: 9602, idx: 2, texto: 'Medir la presión de la línea', estado: 'desviacion', valor: 40, nota: 'Presión baja en la toma', antes: SIN_MARCA })]);
+  ok(r.error === 'El paso 3 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.' && pasoDe(9602, 2).notas === 'Usar el manómetro calibrado.' && pasoDe(9602, 2).estado === 'pendiente', `La nota de la ficha no se pisa: ${JSON.stringify(r)} ${JSON.stringify(pasoDe(9602, 2))}`);
+  await enLaFicha(9602, 2, { valorMedido: 53, notas: '' });
+  [r] = await enviar([op('orden.paso', hace(13.6), { ordenId: 9602, idx: 2, texto: 'Medir la presión de la línea', estado: 'ok', valor: 51, antes: SIN_MARCA })]);
+  ok(r.error === 'El paso 3 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.' && pasoDe(9602, 2).valorMedido === 53 && marcasDe(9602, 2) === 0, `La lectura de la ficha no se pisa: ${JSON.stringify(r)} ${JSON.stringify(pasoDe(9602, 2))}`);
+  // Sin «antes» (un registro que ya esperaba en un celular con la versión anterior), como siempre: la marca se aplica.
+  await enLaFicha(9602, 0, { estado: 'desviacion', notas: 'Fuga en la unión.' });
+  [r] = await enviar([op('orden.paso', hace(13), { ordenId: 9602, idx: 0, texto: 'Revisar la unión de la línea de oxígeno', estado: 'ok' })]);
+  ok(r.ok && pasoDe(9602, 0).estado === 'ok' && marcasDe(9602, 0) === 1, `Sin «antes», como siempre: ${JSON.stringify(r)} ${JSON.stringify(pasoDe(9602, 0))}`);
+  // En una emergencia, «La acción N…».
+  emergencia(9603);
+  await enviar([op('emergencia.hito', hace(12), { ordenId: 9603, hito: 'llegada' }), op('orden.iniciar', hace(12), { ordenId: 9603, acciones: [eopEle.a1, eopEle.a2, eopEle.a3] })]);
+  await enLaFicha(9603, 1, { estado: 'desviacion', notas: 'No se pudo: la planta no tiene combustible.' });
+  [r] = await enviar([op('orden.paso', hace(11), { ordenId: 9603, idx: 1, texto: pasoDe(9603, 1).texto, estado: 'ok', antes: SIN_MARCA })]);
+  igual(r.error, 'La acción 2 cambió en la ficha mientras tanto: revísala y márcala otra vez.', `En una emergencia, la acción: ${JSON.stringify(r)}`);
+  ok(pasoDe(9603, 1).estado === 'desviacion' && marcasDe(9603, 1) === 0, 'Y la acción queda como la dejó la ficha');
 
 } finally {
   await close();

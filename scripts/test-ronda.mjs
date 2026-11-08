@@ -876,7 +876,7 @@ await escenario('22:50', async (e) => {
   await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00', '19:00'] });
   e.reloj('06:30', 1);
   const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
-  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 22:00 sigue hasta las 14:00; el de las 06:00 no se abre.', '(7f) A medianoche, la respuesta dice que el de las 22:00 corre hasta las 14:00');
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 22:00 del 10/11/2026 sigue hasta las 14:00; el de las 06:00 no se abre.', '(7f) A medianoche, la respuesta dice que el de las 22:00 de ayer corre hasta las 14:00');
   e.reloj('06:35', 1);
   let p = await e.hoy();
   igual([p.fecha, p.turno, p.turnosProximos, p.omite], [D, '22:00', null, [{ fecha: dia(1), turno: '06:00' }]], '(7f) A las 06:35 sigue el de las 22:00 de ayer');
@@ -945,9 +945,46 @@ await escenario('23:20', async (e) => {
   const { lineaDeTurnos, avisoCambioTurnos } = e.x.app.rt;
   const aviso = (antes, despues, hhmm) => avisoCambioTurnos(lineaDeTurnos({ id: 1, turnos: JSON.stringify(despues) }, [{ id: 1, rondaId: 1, turnosAntes: JSON.stringify(antes), hasta: en(hhmm) }]), Date.parse(en(hhmm)));
   igual(aviso(['01:00', '09:00', '17:00'], ['02:00', '10:00', '18:00'], '03:00'), 'Los turnos nuevos entran a las 10:00 del 10/11/2026. El turno de la 01:00 sigue hasta esa hora; el de las 09:00 no se abre.', '(7i) «El turno de la 01:00»');
-  igual(aviso(['01:00', '17:00'], ['04:00', '16:00'], '18:00'), 'Los turnos nuevos entran a las 04:00 del 11/11/2026. Hasta entonces siguen los de antes; el de la 01:00 dura hasta esa hora.', '(7i) «el de la 01:00 dura hasta esa hora»');
+  igual(aviso(['01:00', '17:00'], ['04:00', '16:00'], '18:00'), 'Los turnos nuevos entran a las 04:00 del 11/11/2026. Hasta entonces siguen los de antes; el de la 01:00 del 11/11/2026 dura hasta esa hora.', '(7i) «el de la 01:00 del 11/11/2026 dura hasta esa hora»: el de mañana, con su fecha');
   igual(aviso(['01:00', '09:00', '17:00'], ['02:00', '10:00', '18:00'], '22:00'), 'Los turnos nuevos entran a las 02:00 del 11/11/2026. El turno de las 17:00 sigue hasta esa hora; el de la 01:00 no se abre.', '(7i) «el de la 01:00 no se abre»');
   igual(aviso(['01:00', '02:00', '12:00'], ['02:30', '12:30'], '23:00'), 'Los turnos nuevos entran a las 02:30 del 11/11/2026. El turno de las 12:00 sigue hasta esa hora; los de la 01:00 y las 02:00 no se abren.', '(7i) «los de la 01:00 y las 02:00»');
+});
+
+// (7k) La fecha en el aviso: el turno que sigue y el de «hasta» la llevan cuando no son de hoy, y la lleva también el
+// que empieza a la misma hora que otro de la frase. Con dos turnos al día (07:00 y 19:00), con uno solo y con dos
+// cancelaciones en el mismo día.
+await escenario('09:50', async (e) => {
+  e.x.sqlite.prepare('UPDATE rondas SET turnos=? WHERE id=?').run(JSON.stringify(['07:00', '19:00']), e.modeloId);
+  e.reloj('10:00');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:30', '19:30'] })).body.aviso, 'Los turnos nuevos entran a las 19:30 del 10/11/2026. El turno de las 07:00 sigue hasta esa hora; el de las 19:00 no se abre.', '(7k) A las 10:00, 07:30 y 19:30: todo es de hoy, sin fecha');
+  e.reloj('19:10');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00', '19:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 07:00 sigue hasta las 07:00 del 11/11/2026; el de las 19:00 no se abre.', '(7k) Cancelado a las 19:10: sigue hasta las 07:00 de mañana, con su fecha');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '07:00'], '(7k) Y sigue el de las 07:00 de hoy');
+  igual(e.x.app.rt.avisoTurnosSinAbrir(e.linea(), Date.parse(en('06:59', 1))), 'Siguen los turnos de ahora. El turno de las 07:00 del 10/11/2026 sigue hasta las 07:00 del 11/11/2026; el de las 19:00 no se abre.', '(7k) A las 06:59 de mañana, el de ayer y el de hoy, cada uno con su fecha');
+});
+await escenario('05:00', async (e) => {
+  e.x.sqlite.prepare('UPDATE rondas SET turnos=? WHERE id=?').run(JSON.stringify(['07:00']), e.modeloId);
+  e.reloj('06:00');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['08:00'] })).body.aviso, 'Los turnos nuevos entran a las 08:00 del 10/11/2026. El turno de las 07:00 del 09/11/2026 sigue hasta esa hora; el de las 07:00 del 10/11/2026 no se abre.', '(7k) Un solo turno, de 07:00 a 08:00: el de ayer sigue y el de hoy no se abre, cada uno con su fecha');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno, p.omite], [dia(-1), '07:00', [{ fecha: D, turno: '07:00' }]], '(7k) Corre el de las 07:00 de ayer');
+  e.reloj('07:10');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00'] })).body.aviso, 'Siguen los turnos de ahora. El turno de las 07:00 del 09/11/2026 sigue hasta las 07:00 del 11/11/2026; el de las 07:00 del 10/11/2026 no se abre.', '(7k) Cancelado a las 07:10: ya no se contradice');
+});
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('14:10');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
+  e.reloj('15:00');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('22:10');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 06:00 sigue hasta las 06:00 del 11/11/2026; los de las 14:00 y las 22:00 no se abren.', '(7k) Dos cancelaciones en el día: el de las 06:00 sigue hasta las 06:00 de mañana, con su fecha');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '06:00'], '(7k) Y sigue el de las 06:00');
 });
 
 // La ruta del celular con un aviso a la jefatura que se anota, en lugar del que no hace nada: así se lee lo que le llega.
@@ -1008,6 +1045,34 @@ await escenario('20:00', async (e) => {
   igual(rangoNormal({ requiereValor: true, minEsperado: 12.345, maxEsperado: null, unidad: '%' }), '≥ 12.3450 %', '(7j) Solo el mínimo, también');
   igual(rangoNormal({ requiereValor: true, minEsperado: null, maxEsperado: 12.345, unidad: null }), '≤ 12.3450', '(7j) Y solo el máximo');
   igual(rangoNormal({ requiereValor: true, minEsperado: 20, maxEsperado: 22.5, unidad: '°C' }), '20–22.5 °C', '(7j) Los demás números, como siempre');
+  igual(rangoNormal({ requiereValor: true, minEsperado: 20, maxEsperado: 12.345, unidad: null }), '20–12.3450', '(7j) Con el par, también el máximo con 12.3450');
+});
+
+// (7l) K15 en el registro de auditoría: la marca de una sede dice desde qué turno entra, con su artículo.
+async function puntosConAuditoria() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ronda-auditoria-'));
+  const archivo = path.join(dir, 'puntos.mjs');
+  await build({
+    entryPoints: [path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'src/pages/api/ronda-turno/puntos.ts')],
+    outfile: archivo, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent',
+    plugins: [{ name: 'auditoria-anotada', setup(b) {
+      b.onResolve({ filter: /^@\/lib\/(email|smtp-worker|telegram|notificaciones|notif-app|audit|especialidad)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'auditoria' }));
+      b.onLoad({ filter: /.*/, namespace: 'auditoria' }, () => ({ contents: `
+        export const logAudit=async(_ctx,p)=>{(globalThis.__auditoriaRonda??=[]).push(p)}; export const calcularDiff=(a,b)=>b;
+        export const crearNotificacion=async()=>{}; export const sendMail=async()=>{}; export const emailLayout=()=>''; export const sendTelegram=async()=>{};
+        export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{}; export const disparadorProyecto=async()=>{};
+      `, loader: 'js' }));
+    } }],
+  });
+  return import(pathToFileURL(archivo).href);
+}
+const puntosAnotado = await puntosConAuditoria();
+await escenario('10:30', async (e) => {
+  e.reloj('10:50');
+  globalThis.__auditoriaRonda = [];
+  const r = await puntosAnotado.PUT(e.x.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'hace_ronda', sucursalId: 1, haceRonda: false }, rol: 'jefe' }));
+  igual(r.status, 200, '(7l) La marca se guarda');
+  igual(globalThis.__auditoriaRonda.at(-1)?.resumen, 'Sede 1 no hace ronda desde el turno de las 14:00 del 10/11/2026', '(7l) El registro dice «desde el turno de las 14:00»');
 });
 
 // (8) La sede saca su recorrido propio mientras el técnico anota sin señal: la ronda se abre con el recorrido que traía el celular.

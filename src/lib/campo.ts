@@ -755,6 +755,30 @@ function textoGuardadoDePaso(checklist: string | null | undefined, idx: number):
 /** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
 const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
+/**
+ * K17 · La base de una marca: el checklist guardado con el estado, la lectura y la nota del paso como el
+ * celular lo mostraba justo antes de marcarlo («antes»); las demás claves y los demás pasos, como están
+ * guardados. Con ella la marca se fusiona como la ficha y no pisa lo que la jefatura cambió mientras
+ * tanto. Sin «antes» (un registro de un celular con la versión anterior), null: como siempre.
+ */
+function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): string | null {
+  if (typeof antes !== "object" || antes === null || Array.isArray(antes)) return null;
+  const { estado, valor, nota } = antes as Record<string, unknown>;
+  const lista = JSON.parse(checklist ?? "[]");
+  const paso: Record<string, unknown> = { ...lista[idx], estado };
+  for (const [clave, v] of [["valorMedido", valor], ["notas", nota]] as const) {
+    if (v === null || v === undefined || v === "") delete paso[clave];
+    else paso[clave] = v;
+  }
+  lista[idx] = paso;
+  return JSON.stringify(lista);
+}
+/** El rechazo de una marca cuando el paso cambió en la ficha mientras tanto. N es el número que ve el técnico. */
+export const pasoCambioEnLaFicha = (emergencia: boolean, idx: number) =>
+  emergencia
+    ? `La acción ${idx + 1} cambió en la ficha mientras tanto: revísala y márcala otra vez.`
+    : `El paso ${idx + 1} cambió en la ficha mientras tanto: revísalo y márcalo otra vez.`;
+
 type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
 
 const sinPunto = (t: string) => t.trim().replace(/\.+\s*$/, "");
@@ -941,6 +965,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (leido.tipo === "texto" && String(op.valor).trim() !== guardado && pasoConRango({ esperadoMin: limiteDePaso(it.esperadoMin), esperadoMax: limiteDePaso(it.esperadoMax) })) {
         throw new RechazoCampo(MENSAJE_PASO_SIN_NUMERO);
       }
+      const base = baseDeLaMarca(o.checklistEjecucion, idx, op.antes);
       it.estado = estado;
       delete it.hecho;
       // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
@@ -950,7 +975,10 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       else if (valor !== null) it.valorMedido = valor;
       if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
       if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
-      await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista) }, m.iso);
+      // Si alguien cambió ese paso en la ficha mientras tanto (K11), queda como está guardado y la marca se
+      // rechaza: no se escribe nada, tampoco en el libro de marcas.
+      const r = await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista), ...(base !== null ? { checklistBase: base } : {}) }, m.iso);
+      if (base !== null && Array.isArray(r?.pasosSinAplicar) && r.pasosSinAplicar.includes(idx)) throw new RechazoCampo(pasoCambioEnLaFicha(o.tipo === "emergencia", idx), 409);
       await db.insert(ordenPasoMarcas).values({
         ordenId: o.id, pasoIdx: idx, pasoTexto: String(it.texto ?? "").slice(0, 500), estado, valor,
         nota: typeof op.nota === "string" ? op.nota.trim() || null : null,

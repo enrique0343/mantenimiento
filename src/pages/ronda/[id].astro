@@ -9,6 +9,7 @@ import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
 import { aopEventos, ordenes, procedimientos, rondaEjecuciones, rondaLecturas, rondaMarcas, sucursales, usuarios } from "@/lib/schema";
 import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { textoDeNumero } from "@/lib/numero";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -82,7 +83,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
             </div>
             <div class="shrink-0 text-right">
               {l ? <span class={`badge ${COLOR[l.resultado as keyof typeof COLOR]}`}>{textoResultado(l.resultado, !!p.requiereValor)}</span> : <span class="badge bg-red-100 text-red-700">Sin anotar</span>}
-              {l?.valor != null && <div class="mt-1 text-sm font-semibold text-slate-700">{l.valor}{p.unidad ? ` ${p.unidad}` : ""}</div>}
+              {l?.valor != null && <div class="mt-1 text-sm font-semibold text-slate-700">{textoDeNumero(l.valor)}{p.unidad ? ` ${p.unidad}` : ""}</div>}
             </div>
           </div>
           {l?.nota && <p class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{l.nota}</p>}
@@ -91,7 +92,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
             <ul class="mt-2 space-y-0.5 text-[11px] text-slate-500">
               {historia.map(({ m, quien }) => (
                 <li>
-                  {fmtHora(m.ocurridoEn)} · {quien ?? "—"} · {textoResultado(m.resultado, !!p.requiereValor)}{m.valor != null ? ` ${m.valor}` : ""}
+                  {fmtHora(m.ocurridoEn)} · {quien ?? "—"} · {textoResultado(m.resultado, !!p.requiereValor)}{m.valor != null ? ` ${textoDeNumero(m.valor)}` : ""}
                   {m.sinSenal ? ` · capturada sin señal, llegó a ${laHora(fmtHora(m.recibidoEn))}` : ""}{m.ajustado ? " · hora ajustada por el servidor" : ""}
                   {cerrada && ejec.recibidaEn && m.recibidoEn > ejec.recibidaEn ? " · llegó después de la firma" : ""}
                   {m.aopEventoId && <a class="ml-1 font-semibold text-orange-700 underline" href={`/aop/${m.aopEventoId}`}>{mapaEventos.get(m.aopEventoId)?.codigo ?? "AOP"}</a>}

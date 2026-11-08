@@ -12,7 +12,7 @@ import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit, type DiffEntry } from "@/lib/audit";
-import { FAMILIAS_RONDA, avisoCambioTurnos, avisoTurnosSinAbrir, fechaCorta, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
+import { FAMILIAS_RONDA, avisoCambioTurnos, avisoTurnosSinAbrir, fechaCorta, laHora, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
 import { procedimientos, rondaPuntos, rondaVigencias, rondas, sucursales } from "@/lib/schema";
 
 export const prerender = false;
@@ -440,7 +440,7 @@ async function cambiarMarca(ctx: APIContext, db: Db, user: Usuario, sucursalId: 
   const cambios = { haceRonda: { antes: sede.haceRonda, despues: haceRonda } };
   await logAudit(ctx, {
     entidad: "ronda", entidadId: recorrido?.id ?? 0, accion: "update",
-    resumen: `${sede.nombre} ${haceRonda ? "hace ronda" : "no hace ronda"} desde el turno ${aplicaDesde.turno} del ${fechaCorta(aplicaDesde.fecha)}`,
+    resumen: `${sede.nombre} ${haceRonda ? "hace ronda" : "no hace ronda"} desde el turno de ${laHora(aplicaDesde.turno)} del ${fechaCorta(aplicaDesde.fecha)}`,
     cambios,
   });
   return Response.json({ ok: true, sede: actualizada, aplicaDesde, cambios });

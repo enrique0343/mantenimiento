@@ -21,6 +21,7 @@ import {
   avisoTurnosSinAbrir,
   cambiosDeSede,
   inicioTurno,
+  laHora,
   lineaDeTurnos,
   lineaFija,
   nombreRecorrido,
@@ -94,7 +95,7 @@ for (const u of [...umbrales.filter(generico), ...umbrales.filter((x) => !generi
 // turno que se anunció como «no se abre» y cuya hora ya pasó sigue sin abrirse.
 const ahora = Date.now();
 const turnosRonda = ronda ? parsearTurnos(ronda.turnos) : [];
-const fechaTurno = (t: { fecha: string; turno: string }) => `el turno ${t.turno} del ${fmtFechaSoloCompacta(t.fecha)}`;
+const fechaTurno = (t: { fecha: string; turno: string }) => `el turno de ${laHora(t.turno)} del ${fmtFechaSoloCompacta(t.fecha)}`;
 function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
   return [...lista].sort((a, b) => b.hasta.localeCompare(a.hasta))[0] ?? null;
 }
@@ -390,6 +391,8 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
   const $ = (id) => document.getElementById(id);
   const API = "/api/ronda-turno/puntos";
   const fecha = (f) => String(f).split("-").reverse().join("/");
+  // «las 14:00», pero «la 01:00», como laHora de src/lib/turnos.ts.
+  const laHora = (h) => (/^0?1:/.test(h) ? "la " : "las ") + h;
 
   // ── Hablar con el servidor: su error se muestra tal cual ──
   const leer = async (r) => {
@@ -602,7 +605,7 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
       const quedaron = JSON.parse(r.ronda.turnos || "[]");
       $("r_turnos").value = quedaron.join(", ");
       estado.textContent = r.aplicaDesde
-        ? "Guardado: " + quedaron.join(", ") + ". " + (r.aviso || "Entran desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + ".")
+        ? "Guardado: " + quedaron.join(", ") + ". " + (r.aviso || "Entran desde el turno de " + laHora(r.aplicaDesde.turno) + " del " + fecha(r.aplicaDesde.fecha) + ".")
         : "Sin cambios: los turnos ya eran " + quedaron.join(", ") + ".";
       window.showToast?.("Turnos guardados.", "success");
     } catch (e) {
@@ -647,7 +650,7 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
             hace ? nombre + " sí hace ronda" : nombre + " no hace ronda",
             hace
               ? "Desde el turno que todavía no empezó, la ronda vuelve a salir en el celular y se le exige en el tablero y en la revisión semanal."
-              : "Desde el turno que todavía no empezó, la ronda deja de salir en el celular y no se le exige en el tablero ni en la revisión semanal. La ronda que ya empezó se termina. No se copia ni se borra nada.",
+              : "Desde el turno que todavía no empezó, la ronda deja de salir en el celular y no se le exige en el tablero ni en la revisión semanal. La que ya empezó se puede terminar mientras el técnico siga dentro de ella. No se copia ni se borra nada.",
             { confirmLabel: hace ? "Sí hace ronda" : "No hace ronda", danger: false })
         : true;
       if (!ok) return;
@@ -655,7 +658,7 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
       try {
         const r = await enviar("PUT", { accion: "hace_ronda", sucursalId: Number(b.dataset.sede), haceRonda: hace });
         await refrescar(["panel-sedes", "recorrido-resumen"]);
-        window.showToast?.(r.aplicaDesde ? nombre + (hace ? " hace" : " no hace") + " ronda desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + "." : "Sin cambios.", "success");
+        window.showToast?.(r.aplicaDesde ? nombre + (hace ? " hace" : " no hace") + " ronda desde el turno de " + laHora(r.aplicaDesde.turno) + " del " + fecha(r.aplicaDesde.fecha) + "." : "Sin cambios.", "success");
       } catch (e) {
         mostrarError(avisoPagina, e.message);
         b.disabled = false;

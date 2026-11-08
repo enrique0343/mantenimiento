@@ -250,8 +250,14 @@ export function siguienteInicio(linea: TramoTurnos[], ms = Date.now()): TurnoFec
 /** «10/11/2026» */
 export const fechaCorta = (fecha: string) => fecha.slice(0, 10).split("-").reverse().join("/");
 
-/** «el de las 14:00» · «los de la 01:00 y las 02:00» */
-const lasHoras = (xs: TurnoFecha[]) => (xs.length === 1 ? `el de ${laHora(xs[0].turno)}` : `los de ${xs.slice(0, -1).map((x) => laHora(x.turno)).join(", ")} y ${laHora(xs.at(-1)!.turno)}`);
+/** «las 07:00» o, con su fecha, «las 07:00 del 11/11/2026». */
+const horaDe = (t: TurnoFecha, conFecha: boolean) => `${laHora(t.turno)}${conFecha ? ` del ${fechaCorta(t.fecha)}` : ""}`;
+/** Dos turnos a la misma hora en días distintos: sin la fecha, la frase se contradice. */
+const mismaHora = (t: TurnoFecha, otro: TurnoFecha) => t.turno === otro.turno && t.fecha !== otro.fecha;
+
+/** «el de las 14:00» · «los de la 01:00 y las 02:00». `hora` escribe cada uno. */
+const lasHoras = (xs: TurnoFecha[], hora: (t: TurnoFecha) => string = (t) => laHora(t.turno)) =>
+  (xs.length === 1 ? `el de ${hora(xs[0])}` : `los de ${xs.slice(0, -1).map(hora).join(", ")} y ${hora(xs.at(-1)!)}`);
 
 /**
  * Lo que pasa hasta que entra un cambio de turnos pendiente, en frases cortas:
@@ -261,12 +267,16 @@ const lasHoras = (xs: TurnoFecha[]) => (xs.length === 1 ? `el de ${laHora(xs[0].
 export function avisoCambioTurnos(linea: TramoTurnos[], ms = Date.now()): string | null {
   const p = proximoTramo(linea, ms);
   if (!p?.entra) return null;
+  const hoy = ahoraSV(new Date(ms)).fecha;
   const corre = turnoEn(linea, ms);
   const ultimo = turnoEn(linea, p.desde - 1);
   const mismo = corre.fecha === ultimo.fecha && corre.turno === ultimo.turno;
-  const hasta = mismo ? `El turno de ${laHora(corre.turno)} sigue hasta esa hora` : `Hasta entonces siguen los de antes; el de ${laHora(ultimo.turno)} dura hasta esa hora`;
+  // El turno que dura hasta esa hora lleva su fecha si no es de hoy; el que no se abre, si empieza a su misma hora.
+  const sigue = mismo ? corre : ultimo;
+  const deSigue = horaDe(sigue, sigue.fecha !== hoy);
+  const hasta = mismo ? `El turno de ${deSigue} sigue hasta esa hora` : `Hasta entonces siguen los de antes; el de ${deSigue} dura hasta esa hora`;
   const omite = p.omite;
-  const no = omite.length ? `${mismo ? ";" : " y"} ${lasHoras(omite)} ${omite.length === 1 ? "no se abre" : "no se abren"}` : "";
+  const no = omite.length ? `${mismo ? ";" : " y"} ${lasHoras(omite, (t) => horaDe(t, mismaHora(t, sigue)))} ${omite.length === 1 ? "no se abre" : "no se abren"}` : "";
   return `Los turnos nuevos entran a ${laHora(p.entra.turno)} del ${fechaCorta(p.entra.fecha)}. ${hasta}${no}.`;
 }
 
@@ -283,7 +293,11 @@ export function avisoTurnosSinAbrir(linea: TramoTurnos[], ms = Date.now()): stri
   const omite = tramoEn(linea, ms).omite.filter((t) => inicioTurno(t.fecha, t.turno) > empezo && inicioTurno(t.fecha, t.turno) <= ms);
   if (!omite.length) return null;
   const hasta = siguienteInicio(linea, ms);
-  return `Siguen los turnos de ahora. El turno de ${laHora(corre.turno)} sigue hasta ${laHora(hasta.turno)}; ${lasHoras(omite)} ${omite.length === 1 ? "no se abre" : "no se abren"}.`;
+  // El turno que sigue lleva su fecha si no es de hoy; el de «hasta», también si empieza a su misma hora; el que no
+  // se abre, si empieza a la misma hora que uno de ellos.
+  const hoy = ahoraSV(new Date(ms)).fecha;
+  const no = lasHoras(omite, (t) => horaDe(t, mismaHora(t, corre) || mismaHora(t, hasta)));
+  return `Siguen los turnos de ahora. El turno de ${horaDe(corre, corre.fecha !== hoy)} sigue hasta ${horaDe(hasta, hasta.fecha !== hoy || mismaHora(hasta, corre))}; ${no} ${omite.length === 1 ? "no se abre" : "no se abren"}.`;
 }
 
 /** Las vigencias que pesan en una sede: su marca y los turnos de los recorridos que puede usar. */

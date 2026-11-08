@@ -95,6 +95,8 @@ function vencePlazo(iso: string | null | undefined): string {
   const sv = new Date(ms - 6 * 3_600_000).toISOString();
   return `${ms < Date.now() ? "Venció" : "Vence"} ${sv.slice(0, 10) === hoySV() ? "hoy" : fecha(iso)} ${sv.slice(11, 16)}`;
 }
+/** «la 01:43», o «la 01:43 del 09/11/2026» si no es de hoy: un plazo de otro día dice su fecha. */
+const horaDePlazo = (iso: string) => `${laHora(hora(iso))}${new Date(Date.parse(iso) - 6 * 3_600_000).toISOString().slice(0, 10) === hoySV() ? "" : ` del ${fecha(iso)}`}`;
 /**
  * Las acciones del EOP que este celular muestra, tal como las guarda el
  * servidor: si la emergencia no tenía pasos, siembra exactamente estas, aunque
@@ -584,9 +586,7 @@ async function explicarRechazos(registros: Any[]) {
   for (const id of ids) {
     const r = await pedirOrden(id, LIMITE_ORDEN_MS);
     const deEsta = E.rechazos.filter((x) => Number(x.ordenId) === id && !x.motivo);
-    const motivo = r.tipo === "orden" ? (EN_CURSO.includes(r.orden.estado) ? "en_curso" : r.orden.estado === "cancelada" ? "cancelada" : "otro")
-      : r.tipo === "no" && r.status === 404 ? (deEsta.some((x) => /ya no existe/.test(x.error ?? "")) ? "otro" : "reasignada")
-      : "";
+    const motivo = motivoDe(r, deEsta);
     if (!motivo) continue;
     // Sigue en curso: queda en el celular, para abrirla desde «Ver por qué».
     if (r.tipo === "orden" && motivo === "en_curso") ponerEnBase(r.orden);
@@ -596,6 +596,35 @@ async function explicarRechazos(registros: Any[]) {
   if (!cambio) return;
   void cola.guardar(`rechazos:${UID}`, E.rechazos);
   if (E.hoja?.tipo === "rechazos") pintarHoja();
+}
+/** Por qué ya no se trabaja la orden, según lo que respondió el servidor. Vacío si no respondió. */
+function motivoDe(r: Pedido, registros: Any[]): string {
+  if (r.tipo === "orden") return EN_CURSO.includes(r.orden.estado) ? "en_curso" : r.orden.estado === "cancelada" ? "cancelada" : "otro";
+  if (r.tipo === "no" && r.status === 404) return registros.some((x) => /ya no existe/.test(x.error ?? "")) ? "otro" : "reasignada";
+  return "";
+}
+/**
+ * Las órdenes que «Ver por qué» dejó en el celular por seguir en curso y que el día ya no trae se piden otra vez
+ * cada vez que baja el día. Si ya no están en curso (la jefatura la canceló, por ejemplo), el motivo cambia como
+ * en «Ver por qué» y la copia se quita, salvo la que el técnico tiene abierta; si siguen, queda la copia nueva.
+ * Sin respuesta, se quedan como estaban.
+ */
+async function revisarEnCurso(ids: number[]) {
+  let cambio = false;
+  for (const id of ids.slice(0, 5)) {
+    const r = await pedirOrden(id, LIMITE_ORDEN_MS);
+    const deEsta = E.rechazos.filter((x) => Number(x.ordenId) === id && x.motivo === "en_curso");
+    const motivo = motivoDe(r, deEsta);
+    if (!motivo || !deEsta.length) continue;
+    if (r.tipo === "orden" && motivo === "en_curso") { ponerEnBase(r.orden); continue; }
+    for (const x of deEsta) x.motivo = motivo;
+    if (location.hash !== `#orden-${id}`) quitarDeBase(id);
+    cambio = true;
+  }
+  if (!cambio) return;
+  void cola.guardar(`rechazos:${UID}`, E.rechazos);
+  if (E.hoja?.tipo === "rechazos") pintarHoja();
+  else repintarSiEsSeguro();
 }
 
 async function refrescarHoy() {
@@ -610,7 +639,8 @@ async function refrescarHoy() {
     if (enCursoAqui && (j.ronda?.fecha !== enCursoAqui.fecha || j.ronda?.turno !== enCursoAqui.turno)) j.ronda = enCursoAqui;
     // El servidor no pudo leer la ronda: se conserva la que ya había; no es que no haya ronda.
     if (j.rondaError && !j.ronda && E.base?.ronda && Number(E.base.ronda.sucursalId) === Number(j.sedeId)) j.ronda = E.base.ronda;
-    for (const o of enCursoSinAceptar(j)) (j[o.asignadoA === UID ? "ordenes" : "libres"] ??= []).push(o);
+    const sinAceptar = enCursoSinAceptar(j);
+    for (const o of sinAceptar) (j[o.asignadoA === UID ? "ordenes" : "libres"] ??= []).push(o);
     E.base = j;
     E.sesionVencida = false;
     E.enLinea = true;
@@ -618,6 +648,8 @@ async function refrescarHoy() {
     if (!E.sede && j.sedes?.length === 1) { E.sede = j.sedes[0].id; void cola.guardar(`sede:${UID}`, E.sede); void refrescarHoy(); }
     void cola.guardar(`hoy:${UID}`, j);
     rebase();
+    // La jefatura pudo cancelarla después de «Ver por qué»: se pregunta otra vez.
+    if (sinAceptar.length) void revisarEnCurso(sinAceptar.map((o: Any) => o.id));
   } catch {
     E.enLinea = false;
   }
@@ -776,13 +808,16 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
     const etq = ["Emergencia", vencePlazo(emergencia.vencimiento)].filter(Boolean).join(" · ");
     const det = [emergencia.eop?.codigo, emergencia.lugar?.ubicacion ?? emergencia.lugar?.sede].filter(Boolean).join(" · ");
     const donde = enPausa ? `En pausa${emergencia.motivoPausa ? `: ${emergencia.motivoPausa}` : ""}` : empezo ? dondeVas(emergencia) : "";
-    const devuelta = emergencia.devuelta ? `<p class="recorte">Te la devolvieron: ${esc(emergencia.devuelta)}</p>` : "";
+    // Con «Te la devolvieron», dónde va y por qué se la devolvieron van en un solo párrafo, sin «Sigues justo donde
+    // quedaste»; con otras emergencias debajo, en dos líneas como máximo. Así «Ahora» lleno cabe en 360×640.
+    const conDevuelta = emergencia.devuelta ? [donde.replace(/ Sigues justo donde quedaste\.$/, ""), `Te la devolvieron: ${emergencia.devuelta}`].filter(Boolean).join(" ") : donde;
+    const parrafo = conDevuelta ? `<p class="recorte${emergencia.devuelta && otras.length ? " dos" : ""}">${esc(conDevuelta)}</p>` : "";
     // Con la emergencia ya empezada, la ronda del turno no se pierde de vista.
     const tambien = empezo && rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de ${esc(laHora(r.turno))}</button>` : "";
     return {
       ordenId: emergencia.id,
       enAhora: [emergencia, ...otras.slice(0, LINEAS_EMERGENCIA)].map((o: Any) => o.id),
-      html: `<span class="etq urgente">${esc(etq)}</span><h2${otras.length ? ' class="recorte dos"' : ""}>${esc(tituloOrden(emergencia))}</h2>${det ? `<p>${esc(det)}</p>` : ""}${donde ? `<p class="recorte">${esc(donde)}</p>` : ""}${devuelta}<button class="b1 claro" data-a="ir" data-h="#orden-${emergencia.id}">${empezo ? "Seguir" : "Atender la emergencia"}</button>${lineasDeEmergencias(otras)}${tambien}`,
+      html: `<span class="etq urgente">${esc(etq)}</span><h2${otras.length ? ' class="recorte dos"' : ""}>${esc(tituloOrden(emergencia))}</h2>${det ? `<p>${esc(det)}</p>` : ""}${parrafo}<button class="b1 claro" data-a="ir" data-h="#orden-${emergencia.id}">${empezo ? "Seguir" : "Atender la emergencia"}</button>${lineasDeEmergencias(otras)}${tambien}`,
     };
   }
   // La ronda es lo primero del turno. Una orden que ya venía de antes espera; si el
@@ -862,7 +897,7 @@ function vHoy() {
   for (const [clave, lista] of grupos) filas += grupoHtml(clave, clave, `${lista.length} por hacer`, lista.map(filaOrden).join(""), abierto, marcas.get(clave));
   if (p.locales?.length) filas += grupoHtml("locales", "Guardadas en tu celular", `${p.locales.length} por enviar`, p.locales.map((l: Any) => `<div class="fila sub"><span class="marca"></span><span class="txt"><strong>${esc(l.titulo)}</strong><small>Se envía sola cuando vuelva la señal</small></span></div>`).join(""), abierto);
   if (p.desviaciones?.length) {
-    filas += grupoHtml("aop", "Desviaciones abiertas", `${p.desviaciones.length} con reloj`, p.desviaciones.map((d: Any) => `<a class="fila sub" href="/aop/${d.id}" data-fuera><span class="txt"><strong>${esc(d.codigo ?? "AOP")}${d.sala ? ` · ${esc(d.sala)}` : ""}</strong><small>${d.escalarAntesDe ? `Escalar antes de ${laHora(hora(d.escalarAntesDe))}` : esc(d.titulo ?? "")}</small></span>${ico.flecha}</a>`).join(""), abierto);
+    filas += grupoHtml("aop", "Desviaciones abiertas", `${p.desviaciones.length} con reloj`, p.desviaciones.map((d: Any) => `<a class="fila sub" href="/aop/${d.id}" data-fuera><span class="txt"><strong>${esc(d.codigo ?? "AOP")}${d.sala ? ` · ${esc(d.sala)}` : ""}</strong><small>${d.escalarAntesDe ? `Escalar antes de ${horaDePlazo(d.escalarAntesDe)}` : esc(d.titulo ?? "")}</small></span>${ico.flecha}</a>`).join(""), abierto);
   }
   if (p.tickets?.length) filas += grupoHtml("tickets", "Reportes asignados", `${p.tickets.length} por atender`, p.tickets.map((t: Any) => `<a class="fila sub" href="/tickets/${t.id}" data-fuera><span class="txt"><strong>${esc(t.asunto)}</strong><small>${esc([t.solicitante, t.sede].filter(Boolean).join(" · "))}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.libres?.length) filas += grupoHtml("libres", "Sin asignar en esta sede", `${p.libres.length} para tomar`, p.libres.map(filaOrden).join(""), abierto, marcaLibres);
@@ -989,6 +1024,13 @@ function ponerEnBase(orden: Any) {
   if (!E.base) return;
   for (const k of ["ordenes", "libres"]) E.base[k] = (E.base[k] ?? []).filter((x: Any) => x.id !== orden.id);
   E.base[orden.asignadoA === UID ? "ordenes" : "libres"]?.push(orden);
+  void cola.guardar(`hoy:${UID}`, E.base);
+  rebase();
+}
+/** La orden que ya no se trabaja sale de la copia del día, y se guarda. */
+function quitarDeBase(id: number) {
+  if (!E.base) return;
+  for (const k of ["ordenes", "libres"]) E.base[k] = (E.base[k] ?? []).filter((x: Any) => x.id !== id);
   void cola.guardar(`hoy:${UID}`, E.base);
   rebase();
 }
@@ -1328,11 +1370,16 @@ function marcarPaso(estado: string, extra: Record<string, unknown> = {}, textos:
   const f = E.flujo as Flujo;
   const o = ordenDe(f.ordenId as number);
   const p = o.pasos[f.i];
-  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: p.texto, estado, ...extra, ...accionesMostradas(o), ...conTexto(textos) });
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: p.texto, estado, ...extra, ...antesDe(p), ...accionesMostradas(o), ...conTexto(textos) });
   olvidar((k) => k === `lect:${o.id}:${f.i}`);
   zumbar();
   avanzar();
 }
+/**
+ * K17 · El paso como se ve justo antes de marcarlo: la copia del día más lo que falta enviar. Con eso el
+ * servidor sabe si la ficha lo cambió mientras tanto; entonces no pisa ese cambio y no acepta la marca.
+ */
+const antesDe = (p: Any) => ({ antes: { estado: p.estado, valor: p.valor ?? null, nota: p.nota ?? null } });
 function marcarParada(resultado: string, extra: Record<string, unknown> = {}, at?: string) {
   const r = E.p.ronda;
   const f = E.flujo as Flujo;
@@ -1371,7 +1418,9 @@ function guardarLectura() {
   if (!crudo) { aviso("Escribe la lectura para seguir."); l.focus(); return; }
   // Con mínimo o máximo, lo escrito es el número del instrumento: «14,5 A» u «ok» no se guarda ni se envía.
   if (v == null && conRango(p)) { pedirNumero(MENSAJE_PASO_SIN_NUMERO, l); return; }
-  if (v == null || !fueraDe(p, v)) { marcarPaso("ok", { valor: v ?? crudo }, { [`lect:${o.id}:${f.i}`]: crudo }); return; }
+  // Un paso que ya quedó con «Hay un problema» y sin su lectura la recibe y sigue con su problema y su nota.
+  const estado = p.estado === "desviacion" && pasoSinLectura(p) ? "desviacion" : "ok";
+  if (v == null || !fueraDe(p, v)) { marcarPaso(estado, { valor: v ?? crudo }, { [`lect:${o.id}:${f.i}`]: crudo }); return; }
   // La lectura viaja como número: escrita otra vez como texto, «12,3450» quedaría «12.345», que se lee de dos formas.
   abrirHoja({ tipo: "problema", valor: v, valorTxt: `Lectura ${comoTexto(v)}${p.unidad ? ` ${p.unidad}` : ""} · normal ${rangoDe(p)}` });
 }
@@ -2049,7 +2098,7 @@ const queVeLaJefatura = () => (E.enLinea ? "Tu jefatura ya lo ve." : "Tu jefatur
 /** Un punto crítico con novedad, o un equipo que no vuelve a servicio, detienen la secuencia: los pasos que siguen ya no aplican. */
 function detenerOrden(o: Any, nota: string, valor: unknown, escrito = "") {
   const f = E.flujo as Flujo;
-  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor != null && valor !== "" ? { valor } : {}), ...accionesMostradas(o), ...conTexto({ [`problema:${o.id}:${f.i}`]: escrito }) });
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor != null && valor !== "" ? { valor } : {}), ...antesDe(o.pasos[f.i]), ...accionesMostradas(o), ...conTexto({ [`problema:${o.id}:${f.i}`]: escrito }) });
   void despachar({ tipo: "orden.pausar", ordenId: o.id, motivo: `Detenida: ${nota}`.slice(0, 300) });
   olvidar((k) => k === `lect:${o.id}:${f.i}`);
   zumbar();
@@ -2145,7 +2194,8 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     abrirOrden(id);
   },
   salir() { soltarPantalla(); E.flujo = null; ir("#hoy"); },
-  hecho() { marcarPaso("ok"); },
+  // Una acción del EOP que pide lectura lleva el número escrito, igual que «Guardar lectura».
+  hecho() { if ($("#lectura")) guardarLectura(); else marcarPaso("ok"); },
   conforme() { marcarParada("ok"); avanzar(); },
   na() { marcarPaso("na"); },
   nopudo() { abrirHoja({ tipo: "nopudo" }); },
