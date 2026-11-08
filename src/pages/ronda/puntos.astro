@@ -18,15 +18,18 @@ import { asc, eq, inArray } from "drizzle-orm";
 import {
   FAMILIAS_RONDA,
   cambiosDeSede,
-  cambiosDeTurnos,
   inicioTurno,
+  lineaDeTurnos,
+  lineaFija,
   nombreRecorrido,
   parsearTurnos,
+  proximoTramo,
   puedeConfigurarRondas,
   rangoNormal,
   recorridoDeSede,
-  siguienteTurno,
-  turnoActual,
+  siguienteInicio,
+  turnoEn,
+  turnosEn,
   vigenteAl,
 } from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
@@ -85,7 +88,9 @@ for (const u of [...umbrales.filter(generico), ...umbrales.filter((x) => !generi
   plazosAop[u.procedimientoId] ??= { actuar: u.actuar ?? null, escalar: u.escalar ?? null };
 }
 
-// Los turnos de este recorrido y, si cambiaron a mitad de un turno, desde cuándo rigen.
+// Los turnos de este recorrido y, si el cambio todavía no entró, cuáles rigen ahora y desde cuándo entran los nuevos.
+// Un cambio de turnos entra cuando empieza el primer turno de la lista nueva; la marca de una sede, en el siguiente turno.
+const ahora = Date.now();
 const turnosRonda = ronda ? parsearTurnos(ronda.turnos) : [];
 const fechaTurno = (t: { fecha: string; turno: string }) => `el turno ${t.turno} del ${fmtFechaSoloCompacta(t.fecha)}`;
 function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
@@ -93,23 +98,21 @@ function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
 }
 let turnosPendientes: { rigen: string[]; desde: string } | null = null;
 if (ronda) {
-  const t = turnoActual(turnosRonda);
-  const cambios = cambiosDeTurnos(vigencias, ronda.id);
-  const rigen = vigenteAl(cambios, turnosRonda, inicioTurno(t.fecha, t.turno));
-  const ultimo = ultimoCambio(cambios);
-  if (ultimo && rigen.join() !== turnosRonda.join()) turnosPendientes = { rigen, desde: fechaTurno(siguienteTurno(turnosRonda, Date.parse(ultimo.hasta))) };
+  const linea = lineaDeTurnos(ronda, vigencias);
+  const proximo = proximoTramo(linea, ahora);
+  if (proximo?.entra) turnosPendientes = { rigen: turnosEn(linea, ahora), desde: fechaTurno(proximo.entra) };
 }
 
 // Cada sede: qué recorrido usa, si hace ronda y, si se acaba de cambiar, desde qué turno entra.
 const filasSede = sedes.map((s) => {
   const propia = propiaDe(s.id);
   const recorrido = recorridoDeSede(rondasTodas, s.id);
-  const turnos = parsearTurnos(recorrido?.turnos);
-  const t = turnoActual(turnos);
+  const linea = recorrido ? lineaDeTurnos(recorrido, vigencias) : lineaFija(parsearTurnos(null));
+  const t = turnoEn(linea, ahora);
   const cambios = cambiosDeSede(vigencias, s.id);
   const rige = vigenteAl(cambios, s.haceRonda, inicioTurno(t.fecha, t.turno));
   const ultimo = ultimoCambio(cambios);
-  const entra = ultimo && rige !== s.haceRonda ? fechaTurno(siguienteTurno(turnos, Date.parse(ultimo.hasta))) : null;
+  const entra = ultimo && rige !== s.haceRonda ? fechaTurno(siguienteInicio(linea, Date.parse(ultimo.hasta))) : null;
   return { ...s, propia, entra };
 });
 

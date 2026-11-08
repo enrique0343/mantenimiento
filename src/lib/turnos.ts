@@ -68,6 +68,24 @@ export function turnoActual(turnos: string[], ref?: Date): TurnoInfo {
   return { turno: elegido, fecha: fechaTurno, etiqueta: etiquetaTurno(elegido) };
 }
 
+/** Un cambio de turnos que todavía no entró, como lo manda el paquete del celular. */
+export interface TurnosProximos {
+  /** ISO: el inicio del primer turno de la lista nueva. */
+  desde: string;
+  turnos: string[];
+}
+
+/**
+ * El turno que corre con lo que trae el paquete: los turnos de ahora y, desde
+ * que entra el cambio, los próximos. Así el celular sin señal sigue en el
+ * turno que empezó y pasa a la lista nueva cuando le toca.
+ */
+export function turnoConProximos(turnos: string[], proximos: TurnosProximos | null | undefined, ref?: Date): TurnoInfo {
+  const ms = ref ? ref.getTime() : Date.now();
+  const desde = proximos ? Date.parse(proximos.desde) : NaN;
+  return turnoActual(Number.isFinite(desde) && ms >= desde && proximos!.turnos.length ? proximos!.turnos : turnos, ref);
+}
+
 /** Lunes de la semana de esa fecha, para la revisión semanal. */
 export function lunesDe(fecha: string): string {
   const d = new Date(`${fecha.slice(0, 10)}T12:00:00Z`);

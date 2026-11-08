@@ -14,7 +14,7 @@ import {
   plantillaLiberaciones,
   plantillaPrerrequisitos,
 } from "./schema";
-import { evaluarConformeLiberacion, liberacionTieneLectura, numeroDeLectura, PRERREQ_REFERENCIA_HINT, type PrerrequisitoTipo } from "./ordenes";
+import { evaluarConformeLiberacion, liberacionConRango, liberacionTieneLectura, MENSAJE_LECTURA_SIN_NUMERO, numeroDeLectura, PRERREQ_REFERENCIA_HINT, type PrerrequisitoTipo } from "./ordenes";
 import { logAudit } from "@/lib/audit";
 
 type Db = ReturnType<typeof getDb>;
@@ -202,7 +202,10 @@ export interface CambioLiberacion {
   obligatoria?: boolean;
 }
 
-/** Registra la lectura de liberación y calcula si quedó dentro del rango. `momento` es la hora de la medición. */
+/**
+ * Registra la lectura de liberación y calcula si quedó dentro del rango. `momento` es la hora de la medición.
+ * Con mínimo o máximo, la lectura trae un número: «aprox 14 A» no se puede juzgar y se rechaza.
+ */
 export async function registrarLiberacion(
   ctx: APIContext, db: Db, orden: OrdenMop, user: Quien, cambio: CambioLiberacion, momento = new Date().toISOString(),
 ) {
@@ -223,12 +226,13 @@ export async function registrarLiberacion(
   if (tocaValor) {
     const valor = cambio.valorMedido !== undefined ? cambio.valorMedido : actual.valorMedido;
     const texto = cambio.valorMedidoTexto !== undefined ? cambio.valorMedidoTexto?.trim().slice(0, 300) || null : actual.valorMedidoTexto;
+    const hayLectura = (valor != null && Number.isFinite(Number(valor))) || !!texto;
+    if (hayLectura && liberacionConRango(actual) && numeroDeLectura(valor, texto) === null) throw new RechazoMop(MENSAJE_LECTURA_SIN_NUMERO, 400);
     data.valorMedido = valor ?? null;
     data.valorMedidoTexto = texto;
     // Sin rango que comparar, «conforme» queda null y lo juzga quien libera. Una
     // lectura escrita como texto («14,5 A») se juzga por su número.
     data.conforme = evaluarConformeLiberacion(actual.minAceptable, actual.maxAceptable, numeroDeLectura(valor, texto));
-    const hayLectura = (valor != null && Number.isFinite(Number(valor))) || !!texto;
     data.medidoPor = hayLectura ? user.id : null;
     data.medidoEn = hayLectura ? momento : null;
   }

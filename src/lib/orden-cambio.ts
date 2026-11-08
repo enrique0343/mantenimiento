@@ -44,6 +44,9 @@ const updateSchema = z.object({
   solucionAplicada: z.string().nullable().optional(),
   horasTrabajadas: z.number().nullable().optional(),
   checklistEjecucion: z.string().nullable().optional(),
+  // El checklist tal como la ficha lo recibió: con él, el servidor fusiona por
+  // punto y no deshace lo que el celular marcó mientras tanto.
+  checklistBase: z.string().nullable().optional(),
   // Verificacion (solo se setea via accion explicita; aqui aceptamos notas)
   verificacionNotas: z.string().nullable().optional(),
   // Motivo opcional al reasignar (solo se usa para el email al técnico nuevo)
@@ -55,8 +58,8 @@ const updateSchema = z.object({
   procedimientoId: z.number().int().positive().nullable().optional(),
   nivelRiesgo: z.enum(["bajo", "medio", "alto"]).nullable().optional(),
   clasePrioridad: z.enum(["P1", "P2", "P3", "P4"]).nullable().optional(),
-  // Los tres tiempos del EOP. Editables HACIA ATRÁS a propósito: en una
-  // emergencia el técnico actúa primero y registra después (cap. 02, 2.5).
+  // Los tiempos del EOP. El primer toque del celular fija cada hora vacía; una
+  // hora ya fijada y la de alarma las corrige la jefatura, también hacia atrás.
   horaAlarma: z.string().nullable().optional(),
   horaLlegada: z.string().nullable().optional(),
   horaMitigacion: z.string().nullable().optional(),
@@ -187,7 +190,8 @@ export async function aplicarCambioOrden(
       cambios: { asignadoA: { antes: actual.asignadoA, despues: parsed.data.asignadoA } },
     });
   }
-  // Audit: otros cambios (campos de ejecución, prioridad, etc.)
+  // Audit: otros cambios (campos de ejecución, prioridad, etc.). Se compara con
+  // lo que quedó guardado: lo que llegó igual y se dejó fuera no es un cambio.
   const camposEditables = [
     "titulo", "descripcion", "prioridad", "tipo", "vencimiento",
     "trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas",
@@ -198,8 +202,8 @@ export async function aplicarCambioOrden(
   ];
   const otrosCambios: any = {};
   for (const c of camposEditables) {
-    if ((parsed.data as any)[c] !== undefined && (parsed.data as any)[c] !== (actual as any)[c]) {
-      otrosCambios[c] = { antes: (actual as any)[c], despues: (parsed.data as any)[c] };
+    if ((parsed.data as any)[c] !== undefined && (row as any)[c] !== (actual as any)[c]) {
+      otrosCambios[c] = { antes: (actual as any)[c], despues: (row as any)[c] };
     }
   }
   if (Object.keys(otrosCambios).length > 0) {

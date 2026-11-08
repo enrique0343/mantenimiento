@@ -16,10 +16,13 @@ const secciones: Seccion[] = [
     pasos: [
       { t: "Entrar", d: "Abre mantenimiento.complejoavante.dev en Android o iPhone con tu usuario. Puedes agregarla a la pantalla de inicio: desde Ayuda en Android y con Compartir → Agregar a inicio en iPhone." },
       { t: "Hoy", d: "Muestra una sola cosa por hacer: primero la ronda del turno y luego tu siguiente orden. Debajo está el resto del día, agrupado por ubicación." },
-      { t: "Tiempos", d: "«Empezar» arranca el cronómetro. Cada paso queda con su hora. «Pausar» detiene el tiempo de trabajo y pide el motivo. Con eso se escribe solo el reporte de mantenimiento." },
+      { t: "Tiempos", d: "El celular no muestra cronómetro ni minutos estimados. Cada toque se guarda con su hora real y tu jefatura lo ve en la ficha. Sí verás «Vence…», «Actuar antes de» y «Escalar antes de». «Pausar» pide el motivo. Con eso se escribe solo el reporte de mantenimiento." },
+      { t: "Emergencia", d: "En Hoy toca «Atender la emergencia». Al llegar, toca «Ya estoy en el sitio». Sigue las acciones del documento, una por pantalla: «Hecho» o «No se pudo» (escribe por qué). En «¿Ya está controlado?» toca «Sí» cuando la situación ya no empeore; si todavía no, la emergencia queda primera en Hoy. En «¿Volvió a la normalidad?» toca «Sí, restablecido»; si todavía no, déjala en pausa con su motivo. Al final escribe qué encontraste y qué hiciste (puedes dictarlo) y agrega una foto si quieres. La causa raíz la escribe tu jefatura." },
+      { t: "Intervención", d: "Antes de empezar, registra cada permiso con su referencia (n.º de permiso, candado…). «Empezar» aparece cuando los obligatorios están cumplidos. Al terminar, anota cada lectura de liberación; si tiene rango, escribe el número que marcó el instrumento. Si una lectura sale fuera de rango, el celular dice «No libera»: repite la lectura, marca que ejecutaste el plan de reversa o deja la orden en espera." },
+      { t: "Lo que escribes no se pierde", d: "Se guarda en el celular mientras escribes. Si recargas, cierras la app, vas a otra página o se va la señal, vuelves a la misma pantalla con tu texto y tus fotos. «Cancelar» lo borra. Si el sistema no acepta un registro, el texto vuelve a su orden para que lo corrijas, y «Ver por qué» dice el motivo." },
       { t: "Buscar equipo", d: "Para un mantenimiento que no está en la lista: sede → ubicación → equipo. El escaneo de códigos está inhabilitado hasta que los equipos tengan su etiqueta GS1 Data Matrix." },
       { t: "Reportar falla", d: "Eliges el equipo o el sistema y el sistema dice qué documento manda y las tres primeras acciones. La emergencia y el correctivo quedan abiertos con su hora." },
-      { t: "Sin señal", d: "Sigue trabajando. Todo se guarda en el celular con la hora real y se envía solo cuando vuelve la señal. Solo buscar un equipo por primera vez y abrir una orden nueva desde la búsqueda necesitan señal." },
+      { t: "Sin señal", d: "Sigue trabajando. Todo se guarda en el celular con la hora real y se envía solo cuando vuelve la señal. Solo buscar un equipo por primera vez y abrir una orden nueva desde la búsqueda necesitan señal. Una emergencia que reportas sin señal queda anotada con su hora y se trabaja paso a paso cuando el celular la envía." },
     ],
   },
   {
@@ -29,6 +32,19 @@ const secciones: Seccion[] = [
     pasos: [
       { t: "De una orden", d: "En la orden, «Reporte de mantenimiento»: equipo, inicio, fin, tiempo de trabajo, pausas, cada paso con su hora, lecturas, novedades, fotos y firmas. Se imprime o se guarda en PDF." },
       { t: "De un periodo", d: "Indicadores y reportes → Reportes → «Reporte de mantenimiento». Filtra por fecha, sede, área, técnico y tipo. Se imprime o se descarga en CSV." },
+    ],
+  },
+  {
+    icono: "",
+    solo: "adminjefe",
+    titulo: "Ronda de turno: crear y cambiar el recorrido",
+    pasos: [
+      { t: "Dónde", d: "Ronda de turno → «Paradas del recorrido». Arriba dice qué editas: «Modelo», que usan todas las sedes sin recorrido propio, o «Recorrido propio» de una sede, que ya no recibe cambios del modelo." },
+      { t: "Cambiar una parada", d: "«Editar» abre la ventana con todo: qué se verifica, instrucción, familia, si pide un número o es conforme/no conforme, unidad, mínimo y máximo o qué se considera conforme, AOP, crítica, activa, fuente y línea del SOP. En «Más opciones» van los minutos para actuar y escalar; vacíos, rigen los del AOP. Guardar no recarga la página." },
+      { t: "Agregar, ordenar y quitar", d: "«+ Agregar parada» la pone al final. «Subir» y «Bajar» ordenan el recorrido. Una parada no se borra: se desactiva, y lo ya anotado se conserva." },
+      { t: "Turnos", d: "Se escriben en HH:MM separados por coma, en el modelo o en el recorrido propio. Los turnos nuevos entran cuando empieza el primero de la lista nueva; hasta entonces sigue el turno de ahora, y la pantalla dice desde cuándo entran." },
+      { t: "Sedes", d: "«Esta sede no hace ronda» no copia nada; «Esta sede sí hace ronda» la devuelve. «Crear recorrido propio» copia el modelo y pide confirmación: desde ahí la sede ya no recibe cambios del modelo, y no se deshace desde esta pantalla." },
+      { t: "Cuándo rige un cambio", d: "Un cambio entra en la ronda del turno que todavía no empezó; la ronda que ya empezó conserva lo que decía al abrir. La revisión semanal juzga cada turno con lo que regía cuando empezó." },
     ],
   },
   {
@@ -45,7 +61,10 @@ const secciones: Seccion[] = [
     titulo: "Órdenes de trabajo (OT)",
     pasos: [
       { t: "Crear una OT", d: "Menú Órdenes → «+ Nueva orden». Elige tipo (correctivo/preventivo), prioridad, equipo y técnico asignado. Cada orden tiene un código fijo: OT-MG0001 en Mantenimiento General y OT-MB0001 en Biomédico." },
-      { t: "Ejecutar una OT (técnico)", d: "En el celular, Hoy → «Empezar». Cada paso se marca con «Hecho» y al final «Enviar a verificación». Las intervenciones y emergencias se trabajan en la ficha completa de la orden." },
+      { t: "Ejecutar una OT (técnico)", d: "En el celular, Hoy → «Empezar». Cada paso se marca con «Hecho» y al final «Enviar a verificación». Las emergencias y las intervenciones también se trabajan en el celular, paso a paso; la ficha completa de la orden queda para la jefatura." },
+      { t: "Causa raíz (jefatura)", d: "En las emergencias y en los correctivos de equipos de criticidad alta, la jefatura escribe la causa raíz en la ficha de la orden, en «Causa raíz · la escribe la jefatura», dentro de las 72 h. Se puede escribir con la orden en proceso, enviada, verificada o cerrada, y es obligatoria para verificar y cerrar. El técnico solo escribe qué encontró y qué hizo." },
+      { t: "Horas de la emergencia (jefatura)", d: "La llegada, la situación controlada y el restablecimiento quedan con la hora del toque del técnico. Si una hora quedó mal, la jefatura la corrige en la ficha; el técnico no la puede cambiar." },
+      { t: "Intervención sin lectura (jefatura)", d: "Si una lectura de liberación no se pudo tomar, la jefatura usa «Enviar a verificación sin lectura» y escribe el motivo. La orden queda pendiente de verificación, no cerrada, y quien verifica no vuelve a escribir el motivo. Una lectura fuera de rango no se salva así: se repite la medición o se marca la reversa." },
       { t: "Seguimiento", d: "La columna «Días» muestra cuánto lleva asignada cada OT con semáforo de colores. Usa «Ver cerradas» para consultar el histórico." },
       { t: "Cierre administrativo (solo admin)", d: "Para OTs que se trabajaron fuera del sistema: botón en la OT o selección múltiple en la lista. Se cierra con un motivo y dispara la encuesta de satisfacción normal." },
     ],
@@ -163,11 +182,11 @@ const guiaRol: Record<string, { titulo: string; items: string[] }> = {
   },
   tecnico: {
     titulo: "Tu flujo como técnico",
-    items: ["1. Al entrar de turno, abre Hoy y haz la ronda", "2. Frente al equipo, toca «Empezar» y marca cada paso con «Hecho»", "3. Para un equipo que no está en tu lista: Buscar equipo, por sede y ubicación", "4. Si algo falla: Reportar falla te dice qué documento manda y qué hacer primero"],
+    items: ["1. Al entrar de turno, abre Hoy y haz la ronda", "2. Frente al equipo, toca «Empezar» y marca cada paso con «Hecho»", "3. En una emergencia, toca «Ya estoy en el sitio» al llegar y sigue las pantallas", "4. Para un equipo que no está en tu lista: Buscar equipo, por sede y ubicación", "5. Si algo falla: Reportar falla te dice qué documento manda y qué hacer primero"],
   },
   jefe: {
     titulo: "Tu flujo como jefe",
-    items: ["1. Panorama para el estado del día: lo primero es si se hizo la ronda de cada sede", "2. Ronda de turno: tablero por sede, desviaciones con su reloj y registros sin aceptar. Cada semana, firma la revisión", "3. Tickets nuevos → generar OT y asignar técnico", "4. Cronograma/Gantt para planificar; asigna técnico y fecha en la misma tarjeta", "5. KPIs y Presupuesto para el control gerencial", "6. Plan anual cuando te pidan el documento formal"],
+    items: ["1. Panorama para el estado del día: lo primero es si se hizo la ronda de cada sede", "2. Ronda de turno: tablero por sede, desviaciones con su reloj y registros sin aceptar. Cada semana, firma la revisión. El recorrido se cambia en «Paradas del recorrido»", "3. Emergencias: escribe la causa raíz en la ficha dentro de las 72 h; sin ella no se verifica", "4. Tickets nuevos → generar OT y asignar técnico", "5. Cronograma/Gantt para planificar; asigna técnico y fecha en la misma tarjeta", "6. KPIs y Presupuesto para el control gerencial", "7. Plan anual cuando te pidan el documento formal"],
   },
   admin: {
     titulo: "Tu flujo como administrador",

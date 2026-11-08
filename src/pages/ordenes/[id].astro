@@ -14,7 +14,7 @@ import {
   parseChecklist, progresoChecklist, evaluarValorChecklist,
   PRERREQ_TIPOS, PRERREQ_LABEL, PRERREQ_ICONO, PRERREQ_REFERENCIA_HINT,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
-  liberacionTieneLectura, evaluarConformeLiberacion, requiereCausaRaiz, causaRaizVencida,
+  liberacionTieneLectura, liberacionesFueraDeRango, liberacionConRango, requiereCausaRaiz, causaRaizVencida,
   tiemposEmergencia, fmtDuracionHoras, etiquetaMitigacion, isoALocalInput,
   puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ,
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
@@ -343,9 +343,11 @@ const roundsOrigins = await leerOrigenesRondaOrden(db, id);
 const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
 const esRevisor = esRevisorOrden(user, seguimiento.control);
 const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
-// El técnico solo mueve una orden suya o toma una abierta sin asignar: lo demás
-// el servidor se lo rechaza, así que no se le ofrece.
-const tecnicoMueve = !esTecnico || esAsignado || (estadoActual === "abierta" && !o.asignadoA);
+// El técnico solo mueve una orden suya mientras no la envía a verificación, o
+// toma una abierta sin asignar. Devolver o reabrir es de la jefatura o del
+// revisor designado (lo recibe por su propia línea, abajo): el servidor se lo
+// rechaza al técnico asignado, así que no se le ofrece.
+const tecnicoMueve = !esTecnico || (esAsignado && ordenSinEnviar) || (estadoActual === "abierta" && !o.asignadoA);
 const proximas = (tecnicoMueve ? transicionesPermitidas(estadoActual, user.rol, esAsignado) : [])
   .filter((s) => !["verificada", "cerrada"].includes(s));
 if (["completada", "verificada"].includes(estadoActual) && puedeVerificar) proximas.push("verificada");
@@ -375,9 +377,9 @@ const puedeRevertirRepuesto = puedeEditar && esJefatura;
 // el sistema volvió a como estaba y no hay nada que liberar.
 const reversaHecha = !!o.reversaEjecutada;
 const faltanLecturas = esMop && !reversaHecha && bloqueoCierre.faltantes.length > 0;
-const lecturasFuera = esMop && !reversaHecha
-  ? liberaciones.filter((l) => l.obligatoria && evaluarConformeLiberacion(l.minAceptable, l.maxAceptable, l.valorMedido ?? null) === false)
-  : [];
+// Fuera de rango se juzga como el servidor: por el número de la lectura, también
+// cuando quedó escrita como texto («14,5 A»).
+const lecturasFuera = esMop && !reversaHecha ? liberacionesFueraDeRango(liberaciones) : [];
 const envioBloqueado = faltanLecturas || lecturasFuera.length > 0;
 // Sin lectura (no fuera de rango), la jefatura lo envía a verificación con
 // motivo escrito. No lo cierra: queda pendiente de verificación.
@@ -893,23 +895,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Tiempo de respuesta</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.respuestaHoras)}</div>
+              <div id="eopRespuesta" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.respuestaHoras)}</div>
               <div class="text-[11px] text-slate-500">llegada − alarma (indicador 5)</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Hasta la mitigación</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.mitigacionHoras)}</div>
+              <div id="eopMitigacion" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.mitigacionHoras)}</div>
               <div class="text-[11px] text-slate-500">{etiquetaMit.toLowerCase()} − alarma</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Tiempo de reparación</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.reparacionHoras)}</div>
+              <div id="eopReparacion" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.reparacionHoras)}</div>
               <div class="text-[11px] text-slate-500">restablecimiento − alarma (indicador 7)</div>
             </div>
           </div>
-          {(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && (
-            <p class="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
-          )}
+          <p id="eopOrdenAviso" class:list={["mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800", !(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && "hidden"]}>La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
           </Fragment>
           ) : (
             <Fragment>
@@ -1328,6 +1328,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
+          {/* Si el checklist cambió de forma en el servidor, lo de aquí no se puede fusionar. */}
+          <div id="ckConflicto" class="mt-3 hidden border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900" role="alert">
+            <p id="ckConflictoMsg"></p>
+            <button id="ckRecargar" type="button" class="btn-secondary mt-2 text-xs">Volver a cargar la ficha</button>
+          </div>
           <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Las líneas marcadas <strong>lectura obligatoria</strong> piden un número: <strong>la orden no se completa sin él</strong> (márcala N/A si de verdad no se midió). Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => {
@@ -1480,6 +1485,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <ul class="mt-3 space-y-2">
               {liberaciones.map((lib) => {
                 const medida = liberacionTieneLectura(lib);
+                // Con mínimo o máximo se anota el número del instrumento (el
+                // servidor rechaza una lectura sin número); sin rango, también
+                // puede ir en texto.
+                const conRango = liberacionConRango(lib);
                 return (
                   <li class:list={["rounded-lg border p-3",
                     lib.conforme === false ? "border-red-300 bg-red-50" :
@@ -1513,21 +1522,35 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                       )}
                     </div>
                     <div class="mt-2 flex flex-wrap items-end gap-2">
-                      <div>
-                        <label class="mb-1 block text-xs text-slate-600">Valor medido{lib.unidad ? ` (${lib.unidad})` : ""}</label>
-                        <input class="liber-valor input w-32 text-sm" type="number" step="any" data-id={lib.id}
-                               data-min={lib.minAceptable ?? ""} data-max={lib.maxAceptable ?? ""}
-                               value={lib.valorMedido ?? ""} disabled={!puedeRegistrarMop} />
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <label class="mb-1 block text-xs text-slate-600">O anótalo en texto (cuando no es un número)</label>
-                        <input class="liber-texto input w-full text-sm" data-id={lib.id} value={lib.valorMedidoTexto ?? ""}
-                               placeholder="Ej. sin alarmas · selectores en automático" disabled={!puedeRegistrarMop} />
-                      </div>
+                      {conRango ? (
+                        <div>
+                          <label class="mb-1 block text-xs text-slate-600" for={`liberValor${lib.id}`}>Número que marcó el instrumento</label>
+                          <span class="flex items-center gap-2">
+                            <input id={`liberValor${lib.id}`} class="liber-valor input w-32 text-sm" type="text" inputmode="decimal" autocomplete="off"
+                                   data-id={lib.id} data-rango="1" data-min={lib.minAceptable ?? ""} data-max={lib.maxAceptable ?? ""}
+                                   value={lib.valorMedido ?? lib.valorMedidoTexto ?? ""} placeholder="Ej. 14,5" disabled={!puedeRegistrarMop} />
+                            {lib.unidad && <span class="liber-unidad text-sm font-medium text-slate-700">{lib.unidad}</span>}
+                          </span>
+                        </div>
+                      ) : (
+                        <Fragment>
+                          <div>
+                            <label class="mb-1 block text-xs text-slate-600">Valor medido{lib.unidad ? ` (${lib.unidad})` : ""}</label>
+                            <input class="liber-valor input w-32 text-sm" type="number" step="any" data-id={lib.id}
+                                   value={lib.valorMedido ?? ""} disabled={!puedeRegistrarMop} />
+                          </div>
+                          <div class="min-w-0 flex-1">
+                            <label class="mb-1 block text-xs text-slate-600">O anótalo en texto (cuando no es un número)</label>
+                            <input class="liber-texto input w-full text-sm" data-id={lib.id} value={lib.valorMedidoTexto ?? ""}
+                                   placeholder="Ej. sin alarmas · selectores en automático" disabled={!puedeRegistrarMop} />
+                          </div>
+                        </Fragment>
+                      )}
                       {puedeRegistrarMop && (
                         <button type="button" class="liber-save btn-primary text-xs" data-id={lib.id}>Registrar lectura</button>
                       )}
                     </div>
+                    <p class="liber-msg mt-2 hidden text-xs font-medium text-red-700" data-id={lib.id} role="alert"></p>
                   </li>
                 );
               })}
@@ -2069,10 +2092,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   }) }}>
     const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId, usuarioId, causaObligatoria, minCausa } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
-    // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
-    // toda la página (botones incluidos). Ante error, se trata como vacío.
-    let checklist = [];
-    try { checklist = checklistJson ? JSON.parse(checklistJson) : []; } catch { checklist = []; }
+    // El checklist como lo mandó el servidor por última vez (la base con que el
+    // servidor fusiona lo que se guarda aquí) y la copia que se edita en
+    // pantalla. Blindaje: si checklistEjecucion quedara con datos no-JSON, no
+    // debe romper toda la página (botones incluidos). Ante error, va vacío.
+    function ckLeer(texto) {
+      try { const a = texto ? JSON.parse(texto) : []; return Array.isArray(a) ? a : []; } catch { return []; }
+    }
+    let ckBaseTexto = checklistJson ?? null;
+    let ckBase = ckLeer(ckBaseTexto);
+    let checklist = ckLeer(ckBaseTexto);
 
     async function patchOrden(payload) {
       const res = await fetch(`/api/ordenes/${id}`, {
@@ -2243,56 +2272,53 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (r) location.reload();
     });
 
-    // Checklist con 3 estados (ok / na / desviacion / pendiente).
-    // Normalizar items por si vienen del formato viejo {hecho:bool}.
-    checklist = (Array.isArray(checklist) ? checklist : []).map((it) => {
-      let estado = it.estado;
-      if (!["pendiente","ok","na","desviacion"].includes(estado)) {
-        estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
-      }
-      // Preservar la metadata del procedimiento estándar (no perderla al guardar).
-      return {
-        texto: it.texto, estado, notas: it.notas ?? "",
-        criterio: it.criterio ?? null,
-        bloqueante: it.bloqueante === true || it.bloqueante === 1,
-        minutos: it.minutos ?? null,
-        materiales: it.materiales ?? null,
-        valorMedido: it.valorMedido ?? "",
-        // SOP con lectura obligatoria (Fase 47). Si se pierden aquí, el
-        // servidor deja de exigir el valor medido: hay que conservarlos.
-        requiereValor: it.requiereValor === true || it.requiereValor === 1,
-        unidad: it.unidad ?? null,
-        esperadoMin: it.esperadoMin ?? null,
-        esperadoMax: it.esperadoMax ?? null,
-        variableId: it.variableId ?? null,
-        hora: it.hora ?? "",
-        iniciales: it.iniciales ?? "",
-      };
-    });
+    // ── Checklist ──────────────────────────────────────────────────────────
+    // Cada punto queda tal como vino del servidor y solo se toca lo que se marca
+    // o escribe aquí. Al guardar viaja también la base (lo último que mandó el
+    // servidor): el servidor toma de esta pantalla solo los puntos que cambiaron
+    // en ella y conserva los demás, así no se deshace un paso que el técnico
+    // marcó en el celular mientras la ficha estaba abierta.
+    // La pantalla numera los puntos como parseChecklist, sin los que no tienen
+    // texto: ckPos traduce ese número a la posición real en el arreglo.
+    let ckPos = [];
+    function ckPosiciones() {
+      ckPos = [];
+      checklist.forEach((it, i) => { if (String(it?.texto ?? "").length > 0) ckPos.push(i); });
+    }
+    ckPosiciones();
+    function ckItem(idx) {
+      const it = checklist[ckPos[idx]];
+      return it && typeof it === "object" ? it : null;
+    }
+    // Formato viejo {hecho: bool}: se lee igual que en el servidor.
+    function estadoDe(it) {
+      if (["pendiente", "ok", "na", "desviacion"].includes(it?.estado)) return it.estado;
+      return typeof it?.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
+    }
+    const mismoPunto = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const ckCambiado = () => checklist.length !== ckBase.length || checklist.some((it, i) => !mismoPunto(it, ckBase[i]));
 
+    const COLOR_FILA = {
+      ok: "bg-emerald-50 border border-emerald-200",
+      na: "bg-slate-100 border border-slate-200",
+      desviacion: "bg-amber-50 border border-amber-300",
+      pendiente: "bg-white border border-slate-200",
+    };
     function actualizarColorFila(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const row = document.querySelector(`.ck-row[data-idx="${idx}"]`);
       if (!row || !it) return;
-      // Limpiar clases anteriores
-      row.className = row.className
-        .replace(/bg-(emerald|slate|amber|white)-(50|100|200|300)/g, "")
-        .replace(/border-(emerald|slate|amber)-(200|300)/g, "");
-      const colorMap = {
-        ok: "bg-emerald-50 border border-emerald-200",
-        na: "bg-slate-100 border border-slate-200",
-        desviacion: "bg-amber-50 border border-amber-300",
-        pendiente: "bg-white border border-slate-200",
-      };
-      row.classList.add(...colorMap[it.estado].split(" "));
+      for (const clases of Object.values(COLOR_FILA)) row.classList.remove(...clases.split(" "));
+      row.classList.add(...COLOR_FILA[estadoDe(it)].split(" "));
     }
 
     function actualizarBotonesEstado(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       if (!it) return;
+      const actual = estadoDe(it);
       document.querySelectorAll(`.ck-estado-btn[data-idx="${idx}"]`).forEach((btn) => {
         const e = btn.dataset.estado;
-        const isActive = it.estado === e;
+        const isActive = actual === e;
         const colors = {
           pendiente: isActive ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
           ok: isActive ? "bg-brand-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
@@ -2304,33 +2330,114 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
 
     function actualizarNotaVisible(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const wrap = document.querySelector(`.ck-nota-wrap[data-idx="${idx}"]`);
       if (!wrap || !it) return;
-      wrap.classList.toggle("hidden", it.estado !== "desviacion");
+      wrap.classList.toggle("hidden", estadoDe(it) !== "desviacion");
     }
 
-    let ckSaveTimer = null;
-    function programarGuardadoChecklist() {
+    // Vuelve a pintar cada punto con lo que hay en la copia de la pantalla. Un
+    // campo solo se reescribe si cambió, para no mover el cursor de quien escribe.
+    function repintarChecklist() {
+      document.querySelectorAll(".ck-row").forEach((row) => {
+        const idx = Number(row.dataset.idx);
+        const it = ckItem(idx);
+        if (!it) return;
+        actualizarColorFila(idx);
+        actualizarBotonesEstado(idx);
+        actualizarNotaVisible(idx);
+        const poner = (clase, v) => {
+          const el = document.querySelector(`.${clase}[data-idx="${idx}"]`);
+          const t = v === null || v === undefined ? "" : String(v);
+          if (el && el.value !== t) el.value = t;
+        };
+        poner("ck-nota", it.notas);
+        poner("ck-valor", it.valorMedido);
+        poner("ck-num", it.valorMedido);
+        poner("ck-hora", it.hora);
+        poner("ck-iniciales", it.iniciales);
+        if (document.querySelector(`.ck-num[data-idx="${idx}"]`)) mostrarLectura(idx);
+      });
+    }
+
+    function ckIndicador(texto, color) {
       const ind = $("ckAutosave");
-      if (ind) { ind.textContent = "Guardando…"; ind.className = "text-amber-600"; }
+      if (ind) { ind.textContent = texto; ind.className = color; }
+    }
+    function ckConflicto(msg) {
+      const texto = typeof msg === "string" && msg.trim() ? msg : "El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.";
+      const caja = $("ckConflicto");
+      if (!caja) { alert(texto); return; }
+      $("ckConflictoMsg").textContent = texto;
+      caja.classList.remove("hidden");
+    }
+    $("ckRecargar")?.addEventListener("click", () => location.reload());
+
+    // Lo que respondió el servidor, ya fusionado, pasa a ser la base y se pinta.
+    // Un punto que se cambió aquí mientras viajaba el guardado conserva ese
+    // cambio: sale en el guardado siguiente.
+    function tomarChecklist(orden, enviado) {
+      if (!orden || !("checklistEjecucion" in orden)) return;
+      const texto = orden.checklistEjecucion ?? null;
+      const fusion = ckLeer(texto);
+      if (fusion.length !== checklist.length) {
+        ckBaseTexto = texto; ckBase = fusion; checklist = ckLeer(texto); ckPosiciones();
+        ckConflicto();
+        return;
+      }
+      checklist = fusion.map((p, i) => (enviado && !mismoPunto(checklist[i], enviado[i]) ? checklist[i] : JSON.parse(JSON.stringify(p))));
+      ckBaseTexto = texto;
+      ckBase = fusion;
+      ckPosiciones();
+      repintarChecklist();
+    }
+
+    // Lo que viaja: el checklist de esta pantalla y la base con que se armó.
+    const ckEnvio = () => ({ checklistEjecucion: JSON.stringify(checklist), checklistBase: ckBaseTexto ?? "[]" });
+
+    let ckSaveTimer = null;
+    let ckEnVuelo = false;
+    let ckOtraVez = false;
+    // El último guardado no llegó por falta de señal: se reintenta al salir.
+    let ckReintentar = false;
+    function programarGuardadoChecklist() {
+      ckIndicador("Guardando…", "text-amber-600");
       if (ckSaveTimer) clearTimeout(ckSaveTimer);
-      ckSaveTimer = setTimeout(async () => {
-        const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
-        if (ind) {
-          ind.textContent = r ? "✓ Guardado" : "Sin guardar";
-          ind.className = r ? "text-emerald-600" : "text-red-600";
-          setTimeout(() => { ind.textContent = ""; }, 2000);
-        }
-      }, 1000);
+      ckSaveTimer = setTimeout(guardarChecklist, 1000);
+    }
+    async function guardarChecklist() {
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      if (ckEnVuelo) { ckOtraVez = true; return; }
+      if (!ckCambiado()) { ckIndicador("", "text-slate-400"); return; }
+      ckEnVuelo = true;
+      const payload = ckEnvio();
+      const enviado = JSON.parse(payload.checklistEjecucion);
+      let bien = false;
+      try {
+        const res = await fetch(`/api/ordenes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const j = await res.json().catch(() => ({}));
+        ckReintentar = false;
+        if (res.ok) { bien = true; tomarChecklist(j.orden, enviado); }
+        else if (res.status === 409) ckConflicto(j.error);
+        else alert(typeof j.error === "string" ? j.error : "Error");
+      } catch { ckReintentar = true; }
+      ckEnVuelo = false;
+      ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
+      if (bien) setTimeout(() => { if (!ckSaveTimer && !ckEnVuelo && $("ckAutosave")?.textContent === "✓ Guardado") ckIndicador("", "text-slate-400"); }, 2000);
+      if (ckOtraVez) { ckOtraVez = false; guardarChecklist(); }
     }
 
     document.querySelectorAll(".ck-estado-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.dataset.idx);
-        const nuevoEstado = btn.dataset.estado;
-        if (!checklist[idx]) return;
-        checklist[idx].estado = nuevoEstado;
+        const it = ckItem(idx);
+        if (!it) return;
+        it.estado = btn.dataset.estado;
+        delete it.hecho;
         actualizarColorFila(idx);
         actualizarBotonesEstado(idx);
         actualizarNotaVisible(idx);
@@ -2340,18 +2447,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     document.querySelectorAll(".ck-nota").forEach((ta) => {
       ta.addEventListener("input", () => {
-        const idx = Number(ta.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].notas = ta.value;
+        const it = ckItem(Number(ta.dataset.idx));
+        if (!it) return;
+        it.notas = ta.value;
         programarGuardadoChecklist();
       });
     });
 
     document.querySelectorAll(".ck-valor").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].valorMedido = inp.value;
+        const it = ckItem(Number(inp.dataset.idx));
+        if (!it) return;
+        it.valorMedido = inp.value;
         programarGuardadoChecklist();
       });
     });
@@ -2362,14 +2469,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // notas. NO abrimos el evento AOP desde aquí: eso lo hace el módulo de
     // condición anormal; aquí solo queda el dato listo.
     function evaluarLectura(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       if (!it) return { tiene: false, dentro: null };
       const crudo = it.valorMedido;
       const tiene = crudo !== null && crudo !== undefined && String(crudo).trim() !== "";
       const n = tiene ? Number(String(crudo).replace(",", ".")) : NaN;
       const num = Number.isFinite(n) ? n : null;
-      const min = it.esperadoMin === null || it.esperadoMin === undefined ? null : Number(it.esperadoMin);
-      const max = it.esperadoMax === null || it.esperadoMax === undefined ? null : Number(it.esperadoMax);
+      const min = it.esperadoMin === null || it.esperadoMin === undefined || it.esperadoMin === "" ? null : Number(it.esperadoMin);
+      const max = it.esperadoMax === null || it.esperadoMax === undefined || it.esperadoMax === "" ? null : Number(it.esperadoMax);
       let dentro = null;
       if (num !== null && (min !== null || max !== null)) {
         dentro = (min === null || num >= min) && (max === null || num <= max);
@@ -2378,17 +2485,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
 
     function rangoTexto(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const u = it.unidad ? ` ${it.unidad}` : "";
-      const min = it.esperadoMin ?? null, max = it.esperadoMax ?? null;
+      const { min, max } = evaluarLectura(idx);
       if (min !== null && max !== null) return `${min} a ${max}${u}`;
       if (min !== null) return `≥ ${min}${u}`;
       if (max !== null) return `≤ ${max}${u}`;
       return null;
     }
 
-    function pintarLectura(idx) {
-      const it = checklist[idx];
+    // Solo pinta la caja y la etiqueta de la lectura.
+    function mostrarLectura(idx) {
       const ev = evaluarLectura(idx);
       const caja = document.querySelector(`.ck-num[data-idx="${idx}"]`)?.closest("div.mt-2");
       const etiqueta = document.querySelector(`.ck-rango[data-idx="${idx}"]`);
@@ -2406,6 +2513,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           ev.dentro === false ? '<span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>' :
           '<span class="text-slate-500">Registrado</span>';
       }
+    }
+
+    function pintarLectura(idx) {
+      const it = ckItem(idx);
+      if (!it) return;
+      const ev = evaluarLectura(idx);
+      mostrarLectura(idx);
       // Constancia escrita en las notas de la línea. Se regenera en cada
       // tecleo, así que corregir un dedazo también limpia la constancia; el
       // texto que escribió el técnico se conserva siempre.
@@ -2416,17 +2530,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const rt = rangoTexto(idx);
         const constancia = `Lectura fuera de rango: ${it.valorMedido}${u}${rt ? ` (rango normal ${rt})` : ""}${it.hora ? ` a las ${it.hora}` : ""}.`;
         it.notas = humanas ? `${constancia}\n${humanas}` : constancia;
-        if (it.estado !== "desviacion") {
+        if (estadoDe(it) !== "desviacion") {
           it.estado = "desviacion";
+          delete it.hecho;
           actualizarColorFila(idx);
           actualizarBotonesEstado(idx);
         }
-      } else if (it.notas !== humanas) {
+      } else if ((it.notas ?? "") !== humanas) {
         it.notas = humanas;
       }
       actualizarNotaVisible(idx);
       const ta = document.querySelector(`.ck-nota[data-idx="${idx}"]`);
-      if (ta && ta.value !== it.notas) ta.value = it.notas;
+      if (ta && ta.value !== (it.notas ?? "")) ta.value = it.notas ?? "";
     }
 
     function horaAhora() {
@@ -2436,14 +2551,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     document.querySelectorAll(".ck-num").forEach((inp) => {
       inp.addEventListener("input", () => {
         const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].valorMedido = inp.value;
+        const it = ckItem(idx);
+        if (!it) return;
+        it.valorMedido = inp.value;
         // La hora de la lectura se sella sola la primera vez: en el formato
         // impreso del MOP esa columna se llena durante la ejecución.
-        if (inp.value !== "" && !String(checklist[idx].hora || "").trim()) {
-          checklist[idx].hora = horaAhora();
+        if (inp.value !== "" && !String(it.hora || "").trim()) {
+          it.hora = horaAhora();
           const h = document.querySelector(`.ck-hora[data-idx="${idx}"]`);
-          if (h) h.value = checklist[idx].hora;
+          if (h) h.value = it.hora;
         }
         pintarLectura(idx);
         programarGuardadoChecklist();
@@ -2452,18 +2568,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     document.querySelectorAll(".ck-hora").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].hora = inp.value;
+        const it = ckItem(Number(inp.dataset.idx));
+        if (!it) return;
+        it.hora = inp.value;
         programarGuardadoChecklist();
       });
     });
 
     document.querySelectorAll(".ck-iniciales").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].iniciales = inp.value;
+        const it = ckItem(Number(inp.dataset.idx));
+        if (!it) return;
+        it.iniciales = inp.value;
         programarGuardadoChecklist();
       });
     });
@@ -2598,10 +2714,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // Lo escrito y marcado que todavía no salió al servidor, para mandarlo
     // junto con el envío a verificación (también el envío sin lectura).
+    // El checklist solo viaja si algo cambió aquí, y con su base: lo que el
+    // técnico marcó en el celular no se pisa.
     function evidenciaPendiente() {
       if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
-      return { ...leerEjecPayload(), checklistEjecucion: JSON.stringify(checklist ?? []) };
+      return { ...leerEjecPayload(), ...(ckCambiado() ? ckEnvio() : {}) };
     }
     window.otEvidenciaPendiente = evidenciaPendiente;
 
@@ -2689,21 +2807,30 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload),
           keepalive: true,
-        }).then((res) => alTerminar(res.ok), () => alTerminar(null));
+        }).then(async (res) => alTerminar(res.ok, await res.json().catch(() => ({})), res.status), () => alTerminar(null));
       } catch { alTerminar(null); }
     }
     function guardarAlSalir() {
       const payload = {};
-      const conTexto = !!debounceTimer, conPasos = !!ckSaveTimer;
+      const conTexto = !!debounceTimer;
+      // Un guardado del checklist que estaba por salir, en camino o sin señal se
+      // manda otra vez con keepalive: el que va en camino puede cortarse al salir.
+      const conPasos = (!!ckSaveTimer || ckEnVuelo || ckReintentar) && ckCambiado();
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
       if (conTexto) { clearTimeout(debounceTimer); debounceTimer = null; Object.assign(payload, leerEjecPayload()); }
-      if (conPasos) { clearTimeout(ckSaveTimer); ckSaveTimer = null; payload.checklistEjecucion = JSON.stringify(checklist); }
-      if (Object.keys(payload).length) enviarAlSalir(payload, (bien) => {
+      if (conPasos) Object.assign(payload, ckEnvio());
+      const enviado = conPasos ? JSON.parse(payload.checklistEjecucion) : null;
+      if (Object.keys(payload).length) enviarAlSalir(payload, (bien, j, status) => {
         if (conTexto) {
           if (bien) { limpiarLocal(); setIndicador("guardado", "✓ Guardado"); }
           else setIndicador(bien === false ? "error" : "offline", bien === false ? "Sin guardar" : "Sin conexión — guardado localmente");
         }
-        const ind = $("ckAutosave");
-        if (conPasos && ind) { ind.textContent = bien ? "✓ Guardado" : "Sin guardar"; ind.className = bien ? "text-emerald-600" : "text-red-600"; }
+        if (conPasos) {
+          ckReintentar = bien === null;
+          if (bien) tomarChecklist(j?.orden, enviado);
+          else if (status === 409) ckConflicto(j?.error);
+          ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
+        }
       });
       if (causaTimer) {
         clearTimeout(causaTimer); causaTimer = null;
@@ -2916,8 +3043,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   )}
 
   <!-- ══ MOP y EOP: prerrequisitos, liberaciones, horas y plan de reversa ══ -->
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id, motivoPrevio: o.cierreSinLecturaMotivo ?? "" }) }}>
-    const { otId, motivoPrevio } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id, motivoPrevio: o.cierreSinLecturaMotivo ?? "", venceCausa: o.causaRaizVencimiento ?? null, reversaInicial: !!o.reversaEjecutada }) }}>
+    const { otId, motivoPrevio, venceCausa, reversaInicial } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const g = (x) => document.getElementById(x);
 
     function aviso(el, texto, ok) {
@@ -2943,7 +3070,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         return { ok: true, data: j };
       } catch (e) {
         window.showToast?.("Sin conexión: no se pudo guardar.", "error");
-        return { ok: false, error: String(e) };
+        return { ok: false, error: "Sin conexión: no se pudo guardar." };
       }
     }
 
@@ -2989,38 +3116,111 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
     });
 
+    // ISO → datetime-local en hora de El Salvador, igual que isoALocalInput.
+    function isoALocal(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "";
+      return new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "America/El_Salvador", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      }).format(d).replace(" ", "T").slice(0, 16);
+    }
+
+    // Duración entre dos horas, como fmtDuracionHoras: «2 h 15 min».
+    function duracion(desde, hasta) {
+      const a = desde ? Date.parse(desde) : NaN, b = hasta ? Date.parse(hasta) : NaN;
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return "—";
+      const h = Math.round(((b - a) / 3_600_000) * 100) / 100;
+      const min = Math.round(Math.abs(h) * 60), hh = Math.floor(min / 60), mm = min % 60;
+      const txt = hh > 0 ? `${hh} h${mm > 0 ? ` ${mm} min` : ""}` : `${mm} min`;
+      return h < 0 ? `−${txt}` : txt;
+    }
+
     // ── EOP · los tres tiempos (editables hacia atrás) ──────────────────────
+    // Se guarda el valor con que se pintó cada hora y solo viaja la que la
+    // jefatura cambió: la que el técnico registró desde el celular mientras la
+    // ficha estaba abierta no se borra. Después se pinta lo que respondió el
+    // servidor, con la hora del técnico incluida.
+    const HORAS_EOP = ["horaAlarma", "horaLlegada", "horaMitigacion", "horaRestablecimiento"];
+    const horasPintadas = {};
+    for (const c of HORAS_EOP) if (g(c)) horasPintadas[c] = g(c).value;
+
+    function pintarHorasEop(orden) {
+      for (const c of HORAS_EOP) {
+        const el = g(c);
+        if (!el) continue;
+        el.value = isoALocal(orden[c]);
+        horasPintadas[c] = el.value;
+      }
+      const poner = (idEl, txt) => { const el = g(idEl); if (el) el.textContent = txt; };
+      poner("eopRespuesta", duracion(orden.horaAlarma, orden.horaLlegada));
+      poner("eopMitigacion", duracion(orden.horaAlarma, orden.horaMitigacion));
+      poner("eopReparacion", duracion(orden.horaAlarma, orden.horaRestablecimiento));
+      const alReves = !!orden.horaAlarma && !!orden.horaLlegada && Date.parse(orden.horaLlegada) < Date.parse(orden.horaAlarma);
+      g("eopOrdenAviso")?.classList.toggle("hidden", !alReves);
+    }
+
     g("eopSave")?.addEventListener("click", async () => {
+      const cambios = {};
+      for (const c of HORAS_EOP) {
+        const el = g(c);
+        if (el && el.value !== horasPintadas[c]) cambios[c] = localAIso(el.value);
+      }
+      if (!Object.keys(cambios).length) { aviso(g("eopMsg"), "Sin cambios", true); return; }
       const btn = g("eopSave");
       btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
-        horaAlarma: localAIso(g("horaAlarma").value),
-        horaLlegada: localAIso(g("horaLlegada").value),
-        horaMitigacion: localAIso(g("horaMitigacion").value),
-        horaRestablecimiento: localAIso(g("horaRestablecimiento").value),
-      });
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
       btn.disabled = false;
-      if (r.ok) {
+      if (r.ok && r.data?.orden) {
+        pintarHorasEop(r.data.orden);
+        aviso(g("eopMsg"), "✓ Guardado", true);
         window.showToast?.("Horas registradas. El plazo de la causa raíz corre desde la alarma.", "success");
-        location.reload();
+        // Con la alarma se mueve el plazo de la causa raíz, que se dibuja en
+        // varias tarjetas: se vuelve a cargar la ficha.
+        if ((r.data.orden.causaRaizVencimiento ?? null) !== venceCausa) location.reload();
       } else {
         aviso(g("eopMsg"), "No se guardó", false);
       }
     });
 
     // ── MOP · plan de reversa ───────────────────────────────────────────────
-    g("reversaSave")?.addEventListener("click", async () => {
-      const btn = g("reversaSave");
-      btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
+    // Igual que las horas: solo viaja lo que cambió respecto de lo pintado. La
+    // reversa que el técnico marcó desde el celular no se desmarca ni se borran
+    // sus notas.
+    function leerReversa() {
+      return {
         planReversa: g("planReversa").value.trim() || null,
         reversaEjecutada: g("reversaEjecutada").checked,
         reversaNotas: g("reversaNotas").value.trim() || null,
-      });
+      };
+    }
+    let reversaPintada = g("reversaSave") ? leerReversa() : null;
+
+    function pintarReversa(orden) {
+      g("planReversa").value = orden.planReversa ?? "";
+      g("reversaEjecutada").checked = !!orden.reversaEjecutada;
+      g("reversaNotas").value = orden.reversaNotas ?? "";
+      g("reversaEjecutada").closest("label")?.classList.toggle("bg-amber-50", !!orden.reversaEjecutada);
+      reversaPintada = leerReversa();
+    }
+
+    g("reversaSave")?.addEventListener("click", async () => {
+      const ahora = leerReversa();
+      const cambios = {};
+      for (const k of Object.keys(ahora)) if (ahora[k] !== reversaPintada[k]) cambios[k] = ahora[k];
+      if (!Object.keys(cambios).length) { aviso(g("reversaMsg"), "Sin cambios", true); return; }
+      const btn = g("reversaSave");
+      btn.disabled = true;
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
       btn.disabled = false;
-      if (r.ok) {
+      if (r.ok && r.data?.orden) {
+        pintarReversa(r.data.orden);
         aviso(g("reversaMsg"), "✓ Guardado", true);
         window.showToast?.("Plan de reversa guardado.", "success");
+        // Con la reversa marcada o desmarcada cambia lo que se exige para
+        // enviar la intervención: se vuelve a cargar la ficha.
+        if (!!r.data.orden.reversaEjecutada !== reversaInicial) location.reload();
       } else {
         aviso(g("reversaMsg"), "No se guardó", false);
       }
@@ -3094,25 +3294,37 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     });
 
     // ── MOP · lecturas de liberación ────────────────────────────────────────
+    // Con mínimo o máximo, la lectura es el número del instrumento (acepta coma)
+    // y no hay texto libre. Si lo escrito no es un número, el servidor dice qué
+    // falta y se muestra tal cual junto al campo.
     document.querySelectorAll(".liber-save").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const itemId = Number(btn.dataset.id);
         const num = document.querySelector(`.liber-valor[data-id="${itemId}"]`);
         const txt = document.querySelector(`.liber-texto[data-id="${itemId}"]`);
+        const msg = document.querySelector(`.liber-msg[data-id="${itemId}"]`);
+        const conRango = num?.dataset.rango === "1";
         const crudo = num ? num.value.trim() : "";
         const texto = txt ? txt.value.trim() : "";
+        if (msg) { msg.textContent = ""; msg.classList.add("hidden"); }
         if (crudo === "" && texto === "") {
-          window.showToast?.("Escribe el valor medido (número) o anótalo en texto.", "error");
+          window.showToast?.(conRango ? "Escribe el número que marcó el instrumento." : "Escribe el valor medido (número) o anótalo en texto.", "error");
           num?.focus();
           return;
         }
+        const lectura = !conRango
+          ? { valorMedido: crudo === "" ? null : Number(crudo), valorMedidoTexto: texto || null }
+          : /^[-+]?\d+(?:[.,]\d+)?$/.test(crudo)
+            ? { valorMedido: Number(crudo.replace(",", ".")), valorMedidoTexto: null }
+            : { valorMedido: null, valorMedidoTexto: crudo };
         btn.disabled = true;
-        const r = await llamar(`/api/ordenes/${otId}/liberaciones`, "PATCH", {
-          itemId,
-          valorMedido: crudo === "" ? null : Number(crudo),
-          valorMedidoTexto: texto || null,
-        });
+        const r = await llamar(`/api/ordenes/${otId}/liberaciones`, "PATCH", { itemId, ...lectura });
         btn.disabled = false;
+        if (!r.ok && msg) {
+          msg.textContent = r.error;
+          msg.classList.remove("hidden");
+          num?.focus();
+        }
         if (r.ok) {
           const conforme = r.data?.liberacion?.conforme;
           if (conforme === false) {

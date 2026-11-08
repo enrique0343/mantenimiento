@@ -12,7 +12,7 @@ import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit, type DiffEntry } from "@/lib/audit";
-import { FAMILIAS_RONDA, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteTurno } from "@/lib/ronda-turno";
+import { FAMILIAS_RONDA, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
 import { procedimientos, rondaPuntos, rondaVigencias, rondas, sucursales } from "@/lib/schema";
 
 export const prerender = false;
@@ -357,6 +357,7 @@ async function cambiarTurnos(ctx: APIContext, db: Db, user: Usuario, rondaId: nu
     db.update(rondas).set({ turnos: JSON.stringify(turnos) }).where(eq(rondas.id, ronda.id)).returning(),
     db.insert(rondaVigencias).values({ rondaId: ronda.id, turnosAntes: JSON.stringify(antes), hasta: ahora, usuarioId: user.id }),
   ]);
+  // Entran con el primer turno de la lista nueva: el turno que corre sigue hasta ahí, con su ronda.
   const aplicaDesde = siguienteTurno(turnos, Date.parse(ahora));
   const cambios = { turnos: { antes, despues: turnos } };
   await logAudit(ctx, {
@@ -421,15 +422,17 @@ async function cambiarMarca(ctx: APIContext, db: Db, user: Usuario, sucursalId: 
   if (!sede) return fallo(404, "La sede no existe.");
   if (sede.haceRonda === haceRonda) return Response.json({ ok: true, sede, aplicaDesde: null, cambios: {} });
 
-  // Para decir desde qué turno entra: los turnos del recorrido que usa la sede.
+  // Para decir desde qué turno entra: el siguiente inicio en la línea de tiempo del recorrido que usa la sede.
   const [propia] = await db.select().from(rondas).where(eq(rondas.sucursalId, sede.id)).limit(1);
   const [recorrido] = propia ? [propia] : await db.select().from(rondas).where(isNull(rondas.sucursalId)).orderBy(asc(rondas.id)).limit(1);
   const ahora = new Date().toISOString();
-  const [[actualizada]] = await db.batch([
+  const [[actualizada], cambiosTurnos] = await db.batch([
     db.update(sucursales).set({ haceRonda }).where(eq(sucursales.id, sede.id)).returning({ id: sucursales.id, nombre: sucursales.nombre, haceRonda: sucursales.haceRonda }),
+    db.select().from(rondaVigencias).where(eq(rondaVigencias.rondaId, recorrido?.id ?? 0)),
     db.insert(rondaVigencias).values({ sucursalId: sede.id, haceRondaAntes: sede.haceRonda, hasta: ahora, usuarioId: user.id }),
   ]);
-  const aplicaDesde = siguienteTurno(parsearTurnos(recorrido?.turnos), Date.parse(ahora));
+  const linea = recorrido ? lineaDeTurnos(recorrido, cambiosTurnos) : lineaFija(parsearTurnos(null));
+  const aplicaDesde = siguienteInicio(linea, Date.parse(ahora));
   const cambios = { haceRonda: { antes: sede.haceRonda, despues: haceRonda } };
   await logAudit(ctx, {
     entidad: "ronda", entidadId: recorrido?.id ?? 0, accion: "update",

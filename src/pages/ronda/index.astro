@@ -20,7 +20,6 @@ import {
   turnosDeTablero,
   etiquetaTurno,
   ahoraSV,
-  turnoActual,
   type FilaTablero,
 } from "@/lib/ronda-turno";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
@@ -35,11 +34,11 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 
 // Sin filtro, cada sede muestra su turno vigente; con filtro, el turno pedido.
-const turnos = await turnosDeTablero(db);
+// El filtro ofrece los turnos de antes, de ahora y los que entran; de entrada, el que corre.
+const { turnos, vigente: t } = await turnosDeTablero(db);
 const pedidoFecha = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("fecha") ?? "") ? url.searchParams.get("fecha")! : null;
 const pedidoTurno = turnos.includes(url.searchParams.get("turno") ?? "") ? url.searchParams.get("turno")! : null;
 const pedido = pedidoFecha && pedidoTurno ? { fecha: pedidoFecha, turno: pedidoTurno } : undefined;
-const t = turnoActual(turnos);
 const fecha = pedido?.fecha ?? t.fecha;
 const turno = pedido?.turno ?? t.turno;
 

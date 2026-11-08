@@ -225,5 +225,55 @@ try {
   w.close();
   const rd = await render('rondas.astro.mjs', '/rondas?execution=9', 'admin', 1);
   ok(rd.status === 301 && rd.location === '/ronda', 'Los enlaces viejos llegan al tablero');
-  console.log(`PASS test-ronda-paginas: ${checks} verificaciones; pantallas construidas, migraciones reales.`);
 } finally { await f.close(); }
+
+// ── Un cambio de turnos a media mañana: entra con el primer turno de la lista nueva ──
+// Base nueva y reloj fijo: martes 10/11/2026. A las 10:40 el modelo pasa de 06:00, 14:00 y 22:00
+// a 07:00 y 19:00: el de las 06:00 sigue hasta las 14:00, el de las 14:00 hasta las 19:00.
+{
+  const D = '2026-11-10';
+  const en = (hhmm) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`)).toISOString();
+  fijarReloj(en('10:30'));
+  const g = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede Uno',1),(2,'Sede Dos',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const contenedor = await experimental_AstroContainer.create();
+    const ver = async (rel, url) => {
+      const res = await contenedor.renderToResponse(await cargar(rel), { partial: false, request: new Request(`https://local.test${url}`), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } });
+      return parseHtml(await res.text());
+    };
+    const pedir = async (data) => (await g.app.puntos.PUT(g.ctx('/api/ronda-turno/puntos', { method: 'PUT', data, rol: 'jefe' }))).json();
+    const ronda = (await g.call(g.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+    const clave = { sucursalId: 1, fecha: D, turno: '06:00' };
+    await g.call(g.app.sync.POST, '/api/campo/sync', { method: 'POST', rol: 'tecnico', data: { ops: [{ opId: 'paginas-linea-1', tipo: 'ronda.lectura', at: en('10:30'), ...clave, puntoId: ronda.puntos[0].id, resultado: 'ok', ...(ronda.puntos[0].pideValor ? { valor: ronda.puntos[0].min ?? 1 } : {}) }] } });
+    const modelo = g.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id;
+    fijarReloj(en('10:40'));
+    ok((await pedir({ accion: 'turnos', rondaId: modelo, turnos: ['07:00', '19:00'] })).aplicaDesde?.turno === '19:00', 'Los turnos nuevos entran a las 19:00');
+    fijarReloj(en('10:50'));
+    ok((await pedir({ accion: 'hace_ronda', sucursalId: 2, haceRonda: false })).aplicaDesde?.turno === '14:00', 'La marca entra en el siguiente turno que de verdad empieza');
+    fijarReloj(en('10:55'));
+    let doc = await ver('ronda/puntos.astro.mjs', '/ronda/puntos');
+    ok(texto(porId(doc, 'turnos-estado')) === 'El turno de ahora sigue con 06:00, 14:00, 22:00. Estos turnos entran desde el turno 19:00 del 10/11/2026.', `La pantalla dice qué turnos rigen y desde cuándo entran los nuevos: «${texto(porId(doc, 'turnos-estado'))}»`);
+    ok(attr(porId(doc, 'r_turnos'), 'value') === '07:00, 19:00', 'Y deja editar los que se guardaron');
+    const sedeDos = texto(nodos(doc, (n) => attr(n, 'data-sede-fila') === '2')[0]);
+    ok(/No hace ronda · desde el turno 14:00 del 10\/11\/2026; el turno de ahora sigue como estaba/.test(sedeDos), `La marca dice desde qué turno entra: «${sedeDos}»`);
+    doc = await ver('ronda.astro.mjs', '/ronda');
+    const filaSede = (nombre) => texto(nodos(doc, (n) => n.tagName === 'li' && /turno \d\d:\d\d/.test(texto(n)) && texto(n).includes(nombre))[0]);
+    ok(/Sede Uno\s*turno 06:00/.test(filaSede('Sede Uno')) && /En curso/.test(filaSede('Sede Uno')), `El tablero sigue en la ronda de las 06:00, en curso: «${filaSede('Sede Uno')}»`);
+    ok(/turno 06:00/.test(filaSede('Sede Dos')) && /Sin iniciar/.test(filaSede('Sede Dos')), 'La otra sede todavía hace ronda en este turno');
+    fijarReloj(en('14:30'));
+    doc = await ver('ronda.astro.mjs', '/ronda');
+    ok(/Sede Uno\s*turno 14:00/.test(filaSede('Sede Uno')) && /Sin iniciar/.test(filaSede('Sede Uno')), `A las 14:30 corre el de las 14:00 y se exige: «${filaSede('Sede Uno')}»`);
+    ok(/No hace ronda/.test(filaSede('Sede Dos')), 'Y la sede marcada ya no hace ronda');
+    const opciones = nodos(porId(doc, 'f_turno'), (n) => n.tagName === 'option');
+    ok(['06:00', '07:00', '14:00', '19:00', '22:00'].every((tt) => opciones.some((o) => attr(o, 'value') === tt)), 'El filtro ofrece los turnos de antes y los nuevos');
+    ok(attr(opciones.find((o) => attr(o, 'selected') !== undefined), 'value') === '14:00', 'Y de entrada, el que corre');
+    doc = await ver('ronda.astro.mjs', `/ronda?fecha=${D}&turno=07:00`);
+    ok(/No aplica/.test(filaSede('Sede Uno')), 'El de las 07:00 de hoy no se exige');
+    fijarReloj(en('19:30'));
+    doc = await ver('ronda/puntos.astro.mjs', '/ronda/puntos');
+    ok(texto(porId(doc, 'turnos-estado')) === '', 'Ya entraron: la pantalla no anuncia nada pendiente');
+  } finally { await g.close(); }
+}
+console.log(`PASS test-ronda-paginas: ${checks} verificaciones; pantallas construidas, migraciones reales.`);

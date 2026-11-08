@@ -21,6 +21,12 @@ try {
   const enviarTodas = async (ops) => { let resto = ops; const salida = []; while (resto.length) { const r = await enviar(resto.slice(0, 20)); assert.ok(r.length >= 1); salida.push(...r); resto = resto.slice(r.length); } return salida; };
   const hoy = async (s) => (await call(app.hoy.GET, `/api/campo/hoy?sede=${s}`, { rol: 'tecnico' })).body;
   const db = app.database.getDb(ctx('/x'));
+  // Lo esperado se calcula aquí, aparte del código, para que valga a cualquier hora de RELOJ_PRUEBA.
+  const masDias = (f, k) => new Date(Date.parse(`${f}T12:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+  const inicio = (f, tt) => Date.parse(`${f}T${tt}:00-06:00`);
+  const isoDe = (x) => new Date(inicio(x.fecha, x.turno)).toISOString();
+  const proximo = (lista) => { const ya = Date.now(), f0 = new Date(ya - 6 * 3600000).toISOString().slice(0, 10); for (const f of [masDias(f0, -1), f0, masDias(f0, 1)]) for (const tt of lista) if (inicio(f, tt) >= ya) return { fecha: f, turno: tt }; };
+  const despuesDe = (x) => new Date(inicio(x.fecha, x.turno) + 30 * 60000).toISOString();
   const p1 = await hoy(1);
   const c1 = { sucursalId: 1, fecha: p1.ronda.fecha, turno: p1.ronda.turno }; const c2 = { ...c1, sucursalId: 2 };
   const pts = p1.ronda.puntos;
@@ -35,6 +41,7 @@ try {
   ok(comb.actuarMin === 1440 && bit.pideOrden && cuartos.pideOrden && !temp.pideOrden, 'Reloj propio y líneas que piden orden');
   igual([...new Set(pts.map((p) => p.linea))], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'Las líneas 1 a 10 tienen parada; la 11 es el cierre');
   ok(Array.isArray(p1.ronda.turnos) && p1.ronda.turnos.length === 3, 'El paquete trae los turnos para seguir sin señal');
+  igual(p1.ronda.turnosProximos, null, 'Sin cambio de turnos pendiente, no hay turnos próximos');
 
   // AOP por sede y por parada
   const [a] = await enviar([op('ronda.lectura', hace(50), { ...c1, puntoId: temp.id, resultado: 'ok', valor: 25 })]);
@@ -198,10 +205,13 @@ try {
   const r2 = s.body.ronda.id;
   igual(ordenDe(r2).map((x) => x.etiqueta), modeloAntes.map((x) => x.etiqueta), 'El recorrido propio copia las paradas del modelo, en su orden');
   ok((await put({ accion: 'crear_propio', sucursalId: 2 })).body.yaExistia && all('SELECT id FROM rondas WHERE sucursal_id=2').length === 1, 'Pedirlo otra vez no lo duplica');
+  const entraPropio = proximo(['06:00', '14:00']);
   s = await put({ accion: 'turnos', rondaId: r2, turnos: ['06:00', '14:00'] });
   ok(s.status === 200 && s.body.aplicaDesde, JSON.stringify(s.body));
+  igual(s.body.aplicaDesde, entraPropio, 'Entran con el primer turno de la lista nueva');
   const h2 = await hoy(2);
-  ok(h2.ronda.turnos.join() === '06:00,14:00', 'Y usa sus propios turnos');
+  igual(h2.ronda.turnosProximos, { desde: isoDe(entraPropio), turnos: ['06:00', '14:00'] }, 'Y usa sus propios turnos desde que entran');
+  igual(h2.ronda.turnos, ['06:00', '14:00', '22:00'], 'Hasta entonces rigen los de antes');
   const delModelo = new Set(modeloAntes.map((x) => x.id));
   if (h2.ronda.turno === c2.turno) ok(h2.ronda.ejecucionId && h2.ronda.puntos.every((p) => delModelo.has(p.id)), 'La ronda ya abierta conserva lo que decía al abrir');
 
@@ -327,11 +337,6 @@ try {
   ]) { s = await put({ accion: 'turnos', rondaId: modeloId, turnos }); ok(s.status === 400 && s.body.error === msg, `La hora inválida llega a la pantalla: «${msg}»`); }
 
   // Esta sede no hace ronda: sin copiar el modelo, y entra en el turno que todavía no empezó.
-  // Lo esperado se calcula aquí, aparte del código, para que valga a cualquier hora de RELOJ_PRUEBA.
-  const masDias = (f, k) => new Date(Date.parse(`${f}T12:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
-  const inicio = (f, tt) => Date.parse(`${f}T${tt}:00-06:00`);
-  const proximo = (lista) => { const ya = Date.now(), f0 = new Date(ya - 6 * 3600000).toISOString().slice(0, 10); for (const f of [masDias(f0, -1), f0, masDias(f0, 1)]) for (const tt of lista) if (inicio(f, tt) >= ya) return { fecha: f, turno: tt }; };
-  const despuesDe = (x) => new Date(inicio(x.fecha, x.turno) + 30 * 60000).toISOString();
   const sigDe3 = proximo(['06:00', '14:00', '22:00']);
   s = await put({ accion: 'hace_ronda', sucursalId: 3, haceRonda: false });
   ok(s.status === 200 && s.body.sede.haceRonda === false, JSON.stringify(s.body));
@@ -357,13 +362,18 @@ try {
   const cambioMs = Date.parse(one('SELECT hasta FROM ronda_vigencias WHERE ronda_id=?', modeloId).hasta);
   igual(s.body.cambios.turnos, { antes: ['06:00', '14:00', '22:00'], despues: ['06:00', '18:00'] }, 'La auditoría lleva los turnos de antes y los de después');
   ok(one('SELECT turnos_antes t FROM ronda_vigencias WHERE ronda_id=?', modeloId).t === '["06:00","14:00","22:00"]', 'Lo que regía queda escrito');
-  ok((await hoy(4)).ronda.turnos.join() === '06:00,18:00', 'Las sedes que usan el modelo reciben sus turnos');
-  ok((await hoy(2)).ronda.turnos.join() === '06:00,14:00', 'El recorrido propio no recibe cambios del modelo');
+  const entraMs = inicio(nuevoTurno.fecha, nuevoTurno.turno);
+  const p4 = (await hoy(4)).ronda;
+  igual(p4.turnosProximos, { desde: isoDe(nuevoTurno), turnos: ['06:00', '18:00'] }, 'Las sedes que usan el modelo reciben sus turnos desde que empieza el primero de la lista nueva');
+  igual(p4.turnos, ['06:00', '14:00', '22:00'], 'El turno de ahora sigue con los de antes');
+  const p2 = (await hoy(2)).ronda;
+  igual(p2.turnosProximos?.turnos ?? p2.turnos, ['06:00', '14:00'], 'El recorrido propio no recibe cambios del modelo');
   sem = await app.rt.resumenSemana(db, 1, pasada);
   ok(sem.esperadas === 21 && sem.turnos.join() === '06:00,14:00,22:00', `La semana pasada se revisa con los turnos que regían (${sem.turnos.join()})`);
   const dias = Array.from({ length: 7 }, (_, k) => masDias(estaSemana, k));
   const viejos = ['06:00', '14:00', '22:00'], nuevos = ['06:00', '18:00'];
-  const filasSemana = [...new Set([...viejos, ...nuevos])].sort().filter((tt) => dias.some((f) => (viejos.includes(tt) && inicio(f, tt) < cambioMs) || (nuevos.includes(tt) && inicio(f, tt) >= cambioMs) || (f === c1.fecha && tt === c1.turno)));
+  // Los de antes rigen hasta que empieza el primer turno de la lista nueva, no hasta el momento del cambio.
+  const filasSemana = [...new Set([...viejos, ...nuevos])].sort().filter((tt) => dias.some((f) => (viejos.includes(tt) && inicio(f, tt) < entraMs) || (nuevos.includes(tt) && inicio(f, tt) >= entraMs) || (f === c1.fecha && tt === c1.turno)));
   igual((await app.rt.resumenSemana(db, 1, estaSemana)).turnos, filasSemana, 'Esta semana se ven los turnos que rigieron cada día, ni más ni menos');
 
   // Ya en el turno nuevo del modelo
@@ -377,15 +387,22 @@ try {
   ok(fila(4).turno === nuevoTurno.turno && fila(4).estado === 'sin_iniciar' && fila(4).haceRonda, 'El turno nuevo del modelo ya se exige');
   const lunesDe = (d) => lunes(d);
   sem = await app.rt.resumenSemana(db, 1, lunesDe(nuevoTurno.fecha));
-  const quitadas = sem.celdas.filter((c) => ['14:00', '22:00'].includes(c.turno) && inicio(c.fecha, c.turno) > cambioMs && inicio(c.fecha, c.turno) < Date.now());
-  ok(quitadas.every((c) => c.estado === 'no_aplica'), `Los turnos que se quitaron no salen como «no se hizo» después del cambio (${quitadas.length})`);
+  const quitadas = sem.celdas.filter((c) => ['14:00', '22:00'].includes(c.turno) && inicio(c.fecha, c.turno) >= entraMs && inicio(c.fecha, c.turno) < Date.now());
+  ok(quitadas.every((c) => c.estado === 'no_aplica'), `Los turnos que se quitaron no salen como «no se hizo» desde que entran los nuevos (${quitadas.length})`);
+  const siguen = sem.celdas.filter((c) => viejos.includes(c.turno) && inicio(c.fecha, c.turno) > cambioMs && inicio(c.fecha, c.turno) < entraMs && !(c.fecha === c1.fecha && c.turno === c1.turno));
+  ok(siguen.every((c) => c.estado === 'no_se_hizo'), `Lo que empezó después del cambio y antes de que entrara se exige con los turnos de antes (${siguen.map((c) => c.turno).join()})`);
   const celda = (r, x) => r.celdas.find((c) => c.fecha === x.fecha && c.turno === x.turno)?.estado ?? 'no_aplica';
   ok(celda(await app.rt.resumenSemana(db, 3, lunesDe(c3.fecha)), c3) === 'completa', 'La sede que no hace ronda: lo que ya hizo se sigue viendo');
   ok(celda(await app.rt.resumenSemana(db, 3, lunesDe(nuevoTurno.fecha)), nuevoTurno) === 'no_aplica', 'Y lo de después no se le exige');
   const h2b = await hoy(2);
-  ok(!h2b.ronda.ejecucionId, `El recorrido propio está en un turno que todavía no se abre (${h2b.ronda.fecha} ${h2b.ronda.turno})`);
-  ok(h2b.ronda.puntos.some((p) => p.texto === nuevo.etiqueta && p.min === 20 && p.max === 22) && !h2b.ronda.puntos.some((p) => p.id === segunda) && h2b.ronda.puntos.at(-1).id === cisterna.id, 'La ronda que todavía no empezó trae lo editado, sin la desactivada y con la nueva al final');
-  igual(h2b.ronda.puntos.map((p) => p.id), all('SELECT id FROM ronda_puntos WHERE ronda_id=? AND activo=1 ORDER BY orden, id', r2).map((x) => x.id), 'Solo las activas, en el orden del recorrido');
+  if (h2b.ronda.fecha === c2.fecha && h2b.ronda.turno === c2.turno) {
+    // Con RELOJ_PRUEBA de tarde, el recorrido propio sigue en el turno que ya se abrió: conserva lo que decía al abrir.
+    ok(h2b.ronda.ejecucionId && h2b.ronda.puntos.every((p) => delModelo.has(p.id)), 'La ronda que ya empezó conserva lo que decía al abrir');
+  } else {
+    ok(!h2b.ronda.ejecucionId, `El recorrido propio está en un turno que todavía no se abre (${h2b.ronda.fecha} ${h2b.ronda.turno})`);
+    ok(h2b.ronda.puntos.some((p) => p.texto === nuevo.etiqueta && p.min === 20 && p.max === 22) && !h2b.ronda.puntos.some((p) => p.id === segunda) && h2b.ronda.puntos.at(-1).id === cisterna.id, 'La ronda que todavía no empezó trae lo editado, sin la desactivada y con la nueva al final');
+    igual(h2b.ronda.puntos.map((p) => p.id), all('SELECT id FROM ronda_puntos WHERE ronda_id=? AND activo=1 ORDER BY orden, id', r2).map((x) => x.id), 'Solo las activas, en el orden del recorrido');
+  }
 
   const vuelve = proximo(['06:00', '18:00']);
   s = await put({ accion: 'hace_ronda', sucursalId: 3, haceRonda: true });
@@ -396,5 +413,241 @@ try {
   ok((await hoy(3)).ronda?.turno === vuelve.turno, 'Y en el turno siguiente vuelve la ronda');
   igual(app.rt.vigenteAl([{ hasta: '2026-01-02T00:00:00Z', antes: 'b' }, { hasta: '2026-01-01T00:00:00Z', antes: 'a' }], 'c', Date.parse('2025-12-31T00:00:00Z')), 'a', 'Rige lo de antes del primer cambio posterior');
   igual(app.rt.vigenteAl([{ hasta: '2026-01-01T00:00:00Z', antes: 'a' }], 'c', Date.parse('2026-01-01T00:00:00Z')), 'c', 'Un turno que empieza en el momento del cambio ya entra con lo nuevo');
-  console.log(`PASS test-ronda: ${casos} casos; rutas y migraciones reales, sin red.`);
 } finally { await f.close(); }
+
+// ══ La línea de tiempo de los turnos ══════════════════════════════════════════
+// Un cambio de turnos entra cuando empieza el primer turno de la lista nueva: el
+// turno que corre sigue hasta ahí, con su ronda, en el celular, en el servidor,
+// en el tablero y en la semana. Cada caso en una base nueva, con su reloj fijo.
+const D = '2026-11-10'; // martes; su semana empieza el lunes 09/11/2026
+const dia = (k) => new Date(Date.parse(`${D}T12:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
+const en = (hhmm, k = 0) => new Date(Date.parse(`${dia(k)}T${hhmm}:00-06:00`)).toISOString();
+const lunesDeD = '2026-11-09';
+async function escenario(desde, fn) {
+  fijarReloj(en(desde));
+  const x = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', rt: 'lib/ronda-turno', database: 'lib/db', puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    x.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede 1',1)");
+    x.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const db = x.app.database.getDb(x.ctx('/x'));
+    let k = 0;
+    const e = {
+      x, db,
+      reloj: (hhmm, d = 0) => fijarReloj(en(hhmm, d)),
+      op: (tipo, at, extra = {}) => ({ opId: `linea-${++k}-${tipo}`, tipo, at, ...extra }),
+      hoy: async () => (await x.call(x.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda,
+      sync: async (ops) => (await x.call(x.app.sync.POST, '/api/campo/sync', { method: 'POST', data: { ops }, rol: 'tecnico' })).body.resultados,
+      put: async (data) => { const r = await x.app.puntos.PUT(x.ctx('/api/ronda-turno/puntos', { method: 'PUT', data, rol: 'jefe' })); return { status: r.status, body: await r.json() }; },
+      fila: async (pedido) => (await x.app.rt.tableroRondas(db, pedido)).find((z) => z.sucursalId === 1),
+      semana: async () => { const r = await x.app.rt.resumenSemana(db, 1, lunesDeD); return { r, celda: (fecha, turno) => r.celdas.find((c) => c.fecha === fecha && c.turno === turno)?.estado ?? 'sin fila' }; },
+      ejecucion: (fecha, turno) => x.sqlite.prepare('SELECT * FROM ronda_ejecuciones WHERE sucursal_id=1 AND fecha=? AND turno=?').get(fecha, turno),
+      modeloId: x.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id,
+      // Lecturas «conforme» de las primeras paradas, como las manda el celular.
+      lecturas: (ronda, clave, at, n = 3) => ronda.puntos.slice(0, n).map((pt) => e.op('ronda.lectura', at, { ...clave, puntoId: pt.id, resultado: 'ok', ...(pt.pideValor ? { valor: pt.min ?? pt.max ?? 1 } : {}) })),
+    };
+    await fn(e);
+  } finally { await x.close(); }
+}
+const NO_CUADRA = /no cuadran/;
+
+// (1) 06:00, 14:00 y 22:00; a las 15:10 se guardan 06:00 y 18:00: entran a las 18:00.
+await escenario('15:00', async (e) => {
+  let p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnosProximos], [D, '14:00', null], '(1) A las 15:00 corre el de las 14:00');
+  const clave = { sucursalId: 1, fecha: D, turno: '14:00' };
+  const sinSenal = e.lecturas(p, clave, en('15:05'));
+  e.reloj('15:10');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '18:00'] });
+  igual(s.body.aplicaDesde, { fecha: D, turno: '18:00' }, '(1) Entran a las 18:00, con el primer turno de la lista nueva');
+  e.reloj('15:15');
+  const r = await e.sync(sinSenal);
+  ok(r.length === 3 && r.every((y) => y.ok), `(1) Las lecturas sin señal de las 15:05 que llegan a las 15:15 se aceptan: ${JSON.stringify(r)}`);
+  ok(e.ejecucion(D, '14:00')?.puntos_ok === 3, '(1) En la ronda de las 14:00');
+  p = await e.hoy();
+  igual([p.fecha, p.turno, Object.keys(p.lecturas).length], [D, '14:00', 3], '(1) El paquete sigue en el turno de las 14:00, con su ronda empezada');
+  ok(p.ejecucionId === e.ejecucion(D, '14:00').id, '(1) La misma ronda, no una nueva');
+  igual(p.turnos, ['06:00', '14:00', '22:00'], '(1) Con los turnos que rigen ahora');
+  igual(p.turnosProximos, { desde: en('18:00'), turnos: ['06:00', '18:00'] }, '(1) Y los que entran a las 18:00');
+  igual(e.x.app.rt.turnoConProximos(p.turnos, p.turnosProximos, new Date(en('17:59'))).turno, '14:00', '(1) El celular sin señal sigue en las 14:00 hasta las 18:00');
+  igual(e.x.app.rt.turnoConProximos(p.turnos, p.turnosProximos, new Date(en('18:00'))).turno, '18:00', '(1) Y a las 18:00 pasa al turno nuevo');
+  let t = await e.fila();
+  igual([t.turno, t.estado], ['14:00', 'en_curso'], '(1) El tablero muestra la de las 14:00 en curso');
+  const [mas] = await e.sync([e.op('ronda.lectura', en('15:16'), { ...clave, puntoId: p.puntos[3].id, resultado: 'ok', ...(p.puntos[3].pideValor ? { valor: p.puntos[3].min ?? 1 } : {}) })]);
+  ok(mas.ok && e.x.sqlite.prepare('SELECT count(*) n FROM ronda_ejecuciones').get().n === 1, '(1) La lectura siguiente va a la misma ronda: no abre un turno que no se exige');
+  e.reloj('18:01');
+  p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnos, p.turnosProximos, p.ejecucionId], [D, '18:00', ['06:00', '18:00'], null, null], '(1) A las 18:00 corre el de las 18:00');
+  t = await e.fila();
+  igual([t.turno, t.estado], ['18:00', 'sin_iniciar'], '(1) Y el tablero lo exige');
+  igual((await e.fila({ fecha: D, turno: '14:00' })).estado, 'incompleta', '(1) La de las 14:00 terminó a las 18:00 sin cerrarse');
+  e.reloj('22:10');
+  igual((await e.fila({ fecha: D, turno: '22:00' })).estado, 'no_aplica', '(1) El de las 22:00 ya no se exige');
+  const [x22] = await e.sync([e.op('ronda.iniciar', en('22:05'), { sucursalId: 1, fecha: D, turno: '22:00' })]);
+  ok(!x22.ok && NO_CUADRA.test(x22.error) && !e.ejecucion(D, '22:00'), '(1) Ni se abre');
+  e.reloj('07:00', 1);
+  const { r: sem, celda } = await e.semana();
+  igual(sem.turnos, ['06:00', '14:00', '18:00', '22:00'], '(1) La semana tiene los turnos de antes y los de ahora');
+  igual(['06:00', '14:00', '18:00', '22:00'].map((tt) => celda(D, tt)), ['no_se_hizo', 'incompleta', 'no_se_hizo', 'no_aplica'], '(1) Hoy: la de las 14:00 cuenta, la de las 22:00 no se exige');
+  igual(['14:00', '22:00'].map((tt) => celda(dia(-1), tt)), ['no_se_hizo', 'no_se_hizo'], '(1) Ayer se exigía con los turnos de antes');
+});
+
+// (2) 06:00, 14:00 y 22:00; a las 10:40 se guardan 07:00 y 19:00: entran a las 19:00.
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00', '19:00'] });
+  igual(s.body.aplicaDesde, { fecha: D, turno: '19:00' }, '(2) Entran a las 19:00');
+  e.reloj('10:45');
+  let p = await e.hoy();
+  igual([p.turno, p.turnos, p.turnosProximos], ['06:00', ['06:00', '14:00', '22:00'], { desde: en('19:00'), turnos: ['07:00', '19:00'] }], '(2) El de las 06:00 sigue');
+  e.reloj('13:59');
+  igual((await e.hoy()).turno, '06:00', '(2) Hasta las 14:00');
+  e.reloj('14:30');
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '14:00'], '(2) El de las 14:00 corre desde las 14:00');
+  igual((await e.fila()).estado, 'sin_iniciar', '(2) Y se exige');
+  igual((await e.fila({ fecha: D, turno: '06:00' })).estado, 'no_se_hizo', '(2) El de las 06:00 terminó a las 14:00');
+  igual((await e.fila({ fecha: D, turno: '07:00' })).estado, 'no_aplica', '(2) El de las 07:00 de hoy no existe');
+  const [x07] = await e.sync([e.op('ronda.iniciar', en('14:30'), { sucursalId: 1, fecha: D, turno: '07:00' })]);
+  ok(!x07.ok && NO_CUADRA.test(x07.error), '(2) Ni se abre');
+  const [x14] = await e.sync([e.op('ronda.iniciar', en('14:35'), { sucursalId: 1, fecha: D, turno: '14:00' })]);
+  ok(x14.ok && e.ejecucion(D, '14:00'), '(2) El de las 14:00 se abre');
+  e.reloj('18:59');
+  igual((await e.hoy()).turno, '14:00', '(2) El de las 14:00 corre hasta las 19:00');
+  e.reloj('19:30');
+  p = await e.hoy();
+  igual([p.turno, p.turnos, p.turnosProximos], ['19:00', ['07:00', '19:00'], null], '(2) A las 19:00 corre el de las 19:00');
+  igual((await e.fila()).estado, 'sin_iniciar', '(2) El de las 19:00 sí se exige');
+  igual((await e.fila({ fecha: D, turno: '14:00' })).estado, 'incompleta', '(2) El de las 14:00 terminó a las 19:00');
+  e.reloj('22:30');
+  igual((await e.fila({ fecha: D, turno: '22:00' })).estado, 'no_aplica', '(2) El de las 22:00 de hoy no se exige');
+  const [x22] = await e.sync([e.op('ronda.iniciar', en('22:30'), { sucursalId: 1, fecha: D, turno: '22:00' })]);
+  ok(!x22.ok && NO_CUADRA.test(x22.error), '(2) Ni se abre');
+  e.reloj('06:30', 1);
+  igual([(await e.hoy()).fecha, (await e.hoy()).turno], [D, '19:00'], '(2) De madrugada sigue el de las 19:00 de ayer');
+  e.reloj('08:00', 1);
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [dia(1), '07:00'], '(2) Mañana corre el de las 07:00');
+  const { r: sem, celda } = await e.semana();
+  igual(sem.turnos, ['06:00', '07:00', '14:00', '19:00', '22:00'], '(2) La semana tiene los turnos de antes y los de ahora');
+  igual(['06:00', '07:00', '14:00', '19:00', '22:00'].map((tt) => celda(D, tt)), ['no_se_hizo', 'no_aplica', 'incompleta', 'no_se_hizo', 'no_aplica'], '(2) Hoy: ni 22:00 ni 07:00 se exigen; 19:00 sí');
+  igual(['06:00', '07:00'].map((tt) => celda(dia(1), tt)), ['no_aplica', 'sin_iniciar'], '(2) Mañana ya es con los turnos nuevos');
+});
+
+// (3) Dos cambios seguidos antes de que entre el primero: manda el segundo.
+await escenario('15:00', async (e) => {
+  e.reloj('15:10');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '18:00'] })).body.aplicaDesde, { fecha: D, turno: '18:00' }, '(3) El primero entraría a las 18:00');
+  e.reloj('16:00');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '20:00'] })).body.aplicaDesde, { fecha: D, turno: '20:00' }, '(3) El segundo entra a las 20:00');
+  e.reloj('16:05');
+  igual((await e.hoy()).turnosProximos, { desde: en('20:00'), turnos: ['06:00', '20:00'] }, '(3) El celular recibe solo el segundo');
+  e.reloj('18:30');
+  igual((await e.hoy()).turno, '14:00', '(3) El de las 18:00 nunca entra: sigue el de las 14:00');
+  const [x18] = await e.sync([e.op('ronda.iniciar', en('18:30'), { sucursalId: 1, fecha: D, turno: '18:00' })]);
+  ok(!x18.ok && NO_CUADRA.test(x18.error), '(3) Y no se abre');
+  igual((await e.fila({ fecha: D, turno: '18:00' })).estado, 'no_aplica', '(3) Ni se exige');
+  e.reloj('20:30');
+  const p = await e.hoy();
+  igual([p.turno, p.turnos, p.turnosProximos], ['20:00', ['06:00', '20:00'], null], '(3) A las 20:00 corre el de las 20:00');
+  igual(e.x.app.rt.lineaDeTurnos({ id: 1, turnos: '["06:00","20:00"]' }, [
+    { id: 2, rondaId: 1, turnosAntes: '["06:00","18:00"]', hasta: en('16:00') },
+    { id: 1, rondaId: 1, turnosAntes: '["06:00","14:00","22:00"]', hasta: en('15:10') },
+  ]).map((x) => [x.entra?.turno ?? null, x.turnos.join()]), [[null, '06:00,14:00,22:00'], ['20:00', '06:00,20:00']], '(3) La línea de tiempo se arma en orden, aunque las vigencias lleguen desordenadas');
+});
+
+// (4) Turnos que cruzan la medianoche.
+await escenario('02:00', async (e) => {
+  e.x.sqlite.exec(`UPDATE rondas SET turnos='["07:00","19:00"]'`);
+  let p = await e.hoy();
+  igual([p.fecha, p.turno], [dia(-1), '19:00'], '(4) A las 02:00 corre el de las 19:00 de ayer');
+  const clave = { sucursalId: 1, fecha: dia(-1), turno: '19:00' };
+  const sinSenal = e.lecturas(p, clave, en('02:30'));
+  e.reloj('02:40');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '18:00'] })).body.aplicaDesde, { fecha: D, turno: '06:00' }, '(4) Entran a las 06:00 de hoy');
+  e.reloj('03:00');
+  p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnosProximos], [dia(-1), '19:00', { desde: en('06:00'), turnos: ['06:00', '18:00'] }], '(4) Sigue el de las 19:00 de ayer hasta las 06:00');
+  e.reloj('06:30');
+  const r = await e.sync(sinSenal);
+  ok(r.every((y) => y.ok) && e.ejecucion(dia(-1), '19:00')?.puntos_ok === 3, `(4) Lo capturado de madrugada para el turno de ayer se acepta: ${JSON.stringify(r)}`);
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '06:00'], '(4) A las 06:00 corre el de las 06:00 de hoy');
+  const [x07] = await e.sync([e.op('ronda.iniciar', en('07:05'), { sucursalId: 1, fecha: D, turno: '07:00' })]);
+  ok(!x07.ok && NO_CUADRA.test(x07.error), '(4) El de las 07:00 de hoy ya no existe');
+  igual((await e.fila({ fecha: dia(-1), turno: '19:00' })).estado, 'incompleta', '(4) El de las 19:00 de ayer terminó a las 06:00');
+  e.reloj('05:30', 1);
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '18:00'], '(4) A las 05:30 de mañana sigue el de las 18:00 de hoy');
+  const [l18] = await e.sync(e.lecturas(p, { sucursalId: 1, fecha: D, turno: '18:00' }, en('05:30', 1), 1));
+  ok(l18.ok, '(4) Y se anota en él');
+});
+
+// (4b) Un cambio de noche que entra a medianoche.
+await escenario('23:00', async (e) => {
+  const clave = { sucursalId: 1, fecha: D, turno: '22:00' };
+  const p0 = await e.hoy();
+  igual([p0.fecha, p0.turno], [D, '22:00'], '(4b) A las 23:00 corre el de las 22:00');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['00:00', '12:00'] })).body.aplicaDesde, { fecha: dia(1), turno: '00:00' }, '(4b) Entran a la medianoche');
+  const sinSenal = e.lecturas(p0, clave, en('23:40'));
+  e.reloj('00:40', 1);
+  const r = await e.sync(sinSenal);
+  ok(r.every((y) => y.ok) && e.ejecucion(D, '22:00'), '(4b) Lo de las 23:40 llega después de medianoche y se acepta en el de las 22:00');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnos], [dia(1), '00:00', ['00:00', '12:00']], '(4b) Desde la medianoche corre el de las 00:00');
+  e.reloj('06:10', 1);
+  const [x06] = await e.sync([e.op('ronda.iniciar', en('06:10', 1), { sucursalId: 1, fecha: dia(1), turno: '06:00' })]);
+  ok(!x06.ok && NO_CUADRA.test(x06.error), '(4b) El de las 06:00 ya no existe');
+});
+
+// (5) «No hace ronda» a las 13:40, con efecto a las 14:00: lo de las 13:35 sin señal llega a las 14:10.
+await escenario('13:30', async (e) => {
+  const p = await e.hoy();
+  igual(p.turno, '06:00', '(5) A las 13:30 corre el de las 06:00');
+  const sinSenal = e.lecturas(p, { sucursalId: 1, fecha: D, turno: '06:00' }, en('13:35'));
+  e.reloj('13:40');
+  const s = await e.put({ accion: 'hace_ronda', sucursalId: 1, haceRonda: false });
+  igual(s.body.aplicaDesde, { fecha: D, turno: '14:00' }, '(5) Entra a las 14:00');
+  e.reloj('14:10');
+  const r = await e.sync(sinSenal);
+  ok(r.length === 3 && r.every((y) => y.ok), `(5) Las capturas sin señal de las 13:35 se aceptan: ${JSON.stringify(r)}`);
+  ok(e.ejecucion(D, '06:00')?.puntos_ok === 3, '(5) En la ronda de las 06:00');
+  igual(await e.hoy(), null, '(5) Desde las 14:00 el celular no ofrece ronda');
+  const [x14] = await e.sync([e.op('ronda.iniciar', en('14:10'), { sucursalId: 1, fecha: D, turno: '14:00' })]);
+  ok(!x14.ok && /no hacía ronda/.test(x14.error), `(5) Ni el servidor abre una: ${x14.error}`);
+  e.reloj('15:00');
+  const { celda } = await e.semana();
+  igual([celda(D, '06:00'), celda(D, '14:00')], ['incompleta', 'no_aplica'], '(5) La semana no marca «no se hizo»: la de las 06:00 se empezó y la de las 14:00 no se exige');
+  const t = await e.fila({ fecha: D, turno: '06:00' });
+  ok(t.haceRonda && t.estado === 'incompleta', '(5) En el tablero, la de las 06:00 cuenta como de una sede que hacía ronda');
+});
+
+// (5b) La marca entra en el siguiente turno de la línea de tiempo, aunque haya un cambio de turnos pendiente.
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00', '19:00'] });
+  e.reloj('10:50');
+  const s = await e.put({ accion: 'hace_ronda', sucursalId: 1, haceRonda: false });
+  igual(s.body.aplicaDesde, { fecha: D, turno: '14:00' }, '(5b) Entra a las 14:00, el siguiente turno que de verdad empieza, no a las 19:00');
+  ok((await e.hoy())?.turno === '06:00', '(5b) El turno de ahora sigue como estaba');
+  e.reloj('14:30');
+  igual(await e.hoy(), null, '(5b) A las 14:00 ya no hace ronda');
+  const t = await e.fila();
+  ok(t.turno === '14:00' && t.estado === 'no_aplica' && !t.haceRonda, '(5b) Y el tablero no se la exige');
+});
+
+// (6) Capturado sin señal antes de un cambio de turnos y sincronizado después de que entró.
+await escenario('15:00', async (e) => {
+  const p = await e.hoy();
+  const clave = { sucursalId: 1, fecha: D, turno: '14:00' };
+  const sinSenal = [e.op('ronda.iniciar', en('15:04'), clave), ...e.lecturas(p, clave, en('15:05'))];
+  e.reloj('15:10');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '18:00'] });
+  e.reloj('18:30');
+  const r = await e.sync(sinSenal);
+  ok(r.length === 4 && r.every((y) => y.ok), `(6) Se acepta: ${JSON.stringify(r)}`);
+  ok(e.ejecucion(D, '14:00')?.puntos_ok === 3, '(6) En la ronda de las 14:00');
+  const ahora = await e.hoy();
+  ok(ahora.turno === '18:00' && !ahora.ejecucionId, '(6) Y el turno de ahora no se toca');
+});
+
+console.log(`PASS test-ronda: ${casos} casos; rutas y migraciones reales, sin red.`);

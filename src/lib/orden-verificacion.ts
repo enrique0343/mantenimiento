@@ -4,7 +4,7 @@ import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacio
 import {
   parseChecklist, validarChecklistParaCierre, validarLecturasChecklistParaCierre, transicionesPermitidas,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarLiberacionesEnRango, validarCausaRaizParaCierre, puedeCerrarSinLectura,
-  type EstadoOT,
+  requiereCausaRaiz, MIN_CAUSA_RAIZ, type EstadoOT,
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
 import type { getDb } from './db';
@@ -18,6 +18,59 @@ export class ErrorVerificacion extends Error {
 const deny = (message: string, status = 403): never => { throw new ErrorVerificacion(message, status); };
 const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 'checklistEjecucion'];
 const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
+// Las horas del EOP. La de alarma, además, corre el plazo de la causa raíz.
+const HORAS_EOP = ['horaAlarma', 'horaLlegada', 'horaMitigacion', 'horaRestablecimiento'] as const;
+/** La causa raíz como se compara: recortada, y null igual a vacío. */
+const textoCausa = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+/** Una hora del EOP al minuto, como la muestra la ficha. Vacía es null. */
+function minutoEop(v: unknown): number | string | null {
+  if (v === null || v === undefined || v === '') return null;
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? Math.floor(t / 60_000) : String(v);
+}
+async function criticidadDeActivo(db: DB, activoId: number | null | undefined): Promise<string | null> {
+  if (!activoId) return null;
+  const [a] = await db.select({ criticidad: activos.criticidadOperacional }).from(activos).where(eq(activos.id, activoId)).limit(1);
+  return a?.criticidad ?? null;
+}
+
+// ── El checklist de la ficha, fusionado con lo que llegó del celular ──
+const ESTADOS_PUNTO = ['pendiente', 'ok', 'na', 'desviacion'];
+/** Un checklist guardado como texto: vacío es []; ilegible, null. */
+function listaChecklist(raw: unknown): unknown[] | null {
+  if (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '')) return [];
+  try { const v = JSON.parse(String(raw)); return Array.isArray(v) ? v : null; } catch { return null; }
+}
+/** Un punto como se compara: sin claves vacías y con el estado viejo {hecho} traducido.
+ * La ficha rellena claves al abrir; eso no cuenta como un cambio suyo. */
+function puntoComparable(punto: unknown): string {
+  if (typeof punto !== 'object' || punto === null || Array.isArray(punto)) return JSON.stringify(punto ?? null);
+  const p: Record<string, unknown> = { ...(punto as Record<string, unknown>) };
+  if (!ESTADOS_PUNTO.includes(p.estado as string)) p.estado = p.hecho === true ? 'ok' : 'pendiente';
+  delete p.hecho;
+  for (const k of ['bloqueante', 'requiereValor']) if (k in p) p[k] = p[k] === true || p[k] === 1;
+  return JSON.stringify(Object.keys(p).sort().filter((k) => p[k] !== null && p[k] !== undefined && p[k] !== '' && p[k] !== false).map((k) => [k, p[k]]));
+}
+/**
+ * La ficha manda el checklist junto con la base que recibió del servidor. En
+ * cada punto gana lo que la ficha cambió frente a su base; los demás quedan como
+ * están guardados, para no deshacer lo que el técnico marcó en el celular
+ * mientras tanto. Devuelve null si la ficha no cambió ningún punto.
+ */
+function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRaw: unknown): string | null {
+  const nuevo = listaChecklist(nuevoRaw), base = listaChecklist(baseRaw);
+  if (!nuevo || !base) throw new ErrorVerificacion('Checklist inválido.', 400);
+  const guardado = listaChecklist(guardadoRaw) ?? [];
+  if (nuevo.length !== base.length || base.length !== guardado.length) throw new ErrorVerificacion('El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.', 409);
+  let cambia = false;
+  const fusion = nuevo.map((punto, i) => {
+    if (puntoComparable(punto) === puntoComparable(base[i])) return guardado[i];
+    cambia = true;
+    return punto;
+  });
+  return cambia ? JSON.stringify(fusion) : null;
+}
+
 export function ejecutoresDeOrden(state: any): number[] {
   try { return JSON.parse(state?.executoresJson ?? '[]').filter((id: unknown) => Number.isInteger(id)); } catch { return []; }
 }
@@ -93,12 +146,7 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
     if (!rango.ok) deny(rango.error!, 400);
   }
   if (etapa !== 'verificacion') return;
-  let criticidad: string | null = null;
-  const activoFinal = input.activoId !== undefined ? input.activoId : order.activoId;
-  if (activoFinal) {
-    const [a] = await db.select({ criticidad: activos.criticidadOperacional }).from(activos).where(eq(activos.id, activoFinal)).limit(1);
-    criticidad = a?.criticidad ?? null;
-  }
+  const criticidad = await criticidadDeActivo(db, input.activoId !== undefined ? input.activoId : order.activoId);
   const causa = input.causaRaiz !== undefined ? input.causaRaiz : order.causaRaiz;
   const vc = validarCausaRaizParaCierre(tipo, criticidad, causa);
   if (!vc.ok) deny(vc.error!, 400);
@@ -108,6 +156,38 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
  * Completion remains `completada` (pending review); only independent approval closes.
  * Server identities/timestamps cannot be supplied by callers. */
 export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString()) {
+  input = { ...input };
+  // Lo que llegó igual a lo guardado no es un cambio: se deja fuera sin error.
+  let sinCambio = false;
+  const checklistBase = input.checklistBase;
+  delete input.checklistBase;
+  let checklistFusionado = false;
+  if (checklistBase !== undefined && input.checklistEjecucion !== undefined) {
+    const fusion = fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase);
+    if (fusion === null) { delete input.checklistEjecucion; sinCambio = true; }
+    else { input.checklistEjecucion = fusion; checklistFusionado = true; }
+  }
+  // La causa raíz y las horas de la emergencia son de la jefatura, en cualquier
+  // estado. Una pestaña vieja que las reenvía iguales al autoguardar no choca.
+  if (!manager(user)) {
+    if (input.causaRaiz !== undefined) {
+      if (textoCausa(input.causaRaiz) !== textoCausa(order.causaRaiz)) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
+      delete input.causaRaiz; sinCambio = true;
+    }
+    for (const key of HORAS_EOP) {
+      if (input[key] === undefined) continue;
+      const guardada = minutoEop((order as any)[key]);
+      if (minutoEop(input[key]) === guardada) {
+        delete input[key]; sinCambio = true;
+        if (key === 'horaAlarma') delete input.causaRaizVencimiento;
+        continue;
+      }
+      // La alarma corre el plazo de la causa raíz. Las demás las fija el primer
+      // toque del celular mientras se trabaja; una ya fijada, o con la orden ya
+      // enviada, solo la corrige la jefatura.
+      if (key === 'horaAlarma' || guardada !== null || !['abierta', 'en_proceso', 'en_espera'].includes(order.estado)) deny('Las horas de la emergencia las corrige la jefatura.');
+    }
+  }
   const [saved] = await db.select().from(ordenVerificacion).where(eq(ordenVerificacion.ordenId, order.id)).limit(1);
   const initial = {
     ordenId: order.id, version: 0, ciclo: 1, ejecutadoPor: null, executoresJson: '[]',
@@ -135,7 +215,6 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   const onlySelfAssignment = user.rol === 'tecnico' && order.estado === 'abierta' && !order.asignadoA && input.asignadoA === user.id;
   if (!manager(user) && !onlySelfAssignment && editsAssignment) deny('Solo la jefatura puede cambiar la asignación.');
   if (editsMetadata && !manager(user)) deny('Solo la jefatura puede modificar los datos de la orden.');
-  if (user.rol === 'tecnico' && changes('causaRaiz') && ['completada', 'verificada', 'cerrada'].includes(order.estado)) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
   if (user.rol === 'tecnico' && !isReview && !isReturn && !onlySelfAssignment && order.asignadoA !== user.id && !(order.estado === 'abierta' && !order.asignadoA && destination === 'en_proceso')) deny('La orden debe estar asignada a ti para registrar ejecución o cambiar su estado.');
   if (editsExecution && !(manager(user) || (user.rol === 'tecnico' && order.asignadoA === user.id))) deny('No puedes registrar ejecución en esta orden.');
   if (editsExecution && !['en_proceso', 'en_espera'].includes(order.estado)) deny(order.estado === 'abierta' ? 'Inicia la orden antes de registrar su ejecución.' : 'Devuelve o reabre la orden antes de cambiar evidencia de ejecución.', 409);
@@ -144,6 +223,13 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   if (!manager(user) && !['tecnico'].includes(user.rol) && !isReturn && !isReview) deny('No tienes permisos para modificar órdenes.');
   if (['completada','verificada','cerrada','cancelada'].includes(order.estado) && (editsMetadata || editsAssignment)) deny('Devuelve o reabre la orden antes de cambiar sus datos.', 409);
   if (input.vencimiento !== undefined && input.vencimiento !== order.vencimiento && !motivo?.trim()) deny('Registra el motivo de la reprogramación.', 400);
+  // Enviada o cerrada, la causa raíz ya es evidencia del cierre: la jefatura la
+  // corrige, pero no la deja vacía ni más corta. En proceso guarda un borrador.
+  const causaNueva = input.causaRaiz !== undefined ? textoCausa(input.causaRaiz) : null;
+  if (causaNueva !== null && causaNueva !== textoCausa(order.causaRaiz) && causaNueva.length < MIN_CAUSA_RAIZ && ['completada', 'verificada', 'cerrada'].includes(order.estado)) {
+    const criticidad = await criticidadDeActivo(db, input.activoId !== undefined ? input.activoId : order.activoId);
+    if (requiereCausaRaiz(input.tipo ?? order.tipo, criticidad).requiere) deny(`La causa raíz necesita al menos ${MIN_CAUSA_RAIZ} caracteres: con la orden enviada a verificación o cerrada no puede quedar vacía ni más corta.`, 400);
+  }
 
   if (revisorId !== undefined || revisorSuplenteId !== undefined) {
     if (!manager(user)) deny('Solo la jefatura puede designar revisores.');
@@ -221,7 +307,11 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     stateData.reprogramarPreventivos = reprogramarPreventivos;
   }
   if (editsAssignment) data.asignadoEn = input.asignadoA ? now : null;
-  if (!Object.keys(data).length && !Object.keys(stateData).length) deny('No hay cambios.', 400);
+  if (!Object.keys(data).length && !Object.keys(stateData).length) {
+    // Todo lo que llegó era igual a lo guardado: no hay nada que escribir ni que rechazar.
+    if (sinCambio) return { row: order, estado: order.estado, accion: 'sin_cambios', advancePM: false };
+    deny('No hay cambios.', 400);
+  }
   // Approval can be delayed; recurrence stays anchored to actual execution.
   const advancePM = isReview && !state.pmAvanzadoEn;
   if (advancePM) stateData.pmAvanzadoEn = now;
@@ -246,7 +336,10 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   const snapshot = JSON.stringify({ antes: order, despues: { ...order, ...data }, adjuntos: currentAttachments, ejecutores: JSON.parse(stateData.executoresJson ?? state.executoresJson), revisorId: stateData.revisorId ?? state.revisorId, revisorSuplenteId: stateData.revisorSuplenteId ?? state.revisorSuplenteId, historicoSinControl: !saved });
   const batch: any[] = [
     db.insert(ordenVerificacion).values(initial).onConflictDoNothing(),
-    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), sql`exists (select 1 from ordenes where id = ${order.id} and estado = ${order.estado})`, attachmentsUnchanged)).returning({ ordenId: ordenVerificacion.ordenId }),
+    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), sql`exists (select 1 from ordenes where id = ${order.id} and estado = ${order.estado})`,
+      // La fusión se hizo contra este checklist: si otra escritura lo cambió en medio, no se pisa.
+      checklistFusionado ? sql`exists (select 1 from ordenes where id = ${order.id} and checklist_ejecucion is ${order.checklistEjecucion})` : undefined,
+      attachmentsUnchanged)).returning({ ordenId: ordenVerificacion.ordenId }),
   ];
   if (Object.keys(data).length) batch.push(db.update(ordenes).set(data).where(and(eq(ordenes.id, order.id), guard)));
   batch.push(db.insert(ordenVerificacionEventos).select(db.select({

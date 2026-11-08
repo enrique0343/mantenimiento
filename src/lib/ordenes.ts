@@ -477,9 +477,21 @@ export type LiberacionLike = {
   obligatoria: boolean;
   valorMedido?: number | null;
   valorMedidoTexto?: string | null;
+  minAceptable?: number | null;
+  maxAceptable?: number | null;
 };
 
+export const MENSAJE_LECTURA_SIN_NUMERO = "Esta lectura tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).";
+
+/** Una liberación con mínimo o máximo se juzga por su número. */
+export function liberacionConRango(l: { minAceptable?: number | null; maxAceptable?: number | null }): boolean {
+  return (l.minAceptable !== null && l.minAceptable !== undefined) || (l.maxAceptable !== null && l.maxAceptable !== undefined);
+}
+
+// Con rango, la lectura es el número: «aprox 14 A» o «arrancó bien» no
+// liberan nada y cuentan como no medidas. Sin rango, basta un texto.
 export function liberacionTieneLectura(l: LiberacionLike): boolean {
+  if (liberacionConRango(l)) return numeroDeLectura(l.valorMedido, l.valorMedidoTexto) !== null;
   if (l.valorMedido !== null && l.valorMedido !== undefined && Number.isFinite(Number(l.valorMedido))) return true;
   return !!(l.valorMedidoTexto && String(l.valorMedidoTexto).trim() !== "");
 }
@@ -514,10 +526,7 @@ export function rangoLiberacionTexto(
   return null;
 }
 
-export type LiberacionConRango = LiberacionLike & {
-  minAceptable?: number | null;
-  maxAceptable?: number | null;
-};
+export type LiberacionConRango = LiberacionLike;
 
 // El número de una lectura: el valor medido o, si se escribió como texto
 // («14,5 A»), el número con que empieza. Una unidad escrita al lado no esconde
@@ -560,6 +569,7 @@ export function validarLiberacionesEnRango(
 // Regla dura del MOP: no se cierra sin la lectura de liberación.
 // El único escape es el cierre sin lectura con motivo escrito (admin o jefe).
 // Con la reversa ejecutada no hay nada que liberar: quien llama lo revisa antes.
+// Una lectura con rango escrita sin número cuenta como no medida.
 export function validarLiberacionesParaCierre(
   tipo: string | null | undefined,
   liberaciones: LiberacionLike[]
@@ -567,7 +577,11 @@ export function validarLiberacionesParaCierre(
   if (tipo !== "intervencion") return { ok: true, faltantes: [] };
   const faltantes = liberaciones
     .filter((l) => l.obligatoria && !liberacionTieneLectura(l))
-    .map((l) => (l.unidad ? `${l.etiqueta} (${l.unidad})` : l.etiqueta));
+    .map((l) => {
+      const nombre = l.unidad ? `${l.etiqueta} (${l.unidad})` : l.etiqueta;
+      const texto = String(l.valorMedidoTexto ?? "").trim();
+      return texto ? `${nombre}: «${texto}» no trae número` : nombre;
+    });
   if (faltantes.length === 0) return { ok: true, faltantes: [] };
   return {
     ok: false,

@@ -21,6 +21,7 @@ const ESTADO_PASO: Record<string, string> = { ok: "Realizado", na: "No aplica", 
 const ACCION_EVENTO: Record<string, string> = {
   estado: "Cambio de estado", bloqueo: "Pausa", ejecucion_completada: "Enviada a verificación", verificacion_cierre: "Verificada y cerrada",
   devolucion: "Devuelta al técnico", reapertura: "Reabierta", devolucion_solicitante: "Devuelta por quien la pidió", designacion_revisor: "Revisor designado", reprogramacion: "Reprogramada",
+  causa_raiz: "Causa raíz registrada",
 };
 
 /** Minutos entre dos momentos, sin contar lo que estuvo en pausa. */

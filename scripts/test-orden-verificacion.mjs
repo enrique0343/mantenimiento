@@ -1,9 +1,12 @@
 // Authenticated OT routes, actual migrations, isolated SQLite/D1; no network.
 import assert from 'node:assert/strict';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
+fijarReloj();
 const fixture = await setupConjuntos({ modules: {
   verification: 'lib/orden-verificacion', database: 'lib/db', attachment: 'pages/api/adjuntos/[id]',
   prerreq: 'pages/api/ordenes/[id]/prerrequisitos', liber: 'pages/api/ordenes/[id]/liberaciones',
+  sync: 'pages/api/campo/sync', reporte: 'lib/reporte-mantenimiento',
 } });
 const { app, sqlite, faults, call } = fixture;
 const one = (q, ...args) => sqlite.prepare(q).get(...args);
@@ -293,5 +296,128 @@ try {
   sqlite.exec("UPDATE ordenes SET estado='cerrada' WHERE id=27");
   await expect(liber(27,{itemId:l27,valorMedido:55},'jefe'),400);
 
-  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records. No network.`);
+  const sync=(ops,rol='tecnico')=>expect(call(app.sync.POST,'/api/campo/sync',{method:'POST',data:{ops},rol}));
+
+  // ── La causa raíz solo la escribe la jefatura, en cualquier estado ──
+  const SOLO_JEFATURA=/^La causa raíz la escribe la jefatura dentro de las 72 h\.$/;
+  seed(40,{tipo:'emergencia'});
+  await expect(patch(40,{causaRaiz:CAUSA},'jefe'));
+  // La pestaña vieja guarda lo del técnico con «causaRaiz: valor || null»: no borra la de la jefatura.
+  assert.match((await expect(patch(40,{trabajosRealizados:'Rearmé el breaker del ATS y verifiqué tensión.',causaRaiz:null},'tecnico'),403)).error,SOLO_JEFATURA);
+  assert.equal(order(40).causa_raiz,CAUSA,'La causa de la jefatura queda intacta');
+  assert.equal(order(40).trabajos_realizados,null,'De la solicitud rechazada no se guarda nada');
+  assert.match((await expect(patch(40,{causaRaiz:'Se fue la luz, nada más que revisar.'},'tecnico'),403)).error,SOLO_JEFATURA);
+  sqlite.exec("UPDATE ordenes SET estado='en_espera' WHERE id=40");
+  assert.match((await expect(patch(40,{causaRaiz:''},'tecnico'),403)).error,SOLO_JEFATURA);
+  sqlite.exec("UPDATE ordenes SET estado='en_proceso' WHERE id=40");
+  await expect(patch(40,{causaRaiz:'Otra causa escrita por quien no es jefatura'},'visualizador'),403);
+  assert.equal(order(40).causa_raiz,CAUSA);
+  // Igual a la guardada (con espacios de más) no es un cambio: se ignora sin error.
+  const eventos40=history(40).length;
+  await expect(patch(40,{trabajosRealizados:'Rearmé el breaker del ATS y verifiqué tensión.',causaRaiz:` ${CAUSA} `},'tecnico'));
+  assert.equal(order(40).causa_raiz,CAUSA); assert.match(order(40).trabajos_realizados,/breaker/);
+  assert.equal((await expect(patch(40,{causaRaiz:CAUSA},'tecnico'))).orden.causaRaiz,CAUSA);
+  assert.equal(history(40).length,eventos40+1,'Solo el guardado de los trabajos deja evento');
+  seed(41,{tipo:'emergencia'});
+  await expect(patch(41,{causaRaiz:''},'tecnico'));
+  await expect(patch(41,{causaRaiz:null},'tecnico'));
+  assert.equal(order(41).causa_raiz,null,'null y vacío son lo mismo');
+
+  // ── Horas de la emergencia: el técnico fija una vacía; una fijada y la alarma, la jefatura ──
+  const SOLO_JEFATURA_HORAS=/^Las horas de la emergencia las corrige la jefatura\.$/;
+  const ALARMA='2026-10-01T09:00:27.123Z', VENCE='2026-10-04T09:00:27.123Z', LLEGADA='2026-10-01T09:20:00.000Z';
+  seed(42,{tipo:'emergencia'});
+  sqlite.prepare('UPDATE ordenes SET hora_alarma=?,causa_raiz_vencimiento=? WHERE id=42').run(ALARMA,VENCE);
+  await expect(patch(42,{horaLlegada:LLEGADA},'tecnico'));
+  assert.equal(order(42).hora_llegada,LLEGADA,'El técnico fija una hora vacía');
+  assert.match((await expect(patch(42,{horaLlegada:'2026-10-01T09:05:00.000Z'},'tecnico'),403)).error,SOLO_JEFATURA_HORAS);
+  assert.match((await expect(patch(42,{horaLlegada:null},'tecnico'),403)).error,SOLO_JEFATURA_HORAS,'Tampoco la borra');
+  assert.match((await expect(patch(42,{horaAlarma:'2026-10-01T08:00:00.000Z'},'tecnico'),403)).error,SOLO_JEFATURA_HORAS);
+  assert.equal(order(42).hora_llegada,LLEGADA); assert.equal(order(42).hora_alarma,ALARMA);
+  assert.equal(order(42).causa_raiz_vencimiento,VENCE,'El plazo de la causa raíz no se mueve');
+  seed(43,{tipo:'emergencia'});
+  await expect(patch(43,{horaAlarma:'2026-10-01T08:00:00.000Z'},'tecnico'),403);
+  assert.equal(order(43).hora_alarma,null,'Una alarma vacía tampoco la fija el técnico');
+  seed(49,{tipo:'emergencia',estado:'completada',trabajos:'Planta arrancada en manual y carga transferida'});
+  assert.match((await expect(patch(49,{horaRestablecimiento:'2026-10-01T11:00:00.000Z'},'tecnico'),403)).error,SOLO_JEFATURA_HORAS);
+  assert.equal(order(49).hora_restablecimiento,null,'Enviada, una hora vacía también la registra la jefatura');
+  // La pestaña vieja reenvía las cuatro horas como las muestra (al minuto, con su zona): no es un cambio.
+  await expect(patch(42,{horaAlarma:'2026-10-01T03:00:00-06:00',horaLlegada:'2026-10-01T03:20:00-06:00',horaMitigacion:null,horaRestablecimiento:null},'tecnico'));
+  assert.equal(order(42).hora_alarma,ALARMA); assert.equal(order(42).causa_raiz_vencimiento,VENCE);
+  // El celular fija la hora vacía por su propio camino.
+  const hito=await sync([{opId:'reglas-hito-42',tipo:'emergencia.hito',ordenId:42,hito:'mitigacion'}]);
+  assert.equal(hito.resultados[0].ok,true,JSON.stringify(hito)); assert.ok(order(42).hora_mitigacion);
+  // La jefatura corrige hacia atrás y el plazo corre desde la alarma nueva.
+  await expect(patch(42,{horaAlarma:'2026-10-01T08:55:00.000Z',horaLlegada:'2026-10-01T09:10:00.000Z'},'jefe'));
+  assert.equal(order(42).hora_alarma,'2026-10-01T08:55:00.000Z'); assert.equal(order(42).hora_llegada,'2026-10-01T09:10:00.000Z');
+  assert.equal(order(42).causa_raiz_vencimiento,'2026-10-04T08:55:00.000Z');
+
+  // ── Enviada o cerrada, la causa raíz no queda vacía ni corta; en proceso, la jefatura guarda un borrador ──
+  const causa20=order(20).causa_raiz;
+  for (const causaRaiz of ['',null,'x','   breve   ']) assert.match((await expect(patch(20,{causaRaiz},'jefe'),400)).error,/al menos 20 caracteres/);
+  assert.equal(order(20).causa_raiz,causa20,'La causa de la emergencia cerrada queda intacta');
+  seed(44,{tipo:'emergencia',estado:'completada',trabajos:'Planta arrancada en manual y carga transferida'});
+  await expect(patch(44,{causaRaiz:'Breaker'},'admin'),400);
+  await expect(patch(44,{causaRaiz:CAUSA},'admin'));
+  seed(45,{tipo:'emergencia'});
+  await expect(patch(45,{causaRaiz:'Breaker'},'jefe')); assert.equal(order(45).causa_raiz,'Breaker');
+  await expect(patch(45,{causaRaiz:null},'jefe')); assert.equal(order(45).causa_raiz,null);
+  await expect(patch(2,{causaRaiz:'Nota breve'},'jefe')); // un preventivo cerrado no exige causa raíz
+  // El reporte cuenta cuándo se registró.
+  const rep20=await app.reporte.reporteDeOrden(db,20);
+  assert.ok(rep20.historial.some(h=>h.titulo==='Causa raíz registrada'),JSON.stringify(rep20.historial.map(h=>h.titulo)));
+
+  // ── Una lectura de liberación con rango lleva número ──
+  const SIN_NUMERO='Esta lectura tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).';
+  seed(46,{tipo:'intervencion',trabajos:'Regulador de presión ajustado en la zona'});
+  const l46=liberacion(46);
+  for (const valorMedidoTexto of ['aprox 52 psi','Arrancó bien','≈ 52 psi']) assert.equal((await expect(liber(46,{itemId:l46,valorMedidoTexto},'tecnico'),400)).error,SIN_NUMERO);
+  await expect(liber(46,{itemId:l46,valorMedido:null,valorMedidoTexto:'Sin manómetro'},'jefe'),400);
+  assert.deepEqual({...one('SELECT valor_medido_texto t, medido_por p, conforme c FROM orden_liberaciones WHERE id=?',l46)},{t:null,p:null,c:null},'La lectura rechazada no se guarda');
+  const libSync=await sync([{opId:'reglas-lib-46',tipo:'mop.liberacion',ordenId:46,liberacionId:l46,valor:'aprox 52 psi'}]);
+  assert.equal(libSync.resultados[0].ok,false); assert.equal(libSync.resultados[0].error,SIN_NUMERO);
+  assert.equal((await expect(liber(46,{itemId:l46,valorMedidoTexto:'52 psi en la toma 3'},'tecnico'))).liberacion.conforme,true,'Con el número al inicio se juzga');
+  // Una lectura vieja con rango y sin número cuenta como no medida: no se envía.
+  seed(47,{tipo:'intervencion',trabajos:'Válvula de zona reemplazada y probada'});
+  sqlite.prepare("INSERT INTO orden_liberaciones(orden_id,etiqueta,unidad,min_aceptable,max_aceptable,valor_medido_texto,obligatoria) VALUES(47,'Presión de línea','psi',50,55,'aprox 52 psi',1)").run();
+  const noMedida=(await expect(patch(47,{estado:'completada'},'tecnico'),400)).error;
+  assert.match(noMedida,/Falta 1 lectura de liberación obligatoria/); assert.match(noMedida,/«aprox 52 psi» no trae número/);
+  assert.equal(order(47).estado,'en_proceso');
+  // Con la reversa ejecutada se envía: no hay nada que liberar.
+  await expect(patch(47,{reversaEjecutada:true,reversaNotas:'Se regresó la válvula original; el sistema quedó como antes.'},'tecnico'));
+  await expect(patch(47,{estado:'completada'},'tecnico'));
+
+  // ── La ficha guarda con su base: lo que el técnico marcó en el celular se conserva ──
+  seed(48,{checklist:JSON.stringify([{texto:'Revisar tablero',estado:'pendiente'},{texto:'Limpiar contactos',estado:'pendiente'},{texto:'Medir tensión',estado:'pendiente',requiereValor:true,unidad:'V'}])});
+  const base48=order(48).checklist_ejecucion;
+  const paso=await sync([{opId:'reglas-paso-48',tipo:'orden.paso',ordenId:48,idx:0,texto:'Revisar tablero',estado:'ok'}]);
+  assert.equal(paso.resultados[0].ok,true,JSON.stringify(paso));
+  // La ficha abrió antes del toque, rellena las claves al cargar y marca el paso 3.
+  const comoFicha=it=>({texto:it.texto,estado:it.estado,notas:it.notas??'',criterio:it.criterio??null,bloqueante:it.bloqueante===true,minutos:it.minutos??null,materiales:it.materiales??null,valorMedido:it.valorMedido??'',requiereValor:it.requiereValor===true,unidad:it.unidad??null,esperadoMin:it.esperadoMin??null,esperadoMax:it.esperadoMax??null,variableId:it.variableId??null,hora:it.hora??'',iniciales:it.iniciales??''});
+  const enFicha=JSON.parse(base48).map(comoFicha);
+  enFicha[2]={...enFicha[2],estado:'ok',valorMedido:'121'};
+  const guardada48=await expect(patch(48,{checklistEjecucion:JSON.stringify(enFicha),checklistBase:base48},'jefe'));
+  const fusion48=JSON.parse(order(48).checklist_ejecucion);
+  assert.deepEqual(fusion48.map(p=>p.estado),['ok','pendiente','ok'],'Quedan el paso del celular y el de la ficha');
+  assert.ok(fusion48[0].hora && fusion48[0].iniciales,'El paso 1 conserva la firma del celular');
+  assert.equal(fusion48[2].valorMedido,'121');
+  assert.deepEqual(JSON.parse(guardada48.orden.checklistEjecucion),fusion48,'La respuesta trae el checklist fusionado');
+  // Base, nuevo y guardado de largos distintos: 409 y nada cambia.
+  const actual48=order(48).checklist_ejecucion;
+  assert.equal((await expect(patch(48,{checklistEjecucion:JSON.stringify(enFicha.slice(0,2)),checklistBase:JSON.stringify(JSON.parse(base48).slice(0,2))},'jefe'),409)).error,'El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.');
+  assert.equal(order(48).checklist_ejecucion,actual48);
+  // Las reglas de siempre se aplican a lo fusionado.
+  const otroTexto=JSON.parse(actual48); otroTexto[1]={...otroTexto[1],texto:'Otro paso'};
+  assert.match((await expect(patch(48,{checklistEjecucion:JSON.stringify(otroTexto),checklistBase:actual48},'jefe'),400)).error,/No se pueden eliminar puntos/);
+  // Sin puntos cambiados frente a su base no se escribe nada.
+  const eventos48=history(48).length;
+  await expect(patch(48,{checklistEjecucion:actual48,checklistBase:actual48},'jefe'));
+  assert.equal(history(48).length,eventos48);
+  // Si el checklist cambia entre la lectura y la escritura, lo de en medio no se pisa.
+  const marcaFicha=JSON.parse(actual48); marcaFicha[1]={...marcaFicha[1],estado:'na',notas:'No aplica en este tablero'};
+  faults.beforeBatch=async()=>{ const l=JSON.parse(order(48).checklist_ejecucion); l[1]={...l[1],estado:'desviacion'}; sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=48').run(JSON.stringify(l)); };
+  await expect(patch(48,{checklistEjecucion:JSON.stringify(marcaFicha),checklistBase:actual48},'jefe'),409);
+  assert.equal(JSON.parse(order(48).checklist_ejecucion)[1].estado,'desviacion');
+
+  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base. No network.`);
 } finally { await fixture.close(); }

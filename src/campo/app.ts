@@ -86,6 +86,28 @@ const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toSt
 const zumbar = () => { try { navigator.vibrate?.(12); } catch {} };
 const primerNombre = (n: string) => n.split(/\s+/)[0] || n;
 const corto = (s: unknown, n: number) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+/** «Vence hoy 14:30» o «Vence 08/11/2026 14:30». Es un plazo, no un tiempo de medición: el técnico sí lo ve. */
+function vencePlazo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return `${iso < hoySV() ? "Venció" : "Vence"} ${iso === hoySV() ? "hoy" : fecha(iso)}`;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  const sv = new Date(ms - 6 * 3_600_000).toISOString();
+  return `${ms < Date.now() ? "Venció" : "Vence"} ${sv.slice(0, 10) === hoySV() ? "hoy" : fecha(iso)} ${sv.slice(11, 16)}`;
+}
+/**
+ * Las acciones del EOP que este celular muestra, tal como las guarda el
+ * servidor: si la emergencia no tenía pasos, siembra exactamente estas, aunque
+ * sean ninguna. Si la orden ya tiene pasos, el servidor las ignora.
+ */
+const accionesMostradas = (o: Any) => (o?.modo === "emergencia"
+  ? { acciones: (o.pasos ?? []).map((p: Any) => String(p.texto ?? "").trim().slice(0, 300)).filter(Boolean).slice(0, 10) }
+  : {});
+/** Lo que el técnico escribió para esta operación. Si el servidor la rechaza, vuelve a su borrador. */
+const conTexto = (notas: Record<string, unknown>, saltos?: Record<string, number[]>) => {
+  const limpias = Object.fromEntries(Object.entries(notas).map(([k, v]) => [k, String(v ?? "").trim()]).filter(([, v]) => v));
+  return Object.keys(limpias).length || saltos ? { borrador: { notas: limpias, ...(saltos ? { saltos } : {}) } } : {};
+};
 
 const rangoDe = (p: Any) => {
   const u = p.unidad ? ` ${p.unidad}` : "";
@@ -193,20 +215,35 @@ function aplicarLocal(p: Any, op: Op) {
   }
 }
 const esDeEstaRonda = (p: Any, op: Any) => !!p.ronda && op.fecha === p.ronda.fecha && op.turno === p.ronda.turno && Number(op.sucursalId) === Number(p.ronda.sucursalId);
+const inicioDe = (r: Any) => Date.parse(`${r.fecha}T${r.turno}:00-06:00`);
+/**
+ * Los turnos que rigen en ese momento. Un cambio de turnos que la jefatura ya
+ * hizo pero que todavía no entró viene en «turnosProximos»: rige desde su
+ * «desde»; antes, los de «turnos». Sin señal también.
+ */
+function turnosVigentes(r: Any, ms = Date.now()): string[] {
+  const prox = r?.turnosProximos;
+  const desde = prox?.desde ? Date.parse(prox.desde) : NaN;
+  return Array.isArray(prox?.turnos) && prox.turnos.length && Number.isFinite(desde) && ms >= desde ? prox.turnos : r?.turnos ?? [];
+}
 /** Sin señal al cambiar de turno: la misma lista, una ronda nueva. A media ronda se termina con su turno, pero no para siempre. */
 function rodarTurno(): boolean {
   const r = E.base?.ronda;
   if (!r?.turnos?.length) return false;
   if (E.flujo?.tipo === "ronda") {
-    if (Date.now() - Date.parse(`${r.fecha}T${r.turno}:00-06:00`) < 16 * 3_600_000) return false;
+    if (Date.now() - inicioDe(r) < 16 * 3_600_000) return false;
     soltarPantalla();
     E.flujo = null;
     aviso("Esa ronda ya venció. Lo que anotaste quedó guardado.");
     ir("#hoy", true);
   }
-  const t = turnoActual(r.turnos);
-  if (t.fecha === r.fecha && t.turno === r.turno) return false;
-  E.base.ronda = { ...r, fecha: t.fecha, turno: t.turno, etiqueta: t.etiqueta, estado: "sin_iniciar", ejecucionId: null, iniciadaEn: null, lecturas: {}, entregaAnterior: null };
+  const turnos = turnosVigentes(r);
+  const t = turnoActual(turnos);
+  // Solo hacia adelante: un turno que ya pasó no vuelve a abrirse.
+  if ((t.fecha === r.fecha && t.turno === r.turno) || inicioDe(t) < inicioDe(r)) return false;
+  // Si el cambio de turnos ya entró, la lista nueva queda como la de siempre.
+  const cambio = turnos !== r.turnos ? { turnos, turnosProximos: null } : {};
+  E.base.ronda = { ...r, ...cambio, fecha: t.fecha, turno: t.turno, etiqueta: t.etiqueta, estado: "sin_iniciar", ejecucionId: null, iniciadaEn: null, lecturas: {}, entregaAnterior: null };
   void cola.guardar(`hoy:${UID}`, E.base); // Si el sistema recarga la página, sigue en el turno nuevo.
   rebase();
   return true;
@@ -247,11 +284,27 @@ function olvidar(prueba: (clave: string) => boolean) {
   for (const k of Object.keys(E.fotos)) if (prueba(k)) delete E.fotos[k];
   guardarBorrador();
 }
-/** Lo escrito en la hoja abierta ya se envió o se canceló. */
-function olvidarHoja() {
+/** Lo escrito en la hoja abierta ya se envió o se canceló. Al cancelar, sus fotos que no han salido tampoco se envían. */
+function olvidarHoja(cancelar = false) {
   const claves = new Set<string>();
   document.querySelectorAll<HTMLElement>("#hoja [data-nota], #hoja [data-clave]").forEach((el) => { const k = el.dataset.nota ?? el.dataset.clave; if (k) claves.add(k); });
+  if (cancelar) descartarFotos(claves);
   olvidar((k) => claves.has(k));
+}
+/** La foto que se está subiendo en este momento: esa ya no se puede retirar. */
+let fotoEnVuelo: number | null = null;
+/** «Cancelar» una hoja: sus fotos que todavía no salieron se quitan de la cola, para que la hoja diga lo que de verdad se envía. */
+function descartarFotos(claves: Set<string>) {
+  const tomadas = [...claves].reduce((n, k) => n + (E.fotos[k] ?? 0), 0);
+  const quitar = E.pend.filter((op) => op.tipo === "foto" && claves.has(op.clave ?? "") && op.seq !== fotoEnVuelo);
+  if (quitar.length) {
+    const seqs = new Set(quitar.map((op) => op.seq));
+    E.pend = E.pend.filter((op) => !seqs.has(op.seq));
+    for (const op of quitar) void cola.quitar(op.seq);
+    refrescarPill();
+  }
+  const salieron = tomadas - quitar.length;
+  if (salieron > 0) aviso(salieron === 1 ? "Esa foto ya se había enviado: queda en la orden." : `${salieron} fotos ya se habían enviado: quedan en la orden.`);
 }
 const DE_ORDEN = /^(fin|problema|nopudo|lect|ref|lib|reversa|pausa):(\d+)(?::|$)/;
 /** La orden se envió: nada de lo que se escribió en ella sigue en el celular. */
@@ -275,20 +328,56 @@ async function despachar(parcial: Partial<Op> & { tipo: string }, at?: string) {
 }
 
 // Un rechazo puede llegar cuando la orden ya salió de la lista de trabajo (al terminarla, por
-// ejemplo): por eso se busca también en lo terminado y en la última copia del servidor.
-const ordenParaNombrar = (id: number) => [E.p, E.base]
-  .flatMap((p: Any) => [p?.ordenes, p?.libres, p?.hechasHoy, p?.porVerificar])
-  .flatMap((lista: Any) => lista ?? [])
-  .find((o: Any) => o.id === id);
+// ejemplo): por eso se busca también en lo terminado y en la última copia del servidor. Primero
+// la orden completa, que trae su documento y su equipo; si no, lo terminado.
+const ordenParaNombrar = (id: number) => {
+  const en = (claves: string[]) => [E.base, E.p].flatMap((p: Any) => claves.flatMap((k) => p?.[k] ?? [])).find((o: Any) => o.id === id);
+  return en(["ordenes", "libres"]) ?? en(["hechasHoy", "porVerificar"]);
+};
 
+/** De qué es el registro: la orden con su código y su nombre, para saber cuál abrir. */
 const describirOp = (op: Any) => {
   if (op.tipo?.startsWith("ronda.")) return "Ronda";
-  if (op.tipo === "emergencia.abrir") return "Emergencia";
-  if (op.tipo === "correctivo.abrir") return "Correctivo";
+  if (op.tipo === "emergencia.abrir") return corto(op.titulo || "Emergencia nueva", 70);
+  if (op.tipo === "correctivo.abrir") return corto(op.titulo || "Correctivo nuevo", 70);
   if (op.tipo === "aop.abrir") return "Desviación";
-  if (op.ordenId) return etiquetaOT(ordenParaNombrar(op.ordenId) ?? { id: op.ordenId });
+  if (op.ordenId) {
+    const o = ordenParaNombrar(op.ordenId);
+    return o ? `${etiquetaOT(o)} · ${corto(o.modo ? tituloOrden(o) : limpiarTitulo(o.titulo), 60)}` : etiquetaOT({ id: op.ordenId });
+  }
   return op.tipo?.startsWith("orden.") ? "Orden" : "Registro";
 };
+const QUE_HIZO: Record<string, string> = {
+  "orden.iniciar": "Empezar", "orden.pausar": "Pausar", "orden.reanudar": "Reanudar", "orden.terminar": "Enviar a verificación",
+  "mop.prerrequisito": "Permiso", "mop.liberacion": "Lectura de liberación", "mop.reversa": "Plan de reversa", foto: "Foto",
+  "emergencia.abrir": "Abrir la emergencia", "correctivo.abrir": "Abrir el correctivo", "aop.abrir": "Abrir la desviación",
+  "ronda.iniciar": "Empezar la ronda", "ronda.lectura": "Parada", "ronda.cerrar": "Cerrar la ronda",
+};
+/** Qué se intentó registrar. */
+const queHizo = (op: Any) => {
+  if (op.tipo === "orden.paso") return `${ordenParaNombrar(op.ordenId)?.modo === "emergencia" ? "Acción" : "Paso"} ${Number(op.idx) + 1}`;
+  if (op.tipo === "emergencia.hito") return op.hito === "llegada" ? "Llegada al sitio" : op.hito === "mitigacion" ? "Controlado" : "Restablecido";
+  return QUE_HIZO[op.tipo] ?? "Registro";
+};
+/**
+ * Un registro que el servidor no aceptó devuelve al borrador lo que el técnico
+ * escribió en él: lo encuentra en su orden u hoja, lo corrige y lo vuelve a
+ * enviar. Si ya escribió algo nuevo ahí, se queda lo nuevo; lo de antes sigue a
+ * la vista en «Ver por qué».
+ */
+function devolverAlBorrador(op: Op): string {
+  const b = op.borrador;
+  if (!b) return "";
+  let principal = "";
+  for (const [clave, texto] of Object.entries(b.notas ?? {})) {
+    if (!texto) continue;
+    principal ||= texto;
+    if (!String(E.notas[clave] ?? "").trim()) E.notas[clave] = texto;
+  }
+  for (const [clave, ids] of Object.entries(b.saltos ?? {})) E.saltos[clave] = [...new Set([...(E.saltos[clave] ?? []), ...ids])];
+  guardarBorrador(true);
+  return principal;
+}
 
 async function enviarFoto(op: Op): Promise<{ ok: boolean; error?: string; status: number }> {
   const fd = new FormData();
@@ -327,15 +416,19 @@ async function drenar() {
     if (aceptada && E.base && !CREAN_ORDEN.includes(op.tipo)) { aplicarLocal(E.base, op); baseCambio = true; }
     await cola.quitar(op.seq);
   };
+  let huboTexto = false;
   const rechazar = (op: Op, error?: string) => {
     huboRechazo = true;
-    E.rechazos.push({ que: describirOp(op), error: error ?? "No se pudo guardar.", at: op.at });
+    const texto = devolverAlBorrador(op);
+    if (texto) huboTexto = true;
+    E.rechazos.push({ que: describirOp(op), accion: queHizo(op), error: error ?? "No se pudo guardar.", at: op.at, ordenId: op.ordenId ?? null, ...(texto ? { texto } : {}) });
   };
   try {
     while (E.pend.length) {
       const primero = E.pend[0];
       if (primero.tipo === "foto") {
-        const r = await enviarFoto(primero);
+        fotoEnVuelo = primero.seq;
+        const r = await enviarFoto(primero).finally(() => { fotoEnVuelo = null; });
         if (r.status === 401) { E.sesionVencida = true; break; }
         if (r.status >= 500) { fallo = true; break; }
         if (!r.ok) rechazar(primero, r.error);
@@ -343,7 +436,7 @@ async function drenar() {
       } else {
         const lote: Op[] = [];
         for (const op of E.pend) { if (op.tipo === "foto" || lote.length >= 20) break; lote.push(op); }
-        const res = await fetch("/api/campo/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reloj: new Date().toISOString(), ops: lote.map(({ blob, seq, uid, ...resto }) => resto) }) });
+        const res = await fetch("/api/campo/sync", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reloj: new Date().toISOString(), ops: lote.map(({ blob, seq, uid, borrador, ...resto }) => resto) }) });
         if (res.status === 401) { E.sesionVencida = true; break; }
         if (!res.ok) { fallo = true; break; }
         const j: Any = await res.json();
@@ -367,7 +460,7 @@ async function drenar() {
   if (baseCambio) void cola.guardar(`hoy:${UID}`, E.base);
   if (huboRechazo) {
     void cola.guardar(`rechazos:${UID}`, E.rechazos);
-    aviso("El servidor no aceptó un registro. Revísalo en Hoy.");
+    aviso(huboTexto ? "El servidor no aceptó un registro. Lo que escribiste volvió a su orden: revísalo en Hoy." : "El servidor no aceptó un registro. Revísalo en Hoy.");
   }
   if (fallo) programarReintento();
   if (huboCambios && !E.pend.length) {
@@ -442,11 +535,14 @@ const saltado = (clave: string, id: number) => (E.saltos[clave] ?? []).includes(
 /** Un permiso está listo si se cumplió; uno opcional, también si se saltó. */
 const preHecho = (o: Any, k: number) => { const p = o.prerrequisitos[k]; return !!p.cumplido || (!p.obligatorio && saltado(`pre:${o.id}`, p.id)); };
 const faltanObligatorios = (o: Any) => (o.prerrequisitos ?? []).some((p: Any) => p.obligatorio && !p.cumplido);
+const conRango = (l: Any) => l.min != null || l.max != null;
+/** Una lectura con mínimo o máximo solo cuenta como medida si trae el número del instrumento: igual que el servidor. */
+const medidaConNumero = (l: Any) => !!l.medida && (!conRango(l) || l.conforme != null);
 /** Una lectura de liberación queda resuelta si se midió en rango. Una opcional, también fuera de rango o saltada. */
 const libHecha = (o: Any, k: number) => {
   const l = o.liberaciones[k];
-  if (l.medida) return l.conforme !== false || !l.obligatoria;
-  return !l.obligatoria && saltado(`lib:${o.id}`, l.id);
+  if (!l.obligatoria) return !!l.medida || saltado(`lib:${o.id}`, l.id);
+  return medidaConNumero(l) && l.conforme !== false;
 };
 
 /**
@@ -492,18 +588,30 @@ function dondeVas(o: Any) {
   return "Sigues justo donde quedaste.";
 }
 
+/** Entre varias emergencias, primero la que el técnico ya tiene entre manos: en curso, luego en pausa, luego la que nadie empezó. */
+const ORDEN_EMERGENCIA = ["en_proceso", "en_espera", "abierta"];
 function bloqueAhora(): { html: string; ordenId?: number } {
   const p = E.p;
-  // Una emergencia va antes que todo. Si el técnico dijo «Todavía no», sigue aquí, primera.
-  const emergencia = p.ordenes.find((o: Any) => o.tipo === "emergencia" && ["abierta", "en_proceso"].includes(o.estado));
-  if (emergencia) {
-    const empezo = emergencia.estado === "en_proceso" && !!emergencia.hitos?.llegada;
-    const det = [emergencia.eop?.codigo, emergencia.lugar?.ubicacion ?? emergencia.lugar?.sede].filter(Boolean).join(" · ");
-    const devuelta = emergencia.devuelta ? `<p>Te la devolvieron: ${esc(emergencia.devuelta)}</p>` : "";
-    return { ordenId: emergencia.id, html: `<span class="etq urgente">Emergencia</span><h2>${esc(tituloOrden(emergencia))}</h2>${det ? `<p>${esc(det)}</p>` : ""}${empezo ? `<p>${esc(dondeVas(emergencia))}</p>` : ""}${devuelta}<button class="b1 claro" data-a="ir" data-h="#orden-${emergencia.id}">${empezo ? "Seguir" : "Atender la emergencia"}</button>` };
-  }
   const r = p.ronda;
   const rondaPendiente = !!r && r.estado !== "completada";
+  // Una emergencia abierta o en curso va antes que todo. Si el técnico dijo «Todavía no», sigue aquí,
+  // primera: entre varias, la que él ya empezó, aunque esté en pausa, y no la que nadie ha empezado.
+  // Sola y en pausa, no tapa lo que sigue: encabeza la lista.
+  const emergencias = p.ordenes.filter((o: Any) => o.tipo === "emergencia" && ORDEN_EMERGENCIA.includes(o.estado));
+  const emergencia = emergencias.some((o: Any) => o.estado !== "en_espera")
+    ? emergencias.sort((a: Any, b: Any) => ORDEN_EMERGENCIA.indexOf(a.estado) - ORDEN_EMERGENCIA.indexOf(b.estado))[0]
+    : null;
+  if (emergencia) {
+    const enPausa = emergencia.estado === "en_espera";
+    const empezo = enPausa || (emergencia.estado === "en_proceso" && !!emergencia.hitos?.llegada);
+    const etq = ["Emergencia", vencePlazo(emergencia.vencimiento)].filter(Boolean).join(" · ");
+    const det = [emergencia.eop?.codigo, emergencia.lugar?.ubicacion ?? emergencia.lugar?.sede].filter(Boolean).join(" · ");
+    const donde = enPausa ? `En pausa${emergencia.motivoPausa ? `: ${emergencia.motivoPausa}` : ""}` : empezo ? dondeVas(emergencia) : "";
+    const devuelta = emergencia.devuelta ? `<p class="recorte">Te la devolvieron: ${esc(emergencia.devuelta)}</p>` : "";
+    // Con la emergencia ya empezada, la ronda del turno no se pierde de vista.
+    const tambien = empezo && rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de las ${esc(r.turno)}</button>` : "";
+    return { ordenId: emergencia.id, html: `<span class="etq urgente">${esc(etq)}</span><h2>${esc(tituloOrden(emergencia))}</h2>${det ? `<p>${esc(det)}</p>` : ""}${donde ? `<p class="recorte">${esc(donde)}</p>` : ""}${devuelta}<button class="b1 claro" data-a="ir" data-h="#orden-${emergencia.id}">${empezo ? "Seguir" : "Atender la emergencia"}</button>${tambien}` };
+  }
   // La ronda es lo primero del turno. Una orden que ya venía de antes espera; si el
   // técnico la empezó en este mismo turno, sigue con ella y la ronda queda a la vista.
   const inicioTurno = r ? Date.parse(`${r.fecha}T${r.turno}:00-06:00`) : 0;
@@ -609,6 +717,13 @@ function abrirOrden(id: number) {
     pintar();
     return;
   }
+  // Una emergencia que llegó sin su documento ni sus acciones se pide de nuevo, una vez: el
+  // servidor la resuelve por su equipo. Sin señal, o si tampoco las trae, se trabaja así.
+  if (o.modo === "emergencia" && !o.eop?.codigo && !o.pasos?.length && E.enLinea && !refrescadas.has(id)) {
+    refrescadas.add(id);
+    void traerOrden(id, true);
+    return;
+  }
   if (!["abierta", "en_proceso", "en_espera"].includes(o.estado)) {
     E.restaurar = null;
     aviso("Esa orden ya se envió a verificación.");
@@ -652,11 +767,13 @@ function seguirOrden(id: number) {
   irAPantalla(o, pantallaDe(o));
 }
 const refrescadas = new Set<number>();
-async function traerOrden(id: number) {
+/** Pide una orden al servidor. Si ya estaba en el celular (`yaEsta`) y no hay señal, se abre la que había. */
+async function traerOrden(id: number, yaEsta = false) {
   try {
     const r = await fetch(`/api/campo/ordenes?id=${id}`);
     if (r.status === 401) { E.sesionVencida = true; history.replaceState({}, "", "#hoy"); pintar(); return; }
     if (!r.ok) {
+      if (yaEsta && r.status >= 500) { abrirOrden(id); return; }
       // Ninguna orden se trabaja fuera del celular: si no está disponible, se dice aquí.
       aviso(r.status === 404 ? "Esa orden ya no está disponible para ti." : "No se pudo abrir esa orden. Intenta otra vez.");
       history.replaceState({}, "", "#hoy");
@@ -676,10 +793,21 @@ async function traerOrden(id: number) {
     abrirOrden(id);
   } catch {
     E.enLinea = false;
+    if (yaEsta) { abrirOrden(id); return; }
     aviso("Esa orden no está en tu celular. Necesita señal.");
     pintar();
   }
 }
+
+/**
+ * Una pantalla de una sola cosa, sin scroll de página: un texto muy largo se
+ * recorta o se desplaza dentro de su caja, y el botón principal queda fijo
+ * abajo, al alcance del pulgar.
+ */
+const marco = (cuerpo: string, pie: string) => `<div class="marco"><div class="final marco-cuerpo">${cuerpo}</div><div class="paso-pie">${pie}</div></div>`;
+const volverAHoy = `<a class="b2" href="#hoy" data-a="ir" data-h="#hoy">Volver a Hoy</a>`;
+/** Un dato con su etiqueta. Lo largo se recorta a tres líneas; al tocarlo se ve entero, dentro de su caja. */
+const dato = (etq: string, valor: string, clase = "") => `<div class="dato${clase ? ` ${clase}` : ""}"><span class="etq">${esc(etq)}</span><b class="recorte" data-a="verTodo">${esc(valor)}</b></div>`;
 
 function vInicio() {
   const o = ordenDe(E.params.id);
@@ -688,52 +816,65 @@ function vInicio() {
   if (o.modo === "intervencion") return vInicioIntervencion(o);
   const dets = [o.tipo === "preventivo" ? "Preventivo" : o.tipo === "correctivo" ? "Correctivo" : o.tipo, o.vencimiento ? `vence ${fecha(o.vencimiento)}` : ""].filter(Boolean).join(" · ");
   const mats = [...new Set(o.pasos.map((p: Any) => p.materiales).filter(Boolean))] as string[];
-  return `<div class="final"><span class="etq">${esc(dets)}</span><h1>${esc(tituloOrden(o))}</h1><p class="ayuda">${esc([o.activo?.codigo, o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · "))}</p>`
-    + (o.descripcion ? `<div class="dato"><span class="etq">Lo que pidieron</span><b>${esc(o.descripcion)}</b></div>` : "")
-    + `<div class="dato"><span class="etq">Trabajo</span><b>${o.pasos.length ? `${o.pasos.length} pasos` : "Sin lista de pasos"}</b></div>`
-    + (mats.length ? `<div class="dato"><span class="etq">Lleva contigo</span><b>${esc(mats.join(" · "))}</b></div>` : "")
-    + `<div class="empuja"><button class="b1" data-a="empezar" data-id="${o.id}">${ico.play}Empezar</button><a class="b2" href="#hoy" data-a="ir" data-h="#hoy">Volver a Hoy</a></div></div>`;
+  return marco(`<span class="etq">${esc(dets)}</span><h1 class="recorte">${esc(tituloOrden(o))}</h1><p class="ayuda">${esc([o.activo?.codigo, o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · "))}</p>`
+    + (o.descripcion ? dato("Lo que pidieron", o.descripcion) : "")
+    + dato("Trabajo", o.pasos.length ? `${o.pasos.length} pasos` : "Sin lista de pasos")
+    + (mats.length ? dato("Lleva contigo", mats.join(" · ")) : ""),
+    `<button class="b1" data-a="empezar" data-id="${o.id}">${ico.play}Empezar</button>${volverAHoy}`);
 }
-/** La emergencia empieza cuando el técnico llega: ese toque fija la hora de llegada. */
+/** La emergencia empieza cuando el técnico llega: ese toque fija la hora de llegada. Arriba, su plazo. */
 function vInicioEmergencia(o: Any) {
   const llego = !!o.hitos?.llegada;
   const lugar = lugarDe(o);
   const equipo = o.activo ? [o.activo.codigo, o.activo.nombre].filter(Boolean).join(" · ") : "";
-  return `<div class="final"><span class="etq urgente">Emergencia</span>`
+  const etq = ["Emergencia", vencePlazo(o.vencimiento)].filter(Boolean).join(" · ");
+  return marco(`<span class="etq urgente">${esc(etq)}</span>`
     + (o.eop?.codigo ? `<span class="cod">${esc(o.eop.codigo)}</span>` : "")
-    + `<h1>${esc(tituloOrden(o))}</h1>`
-    + (lugar ? `<div class="dato"><span class="etq">Lugar</span><b>${esc(lugar)}</b></div>` : "")
-    + (equipo ? `<div class="dato"><span class="etq">Equipo</span><b>${esc(equipo)}</b></div>` : "")
-    + (o.descripcion ? `<div class="dato"><span class="etq">Lo que reportaron</span><b>${esc(corto(o.descripcion, 160))}</b></div>` : "")
-    + (o.devuelta ? `<div class="dato"><span class="etq">Te la devolvieron</span><b>${esc(o.devuelta)}</b></div>` : "")
-    + `<div class="empuja"><button class="b1" data-a="llegue" data-id="${o.id}">${llego ? `${ico.play}Seguir` : "Ya estoy en el sitio"}</button><a class="b2" href="#hoy" data-a="ir" data-h="#hoy">Volver a Hoy</a></div></div>`;
+    + `<h1 class="recorte">${esc(tituloOrden(o))}</h1>`
+    + (lugar ? dato("Lugar", lugar) : "")
+    + (equipo ? dato("Equipo", equipo) : "")
+    + (o.descripcion ? dato("Lo que reportaron", o.descripcion) : "")
+    + (o.devuelta ? dato("Te la devolvieron", o.devuelta) : ""),
+    `<button class="b1" data-a="llegue" data-id="${o.id}">${llego ? `${ico.play}Seguir` : "Ya estoy en el sitio"}</button>${volverAHoy}`);
 }
-/** Antes de empezar, los permisos. «Empezar» aparece cuando los obligatorios están cumplidos. */
+/**
+ * Antes de empezar, los permisos: cuántos van y uno solo a la vista, el que
+ * sigue, con su texto. Cada uno se registra en su pantalla. «Empezar» aparece
+ * cuando los obligatorios están cumplidos.
+ */
 function vInicioIntervencion(o: Any) {
   const pre: Any[] = o.prerrequisitos ?? [];
   const faltan = faltanObligatorios(o);
   const k = pre.findIndex((_: Any, j: number) => !preHecho(o, j));
+  const sig = k >= 0 ? pre[k] : null;
+  const n = pre.length;
+  const cumplidos = pre.filter((p: Any) => p.cumplido).length;
+  const saltados = pre.filter((p: Any) => !p.cumplido && !p.obligatorio && saltado(`pre:${o.id}`, p.id)).length;
+  const avance = `${cumplidos} de ${n} permiso${n === 1 ? "" : "s"} cumplido${n === 1 ? "" : "s"}${saltados ? ` · ${saltados} opcional${saltados === 1 ? "" : "es"} saltado${saltados === 1 ? "" : "s"}` : ""}`;
   const dets = ["Intervención", o.vencimiento ? `vence ${fecha(o.vencimiento)}` : ""].filter(Boolean).join(" · ");
-  const filas = pre.map((p: Any, j: number) => {
-    const estado = p.cumplido ? esc(p.referencia || "Cumplido") : p.obligatorio ? "Falta. Es obligatorio." : saltado(`pre:${o.id}`, p.id) ? "Opcional. Lo saltaste." : "Opcional";
-    return `<button class="perm" data-a="verPermiso" data-i="${j}"><span class="marca${p.cumplido ? " si" : ""}">${p.cumplido ? ico.check : ""}</span><span class="txt"><strong>${esc(p.texto)}</strong><small>${estado}</small></span>${ico.flecha}</button>`;
-  }).join("");
+  const permisos = n
+    ? `<div class="permisos"><span class="etq">Antes de empezar, los permisos</span>${segmentos(n, k, (j) => preHecho(o, j), "linea")}<p class="avance">${esc(avance)}</p>`
+      + (sig
+        ? `<button class="perm" data-a="verPermiso" data-i="${k}"><span class="txt"><strong class="recorte">${esc(sig.texto)}</strong><small>${sig.obligatorio ? "Sigue este. Es obligatorio." : "Sigue este. Es opcional."}</small></span>${ico.flecha}</button>`
+        : `<button class="link" data-a="verPermiso" data-i="0" style="align-self:flex-start">Revisar los permisos</button>`)
+      + `</div>`
+    : "";
   const boton = faltan
-    ? `<button class="b1" data-a="verPermiso" data-i="${k < 0 ? 0 : k}">Registrar los permisos</button>`
+    ? `<button class="b1" data-a="verPermiso" data-i="${k < 0 ? 0 : k}">${cumplidos ? "Seguir con los permisos" : "Registrar los permisos"}</button>`
     : `<button class="b1" data-a="empezar" data-id="${o.id}">${ico.play}Empezar</button>`;
-  return `<div class="final"><span class="etq">${esc(dets)}</span><h1>${esc(tituloOrden(o))}</h1><p class="ayuda">${esc([o.activo?.codigo, o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · "))}</p>`
-    + (o.descripcion ? `<div class="dato solo-alto"><span class="etq">Lo que pidieron</span><b>${esc(corto(o.descripcion, 140))}</b></div>` : "")
-    + (o.devuelta ? `<div class="dato"><span class="etq">Te la devolvieron</span><b>${esc(o.devuelta)}</b></div>` : "")
-    + (pre.length ? `<div class="permisos"><span class="etq">Antes de empezar, los permisos</span>${filas}</div>` : "")
-    + `<div class="empuja">${boton}<a class="b2" href="#hoy" data-a="ir" data-h="#hoy">Volver a Hoy</a></div></div>`;
+  return marco(`<span class="etq">${esc(dets)}</span><h1 class="recorte">${esc(tituloOrden(o))}</h1><p class="ayuda">${esc([o.activo?.codigo, o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · "))}</p>`
+    + (o.descripcion ? dato("Lo que pidieron", o.descripcion, "solo-alto") : "")
+    + (o.devuelta ? dato("Te la devolvieron", o.devuelta) : "")
+    + permisos,
+    `${boton}${volverAHoy}`);
 }
 
 function vPausa() {
   const o = ordenDe(E.params.id);
   if (!o) return vHoy();
-  return `<div class="final"><span class="etq">En pausa</span><h1>${esc(tituloOrden(o))}</h1>`
-    + (o.motivoPausa ? `<div class="dato"><span class="etq">Motivo</span><b>${esc(o.motivoPausa)}</b></div>` : "")
-    + `<div class="empuja"><button class="b1" data-a="reanudar" data-id="${o.id}">${ico.play}Reanudar</button><a class="b2" href="#hoy" data-a="ir" data-h="#hoy">Volver a Hoy</a></div></div>`;
+  return marco(`<span class="etq">En pausa</span><h1 class="recorte">${esc(tituloOrden(o))}</h1>`
+    + (o.motivoPausa ? dato("Motivo", o.motivoPausa) : ""),
+    `<button class="b1" data-a="reanudar" data-id="${o.id}">${ico.play}Reanudar</button>${volverAHoy}`);
 }
 
 /** El campo de una lectura. Lo que se escribió a medias vuelve a estar ahí. */
@@ -762,7 +903,7 @@ function cabOrden(o: Any) {
   return `<div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button><div class="paso-tit"><strong>${esc(titulo)}</strong><span>${esc(sub)}</span></div>${pausa}<span id="senal">${pillHtml()}</span></div>`;
 }
 const cabRonda = (r: Any, p: Any) => `<div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button><div class="paso-tit"><strong>${esc(`Ronda de las ${r.turno}`)}</strong><span>${esc(p.sistema === "otro" ? "" : SISTEMAS[p.sistema] ?? r.nombre)}</span></div><span id="senal">${pillHtml()}</span></div>`;
-const segmentos = (n: number, actual: number, hecho: (k: number) => boolean) => `<div class="segs">${Array.from({ length: n }, (_, k) => `<i class="${k === actual ? "a" : hecho(k) ? "h" : ""}"></i>`).join("")}</div>`;
+const segmentos = (n: number, actual: number, hecho: (k: number) => boolean, clase = "") => `<div class="segs${clase ? ` ${clase}` : ""}">${Array.from({ length: n }, (_, k) => `<i class="${k === actual ? "a" : hecho(k) ? "h" : ""}"></i>`).join("")}</div>`;
 /** «Volver al…» de cada pantalla del trabajo, si hay a dónde volver. */
 function enlaceAtras(o: Any, vista: string, i: number) {
   const atras = pantallaAnterior(o, vista, i);
@@ -854,9 +995,10 @@ function vLiberacion() {
   const lista: Any[] = o?.liberaciones ?? [];
   const l = lista[f?.i];
   if (!o || !l) { E.flujo = null; E.vista = "hoy"; return vHoy(); }
-  const libre = l.min == null && l.max == null;
+  const libre = !conRango(l);
   const normal = l.esperado || rangoDe(l);
-  const anotada = l.medida ? `<p class="ayuda">Anotaste: ${esc(l.valor)}${typeof l.valor === "number" && l.unidad ? ` ${esc(l.unidad)}` : ""}${l.conforme === false ? ", fuera de rango" : ""}.</p>` : "";
+  const sinNumero = l.medida && !medidaConNumero(l);
+  const anotada = l.medida ? `<p class="ayuda recorte">Anotaste: ${esc(l.valor)}${typeof l.valor === "number" && l.unidad ? ` ${esc(l.unidad)}` : ""}${l.conforme === false ? ", fuera de rango" : sinNumero ? ", sin número: anota el que marcó el instrumento" : ""}.</p>` : "";
   return `<div class="paso">${cabOrden(o)}${segmentos(lista.length, f.i, (k) => libHecha(o, k))}`
     + `<div class="paso-cuerpo" data-k="${f.i}"><div class="paso-meta"><span class="etq">Lectura de liberación ${f.i + 1} de ${lista.length}</span><span class="tag${l.obligatoria ? " obl" : ""}">${l.obligatoria ? "Obligatoria" : "Opcional"}</span></div>`
     + `<h1 class="${String(l.etiqueta).length > 70 ? "largo" : ""}">${esc(l.etiqueta)}</h1>`
@@ -912,11 +1054,12 @@ function avanzar() {
   irAPantalla(o, sig >= 0 ? { vista: "paso", i: sig } : pantallaDe(o));
 }
 
-function marcarPaso(estado: string, extra: Record<string, unknown> = {}) {
+/** Marca el paso en pantalla. `textos`: lo que el técnico escribió, por su clave de borrador, para devolvérselo si el servidor no lo acepta. */
+function marcarPaso(estado: string, extra: Record<string, unknown> = {}, textos: Record<string, unknown> = {}) {
   const f = E.flujo as Flujo;
   const o = ordenDe(f.ordenId as number);
   const p = o.pasos[f.i];
-  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: p.texto, estado, ...extra });
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: p.texto, estado, ...extra, ...accionesMostradas(o), ...conTexto(textos) });
   olvidar((k) => k === `lect:${o.id}:${f.i}`);
   zumbar();
   avanzar();
@@ -950,11 +1093,12 @@ function guardarLectura() {
     abrirHoja({ tipo: "novedad", valor: v, at: new Date().toISOString(), opcional: true, foco: false, valorTxt: `Lectura ${v}${pt.unidad ? ` ${pt.unidad}` : ""} · normal ${rangoDe(pt)}` });
     return;
   }
-  const p = ordenDe(f.ordenId as number).pasos[f.i];
+  const o = ordenDe(f.ordenId as number);
+  const p = o.pasos[f.i];
   const crudo = l.value.trim();
   const hayRango = p.min != null || p.max != null;
   if (v == null && (hayRango || !crudo)) { aviso("Escribe la lectura para seguir."); l.focus(); return; }
-  if (v == null || !fueraDe(p, v)) { marcarPaso("ok", { valor: v ?? crudo }); return; }
+  if (v == null || !fueraDe(p, v)) { marcarPaso("ok", { valor: v ?? crudo }, { [`lect:${o.id}:${f.i}`]: crudo }); return; }
   abrirHoja({ tipo: "problema", valor: String(v), valorTxt: `Lectura ${v}${p.unidad ? ` ${p.unidad}` : ""} · normal ${rangoDe(p)}` });
 }
 
@@ -1013,6 +1157,8 @@ function trabajosEscritos(o: Any) {
   const na = pasos.filter((p: Any) => p.estado === "na").length;
   const nov = pasos.filter((p: Any) => p.estado === "desviacion").length;
   const lect = pasos.filter((p: Any) => p.valor).map((p: Any) => `${p.texto}: ${p.valor}${p.unidad ? ` ${p.unidad}` : ""}`);
+  // En una emergencia, cada acción del EOP se hizo o no se pudo: igual que lo escribe el servidor.
+  if (o.modo === "emergencia") return `${limpio}: ${ok} de ${pasos.length} acciones hechas${na ? `, ${na} no aplica` : ""}${nov ? `; ${nov} ${nov === 1 ? "no se pudo" : "no se pudieron"}` : ""}.${lect.length ? ` Lecturas: ${lect.join("; ")}.` : ""}`;
   return `${limpio}: ${ok + nov} de ${pasos.length} puntos realizados${nov ? `, ${nov} con novedad` : " sin novedad"}${na ? `, ${na} no aplica` : ""}.${lect.length ? ` Lecturas: ${lect.join("; ")}.` : ""}`;
 }
 /** Tomar una foto. Si en esta pantalla u hoja ya se tomó, se dice así: «1 foto lista». */
@@ -1088,22 +1234,31 @@ function vFinTrabajo(o: Any) {
   const clave = `fin:${o.id}`;
   const emergencia = o.modo === "emergencia";
   const texto = trabajosEscritos(o);
-  const lecturas = emergencia ? [] : (o.liberaciones ?? []).filter((l: Any) => l.medida).map((l: Any) => `${l.etiqueta}: ${l.valor}${typeof l.valor === "number" && l.unidad ? ` ${l.unidad}` : ""}`);
   const atras = pantallaAnterior(o, "fin", 0);
   const volver = atras
     ? `<button class="link" data-a="anterior" style="justify-content:center">${atras.vista === "liberacion" ? "Revisar las lecturas" : emergencia ? "Revisar las acciones" : "Revisar los pasos"}</button>`
     : `<a class="link" href="#hoy" data-a="ir" data-h="#hoy" style="justify-content:center">Volver a Hoy</a>`;
-  return `<div class="final"><span class="etq${emergencia ? " urgente" : ""}">${esc([emergencia ? "Emergencia" : "Intervención", emergencia ? o.eop?.codigo : o.activo?.codigo].filter(Boolean).join(" · "))}</span>`
+  return marco(`<span class="etq${emergencia ? " urgente" : ""}">${esc([emergencia ? "Emergencia" : "Intervención", emergencia ? o.eop?.codigo : o.activo?.codigo].filter(Boolean).join(" · "))}</span>`
     + `<h1>¿Qué encontraste y qué hiciste?</h1>`
-    + (o.devuelta ? `<div class="dato"><span class="etq">Te la devolvieron</span><b>${esc(o.devuelta)}</b></div>` : "")
-    + (texto ? `<div class="dato solo-alto"><span class="etq">Ya quedó anotado</span><b>${esc(texto)}</b></div>` : "")
-    + (lecturas.length ? `<div class="dato"><span class="etq">Lecturas de liberación</span><b>${esc(lecturas.join(" · "))}</b></div>` : "")
-    + (o.reversa?.ejecutada ? `<div class="dato"><span class="etq">Plan de reversa</span><b>Ejecutado: no hace falta liberar el sistema.</b></div>` : "")
+    + (o.devuelta ? dato("Te la devolvieron", o.devuelta) : "")
+    + (texto ? dato("Ya quedó anotado", texto, "solo-alto") : "")
+    + (emergencia ? "" : resumenLecturas(o))
+    + (o.reversa?.ejecutada ? dato("Plan de reversa", "Ejecutado: no hace falta liberar el sistema.") : "")
     + `<label class="oculto" for="nota-fin">Qué encontraste y qué hiciste</label><textarea id="nota-fin" data-nota="${clave}" placeholder="Usa el micrófono del teclado para dictarlo.">${esc(E.notas[clave] ?? "")}</textarea>`
     + fotoCampo("foto-final", clave, "despues", "Foto (opcional)")
     + (emergencia ? `<p class="ayuda">La causa raíz la escribe tu jefatura.</p>` : "")
-    + `<p class="err" id="err-fin" hidden></p>`
-    + `<div class="empuja"><button class="b1" data-a="enviar">Enviar a verificación</button>${volver}</div></div>`;
+    + `<p class="err" id="err-fin" hidden></p>`,
+    `<button class="b1" data-a="enviar">Enviar a verificación</button>${volver}`);
+}
+/** Las lecturas de liberación en una línea: cuántas se anotaron y cuántas quedaron fuera de rango. Cada una se revisa en su pantalla. */
+function resumenLecturas(o: Any) {
+  const libs: Any[] = o.liberaciones ?? [];
+  if (!libs.length) return "";
+  const anotadas = libs.filter((l) => l.medida);
+  const fuera = anotadas.filter((l) => l.conforme === false).length;
+  const sin = libs.length - anotadas.length;
+  const n = anotadas.length;
+  return dato("Lecturas de liberación", [`${n} lectura${n === 1 ? "" : "s"} anotada${n === 1 ? "" : "s"}`, fuera ? `${fuera} fuera de rango` : "", sin ? `${sin} sin anotar` : ""].filter(Boolean).join(" · "));
 }
 function vListo() {
   const u = E.listo;
@@ -1273,10 +1428,22 @@ function vHoja() {
         + (E.sesionVencida ? `<a class="b2" href="/login?next=/campo">Volver a entrar</a>` : "")
         + `<button class="link" data-a="cerrarHoja">Cerrar</button></div>`;
     }
-    case "rechazos":
-      return `<div class="hoja-caja"><span class="etq">Sin aceptar</span><h2>El servidor no aceptó estos registros</h2><p class="ayuda">Tu jefatura puede verlos. Si hace falta, repite el trabajo o pide ayuda.</p>`
-        + `<div class="lista">${E.rechazos.slice(-12).map((x) => `<div class="fila"><span class="txt"><strong>${esc(x.que)}</strong><small>${esc(x.error)}</small></span></div>`).join("")}</div>`
+    case "rechazos": {
+      // De qué orden es cada uno, qué se intentó y por qué no entró. Lo escrito ya volvió a su orden u hoja.
+      const lista = E.rechazos.slice(-12).reverse();
+      const volvio = lista.some((x) => x.texto);
+      const filas = lista.map((x) => {
+        const abierta = x.ordenId ? ordenDe(Number(x.ordenId)) : null;
+        return `<div class="fila"><span class="txt"><strong>${esc(x.que)}</strong><small>${esc([x.accion, x.error].filter(Boolean).join(": "))}</small>`
+          + (x.texto ? `<small class="recorte">Lo que escribiste: «${esc(corto(x.texto, 160))}»</small>` : "")
+          + (abierta ? `<button class="link" data-a="ir" data-h="#orden-${abierta.id}">Abrir la orden</button>` : "")
+          + `</span></div>`;
+      }).join("");
+      return `<div class="hoja-caja"><span class="etq">Sin aceptar</span><h2>El servidor no aceptó ${lista.length === 1 ? "este registro" : "estos registros"}</h2>`
+        + `<p class="ayuda">${volvio ? "Lo que escribiste volvió a su orden: ábrela, corrige y envíala otra vez." : "Tu jefatura puede verlos. Si hace falta, repite el trabajo o pide ayuda."}</p>`
+        + `<div class="lista desplaza">${filas}</div>`
         + `<button class="b1" data-a="limpiarRechazos">Entendido</button></div>`;
+    }
     case "pausar": {
       // «Todavía no» en la emergencia y «Dejar en espera» en una lectura llegan con su motivo ya marcado.
       const motivos = [...new Set([h.sugerido, "Falta repuesto", "Esperando autorización", "El área está ocupada", "Me pasaron a otra urgencia"].filter(Boolean))] as string[];
@@ -1419,6 +1586,8 @@ function pintar(op: { conservar?: boolean } = {}) {
   const sinTabs = SIN_TABS.includes(E.vista);
   const nav = $("#tabs");
   if (nav) nav.hidden = sinTabs;
+  // Con el menú abajo, el pie fijo no repite el margen del borde inferior del teléfono.
+  $("#movil")?.classList.toggle("con-tabs", !sinTabs);
   if (!sinTabs) pintarTabs();
   pintarHoja();
   pantalla.scrollTop = op.conservar ? antes : 0;
@@ -1580,9 +1749,9 @@ function abrirFalla(tipo: "emergencia.abrir" | "correctivo.abrir", datos: Record
 /** Nunca decir que la jefatura ya lo ve si no hay señal. */
 const queVeLaJefatura = () => (E.enLinea ? "Tu jefatura ya lo ve." : "Tu jefatura no lo ve hasta que vuelva la señal; si es urgente, avísale por radio.");
 /** Un punto crítico con novedad, o un equipo que no vuelve a servicio, detienen la secuencia: los pasos que siguen ya no aplican. */
-function detenerOrden(o: Any, nota: string, valor: unknown) {
+function detenerOrden(o: Any, nota: string, valor: unknown, escrito = "") {
   const f = E.flujo as Flujo;
-  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor ? { valor } : {}) });
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor ? { valor } : {}), ...accionesMostradas(o), ...conTexto({ [`problema:${o.id}:${f.i}`]: escrito }) });
   void despachar({ tipo: "orden.pausar", ordenId: o.id, motivo: `Detenida: ${nota}`.slice(0, 300) });
   olvidar((k) => k === `lect:${o.id}:${f.i}`);
   zumbar();
@@ -1642,7 +1811,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   pausarYEmpezar(d) {
     const id = Number(d.id);
     void despachar({ tipo: "orden.pausar", ordenId: Number(d.activa), motivo: "Pasó a otra orden" });
-    void despachar({ tipo: "orden.iniciar", ordenId: id });
+    void despachar({ tipo: "orden.iniciar", ordenId: id, ...accionesMostradas(ordenDe(id)) });
     ir(`#orden-${id}`, true);
   },
   llegue(d) {
@@ -1656,9 +1825,10 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
       void despachar({ tipo: "orden.pausar", ordenId: otra.id, motivo: "Atiende una emergencia" }, at);
       aviso(`«${corto(tituloOrden(otra), 40)}» quedó en pausa.`);
     }
-    // El primer toque fija la hora de llegada. «Llegué» no inicia la orden: se manda también iniciar.
+    // El primer toque fija la hora de llegada. «Llegué» no inicia la orden: se manda también iniciar,
+    // con las acciones que este celular va a mostrar: el servidor guarda esas y no otras.
     if (!o.hitos?.llegada) void despachar({ tipo: "emergencia.hito", ordenId: id, hito: "llegada" }, at);
-    if (o.estado !== "en_proceso") void despachar({ tipo: "orden.iniciar", ordenId: id }, at);
+    if (o.estado !== "en_proceso") void despachar({ tipo: "orden.iniciar", ordenId: id, ...accionesMostradas(o) }, at);
     zumbar();
     seguirOrden(id);
   },
@@ -1678,7 +1848,8 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const nota = t?.value.trim() ?? "";
     if (nota.length < 3) { const e = $("#err-nopudo"); if (e) e.hidden = false; t?.focus(); return; }
     olvidarHoja();
-    marcarPaso("desviacion", { nota: `No se pudo: ${nota}` });
+    const f = E.flujo as Flujo;
+    marcarPaso("desviacion", { nota: `No se pudo: ${nota}` }, { [`nopudo:${f.ordenId}:${f.i}`]: nota });
   },
   controlado() { marcarHito("mitigacion"); },
   restablecido() { marcarHito("restablecimiento"); },
@@ -1704,7 +1875,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (!o || !p || !campo) return;
     const ref = campo.value.trim();
     if (ref.length < 2) { const e = $("#err-ref"); if (e) e.hidden = false; campo.focus(); return; }
-    void despachar({ tipo: "mop.prerrequisito", ordenId: o.id, prerrequisitoId: p.id, referencia: ref });
+    void despachar({ tipo: "mop.prerrequisito", ordenId: o.id, prerrequisitoId: p.id, referencia: ref, ...conTexto({ [`ref:${o.id}:${p.id}`]: ref }) });
     olvidar((k) => k === `ref:${o.id}:${p.id}`);
     zumbar();
     siguientePermiso(o, f.i);
@@ -1726,7 +1897,14 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (!o || !l || !campo) return;
     const crudo = campo.value.trim();
     if (!crudo) { aviso("Escribe la lectura para seguir."); campo.focus(); return; }
-    void despachar({ tipo: "mop.liberacion", ordenId: o.id, liberacionId: l.id, valor: crudo });
+    // Con mínimo o máximo, la lectura es el número del instrumento: sin él, el servidor la rechazaría después.
+    if (conRango(l) && numeroDe(crudo) == null) {
+      const s = $("#lect-estado");
+      if (s) { s.textContent = "Esta lectura tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5)."; s.className = "lect-estado falta"; }
+      campo.focus();
+      return;
+    }
+    void despachar({ tipo: "mop.liberacion", ordenId: o.id, liberacionId: l.id, valor: crudo, ...conTexto({ [`lib:${o.id}:${l.id}`]: crudo }) });
     olvidar((k) => k === `lib:${o.id}:${l.id}`);
     zumbar();
     const v = numeroDe(crudo);
@@ -1760,7 +1938,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const notas = t?.value.trim() ?? "";
     if (!o) return;
     if (notas.length < 10) { const e = $("#err-reversa"); if (e) e.hidden = false; t?.focus(); return; }
-    void despachar({ tipo: "mop.reversa", ordenId: o.id, notas });
+    void despachar({ tipo: "mop.reversa", ordenId: o.id, notas, ...conTexto({ [`reversa:${o.id}`]: notas }) });
     olvidarHoja();
     zumbar();
     aviso(`Reversa anotada. ${queVeLaJefatura()}`);
@@ -1789,24 +1967,28 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const final = notaDeProblema();
     if (!final) return;
     const h = E.hoja;
+    const f = E.flujo as Flujo;
+    const escrito = $<HTMLTextAreaElement>("#nota-problema")?.value ?? "";
     olvidarHoja();
-    marcarPaso("desviacion", { nota: final, ...(h.valor ? { valor: h.valor } : {}) });
+    marcarPaso("desviacion", { nota: final, ...(h.valor ? { valor: h.valor } : {}) }, { [`problema:${f.ordenId}:${f.i}`]: escrito });
   },
   problemaCorrectivo() {
     const final = notaDeProblema();
     if (!final) return;
     const h = E.hoja;
+    const escrito = $<HTMLTextAreaElement>("#nota-problema")?.value ?? "";
     olvidarHoja();
     const o = ordenDe(E.flujo?.ordenId as number);
     abrirFalla("correctivo.abrir", { activoId: o.activo?.id ?? null, ubicacionId: o.lugar?.ubicacionId ?? null, sucursalId: o.lugar?.sedeId ?? E.sede, rubro: o.rubro ?? "infraestructura", nota: final }, `Correctivo: ${tituloOrden(o)}`);
-    detenerOrden(o, final, h.valor);
+    detenerOrden(o, final, h.valor, escrito);
   },
   problemaDetener() {
     const final = notaDeProblema();
     if (!final) return;
     const h = E.hoja;
+    const escrito = $<HTMLTextAreaElement>("#nota-problema")?.value ?? "";
     olvidarHoja();
-    detenerOrden(ordenDe(E.flujo?.ordenId as number), final, h.valor);
+    detenerOrden(ordenDe(E.flujo?.ordenId as number), final, h.valor, escrito);
   },
   abrirCorrectivoDesdeFin() {
     const o = ordenDe(E.flujo?.ordenId as number);
@@ -1866,8 +2048,9 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (E.flujo?.tipo === "ronda" && E.vista === "paso") { avanzar(); return; }
     cerrarHoja();
   },
-  // «Cancelar»: la hoja se cierra y lo que se había escrito en ella se borra. Si vino de otra hoja, vuelve a esa.
-  cerrarHoja() { olvidarHoja(); cerrarHoja(); },
+  // «Cancelar»: la hoja se cierra y lo que se había escrito en ella se borra, con sus fotos que todavía
+  // no salieron. Si vino de otra hoja, vuelve a esa.
+  cerrarHoja() { olvidarHoja(true); cerrarHoja(); },
   pausar() { abrirHoja({ tipo: "pausar", foco: false }); },
   motivoPausa(d, b) {
     document.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", "false"));
@@ -1880,7 +2063,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const motivo = t?.value.trim() || E.hoja?.motivo;
     if (!motivo) { const e = $("#err-pausa"); if (e) e.hidden = false; return; }
     const id = Number(E.flujo?.ordenId ?? E.params?.id);
-    void despachar({ tipo: "orden.pausar", ordenId: id, motivo });
+    void despachar({ tipo: "orden.pausar", ordenId: id, motivo, ...conTexto({ [`pausa:${id}`]: t?.value ?? "" }) });
     olvidarHoja();
     soltarPantalla();
     E.flujo = null;
@@ -1888,6 +2071,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     ir("#hoy", true);
   },
   verNota() { E.verNota = true; pintar({ conservar: true }); },
+  verTodo(_d, b) { b.classList.toggle("entero"); },
   enviar() {
     const f = E.flujo as Flujo;
     const o = ordenDe(f.ordenId as number);
@@ -1898,12 +2082,15 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (o.modo !== "pasos" && nota.length < 10) { decir("Escribe qué encontraste y qué hiciste (al menos 10 letras)."); $<HTMLTextAreaElement>("#nota-fin")?.focus(); return; }
     if (o.modo === "pasos" && !o.pasos.length && nota.length < 10) { decir("Describe lo que hiciste (al menos 10 letras)."); return; }
     if (o.modo === "intervencion" && !o.reversa?.ejecutada) {
-      const mal = (o.liberaciones ?? []).find((l: Any) => l.obligatoria && (!l.medida || l.conforme === false));
-      if (mal) { decir(mal.medida ? `«${mal.etiqueta}» quedó fuera de rango: repite la lectura o marca la reversa.` : `Falta la lectura de «${mal.etiqueta}».`); return; }
+      // Una obligatoria con rango cuenta como medida solo con su número, igual que en el servidor.
+      const mal = (o.liberaciones ?? []).find((l: Any) => l.obligatoria && (!medidaConNumero(l) || l.conforme === false));
+      if (mal) { decir(!mal.medida ? `Falta la lectura de «${mal.etiqueta}».` : mal.conforme === false ? `«${mal.etiqueta}» quedó fuera de rango: repite la lectura o marca la reversa.` : `«${mal.etiqueta}» necesita el número que marcó el instrumento.`); return; }
     }
     E.listo = { titulo: [o.activo?.codigo, tituloOrden(o)].filter(Boolean).join(" · "), lugar: o.lugar?.ubicacion, sinEnviar: !E.enLinea };
     // La causa raíz la escribe la jefatura: el celular manda solo lo que el técnico encontró e hizo.
-    void despachar({ tipo: "orden.terminar", ordenId: o.id, nota: nota || null });
+    // Lo escrito y los opcionales saltados viajan con el envío: si el servidor no lo acepta, vuelven a la orden.
+    const saltos = Object.fromEntries([`pre:${o.id}`, `lib:${o.id}`].filter((k) => E.saltos[k]?.length).map((k) => [k, E.saltos[k]]));
+    void despachar({ tipo: "orden.terminar", ordenId: o.id, nota: nota || null, ...conTexto({ [`fin:${o.id}`]: nota }, Object.keys(saltos).length ? saltos : undefined) });
     zumbar();
     soltarPantalla();
     olvidarDeOrden(o.id);
@@ -1957,7 +2144,9 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   abrirDesviacion() {
     const d = E.hoja?.doc;
     const a = E.b.ficha?.activo;
-    void despachar({ tipo: "aop.abrir", procedimientoId: d.id, activoId: a?.id ?? null, ubicacionId: a?.ubicacionId ?? null, sucursalId: a?.sedeId ?? E.sede, valor: $<HTMLInputElement>("#valor-desv")?.value ?? null, nota: $<HTMLTextAreaElement>("#nota-desv")?.value ?? "" });
+    const valor = $<HTMLInputElement>("#valor-desv")?.value ?? null;
+    const nota = $<HTMLTextAreaElement>("#nota-desv")?.value ?? "";
+    void despachar({ tipo: "aop.abrir", procedimientoId: d.id, activoId: a?.id ?? null, ubicacionId: a?.ubicacionId ?? null, sucursalId: a?.sedeId ?? E.sede, valor, nota, ...conTexto({ [`desv:${a?.id}`]: nota, [`desv-valor:${a?.id}`]: valor }) });
     olvidarHoja();
     zumbar();
     aviso(`Desviación abierta. Actuar antes de ${plazo(d.actuarMin)}.`);
@@ -1968,7 +2157,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const fi = E.b.ficha;
     const nota = $<HTMLTextAreaElement>("#nota-falla")?.value.trim() ?? "";
     olvidarHoja();
-    abrirFalla("emergencia.abrir", { eop: fi.falla?.codigo, activoId: fi.activo.id, ubicacionId: fi.activo.ubicacionId, sucursalId: fi.activo.sedeId ?? E.sede, nota }, `Emergencia: ${fi.activo.nombre}`);
+    abrirFalla("emergencia.abrir", { eop: fi.falla?.codigo, activoId: fi.activo.id, ubicacionId: fi.activo.ubicacionId, sucursalId: fi.activo.sedeId ?? E.sede, nota, ...conTexto({ [`falla:${fi.activo.id}`]: nota }) }, `Emergencia: ${fi.activo.nombre}`);
     soltarHistorialDeHoja();
     ir("#hoy", true);
   },
@@ -1978,7 +2167,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const nota = t?.value.trim() ?? "";
     if (nota.length < 5) { const e = $("#err-falla"); if (e) e.hidden = false; t?.focus(); return; }
     olvidarHoja();
-    abrirFalla("correctivo.abrir", { activoId: fi.activo.id, ubicacionId: fi.activo.ubicacionId, sucursalId: fi.activo.sedeId ?? E.sede, nota }, `Correctivo: ${fi.activo.nombre}`);
+    abrirFalla("correctivo.abrir", { activoId: fi.activo.id, ubicacionId: fi.activo.ubicacionId, sucursalId: fi.activo.sedeId ?? E.sede, nota, ...conTexto({ [`falla:${fi.activo.id}`]: nota }) }, `Correctivo: ${fi.activo.nombre}`);
     soltarHistorialDeHoja();
     ir("#hoy", true);
   },
@@ -1988,7 +2177,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const nota = t?.value.trim() ?? "";
     if (nota.length < 5) { const e = $("#err-otra"); if (e) e.hidden = false; t?.focus(); return; }
     olvidarHoja();
-    abrirFalla("correctivo.abrir", { sucursalId: E.sede, rubro: "infraestructura", nota }, `Correctivo: ${nota.slice(0, 60)}`);
+    abrirFalla("correctivo.abrir", { sucursalId: E.sede, rubro: "infraestructura", nota, ...conTexto({ [`otra:${E.sede}`]: nota }) }, `Correctivo: ${nota.slice(0, 60)}`);
     soltarHistorialDeHoja();
     ir("#hoy", true);
   },
@@ -2050,7 +2239,8 @@ movil.addEventListener("change", async (ev) => {
     const c = await comprimir(t.files[0]);
     const ordenId = E.flujo?.ordenId;
     if (!ordenId) throw new Error("sin orden");
-    await despachar({ tipo: "foto", ordenId, categoria: t.dataset.foto, blob: c.blob, nombre: `foto-${Date.now()}.jpg` });
+    // La foto lleva la clave de su hoja: si el técnico cancela la hoja antes de que salga, no se envía.
+    await despachar({ tipo: "foto", ordenId, categoria: t.dataset.foto, blob: c.blob, nombre: `foto-${Date.now()}.jpg`, clave });
     // La foto ya está en la cola: si la página se recarga, esta hoja dice «1 foto lista».
     const n = (E.fotos[clave] ?? 0) + 1;
     if (clave) { E.fotos[clave] = n; guardarBorrador(true); }

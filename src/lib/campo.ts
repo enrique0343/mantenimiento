@@ -18,15 +18,15 @@ import {
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
 import { minutosEstimadosChecklist, parseChecklist, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
-import { checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
+import { accionesDelCelular, checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
 import { cambiarPrerrequisito, lecturaEscrita, liberacionParaCampo, mopDeOrdenes, prerrequisitoParaCampo, RechazoMop, registrarLiberacion } from "@/lib/mop";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { queSigue } from "@/lib/resolver";
 import {
-  abrirEjecucion, buscarEjecucion, cerrarEjecucion, ligarOrdenALectura, paradasDeEjecucion, parsearTurnos, puntosDeRonda, recorridoDe, registrarLectura,
-  rondaDeSede, turnoActual, etiquetaTurno, type RondaEjecucion,
+  abrirEjecucion, buscarEjecucion, cerrarEjecucion, existeTurno, inicioTurno, ligarOrdenALectura, paradasDeEjecucion, proximoTramo, puntosDeRonda, recorridoConLinea,
+  recorridoDe, registrarLectura, turnoEn, turnosEn, etiquetaTurno, type RondaEjecucion,
 } from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
@@ -180,14 +180,13 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
   return base;
 }
 
-// Búsquedas del EOP por equipo en un paquete: cada una son varias consultas y D1 corta a 50.
-const MAX_EOP_POR_EQUIPO = 2;
-
-/** Lo que una emergencia o una intervención trae además de sus pasos, para varias órdenes a la vez. */
-async function extrasDeCampo(db: Db, filas: FilaOrden[], ubis: MapaUbicaciones, opciones: { conocidas?: Map<number, FichaEop>; maxResolver?: number } = {}) {
-  // Si hay tope de búsquedas, primero las que todavía no tienen pasos: a esas el EOP les da el trabajo.
-  const emergencias = filas.filter((f) => f.o.tipo === "emergencia")
-    .sort((x, y) => Number(!checklistVacio(x.o.checklistEjecucion)) - Number(!checklistVacio(y.o.checklistEjecucion)));
+/**
+ * Lo que una emergencia o una intervención trae además de sus pasos, para
+ * varias órdenes a la vez. Cada emergencia llega con su EOP y sus acciones,
+ * sean cuantas sean: el EOP se busca para todas juntas, en pocas consultas.
+ */
+async function extrasDeCampo(db: Db, filas: FilaOrden[], ubis: MapaUbicaciones, opciones: { conocidas?: Map<number, FichaEop> } = {}) {
+  const emergencias = filas.filter((f) => f.o.tipo === "emergencia");
   const eops = emergencias.length
     ? await eopsDeOrdenes(db, emergencias.map((f) => ({ id: f.o.id, procedimientoId: f.o.procedimientoId ?? null, activoId: f.o.activoId ?? null, sedeId: lugarDeFila(f, ubis).sedeId })), opciones)
     : new Map<number, EopDeOrden>();
@@ -237,9 +236,14 @@ export async function documentosAop(db: Db, ids: number[]) {
 }
 
 async function rondaParaSede(db: Db, sedeId: number) {
-  const ronda = await rondaDeSede(db, sedeId);
-  if (!ronda) return null;
-  const t = turnoActual(parsearTurnos(ronda.turnos));
+  const ahora = Date.now();
+  const r = await recorridoConLinea(db, sedeId);
+  if (!r) return null;
+  const { ronda, linea } = r;
+  // El turno que corre según la línea de tiempo: un cambio de turnos entra con el primer turno de su lista.
+  const t = turnoEn(linea, ahora);
+  if (!r.haceRondaEn(inicioTurno(t.fecha, t.turno))) return null;
+  const proximo = proximoTramo(linea, ahora);
   const ejec = await buscarEjecucion(db, { sucursalId: sedeId, fecha: t.fecha, turno: t.turno });
   const puntos = ejec ? await paradasDeEjecucion(db, ejec) : await puntosDeRonda(db, ronda.id);
   // Lo que dejó el turno anterior: la línea 1 del SOP empieza por aquí.
@@ -269,7 +273,9 @@ async function rondaParaSede(db: Db, sedeId: number) {
     fecha: t.fecha,
     turno: t.turno,
     etiqueta: etiquetaTurno(t.turno),
-    turnos: parsearTurnos(ronda.turnos),
+    // Sin señal, el celular calcula el turno con «turnos» y, desde «turnosProximos.desde», con la lista nueva.
+    turnos: turnosEn(linea, ahora),
+    turnosProximos: proximo ? { desde: new Date(proximo.desde).toISOString(), turnos: proximo.turnos } : null,
     entregaAnterior: anterior ?? null,
     minutos: ronda.minutosEstimados ?? null,
     estado: ejec ? ejec.estado : "sin_iniciar",
@@ -382,7 +388,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     .orderBy(asc(procedimientos.codigoCorto));
   const fichas = eops.map(fichaEop);
   // Prerrequisitos y liberaciones de las intervenciones, y el EOP de cada emergencia, sin una consulta por orden.
-  const extras = await extrasDeCampo(db, [...mias, ...libres], ubis, { conocidas: new Map(fichas.map((e) => [e.id, e])), maxResolver: MAX_EOP_POR_EQUIPO });
+  const extras = await extrasDeCampo(db, [...mias, ...libres], ubis, { conocidas: new Map(fichas.map((e) => [e.id, e])) });
   const armar = (f: FilaOrden) => {
     const ultimas = (f.o.planId && ultimasPorPlan.get(f.o.planId)) || {};
     return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas, ...extras(f.o.id) });
@@ -696,6 +702,17 @@ function exigirEjecutor(user: Usuario, o: typeof ordenes.$inferSelect, { tomarLi
   throw new RechazoCampo(o.asignadoA ? "Esta orden está asignada a otra persona." : "Empieza la orden antes de registrar en ella: así queda a tu nombre.", 403);
 }
 
+/**
+ * Las acciones del EOP que el celular mostró, si las manda. Solo cuentan en una
+ * emergencia que todavía no tiene pasos; en cualquier otra orden se ignoran.
+ */
+function accionesDeOp(o: typeof ordenes.$inferSelect, op: OperacionCampo): string[] | undefined {
+  if (o.tipo !== "emergencia" || !checklistVacio(o.checklistEjecucion) || !EN_CURSO.includes(o.estado)) return undefined;
+  const r = accionesDelCelular(op.acciones);
+  if (r.error) throw new RechazoCampo(r.error);
+  return r.acciones;
+}
+
 /** Los rechazos del MOP son rechazos del celular: se guardan y se le muestran al técnico. */
 async function enMop<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) { if (e instanceof RechazoMop) throw new RechazoCampo(e.message, e.status); throw e; }
@@ -703,15 +720,30 @@ async function enMop<T>(fn: () => Promise<T>): Promise<T> {
 
 type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
 
-/** Trabajos realizados, escritos a partir de lo que el técnico ya marcó. */
+const sinPunto = (t: string) => t.trim().replace(/\.+\s*$/, "");
+
+/**
+ * Trabajos realizados, escritos a partir de lo que el técnico ya marcó. En una
+ * emergencia, una acción que no se pudo hacer se cuenta aparte, con su motivo.
+ */
 export function textoDeTrabajos(
   checklist: string | null | undefined, titulo: string, nota?: string | null,
-  extra: { liberaciones?: LecturaLiberacion[]; reversa?: string | null; causaTecnico?: string | null } = {},
+  extra: { liberaciones?: LecturaLiberacion[]; reversa?: string | null; causaTecnico?: string | null; emergencia?: boolean } = {},
 ) {
   const pasos = parseChecklist(checklist);
   const limpio = titulo.replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+\S+$/, "").trim() || "Mantenimiento";
   const partes: string[] = [];
-  if (pasos.length) {
+  if (pasos.length && extra.emergencia) {
+    // En el celular, una acción del EOP se hizo o no se pudo («No se pudo: …»).
+    const hechas = pasos.filter((p) => p.estado === "ok").length;
+    const na = pasos.filter((p) => p.estado === "na").length;
+    const noPudo = pasos.filter((p) => p.estado === "desviacion");
+    const motivo = (p: ChecklistItem) => sinPunto((p.notas ?? "").replace(/^\s*no se pudo\s*:?\s*/i, ""));
+    const cuales = noPudo.map((p) => `«${sinPunto(p.texto)}»${motivo(p) ? `: ${motivo(p)}` : ""}`).join("; ");
+    partes.push(`${limpio}: ${hechas} de ${pasos.length} acciones hechas${na ? `, ${na} no aplica` : ""}${noPudo.length ? `; ${noPudo.length} ${noPudo.length === 1 ? "no se pudo" : "no se pudieron"}: ${cuales}` : ""}.`);
+    const lect = pasos.filter((p) => p.valorMedido).map((p) => `${p.texto}: ${p.valorMedido}${p.unidad ? ` ${p.unidad}` : ""}`);
+    if (lect.length) partes.push(`Lecturas: ${lect.join("; ")}.`);
+  } else if (pasos.length) {
     const ok = pasos.filter((p) => p.estado === "ok").length;
     const na = pasos.filter((p) => p.estado === "na").length;
     const nov = pasos.filter((p) => p.estado === "desviacion");
@@ -783,21 +815,26 @@ const claveRonda = (op: OperacionCampo) => {
   return { sucursalId, fecha, turno };
 };
 
-/** La ronda del turno que trae la operación. Sin señal no hay id: se reconoce por sede, fecha y turno. */
+/**
+ * La ronda del turno que trae la operación. Sin señal no hay id: se reconoce
+ * por sede, fecha y turno. El turno se juzga con lo que regía cuando empezó:
+ * con la línea de tiempo de los turnos y con la marca de la sede de entonces,
+ * aunque la jefatura haya cambiado algo antes de que volviera la señal.
+ */
 async function ejecucionDeOp(db: Db, op: OperacionCampo, user: Usuario, m: Momento): Promise<RondaEjecucion> {
   const clave = claveRonda(op);
   const existente = await buscarEjecucion(db, clave);
   if (existente) return existente;
-  const ronda = await rondaDeSede(db, clave.sucursalId);
-  if (!ronda) throw new RechazoCampo("Esta sede no tiene ronda configurada.");
-  const [sede] = await db.select({ activa: sucursales.activa }).from(sucursales).where(eq(sucursales.id, clave.sucursalId)).limit(1);
-  if (!sede?.activa) throw new RechazoCampo("Esa sede no está activa.");
-  const inicio = Date.parse(`${clave.fecha}T${clave.turno}:00-06:00`);
+  const r = await recorridoConLinea(db, clave.sucursalId);
+  if (!r) throw new RechazoCampo("Esta sede no tiene ronda configurada.");
+  if (!r.activa) throw new RechazoCampo("Esa sede no está activa.");
+  const inicio = inicioTurno(clave.fecha, clave.turno);
   const hecho = Date.parse(m.iso);
-  if (!parsearTurnos(ronda.turnos).includes(clave.turno) || !Number.isFinite(inicio) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
+  if (!Number.isFinite(inicio) || !existeTurno(r.linea, clave.fecha, clave.turno) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
     throw new RechazoCampo("La fecha o el turno de esta ronda no cuadran con la hora en que se capturó.");
   }
-  const { ejecucion } = await abrirEjecucion(db, { rondaId: ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
+  if (!r.haceRondaEn(inicio)) throw new RechazoCampo("En ese turno esta sede no hacía ronda.");
+  const { ejecucion } = await abrirEjecucion(db, { rondaId: r.ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
   return ejecucion;
 }
 
@@ -809,7 +846,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (o.estado !== "en_proceso") {
         exigirEjecutor(user, o, { tomarLibre: true });
         // Una emergencia sin pasos guarda primero las acciones de su EOP: las que ya vio el técnico.
-        await sembrarAccionesEop(ctx, db, o);
+        await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
         await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
       }
       return { ordenId: o.id, m };
@@ -835,7 +872,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
       exigirEjecutor(user, o);
-      o = await sembrarAccionesEop(ctx, db, o);
+      o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
       let lista: any[];
       try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
       if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
@@ -869,7 +906,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
               .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, o.id)).orderBy(asc(ordenLiberaciones.orden), asc(ordenLiberaciones.id))
           : [];
         const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota, {
-          liberaciones, reversa: o.reversaEjecutada ? o.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa,
+          liberaciones, reversa: o.reversaEjecutada ? o.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa, emergencia: o.tipo === "emergencia",
         }) || o.trabajosRealizados || "";
         await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}) }, m.iso);
       }

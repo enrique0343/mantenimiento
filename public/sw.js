@@ -4,7 +4,7 @@
 // pasan directo a la red: aquí no se guarda ningún dato de negocio. Los datos sin
 // enviar viven en IndexedDB y los maneja la página.
 // Sube con cada cambio de la pantalla del técnico: la copia anterior se borra al activarse.
-const CACHE = "campo-v2";
+const CACHE = "campo-v3";
 const PANTALLA = "/campo";
 const ARCHIVOS = ["/_astro/", "/fonts/", "/icons/", "/brand/"];
 

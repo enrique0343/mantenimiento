@@ -12,7 +12,8 @@ export const prerender = false;
 // Lecturas de liberación del MOP (cap. 02 y 05): «una sección de cierre con
 // las lecturas de liberación. La orden no cierra sin la lectura de
 // liberación.» Al escribir el valor medido se calcula "conforme" contra el
-// rango min/max tomado del SCP. La regla que impide cerrar vive en el PATCH de
+// rango min/max tomado del SCP; con rango, la lectura lleva número («aprox
+// 14 A» se rechaza con 400). La regla que impide cerrar vive en el PATCH de
 // /api/ordenes/[id]; el único escape es el cierre sin lectura con motivo
 // escrito, que solo puede usar admin o jefe. Medir es parte de la ejecución:
 // solo el técnico asignado o la jefatura, con la misma regla que usa el

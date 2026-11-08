@@ -11,6 +11,10 @@ export interface Op {
   at: string;
   ordenId?: number;
   blob?: Blob;
+  /** Lo que el técnico escribió, por su clave de borrador. No viaja: si el servidor rechaza la operación, vuelve al borrador. */
+  borrador?: { notas?: Record<string, string>; saltos?: Record<string, number[]> };
+  /** En una foto, la clave de la hoja donde se tomó: si se cancela la hoja antes de que salga, no se envía. */
+  clave?: string;
   [k: string]: unknown;
 }
 

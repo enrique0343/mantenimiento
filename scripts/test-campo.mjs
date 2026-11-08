@@ -686,6 +686,15 @@ try {
   [r] = await enviar([op('orden.terminar', hace(17), { ordenId: 9304, nota: 'Compresor cambiado.' })]);
   ok(r.ok, JSON.stringify(r));
   igual(one('SELECT estado FROM ordenes WHERE id=9304').estado, 'completada');
+  // K4 por el celular: con rango, la lectura trae su número; sin número se rechaza con la frase de la ficha y no se guarda.
+  const conRango = intervencion(9305);
+  await enviar([op('mop.prerrequisito', hace(16), { ordenId: 9305, prerrequisitoId: conRango.permiso, referencia: 'PT-0461' }), op('orden.iniciar', hace(15), { ordenId: 9305 })]);
+  [r] = await enviar([op('mop.liberacion', hace(14), { ordenId: 9305, liberacionId: conRango.corriente, valor: 'Normal' })]);
+  igual(r.error, 'Esta lectura tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).', JSON.stringify(r));
+  lib = one('SELECT * FROM orden_liberaciones WHERE id=?', conRango.corriente);
+  ok(lib.valor_medido === null && lib.valor_medido_texto === null && lib.medido_en === null, 'Y no queda como medida');
+  [r] = await enviar([op('mop.liberacion', hace(13), { ordenId: 9305, liberacionId: conRango.corriente, valor: '9,8 A' })]);
+  ok(r.ok && r.datos?.conforme === true, JSON.stringify(r));
 
   // Permisos: la intervención de otro no se toca; una libre la toma quien empieza.
   const ajena = intervencion(9302, { asignado: 20 });
@@ -736,24 +745,163 @@ try {
   igual(await abrir('/ordenes/9001'), '/campo#orden-9001', 'Preventivo, como antes');
 
   // ── D1 corta a 50 consultas por solicitud: el paquete, con todo esto, cabe ──
-  // Tres emergencias sin EOP vinculado, en tres equipos: el paquete busca el EOP de dos, y primero las que no tienen pasos.
+  // Como D1: cada sentencia suelta es una consulta y un batch entero es una más, con la sesión incluida.
+  const consultasD1 = async (fn) => {
+    const antes = fixture.queries.length, batches = faults.batchCount, batch = fixture.DB.batch;
+    let enBatch = 0;
+    fixture.DB.batch = (sentencias) => { enBatch += sentencias.length; return batch.call(fixture.DB, sentencias); };
+    try { const r = await fn(); return { r, consultas: fixture.queries.length - antes - enBatch + (faults.batchCount - batches) }; }
+    finally { fixture.DB.batch = batch; }
+  };
+  // Tres emergencias sin EOP vinculado, en tres equipos: las tres llegan con su EOP, sin tope.
   emergencia(9207, { activo: 1, eop: null });
   emergencia(9208, { activo: 5, eop: null, checklist: CHECKLIST });
   emergencia(9209, { activo: 4, eop: null });
-  const antes = fixture.queries.length;
-  const pqGrande = await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' });
-  const consultas = fixture.queries.length - antes;
+  let { r: pqGrande, consultas } = await consultasD1(() => call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' }));
   igual(pqGrande.status, 200);
-  ok(consultas <= 45, `El paquete hizo ${consultas} consultas`);
+  ok(consultas <= 50, `El paquete hizo ${consultas} consultas D1`);
+  const consultasTres = consultas;
   ok(pqGrande.body.ordenes.filter((x) => x.modo === 'emergencia').length >= 4 && pqGrande.body.ordenes.some((x) => x.modo === 'intervencion'));
   ok(pqGrande.body.emergencias.every((x) => typeof x.etiquetaMitigacion === 'string' && x.etiquetaMitigacion.length > 0));
   const enPaquete = (id) => pqGrande.body.ordenes.find((x) => x.id === id);
   igual(enPaquete(9207).eop.codigo, 'EOP-HVAC-01');
-  igual(enPaquete(9209).eop.codigo, 'EOP-MSP-01', 'La que no tiene pasos va antes');
+  igual(enPaquete(9209).eop.codigo, 'EOP-MSP-01');
   igual(enPaquete(9209).pasos.length, 3);
-  igual(enPaquete(9208).eop.codigo, null, 'Pasado el tope, la que ya tiene pasos espera a abrirse sola');
-  igual(enPaquete(9208).pasos.length, 3, 'Sus pasos son los de su checklist');
+  igual(enPaquete(9208).eop.codigo, 'EOP-HVAC-01', 'La tercera también llega con su EOP');
+  igual(enPaquete(9208).pasos.map((x) => x.texto).join('|'), 'Apagar y bloquear|Limpiar filtros|Medir corriente', 'Sus pasos son los de su checklist');
   igual((await call(app.crear.GET, '/api/campo/ordenes?id=9208', { rol: 'tecnico' })).body.orden.eop.codigo, 'EOP-HVAC-01');
+  ok(pqGrande.body.ronda && pqGrande.body.ronda.turnosProximos === null && pqGrande.body.ronda.turnos.length === 3, 'Sin cambio de turnos pendiente, el paquete no trae turnos próximos');
+
+  // Diez emergencias sin EOP vinculado, cada una en su equipo y de familias distintas, más tres libres de la
+  // sede: todas con su EOP y sus acciones, las mismas que resuelve queSigue, y el paquete sigue dentro de D1.
+  sqlite.exec(`
+    INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,estado,sistema,padre_id) VALUES
+      (31,'PE-31','Planta eléctrica de emergencia','general','infraestructura',2,'operativo',NULL,NULL),
+      (32,'UPS-32','UPS de la sala de cómputo','general','infraestructura',2,'operativo',NULL,NULL),
+      (33,'BA-33','Bomba de agua de la cisterna','general','infraestructura',2,'operativo',NULL,NULL),
+      (34,'OX-34','Manifold de oxígeno','general','infraestructura',2,'operativo',NULL,NULL),
+      (35,'AS-35','Ascensor de camillas','general','infraestructura',2,'operativo',NULL,NULL),
+      (36,'BI-36','Bomba contra incendio','general','infraestructura',2,'operativo',NULL,NULL),
+      (38,'TB-38','Gabinete principal','general','infraestructura',2,'operativo','electrico',NULL),
+      (37,'TC-37','Tarjeta de control','general','infraestructura',2,'operativo',NULL,38),
+      (39,'SN-39','Sensor de la tarjeta','general','infraestructura',2,'operativo',NULL,37),
+      (40,'AC-40','Minisplit de la habitación','general','aires',2,'operativo',NULL,NULL),
+      (41,'AC-41','Minisplit del quirófano','general','aires',1,'operativo',NULL,NULL),
+      (42,'AC-42','Aire de la azotea','general','aires',3,'operativo','minisplit',NULL),
+      (43,'GE-43','Generador del edificio B','general','infraestructura',2,'operativo',NULL,NULL);
+  `);
+  const diez = [[9401, 31], [9402, 32], [9403, 33], [9404, 34], [9405, 35], [9406, 36], [9407, 37], [9408, 39], [9409, 40], [9410, 41]];
+  for (const [id, activo] of diez) emergencia(id, { activo, eop: null });
+  // Una de otra sede, con su propio EOP vigente: manda el de su sede.
+  sqlite.prepare("UPDATE ordenes SET ubicacion_id=3, sucursal_id=2 WHERE id=9410").run();
+  sqlite.prepare("UPDATE activos SET ubicacion_id=3 WHERE id=41").run();
+  const mspModelo = one("SELECT id FROM procedimientos WHERE codigo_corto='EOP-MSP-01'");
+  sqlite.prepare("INSERT INTO procedimientos(codigo_corto,tipo,sistema,titulo,version,estado,sucursal_id,activo,responsable_id) VALUES('EOP-MSP-S2','eop','minisplit','Minisplit de la otra sede','1','vigente',2,1,1)").run();
+  const mspS2 = one("SELECT id FROM procedimientos WHERE codigo_corto='EOP-MSP-S2'").id;
+  sqlite.prepare("INSERT INTO eop_ficha(procedimiento_id,accion_1,accion_2,etiqueta_hora_mitigacion) VALUES(?,?,?,?)").run(mspS2, 'Apagar la unidad', 'Abrir la ventila', 'Unidad apagada');
+  sqlite.prepare("UPDATE activos SET nombre='Minisplit de la azotea' WHERE id=41").run();
+  ok(mspModelo, 'El EOP de minisplit modelo existe');
+  for (const [id, activo] of [[9411, 42], [9412, 43], [9413, 33]]) emergencia(id, { activo, eop: null, asignado: null });
+  ({ r: pqGrande, consultas } = await consultasD1(() => call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })));
+  igual(pqGrande.status, 200);
+  ok(consultas <= 50, `El paquete con diez emergencias sin EOP vinculado hizo ${consultas} consultas D1`);
+  console.log(`Paquete con tres emergencias sin EOP vinculado: ${consultasTres} consultas D1; con diez propias y tres libres: ${consultas}`);
+  const dbQ = app.database.getDb(fixture.ctx('/x'));
+  const todas = pqGrande.body.ordenes.concat(pqGrande.body.libres);
+  for (const id of [...diez.map(([x]) => x), 9412, 9413]) {
+    const o = todas.find((x) => x.id === id);
+    ok(o, `La emergencia ${id} viaja en el paquete`);
+    const fila = one('SELECT activo_id a, sucursal_id s FROM ordenes WHERE id=?', id);
+    const sigue = await app.resolver.queSigue(dbQ, fila.a, 'falla', fila.s);
+    igual(o.eop.codigo, sigue.documento?.codigoCorto ?? null, `La emergencia ${id} trae el EOP que resuelve queSigue`);
+    igual(o.pasos.map((x) => x.texto).join('|'), sigue.primerasAcciones.map((x) => x.trim()).join('|'), `La emergencia ${id} trae sus acciones como pasos`);
+    ok(o.pasos.length > 0, `La emergencia ${id} tiene pasos`);
+  }
+  const vistaDiez = (id) => todas.find((x) => x.id === id);
+  igual(vistaDiez(9407).eop.codigo, 'EOP-ELE-01', 'El componente hereda la familia del equipo padre');
+  igual(vistaDiez(9408).eop.codigo, 'EOP-ELE-01', 'Y el nieto también');
+  igual(vistaDiez(9409).eop.codigo, 'EOP-MSP-01');
+  igual(JSON.stringify([vistaDiez(9410).eop.codigo, vistaDiez(9410).eop.etiquetaMitigacion, vistaDiez(9410).pasos.length]), JSON.stringify(['EOP-MSP-S2', 'Unidad apagada', 2]), 'En otra sede manda su EOP vigente, con su rótulo');
+  ok(pqGrande.body.libres.some((x) => x.id === 9413 && x.eop.codigo === 'EOP-AGU-01'), 'Las libres de la sede también llegan con su EOP');
+  ok(!pqGrande.body.libres.some((x) => x.id === 9411), 'Una libre de otra sede no se ofrece');
+  // Lo mismo al abrir una sola.
+  igual((await call(app.crear.GET, '/api/campo/ordenes?id=9405', { rol: 'tecnico' })).body.orden.eop.codigo, 'EOP-ASC-01');
+  // Más equipos que los 100 parámetros que D1 acepta por consulta: van en tandas, en un solo batch.
+  // La mitad son minisplits de quirófano: la sala decide la familia también dentro del batch.
+  sqlite.exec(`INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,estado) VALUES ${Array.from({ length: 95 }, (_, i) => i % 2 ? `(${600 + i},'AC-${600 + i}','Minisplit ${i + 1}','general','aires',1,'operativo')` : `(${600 + i},'AS-${600 + i}','Ascensor ${i + 1}','general','infraestructura',2,'operativo')`).join(',')}`);
+  const muchas = Array.from({ length: 95 }, (_, i) => ({ id: 70000 + i, procedimientoId: null, activoId: 600 + i, sedeId: 1 }));
+  const { r: resueltas, consultas: enTandas } = await consultasD1(() => app.eop.eopsDeOrdenes(dbQ, muchas));
+  ok(muchas.every((o, i) => resueltas.get(o.id)?.codigo === (i % 2 ? 'EOP-HVAC-01' : 'EOP-ASC-01') && resueltas.get(o.id).acciones.length === 3), 'Los 95 equipos con su EOP y sus acciones');
+  ok(enTandas <= 4, `En ${enTandas} consultas D1`);
+
+  // ── K2: el celular dice qué acciones del EOP mostró ──
+  // «acciones: []»: el celular no mostró ninguna. No se siembra nada y se envía con lo que cuenta el técnico.
+  emergencia(9420, { activo: 2, eop: null });
+  [r] = await enviar([
+    op('emergencia.hito', hace(9), { ordenId: 9420, hito: 'llegada' }), op('orden.iniciar', hace(9), { ordenId: 9420, acciones: [] }),
+    op('emergencia.hito', hace(8), { ordenId: 9420, hito: 'mitigacion' }), op('emergencia.hito', hace(7), { ordenId: 9420, hito: 'restablecimiento' }),
+    op('orden.terminar', hace(6), { ordenId: 9420, nota: 'Rearmé el equipo y quedó enfriando.' }),
+  ]).then((x) => [x.find((y) => !y.ok) ?? x.at(-1)]);
+  ok(r.ok, `Sin acciones que mostrar, la emergencia se envía: ${JSON.stringify(r)}`);
+  e = one('SELECT * FROM ordenes WHERE id=9420');
+  igual(e.checklist_ejecucion, null, '«acciones: []» no siembra nada');
+  igual(e.estado, 'completada');
+  ok(e.trabajos_realizados.includes('Rearmé el equipo'), e.trabajos_realizados);
+  // Con textos: se siembran esos, recortados, aunque el servidor resolvería otros.
+  emergencia(9421, { activo: 2, eop: null });
+  const mostradas = ['  Verificar la transferencia  ', 'Encender la planta', 'Avisar a la jefatura'];
+  [r] = await enviar([op('orden.iniciar', hace(9), { ordenId: 9421, acciones: mostradas })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9421').c).map((x) => `${x.texto}:${x.estado}`).join('|'), 'Verificar la transferencia:pendiente|Encender la planta:pendiente|Avisar a la jefatura:pendiente', 'Se siembran exactamente las que mostró el celular');
+  // C7: lo que no se pudo se cuenta aparte, con su motivo.
+  await enviar([
+    op('orden.paso', hace(8), { ordenId: 9421, idx: 0, texto: 'Verificar la transferencia', estado: 'ok' }),
+    op('orden.paso', hace(7), { ordenId: 9421, idx: 1, texto: 'Encender la planta', estado: 'desviacion', nota: 'No se pudo: sin combustible' }),
+    op('orden.paso', hace(6), { ordenId: 9421, idx: 2, texto: 'Avisar a la jefatura', estado: 'ok' }),
+  ]);
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9421, nota: 'Se pidió combustible; la carga quedó en la red.' })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9421');
+  ok(e.trabajos_realizados.startsWith('Falla de energía: 2 de 3 acciones hechas; 1 no se pudo: «Encender la planta»: sin combustible.'), e.trabajos_realizados);
+  ok(!/puntos realizados|con novedad/.test(e.trabajos_realizados), 'Lo que no se pudo no se cuenta como realizado');
+  igual(app.campo.textoDeTrabajos(JSON.stringify([
+    { texto: 'Cortar la energía.', estado: 'desviacion', notas: 'No se pudo: el tablero está bloqueado.' },
+    { texto: 'Aislar el área', estado: 'na' },
+    { texto: 'Avisar', estado: 'desviacion', notas: 'No se pudo: sin señal' },
+  ]), '[Emergencia] Corto circuito - TB-01', null, { emergencia: true }), 'Corto circuito: 0 de 3 acciones hechas, 1 no aplica; 2 no se pudieron: «Cortar la energía»: el tablero está bloqueado; «Avisar»: sin señal.', 'Varias que no se pudieron');
+  // Sin «acciones» (celular viejo), como hoy: las del EOP que resuelve el servidor.
+  emergencia(9422, { activo: 2, eop: null });
+  [r] = await enviar([op('orden.iniciar', hace(4), { ordenId: 9422 })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9422').c).map((x) => x.texto).join('|'), (await vistaDe(9409) ?? vistaDiez(9409)).pasos.map((x) => x.texto).join('|'), 'Sin acciones, las de su EOP');
+  // Con pasos ya guardados, las acciones se ignoran.
+  [r] = await enviar([op('orden.iniciar', hace(4), { ordenId: 9208, acciones: ['Otra cosa'] })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9208').c).map((x) => x.texto).join('|'), 'Apagar y bloquear|Limpiar filtros|Medir corriente', 'Una orden con checklist no cambia');
+  // El primer paso de una emergencia empezada en la ficha también siembra lo que mostró el celular.
+  emergencia(9423, { activo: null, eop: null });
+  sqlite.prepare("UPDATE ordenes SET estado='en_proceso', iniciada_en=? WHERE id=9423").run(hace(20));
+  [r] = await enviar([op('orden.paso', hace(3), { ordenId: 9423, idx: 0, texto: 'Cerrar la llave de paso', estado: 'ok', acciones: ['Cerrar la llave de paso', 'Secar el piso'] })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9423').c).map((x) => `${x.texto}:${x.estado}`).join('|'), 'Cerrar la llave de paso:ok|Secar el piso:pendiente');
+  // Lo que no es una lista de hasta diez textos de 1 a 300 letras se rechaza con una frase, sin tocar la orden.
+  emergencia(9424, { activo: 2, eop: null });
+  for (const mal of [Array.from({ length: 11 }, (_, i) => `Acción ${i + 1}`), ['Bien', '   '], 'Encender la planta', ['x'.repeat(301)], [42]]) {
+    [r] = await enviar([op('orden.iniciar', hace(2), { ordenId: 9424, acciones: mal })]);
+    ok(!r.ok && /acciones de la emergencia/.test(r.error), `Se rechaza ${JSON.stringify(mal).slice(0, 40)}: ${r.error}`);
+  }
+  e = one('SELECT estado, checklist_ejecucion c FROM ordenes WHERE id=9424');
+  ok(e.estado === 'abierta' && e.c === null, 'Y la orden queda como estaba');
+  [r] = await enviar([op('orden.iniciar', hace(2), { ordenId: 9424, acciones: Array.from({ length: 10 }, (_, i) => `${'y'.repeat(299)}${i}`) })]);
+  ok(r.ok && JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9424').c).length === 10, 'Diez de 300 letras sí');
+  // Una acción del EOP más larga que eso viaja ya recortada: lo que el celular devuelve se acepta y sus pasos cuadran.
+  sqlite.prepare('UPDATE eop_ficha SET accion_2=? WHERE procedimiento_id=?').run(`Abrir la ventila ${'y deja que circule el aire '.repeat(12)}`, mspS2);
+  const larga = await vistaDe(9410);
+  igual(larga.pasos[1].texto.length, 300, 'El paquete trae la acción con el tope que acepta el servidor');
+  [r] = await enviar([op('orden.iniciar', hace(2), { ordenId: 9410, acciones: larga.pasos.map((x) => x.texto) })]);
+  ok(r.ok, JSON.stringify(r));
+  [r] = await enviar([op('orden.paso', hace(1), { ordenId: 9410, idx: 1, texto: larga.pasos[1].texto, estado: 'ok' })]);
+  ok(r.ok, `El paso se marca con el mismo texto: ${JSON.stringify(r)}`);
   // La orden abierta suelta trae lo mismo que el paquete.
   const suelta = await call(app.crear.GET, '/api/campo/ordenes?id=9301', { rol: 'tecnico' });
   igual(suelta.status, 200);
@@ -762,6 +910,19 @@ try {
   const sueltaEop = await call(app.crear.GET, '/api/campo/ordenes?id=9207', { rol: 'tecnico' });
   igual(sueltaEop.body.orden.eop.codigo, 'EOP-HVAC-01', 'En quirófano manda el EOP de climatización crítica');
   ok(sinHoras(sueltaEop.body.orden));
+
+  // ── K1: un cambio de turnos que todavía no entró viaja aparte; el turno de ahora sigue como estaba ──
+  const antesK1 = (await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+  const modeloK1 = one('SELECT id, turnos FROM rondas WHERE sucursal_id IS NULL');
+  const cambioK1 = Date.now();
+  sqlite.prepare('INSERT INTO ronda_vigencias(ronda_id,turnos_antes,hasta,usuario_id) VALUES(?,?,?,1)').run(modeloK1.id, modeloK1.turnos, new Date(cambioK1).toISOString());
+  sqlite.prepare(`UPDATE rondas SET turnos='["06:00","18:00"]' WHERE id=?`).run(modeloK1.id);
+  // Lo esperado, aparte del código: el primer turno de la lista nueva que empieza desde el cambio.
+  const hoyK1 = new Date(cambioK1 - 6 * 3600000).toISOString().slice(0, 10);
+  const entraK1 = [0, 1].flatMap((k) => ['06:00', '18:00'].map((tt) => Date.parse(`${new Date(Date.parse(`${hoyK1}T12:00:00Z`) + k * 86400000).toISOString().slice(0, 10)}T${tt}:00-06:00`))).find((ms) => ms >= cambioK1);
+  const k1 = (await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+  igual(JSON.stringify([k1.fecha, k1.turno, k1.turnos]), JSON.stringify([antesK1.fecha, antesK1.turno, antesK1.turnos]), 'El turno de ahora sigue con los turnos que rigen');
+  igual(JSON.stringify(k1.turnosProximos), JSON.stringify({ desde: new Date(entraK1).toISOString(), turnos: ['06:00', '18:00'] }), 'Y los nuevos llegan con la hora en que entran');
 
   console.log(`PASS test-campo: ${verificaciones} verificaciones; rutas y migraciones reales, sin red.`);
 } finally {
