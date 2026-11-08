@@ -3266,7 +3266,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const cambios = campos.filter((c) => (payload[c] ?? "") !== enServidor(c) && !(conBase && typeof base[c] === "string" && (payload[c] ?? "") === base[c]));
         if (!cambios.length) { soltar(); return "nada"; }
         // Los campos en que se guardó otro texto después de escribir el borrador.
-        // El de antes de esta versión no trae la base: se ofrece como siempre.
+        // El de antes de esta versión llega con base vacía (abajo).
         const otros = conBase ? cambios.filter((c) => typeof base[c] === "string" && base[c] !== enServidor(c)) : [];
         const fechaSave = new Date(savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
         const uno = otros.length === 1;
@@ -3299,7 +3299,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (cuenta && Number(vieja.savedAt) < Number(cuenta.savedAt)) soltarVieja();
         // Si no, espera mientras haya uno de esta cuenta que ofrecer: no se
         // borra sin haberlo ofrecido.
-        else if (deCuenta === "nada") ofrecer(vieja, soltarVieja);
+        // La clave de antes guardaba los campos como estaban en pantalla, también
+        // los que nadie tocó: se ofrece con base vacía. Un campo vacío no se
+        // restaura y, si el servidor tiene otro texto en ese campo, la pregunta lo
+        // dice (Cancelar = dejar lo guardado).
+        else if (deCuenta === "nada") ofrecer({ ...vieja, base: Object.fromEntries(ejecFields.map((c) => [c, ""])) }, soltarVieja);
       } catch {}
     })();
 
@@ -3459,8 +3463,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
       $("causaSave")?.addEventListener("click", () => { guardarCausa(); });
       // La causa que la pestaña de antes de esta versión guardaba junto con los
-      // textos (la clave sin la cuenta) pasa a ser el borrador de esta cuenta, sin
-      // base, y se ofrece ahora, salvo que la cuenta ya tenga uno más nuevo.
+      // textos (la clave sin la cuenta) pasa a ser el borrador de esta cuenta y se
+      // ofrece ahora, salvo que la cuenta ya tenga uno más nuevo. Esa clave guardaba
+      // la causa como estaba en pantalla, aunque nadie la escribiera: va con base
+      // vacía, así, si el servidor tiene una causa, la pregunta dice que se guardó
+      // otro texto (Cancelar = dejar lo guardado).
       // Después sale de esa clave. A quien no puede escribir la causa no se le
       // ofrece y queda allí.
       try {
@@ -3470,7 +3477,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           let propio = null;
           try { propio = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null"); } catch {}
           const masNuevo = typeof propio?.valor === "string" && Number(propio.savedAt) > Number(vieja.savedAt);
-          if (!masNuevo && deAntes.trim() !== causaGuardada) localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: deAntes, savedAt: Number(vieja.savedAt) || Date.now() }));
+          if (!masNuevo && deAntes.trim() !== causaGuardada) localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: deAntes, base: "", savedAt: Number(vieja.savedAt) || Date.now() }));
           const textos = { ...vieja.payload };
           delete textos.causaRaiz;
           if (ejecFields.some((c) => textos[c] !== undefined)) localStorage.setItem(STORAGE_KEY_VIEJA, JSON.stringify({ ...vieja, payload: textos }));

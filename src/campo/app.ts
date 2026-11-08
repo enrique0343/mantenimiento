@@ -16,6 +16,7 @@ import { comprimir, peso } from "./foto";
 import { laHora, turnoActual, type TurnoInfo } from "../lib/turnos";
 import { etiquetaOT } from "../lib/orden-codigo";
 import { leerNumero, numeroAlInicio, textoDeNumero, valorDe } from "../lib/numero";
+import { envioConPasosCambiados, pasoDeLaFrase } from "../lib/frases-campo";
 
 const TZ = "America/El_Salvador";
 const cuerpo = document.body.dataset;
@@ -403,6 +404,7 @@ function olvidarDeOrden(id: number) {
 const nuevoSeq = () => (E.ultimoSeq = Math.max(E.ultimoSeq + 1, Date.now()));
 async function despachar(parcial: Partial<Op> & { tipo: string }, at?: string) {
   const op: Op = { seq: nuevoSeq(), uid: UID, opId: uuid(), at: at ?? new Date().toISOString(), ...parcial };
+  if (op.tipo === "orden.paso") pasoRevisado(op.ordenId, op.idx);
   await meter(op);
   void drenar();
   return op;
@@ -506,6 +508,8 @@ async function drenar() {
   // ronda, tras un cambio de turno, el paquete nuevo tampoco lo trae.
   const quitarOp = async (op: Op, aceptada: boolean) => {
     E.pend = E.pend.filter((x) => x.seq !== op.seq);
+    // Una marca aceptada después de un rechazo de K17 en ese paso: ese rechazo ya no detiene el envío.
+    if (aceptada && op.tipo === "orden.paso") pasoRevisado(op.ordenId, op.idx, op.at);
     if (aceptada && E.base && !CREAN_ORDEN.includes(op.tipo)) { aplicarLocal(E.base, op); baseCambio = true; }
     await cola.quitar(op.seq);
   };
@@ -913,7 +917,7 @@ function vHoy() {
   const fechaLarga = new Date().toLocaleDateString("es-SV", { weekday: "long", day: "numeric", month: "long", timeZone: TZ });
   // Desde el turno en que la sede ya no hace ronda, el turno de la copia ya no es el que corre.
   const turno = p.ronda?.turno && !yaNoHaceRonda(p.ronda) ? ` · turno ${esc(p.ronda.turno)}` : "";
-  const avisos = (E.sesionVencida ? `<div class="avisito"><span>Tu sesión venció.${E.pend.length ? ` ${E.pend.length} registros esperan.` : ""}</span><a class="link" href="/login?next=/campo">Entrar</a></div>` : "")
+  const avisos = (E.sesionVencida ? `<div class="avisito"><span>Tu sesión venció.${E.pend.length ? ` ${E.pend.length} ${E.pend.length === 1 ? "registro espera" : "registros esperan"}.` : ""}</span><a class="link" href="/login?next=/campo">Entrar</a></div>` : "")
     + (E.rechazos.length ? `<div class="avisito"><span>${E.rechazos.length} registro${E.rechazos.length === 1 ? "" : "s"} sin aceptar</span><button class="link" data-a="verRechazos">Ver por qué</button></div>` : "");
   // Con un aviso arriba y «Ahora» lleno, en una pantalla baja el saludo deja su lugar (campo.css): todo «Ahora» queda a la vista.
   return `<div class="hoy-cab${avisos && ahora.lleno ? " compacta" : ""}"><div><span class="etq">${esc(fechaLarga)}${turno}</span><h1>Hola, ${esc(primerNombre(p.usuario?.nombre ?? NOMBRE))}</h1>${nombreSede ? `<button class="sede-btn" data-a="sede">${esc(nombreSede)}${ico.abajo}</button>` : ""}</div><span id="senal">${pillHtml()}</span></div>`
@@ -1943,6 +1947,35 @@ const pasoCambiado = (error: unknown): number | null => {
 };
 /** La orden que «Abrir la orden» lleva al paso que cambió: se abre en ese paso, no en el primero pendiente. */
 let irAlPaso: { hash: string; i: number } | null = null;
+/**
+ * K19 · Los pasos de la orden con un rechazo de K17 («El paso 3 cambió en la ficha mientras tanto…») que el celular
+ * todavía no volvió a marcar (sus índices, ordenados). Mientras haya uno, «Enviar a verificación» no sale. Un paso que
+ * ya no está en la orden no cuenta, como en el servidor.
+ */
+function pasosPorRevisar(o: Any): number[] {
+  const n = o.pasos?.length ?? 0;
+  const idxs = new Set<number>();
+  for (const x of E.rechazos) {
+    if (Number(x.ordenId) !== Number(o.id) || x.revisado) continue;
+    const i = pasoDeLaFrase(x.error);
+    if (i !== null && i < n) idxs.add(i);
+  }
+  return [...idxs].sort((a, b) => a - b);
+}
+/**
+ * El paso se volvió a marcar: sus rechazos de K17 ya no detienen el envío. Al marcarlo, todos; con `hasta` (una marca
+ * que el servidor aceptó), los de las marcas anteriores a ella.
+ */
+function pasoRevisado(ordenId: unknown, idx: unknown, hasta?: string) {
+  let cambio = false;
+  for (const x of E.rechazos) {
+    if (x.revisado || Number(x.ordenId) !== Number(ordenId) || pasoDeLaFrase(x.error) !== Number(idx)) continue;
+    if (hasta && x.at && String(x.at) > hasta) continue;
+    x.revisado = true;
+    cambio = true;
+  }
+  if (cambio) void cola.guardar(`rechazos:${UID}`, E.rechazos);
+}
 /** Por qué ya no se puede trabajar la orden de un registro sin aceptar, como lo dice «Ver por qué». */
 const PERDIDA: Record<string, string> = {
   reasignada: "Esta orden ya no está a tu nombre: lo que escribiste queda aquí para tu jefatura.",
@@ -2488,6 +2521,10 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const nota = ($<HTMLTextAreaElement>("#nota-fin")?.value ?? E.notas[`fin:${o.id}`] ?? "").trim();
     const err = $("#err-fin");
     const decir = (m: string) => { if (err) { err.textContent = m; err.hidden = false; } };
+    // K19 · Un paso que cambió en la ficha y no se volvió a marcar: la orden no sale (el servidor no la aceptaría) y lo
+    // que el técnico escribió en ese paso se queda en el celular. Se va al primero de esos pasos, como está guardado.
+    const cambiados = pasosPorRevisar(o);
+    if (cambiados.length) { irAPantalla(o, { vista: "paso", i: cambiados[0] }); aviso(envioConPasosCambiados(o.modo === "emergencia", cambiados)); return; }
     // Un paso que pide lectura y no la tiene no se envía: el servidor no lo aceptaría y lo escrito volvería a la orden.
     const sinLectura = (o.pasos ?? []).findIndex(pasoSinLectura);
     if (sinLectura >= 0) { pedirLecturaDePaso(o, sinLectura); return; }

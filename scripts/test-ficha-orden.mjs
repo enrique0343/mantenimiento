@@ -261,6 +261,9 @@ try {
   emergencia(236, { checklist_ejecucion: null, trabajos_realizados: 'Planta en manual.' });
   emergencia(237, { checklist_ejecucion: null, trabajos_realizados: 'Texto que guardó el técnico después.' });
   emergencia(239, { checklist_ejecucion: null, trabajos_realizados: 'Planta en manual.' });
+  // La clave vieja con base vacía: la causa y la solución que el servidor tiene guardadas después.
+  emergencia(251, { checklist_ejecucion: null, trabajos_realizados: 'Planta en manual.', causa_raiz: 'Causa guardada después por otra cuenta: el relé de transferencia quedó pegado.' });
+  for (const id of [252, 253]) emergencia(id, { checklist_ejecucion: null, solucion_aplicada: 'Solución guardada después por otra cuenta.' });
   emergencia(244, { checklist_ejecucion: lista(PASOS[0]) });
   orden(245, { tipo: 'preventivo', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), checklist_ejecucion: JSON.stringify([
     { texto: 'Medir la corriente de fase', estado: 'pendiente', requiereValor: true, unidad: 'A', esperadoMin: 12.345, esperadoMax: 15 }]) });
@@ -1975,8 +1978,9 @@ try {
       await p.hasta(() => trabajosDe(id) === NUEVO && equipo.getItem(`ot-${id}-draft-3`) === null, 'lo recuperado se guarda');
       p.w.close();
       const q = await abrir(id, 'tecnico', { compartido: equipo, confirmar: !viejoMasNuevo });
-      if (viejoMasNuevo) ok(q.confirmaciones.length === 1 && /¿Restaurarlos\? \(Cancelar = descartar\)$/.test(q.confirmaciones[0]) && equipo.getItem(`ot-${id}-draft`) === null && trabajosDe(id) === NUEVO,
-        `Al volver a abrir se ofrece el viejo, como hoy, y sale del equipo: ${q.confirmaciones.join(' | ')}`);
+      // La clave vieja va con base vacía: el servidor ya tiene otro texto, así que la pregunta lo dice y Cancelar lo deja.
+      if (viejoMasNuevo) ok(q.confirmaciones.length === 1 && /se guardó otro texto en Trabajos realizados\. ¿Reemplazarlo con lo que escribiste aquí\? \(Cancelar = dejar lo guardado\)$/.test(q.confirmaciones[0]) && equipo.getItem(`ot-${id}-draft`) === null && trabajosDe(id) === NUEVO,
+        `Al volver a abrir se ofrece el viejo, dice que se guardó otro texto y sale del equipo: ${q.confirmaciones.join(' | ')}`);
       else {
         await pausa(1700);
         ok(q.confirmaciones.length === 0 && q.patches().length === 0 && trabajosDe(id) === NUEVO, `El viejo no se ofrece después ni pisa lo recuperado: ${q.confirmaciones.join(' | ')}`);
@@ -2300,7 +2304,8 @@ try {
     const equipo = new Almacen();
     equipo.setItem('ot-237-draft', deProduccion(DE_PRODUCCION));
     const j = await abrir(237, 'jefe', { compartido: equipo });
-    ok(j.confirmaciones.length === 2 && RESTAURAR.test(j.confirmaciones[0]) && RECUPERAR.test(j.confirmaciones[1]), `Primero los textos y después la causa: ${j.confirmaciones.join(' | ')}`);
+    // El servidor tiene los trabajos que el técnico guardó después: la pregunta lo dice (la clave vieja va con base vacía).
+    ok(j.confirmaciones.length === 2 && OTRO_EN_TRABAJOS.test(j.confirmaciones[0]) && RECUPERAR.test(j.confirmaciones[1]), `Primero los textos y después la causa: ${j.confirmaciones.join(' | ')}`);
     await j.hasta(() => trabajosDe(237) === DE_PRODUCCION && causaDe(237) === CAUSA_VIEJA && claves(equipo, 237).length === 0, 'se guardan los dos y no queda nada en el equipo', 6000);
     ok(j.avisos.length === 0, `Sin ventanas: ${j.avisos.join(' | ')}`);
     j.w.close();
@@ -2322,6 +2327,35 @@ try {
     ok(j.confirmaciones.length === 1 && RECUPERAR.test(j.confirmaciones[0]), `A la jefatura se le ofrece la causa: ${j.confirmaciones.join(' | ')}`);
     await j.hasta(() => causaDe(238) === CAUSA_VIEJA && claves(equipo, 238).length === 0, 'la jefatura la guarda y no queda nada');
     j.w.close();
+  }
+  { // La causa de la clave vieja va con base vacía: si el servidor tiene otra causa, la pregunta lo dice y Cancelar la deja.
+    const GUARDADA = 'Causa guardada después por otra cuenta: el relé de transferencia quedó pegado.';
+    const equipo = new Almacen();
+    equipo.setItem('ot-251-draft', deProduccion('Planta en manual.'));
+    const j = await abrir(251, 'jefe', { compartido: equipo, confirmar: false });
+    ok(j.confirmaciones.length === 1 && OTRA_CAUSA.test(j.confirmaciones[0]), `La pregunta dice que se guardó otra causa: ${j.confirmaciones.join(' | ')}`);
+    await pausa(1700);
+    ok(causaDe(251) === GUARDADA && j.patches().length === 0 && claves(equipo, 251).length === 0, `Cancelar deja la causa guardada y no queda nada en el equipo: ${claves(equipo, 251).join(', ')}`);
+    j.w.close();
+  }
+  { // Los textos de la clave vieja van con base vacía: el que tiene otro texto en el servidor se nombra en la pregunta.
+    const GUARDADA = 'Solución guardada después por otra cuenta.';
+    const equipo = new Almacen();
+    equipo.setItem('ot-252-draft', JSON.stringify({ payload: { trabajosRealizados: 'Trabajos escritos en producción sin señal.', causaRaiz: null, solucionAplicada: 'Solución que estaba en pantalla.' }, savedAt: Date.now() - 600000 }));
+    const t = await abrir(252, 'tecnico', { compartido: equipo, confirmar: false });
+    ok(t.confirmaciones.length === 1 && /se guardó otro texto en Solución aplicada\. ¿Reemplazarlo con lo que escribiste aquí\? \(Cancelar = dejar lo guardado\)$/.test(t.confirmaciones[0]),
+      `La pregunta nombra la solución guardada después: ${t.confirmaciones.join(' | ')}`);
+    await pausa(1700);
+    ok(solucionDe(252) === GUARDADA && trabajosDe(252) === null && t.patches().length === 0 && equipo.getItem('ot-252-draft') === null, 'Cancelar deja lo guardado y descarta la clave vieja');
+    t.w.close();
+    // Un campo vacío de la clave vieja no se restaura ni hace preguntar por lo guardado.
+    const otro = new Almacen();
+    otro.setItem('ot-253-draft', JSON.stringify({ payload: { trabajosRealizados: 'Trabajos escritos en producción sin señal.', causaRaiz: null, solucionAplicada: null }, savedAt: Date.now() - 600000 }));
+    const u = await abrir(253, 'tecnico', { compartido: otro });
+    ok(u.confirmaciones.length === 1 && RESTAURAR.test(u.confirmaciones[0]), `Solo se ofrecen los trabajos: ${u.confirmaciones.join(' | ')}`);
+    await u.hasta(() => trabajosDe(253) === 'Trabajos escritos en producción sin señal.' && otro.getItem('ot-253-draft') === null, 'los trabajos se guardan');
+    ok(solucionDe(253) === GUARDADA && JSON.stringify(u.patches()) === JSON.stringify([{ trabajosRealizados: 'Trabajos escritos en producción sin señal.' }]), `La solución guardada queda: ${JSON.stringify(u.patches())}`);
+    u.w.close();
   }
   { // Con un borrador de causa de la cuenta más nuevo, la causa de la clave vieja no se ofrece: se ofrece la de la cuenta.
     const PROPIA = 'Causa de la cuenta escrita después: el breaker principal está subdimensionado.';

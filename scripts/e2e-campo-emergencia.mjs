@@ -1484,6 +1484,53 @@ try {
   await clic('limpiarRechazos');
   sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id IN (531, 536)");
 
+  // ══ K19 · Con el rechazo ya en el celular, el técnico abre la orden desde Hoy, llega al cierre y toca «Enviar a
+  // verificación». No sale: lo lleva al paso que cambió, con su lectura y su nota todavía en el celular ══
+  ahora = enSV('12:27');
+  orden(537, 'preventivo', '[Preventivo] Semestral - CH-83', 83, 'aires', CHECKLIST);
+  await abrir('https://test.invalid/campo#orden-537');
+  await hasta(() => /3 pasos/.test(texto()), 'el preventivo 537');
+  await clic('empezar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=537').estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+  enLinea = false; w.dispatchEvent(new w.Event('offline'));
+  await clic('hecho'); await clic('hecho');
+  escribir('#lectura', '15');
+  await clic('lectura');
+  const NOTA_537 = 'Corriente alta: el compresor calienta';
+  escribir('#nota-problema', NOTA_537);
+  await clic('problemaSeguir');
+  await clic('verNota');
+  const FIN_537 = 'Revisé el chiller y medí la corriente del compresor.';
+  escribir('#nota-fin', FIN_537);
+  await clic('enviar');
+  const base537 = one('SELECT checklist_ejecucion c FROM ordenes WHERE id=537').c;
+  igual((await app.order.PATCH(ctx('/api/ordenes/537', { method: 'PATCH', id: 537, rol: 'jefe', data: { checklistEjecucion: JSON.stringify(JSON.parse(base537).map((x, i) => (i === 2 ? { ...x, estado: 'ok', valorMedido: 10 } : x))), checklistBase: base537, soloCambios: true } }))).status, 200, 'La jefatura anota 10 A en la ficha');
+  enLinea = true; w.dispatchEvent(new w.Event('online'));
+  await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=537 AND resultado='rechazada'").n === 2 && !enVuelo && !/Enviando/.test(pill()), 'no entran la lectura ni el envío');
+  const paso537 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=537').c)[i];
+  const terminar537 = () => enviados.filter((op) => op.tipo === 'orden.terminar' && op.ordenId === 537).length;
+  await abrir('https://test.invalid/campo#orden-537');
+  await hasta(() => /3 de 3 pasos anotados/.test(texto()), 'sin pasar por «Ver por qué», la orden abre en el cierre');
+  const envios537 = terminar537();
+  await clic('enviar');
+  anotar('el envío que no sale: va al paso que cambió');
+  ok(/Paso 3 de 3/.test(texto()) && doc.querySelector('#lectura')?.value === '15' && texto().includes('Ya está marcado: Hecho, con 10 A.'), 'Va al paso que cambió, con su lectura en el campo: ' + texto().slice(0, 240));
+  igual(doc.querySelector('#aviso').textContent, 'La orden no se envió: el paso 3 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.', 'Dice por qué no sale');
+  await espera(300);
+  ok(terminar537() === envios537 && one('SELECT estado FROM ordenes WHERE id=537').estado === 'en_proceso', 'El envío no sale y la orden sigue en curso');
+  await clic('lectura');
+  igual(doc.querySelector('#nota-problema')?.value, NOTA_537, 'Su nota sigue en la hoja');
+  await clic('problemaSeguir');
+  ok(/3 de 3 pasos anotados/.test(texto()) && doc.querySelector('#nota-fin')?.value === FIN_537, 'Sigue al cierre, con su nota: ' + texto().slice(0, 160));
+  await clic('enviar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=537').estado === 'completada', 'marcado otra vez, la orden se envía');
+  ok(paso537(2).estado === 'desviacion' && paso537(2).valorMedido === 15 && paso537(2).notas === NOTA_537, 'Con la lectura y la nota del técnico: ' + JSON.stringify(paso537(2)));
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /2 registros sin aceptar/.test(texto()), 'Hoy');
+  await clic('verRechazos');
+  await clic('limpiarRechazos');
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=537");
+
   // ══ P24 · Dos marcas sin señal en el mismo paso: la segunda sale con el paso como lo dejó la primera, y entra ══
   orden(532, 'preventivo', '[Preventivo] Quincenal - CH-83', 83, 'aires', CHECKLIST);
   await abrir('https://test.invalid/campo#orden-532');

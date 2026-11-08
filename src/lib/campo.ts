@@ -32,6 +32,7 @@ import { LINEAS_CON_ORDEN, laHora } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
 import { leerNumero, textoDeNumero } from "@/lib/numero";
 import { calcularVencimiento } from "@/lib/sla";
+import { pasoCambioEnLaFicha, PASO_DE_LA_FRASE, envioConPasosCambiados } from "@/lib/frases-campo";
 
 type Db = ReturnType<typeof getDb>;
 type Usuario = { id: number; rol: any; nombre: string; especialidad?: string | null };
@@ -776,22 +777,8 @@ function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): s
 }
 /** La marca trae el paso como lo mostraba el celular («antes»). */
 const conAntes = (antes: unknown): antes is Record<string, unknown> => typeof antes === "object" && antes !== null && !Array.isArray(antes);
-/** El rechazo de una marca cuando el paso cambió en la ficha mientras tanto. N es el número que ve el técnico. */
-export const pasoCambioEnLaFicha = (emergencia: boolean, idx: number) =>
-  emergencia
-    ? `La acción ${idx + 1} cambió en la ficha mientras tanto: revísala y márcala otra vez.`
-    : `El paso ${idx + 1} cambió en la ficha mientras tanto: revísalo y márcalo otra vez.`;
-/** El número del paso en la frase de pasoCambioEnLaFicha, guardada con el rechazo. */
-const PASO_DE_LA_FRASE = /^(?:El paso|La acción) (\d+) cambió en la ficha mientras tanto/;
-/** K19 · El envío que no sale mientras un paso que cambió en la ficha no se vuelva a marcar. `idxs`, ordenados. */
-export function envioConPasosCambiados(emergencia: boolean, idxs: number[]): string {
-  const n = idxs.map((i) => i + 1);
-  const cuales = n.length === 1 ? String(n[0]) : `${n.slice(0, -1).join(", ")} y ${n[n.length - 1]}`;
-  const que = emergencia
-    ? n.length === 1 ? `la acción ${cuales} cambió en la ficha mientras tanto. Revísala, márcala` : `las acciones ${cuales} cambiaron en la ficha mientras tanto. Revísalas, márcalas`
-    : n.length === 1 ? `el paso ${cuales} cambió en la ficha mientras tanto. Revísalo, márcalo` : `los pasos ${cuales} cambiaron en la ficha mientras tanto. Revísalos, márcalos`;
-  return `La orden no se envió: ${que} otra vez y vuelve a enviarla.`;
-}
+// Las frases de K17 y K19 salen de src/lib/frases-campo.ts: el celular las reconoce y las repite.
+export { pasoCambioEnLaFicha, envioConPasosCambiados };
 
 /** El estado de un paso como se compara: el viejo {hecho} cuenta como ok; sin uno válido, pendiente. */
 const estadoComparable = (p: any) => (["pendiente", "ok", "na", "desviacion"].includes(p?.estado) ? p.estado : p?.hecho === true ? "ok" : "pendiente");
