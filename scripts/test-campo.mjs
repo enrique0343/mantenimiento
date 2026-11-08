@@ -779,7 +779,8 @@ try {
   // 12.345 llega como número: guardado como número, no vuelve a leerse como «12.345», que sería ambiguo.
   [r] = await enviar([op('orden.paso', hace(5.5), { ordenId: 9501, idx: 2, texto: 'Medir corriente', estado: 'desviacion', valor: 12.345, nota: 'Corriente alta en el compresor' })]);
   ok(r.ok && pasoMedir().valorMedido === 12.345, `Un número con tres decimales también se acepta: ${JSON.stringify(r)}`);
-  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9501 ORDER BY id DESC LIMIT 1').v, '12.345', 'Y queda en el libro con su número');
+  // K7: en el libro va escrito con textoDeNumero, para que se vuelva a leer igual: «12.345» sería ambiguo.
+  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9501 ORDER BY id DESC LIMIT 1').v, '12.3450', 'Y queda en el libro como «12.3450»');
   const ronda2 = (await call(app.hoy.GET, '/api/campo/hoy?sede=2', { rol: 'tecnico' })).body.ronda;
   const temp2 = ronda2.puntos.find((x) => x.pideValor && x.min != null && x.max != null);
   const clave2 = { rondaId: ronda2.rondaId, sucursalId: 2, fecha: ronda2.fecha, turno: ronda2.turno };
@@ -794,6 +795,37 @@ try {
   const eventosAntes = one('SELECT count(*) n FROM aop_eventos').n;
   [r] = await enviar([op('aop.abrir', hace(2), { procedimientoId: aop.id, activoId: 2, valor: '1.200', nota: 'CO₂ alto' })]);
   ok(r.error === AMBIGUO && one('SELECT count(*) n FROM aop_eventos').n === eventosAntes, `En una desviación, también: ${r.error}`);
+
+  // ── K8: en un paso con rango, lo escrito es el número que marcó el instrumento ──
+  // «Medir corriente» va de 8 a 12 A. Un texto que no es número se rechaza con su frase y no se guarda nada.
+  seed(9502, { checklist: JSON.stringify([...JSON.parse(CHECKLIST), { texto: 'Anotar la placa del motor', requiereValor: true, estado: 'pendiente' }]) });
+  await enviar([op('orden.iniciar', hace(9), { ordenId: 9502 })]);
+  const paso9502 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9502').c)[i];
+  for (const escrito of ['14,5 A', 'ok']) {
+    const consultasAntes = fixture.queries.length;
+    [r] = await enviar([op('orden.paso', hace(8), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: escrito })]);
+    igual(r.error, app.reglas.MENSAJE_PASO_SIN_NUMERO, `«${escrito}» en un paso de 8 a 12 A se rechaza con su frase: ${JSON.stringify(r)}`);
+    ok(!fixture.queries.slice(consultasAntes).some((q) => /orden_verificacion/.test(q.sql)), `«${escrito}» se rechaza en la ruta del celular, antes de llegar a las reglas de la ficha`);
+  }
+  ok(paso9502(2).estado === 'pendiente' && paso9502(2).valorMedido === undefined && !one('SELECT id FROM orden_paso_marcas WHERE orden_id=9502'), `Y no se guarda nada: ${JSON.stringify(paso9502(2))}`);
+  [r] = await enviar([op('orden.paso', hace(7), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'desviacion', valor: '14,5', nota: 'Sobre el rango' })]);
+  ok(r.ok && paso9502(2).valorMedido === 14.5 && paso9502(2).estado === 'desviacion', `«14,5» se guarda como número: ${JSON.stringify(paso9502(2))}`);
+  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9502 ORDER BY id DESC LIMIT 1').v, '14.5', 'Y en el libro');
+  // En un paso sin rango, lo escrito se guarda tal cual, como hoy.
+  [r] = await enviar([op('orden.paso', hace(6), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: ' 14,5 A ' })]);
+  ok(r.ok && paso9502(3).valorMedido === '14,5 A', `En un paso sin rango, el texto sigue como hoy: ${JSON.stringify(paso9502(3))}`);
+  // El mismo texto que ya estaba guardado (de antes de esta versión) no es un cambio: el paso se marca y el texto queda.
+  sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=9502').run(JSON.stringify(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9502').c).map((x, i) => (i === 2 ? { ...x, valorMedido: 'ok', estado: 'pendiente' } : x))));
+  [r] = await enviar([op('orden.paso', hace(5), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: 'ok' })]);
+  ok(r.ok && paso9502(2).estado === 'ok' && paso9502(2).valorMedido === 'ok', `El texto que ya estaba no se rechaza: ${JSON.stringify(r)}`);
+  [r] = await enviar([op('orden.paso', hace(4), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: 'aprox 10' })]);
+  igual(r.error, app.reglas.MENSAJE_PASO_SIN_NUMERO, 'Otro texto, sí');
+  igual(paso9502(2).valorMedido, 'ok', 'Y lo guardado no cambia');
+  // K7: una lectura de liberación pasa a los trabajos escrita con textoDeNumero.
+  igual(app.campo.textoDeTrabajos(null, '[Intervención] Cambio de compresor - AC-01', null, { liberaciones: [
+    { etiqueta: 'Corriente de arranque', unidad: 'A', valorMedido: 12.345, valorMedidoTexto: null },
+    { etiqueta: 'Presión de succión', unidad: 'psi', valorMedido: 9.8, valorMedidoTexto: null },
+  ] }), 'Lecturas de liberación: Corriente de arranque: 12.3450 A; Presión de succión: 9.8 psi.', 'En los trabajos, 12.345 va como «12.3450» y 9.8 como siempre');
 
   // ── El aviso o el correo lleva al técnico al celular, con cualquier tipo de orden ──
   const middleware = await (async () => {
@@ -1035,6 +1067,29 @@ try {
     await marcar(false);
     fijarReloj(en('14:05'));
     igual(await ronda(), null, 'Desde las 14:00 el paquete no trae ronda');
+  } finally { await g.close(); }
+}
+
+// ── K7: la lectura de la ronda que vuelve como texto se escribe con textoDeNumero ──
+// Base nueva y reloj fijo: martes 10/11/2026. A las 10:29 la temperatura se anota 12.345 en la ronda de las 06:00.
+{
+  const D = '2026-11-10';
+  const en = (hhmm) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`)).toISOString();
+  fijarReloj(en('10:30'));
+  const g = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede prueba',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const ronda = async () => (await g.call(g.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+    let r = await ronda();
+    const temp = r.puntos.find((p) => /temperatura/.test(p.texto) && p.pideValor && p.min === 20 && p.max === 22);
+    const lectura = { opId: 'k7-temperatura-1', tipo: 'ronda.lectura', at: en('10:29'), rondaId: r.rondaId, sucursalId: 1, fecha: D, turno: '06:00', puntoId: temp.id, resultado: 'ok', valor: 12.345 };
+    const [x] = (await g.call(g.app.sync.POST, '/api/campo/sync', { method: 'POST', data: { ops: [lectura] }, rol: 'tecnico' })).body.resultados;
+    ok(x.ok && g.sqlite.prepare('SELECT valor v FROM ronda_lecturas WHERE punto_id=?').get(temp.id).v === 12.345, `La lectura se guarda como número: ${JSON.stringify(x)}`);
+    fijarReloj(en('14:10'));
+    r = await ronda();
+    igual(r.turno, '14:00', 'A las 14:10 corre la ronda de las 14:00');
+    igual(r.puntos.find((p) => p.id === temp.id).ultima, '12.3450', 'La última lectura viaja como «12.3450», que se vuelve a leer igual');
   } finally { await g.close(); }
 }
 

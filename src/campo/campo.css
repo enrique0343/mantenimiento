@@ -184,6 +184,12 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
 .hoja-caja .lista.desplaza{max-height:calc(var(--alto,100dvh) * .45);overflow-y:auto;overscroll-behavior:contain}
 .hoja-caja .lista.desplaza .fila{padding-inline:0}
 .hoja-caja .lista.desplaza .link{min-height:36px}
+/* La hoja de un documento (la desviación): lo que dice el documento se desplaza en su caja; los relojes,
+   el campo y los botones quedan a la vista, también con un aviso debajo del campo. */
+.hoja-caja.con-pie{display:flex;flex-direction:column}
+.hoja-caja.con-pie>*{flex:none}
+.hoja-caja.con-pie>.hoja-doc{flex:0 1 auto;min-height:44px;overflow-y:auto;overscroll-behavior:contain;display:grid;gap:8px;align-content:start}
+.hoja-campos,.hoja-pie{display:grid;gap:8px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{min-height:44px;padding:6px 12px;background:var(--blanco);border:1px solid var(--filete);border-radius:2px;font-size:15px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--azul);color:var(--blanco);border-color:var(--azul)}
@@ -202,5 +208,11 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .dato{padding:5px 0}
   .perm{min-height:44px}
   .lect-caja.texto input{min-height:52px}
+  /* La hoja de la desviación cabe en 360×640 también con el aviso debajo del campo. */
+  .hoja-caja.con-pie{gap:8px;padding-top:12px}
+  .hoja-caja.con-pie .relojes{padding:6px 0}
+  .hoja-caja.con-pie .relojes b{font-size:20px}
+  .hoja-caja.con-pie .hoja-campos{gap:6px}
+  .hoja-caja.con-pie textarea{min-height:60px}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}

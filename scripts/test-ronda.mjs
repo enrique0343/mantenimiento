@@ -800,6 +800,118 @@ await escenario('14:05', async (e) => {
   igual([p.turno, p.omite], ['14:00', []], '(7d) Y corre hasta las 14:30');
 });
 
+// ══ Decisión 7b: un turno que ya se anunció como «no se abre» y cuya hora ya pasó no vuelve a abrirse ══
+// (7e) A las 10:40 los turnos se corren media hora: el de las 14:00 no se abre. A las 14:10 la jefatura los
+// corrige a 06:45, 14:45 y 22:45: el de las 14:00 sigue sin abrirse y el de las 06:00 corre hasta las 14:45.
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('14:05');
+  const p0 = await e.hoy();
+  const c06 = { rondaId: p0.rondaId, sucursalId: 1, fecha: D, turno: '06:00' };
+  const empezada = await e.sync([e.op('ronda.iniciar', en('14:03'), c06), ...e.lecturas(p0, c06, en('14:04'), 2)]);
+  ok(empezada.length === 3 && empezada.every((y) => y.ok), `(7e) A las 14:03 el técnico empieza la de las 06:00: ${JSON.stringify(empezada)}`);
+  e.reloj('14:10');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:45', '14:45', '22:45'] });
+  igual(s.body.aplicaDesde, { fecha: D, turno: '14:45' }, '(7e) La corrección entra a las 14:45');
+  igual(s.body.aviso, 'Los turnos nuevos entran a las 14:45 del 10/11/2026. El turno de las 06:00 sigue hasta esa hora; el de las 14:00 no se abre.', '(7e) La respuesta dice que el de las 14:00 sigue sin abrirse');
+  e.reloj('14:12');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno, p.ejecucionId, Object.keys(p.lecturas).length], [D, '06:00', e.ejecucion(D, '06:00').id, 2], '(7e) A las 14:12 corre la de las 06:00, con lo que ya se anotó');
+  igual([p.turnos, p.turnosProximos, p.omite], [['06:00', '14:00', '22:00'], { desde: en('14:45'), turnos: ['06:45', '14:45', '22:45'] }, [{ fecha: D, turno: '14:00' }]], '(7e) El paquete trae el de las 14:00 como turno que no se abre');
+  const { turnoConProximos } = e.x.app.rt;
+  igual(turnoConProximos(p.turnos, p.turnosProximos, new Date(en('14:30')), p.omite).turno, '06:00', '(7e) Sin señal, el celular sigue en la de las 06:00');
+  igual(turnoConProximos(p.turnos, p.turnosProximos, new Date(en('14:46')), p.omite).turno, '14:45', '(7e) Y a las 14:45 pasa al turno nuevo');
+  const t = await e.fila();
+  igual([t.turno, t.estado], ['06:00', 'en_curso'], '(7e) El tablero sigue en la de las 06:00');
+  igual((await e.fila({ fecha: D, turno: '14:00' })).estado, 'no_aplica', '(7e) Y no exige la de las 14:00');
+  const [x14] = await e.sync([e.op('ronda.iniciar', en('14:12'), { sucursalId: 1, fecha: D, turno: '14:00' })]);
+  ok(!x14.ok && x14.error === YA_NO_EXISTE && !e.ejecucion(D, '14:00'), `(7e) La de las 14:00 no se abre: ${x14.error}`);
+  const [mas] = await e.sync(e.lecturas(p, c06, en('14:20'), 3).slice(2));
+  ok(mas.ok && e.ejecucion(D, '06:00').puntos_ok === 3, '(7e) Lo anotado a las 14:20 entra en la de las 06:00');
+  e.reloj('14:46');
+  const p2 = await e.hoy();
+  igual([p2.fecha, p2.turno, p2.turnos, p2.turnosProximos, p2.ejecucionId], [D, '14:45', ['06:45', '14:45', '22:45'], null, null], '(7e) A las 14:46 corre el de las 14:45');
+  e.reloj('23:30');
+  const { r: sem, celda } = await e.semana();
+  igual(sem.turnos, ['06:00', '06:45', '14:00', '14:45', '22:00', '22:45'], '(7e) La semana tiene los turnos de antes y los que rigen; los del cambio reemplazado, no');
+  igual(sem.turnos.map((tt) => celda(D, tt)), ['incompleta', 'no_aplica', 'no_aplica', 'no_se_hizo', 'no_aplica', 'sin_iniciar'], '(7e) Hoy la de las 14:00 no se exige');
+});
+
+// (7f) Si a las 14:10 la jefatura cancela el cambio (vuelve a 06:00, 14:00 y 22:00), el de las 14:00 sigue sin
+// abrirse: ya se anunció y su hora ya pasó. El de las 06:00 corre hasta las 22:00.
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('14:10');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora: el cambio que estaba pendiente ya no entra.', '(7f) La respuesta dice que el cambio ya no entra');
+  e.reloj('14:12');
+  const p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnos, p.turnosProximos, p.omite], [D, '06:00', ['06:00', '14:00', '22:00'], null, [{ fecha: D, turno: '14:00' }]], '(7f) A las 14:12 sigue la de las 06:00 y el de las 14:00 no se abre');
+  igual(e.x.app.rt.turnoConProximos(p.turnos, p.turnosProximos, new Date(en('21:59')), p.omite).turno, '06:00', '(7f) Sin señal, el celular sigue en la de las 06:00 hasta las 22:00');
+  igual((await e.fila()).turno, '06:00', '(7f) El tablero sigue en la de las 06:00');
+  igual((await e.fila({ fecha: D, turno: '14:00' })).estado, 'no_aplica', '(7f) Y no exige la de las 14:00');
+  const [x14] = await e.sync([e.op('ronda.iniciar', en('14:12'), { sucursalId: 1, fecha: D, turno: '14:00' })]);
+  ok(!x14.ok && x14.error === YA_NO_EXISTE && !e.ejecucion(D, '14:00'), `(7f) Ni se abre: ${x14.error}`);
+  e.reloj('21:59');
+  igual((await e.hoy()).turno, '06:00', '(7f) La de las 06:00 corre hasta las 22:00');
+  e.reloj('22:01');
+  igual((await e.hoy()).turno, '22:00', '(7f) A las 22:00 corre la de las 22:00');
+  igual((await e.fila({ fecha: D, turno: '06:00' })).estado, 'no_se_hizo', '(7f) La de las 06:00 terminó a las 22:00');
+  const { r: sem, celda } = await e.semana();
+  igual(sem.turnos.map((tt) => `${tt} ${celda(D, tt)}`), ['06:00 no_se_hizo', '14:00 no_aplica', '22:00 sin_iniciar'], '(7f) En la semana, la de las 14:00 no se exige');
+});
+
+// (7g) Cancelado a las 12:00, antes de la hora del de las 14:00: ese turno se calcula de nuevo y se abre como siempre.
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('12:00');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora: el cambio que estaba pendiente ya no entra.', '(7g) A las 12:00 se cancela el cambio');
+  igual((await e.hoy()).omite, [], '(7g) Ya ningún turno se queda sin abrir');
+  e.reloj('14:05');
+  const p = await e.hoy();
+  igual([p.turno, p.turnosProximos, p.omite], ['14:00', null, []], '(7g) A las 14:05 corre la de las 14:00');
+  const [x14] = await e.sync([e.op('ronda.iniciar', en('14:05'), { sucursalId: 1, fecha: D, turno: '14:00' })]);
+  ok(x14.ok && e.ejecucion(D, '14:00'), '(7g) Y se abre');
+  const t = await e.fila();
+  igual([t.turno, t.estado], ['14:00', 'en_curso'], '(7g) El tablero la exige');
+});
+
+// (7h) Reemplazado por otra lista y otra vez después: el de las 14:00 sigue sin abrirse, una sola vez en «omite».
+await escenario('10:30', async (e) => {
+  e.reloj('10:40');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
+  e.reloj('14:10');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['15:00', '23:00'] })).body.aviso, 'Los turnos nuevos entran a las 15:00 del 10/11/2026. El turno de las 06:00 sigue hasta esa hora; el de las 14:00 no se abre.', '(7h) A las 14:10, 15:00 y 23:00');
+  e.reloj('14:12');
+  let p = await e.hoy();
+  igual([p.turno, p.turnosProximos, p.omite], ['06:00', { desde: en('15:00'), turnos: ['15:00', '23:00'] }, [{ fecha: D, turno: '14:00' }]], '(7h) Corre la de las 06:00 hasta las 15:00');
+  e.reloj('14:20');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:45', '14:45', '22:45'] })).body.aviso, 'Los turnos nuevos entran a las 14:45 del 10/11/2026. El turno de las 06:00 sigue hasta esa hora; el de las 14:00 no se abre.', '(7h) A las 14:20, otra vez');
+  e.reloj('14:22');
+  p = await e.hoy();
+  igual([p.turno, p.turnosProximos, p.omite], ['06:00', { desde: en('14:45'), turnos: ['06:45', '14:45', '22:45'] }, [{ fecha: D, turno: '14:00' }]], '(7h) Sigue la de las 06:00 y el de las 14:00 va una sola vez');
+  e.reloj('14:50');
+  igual((await e.hoy()).turno, '14:45', '(7h) A las 14:45 corre el de las 14:45');
+});
+
+// (7i) La hora de un turno en una frase: «las 14:00», pero «la 01:00».
+await escenario('23:20', async (e) => {
+  e.reloj('23:30');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['01:00', '09:00', '17:00'] });
+  igual(s.body.aplicaDesde, { fecha: dia(1), turno: '01:00' }, '(7i) Entran a la 01:00 de mañana');
+  igual(s.body.aviso, 'Los turnos nuevos entran a la 01:00 del 11/11/2026. El turno de las 22:00 sigue hasta esa hora.', '(7i) La respuesta dice «a la 01:00»');
+  const { lineaDeTurnos, avisoCambioTurnos } = e.x.app.rt;
+  const aviso = (antes, despues, hhmm) => avisoCambioTurnos(lineaDeTurnos({ id: 1, turnos: JSON.stringify(despues) }, [{ id: 1, rondaId: 1, turnosAntes: JSON.stringify(antes), hasta: en(hhmm) }]), Date.parse(en(hhmm)));
+  igual(aviso(['01:00', '09:00', '17:00'], ['02:00', '10:00', '18:00'], '03:00'), 'Los turnos nuevos entran a las 10:00 del 10/11/2026. El turno de la 01:00 sigue hasta esa hora; el de las 09:00 no se abre.', '(7i) «El turno de la 01:00»');
+  igual(aviso(['01:00', '17:00'], ['04:00', '16:00'], '18:00'), 'Los turnos nuevos entran a las 04:00 del 11/11/2026. Hasta entonces siguen los de antes; el de la 01:00 dura hasta esa hora.', '(7i) «el de la 01:00 dura hasta esa hora»');
+  igual(aviso(['01:00', '09:00', '17:00'], ['02:00', '10:00', '18:00'], '22:00'), 'Los turnos nuevos entran a las 02:00 del 11/11/2026. El turno de las 17:00 sigue hasta esa hora; el de la 01:00 no se abre.', '(7i) «el de la 01:00 no se abre»');
+  igual(aviso(['01:00', '02:00', '12:00'], ['02:30', '12:30'], '23:00'), 'Los turnos nuevos entran a las 02:30 del 11/11/2026. El turno de las 12:00 sigue hasta esa hora; los de la 01:00 y las 02:00 no se abren.', '(7i) «los de la 01:00 y las 02:00»');
+});
+
 // (8) La sede saca su recorrido propio mientras el técnico anota sin señal: la ronda se abre con el recorrido que traía el celular.
 await escenario('10:30', async (e) => {
   e.x.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(2,'Sede 2',1)");
@@ -834,19 +946,17 @@ await escenario('10:30', async (e) => {
   igual(x.error, NO_CUADRA, 'Un turno de hace más de 24 h no cuadra con la hora capturada');
 });
 
-// (G7) El celular de verdad, contra estas rutas: con los turnos corridos media hora no abre el de las 14:00,
-// con señal ni sin ella, y a las 14:30 pasa al turno nuevo.
-{
+// El celular de verdad (src/campo/app.ts en jsdom) contra estas rutas, con el reloj de prueba. Con dos
+// sedes pregunta en cuál está el técnico; se elige la 1 y empieza en Hoy.
+const bundleCelular = (await build({ entryPoints: [path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'src/campo/app.ts')], bundle: true, write: false, format: 'iife', platform: 'browser', logLevel: 'silent' })).outputFiles[0].text;
+async function celularReal(clave, desde, fn) {
   const requerir = createRequire(import.meta.url);
   const { JSDOM } = requerir('jsdom');
   const { IDBFactory, IDBKeyRange } = requerir('fake-indexeddb');
-  const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const bundle = (await build({ entryPoints: [path.join(raiz, 'src/campo/app.ts')], bundle: true, write: false, format: 'iife', platform: 'browser', logLevel: 'silent' })).outputFiles[0].text;
-  fijarReloj(en('10:30'));
+  fijarReloj(en(desde));
   const x = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', puntos: 'pages/api/ronda-turno/puntos' } });
   let w = null;
   try {
-    // Con dos sedes el celular pregunta en cuál está el técnico.
     x.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede 1',1),(2,'Sede 2',1); UPDATE rondas SET vigente_desde='2020-01-01';");
     const modeloId = x.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id;
     let enLinea = true;
@@ -862,33 +972,64 @@ await escenario('10:30', async (e) => {
       if (u.pathname === '/api/campo/sync') return x.app.sync.POST(x.ctx(u.pathname, { method: 'POST', data: JSON.parse(init.body), rol: 'tecnico' }));
       return new Response('{}', { status: 404 });
     };
-    w.eval(bundle);
+    w.eval(bundleCelular);
     const espera = (ms) => new Promise((r) => setTimeout(r, ms));
     const pantalla = () => w.document.querySelector('#pantalla').textContent;
-    const hasta = async (fn) => { for (let i = 0; i < 300 && !fn(); i++) await espera(10); return fn(); };
+    const hasta = async (fn2) => { for (let i = 0; i < 300 && !fn2(); i++) await espera(10); return fn2(); };
     const rondaEnPantalla = () => (pantalla().match(/Ronda de las \d\d:\d\d/) ?? ['sin ronda'])[0];
     const volverAHoy = async () => { w.document.dispatchEvent(new w.Event('visibilitychange')); await espera(60); };
-    ok(await hasta(() => /¿En qué sede estás hoy\?/.test(pantalla())), '(G7) El celular pide la sede');
+    ok(await hasta(() => /¿En qué sede estás hoy\?/.test(pantalla())), `(${clave}) El celular pide la sede`);
     w.document.querySelector('[data-a="sede"]').click();
     await espera(25);
     w.document.querySelector('[data-a="elegirSede"][data-id="1"]').click();
-    ok(await hasta(() => rondaEnPantalla() === 'Ronda de las 06:00'), `(G7) A las 10:30, la ronda de las 06:00: ${pantalla().slice(0, 120)}`);
-    fijarReloj(en('10:40'));
-    await x.app.puntos.PUT(x.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'turnos', rondaId: modeloId, turnos: ['06:30', '14:30', '22:30'] }, rol: 'jefe' }));
-    fijarReloj(en('14:02'));
-    w.dispatchEvent(new w.Event('online'));
-    await espera(150);
-    await volverAHoy();
-    igual(rondaEnPantalla(), 'Ronda de las 06:00', '(G7) A las 14:02, con señal, sigue la ronda de las 06:00: la de las 14:00 no se abre');
-    enLinea = false;
-    w.dispatchEvent(new w.Event('offline'));
-    fijarReloj(en('14:20'));
-    await volverAHoy();
-    igual(rondaEnPantalla(), 'Ronda de las 06:00', '(G7) Sin señal a las 14:20, también');
-    fijarReloj(en('14:31'));
-    await volverAHoy();
-    igual(rondaEnPantalla(), 'Ronda de las 14:30', '(G7) A las 14:31, sin señal, pasa a la ronda de las 14:30');
+    await fn({
+      pantalla, hasta, rondaEnPantalla, volverAHoy, espera,
+      turnos: (turnos) => x.app.puntos.PUT(x.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'turnos', rondaId: modeloId, turnos }, rol: 'jefe' })),
+      // Vuelve la señal: el celular manda lo pendiente y pide el paquete.
+      conSenal: async () => { enLinea = true; w.dispatchEvent(new w.Event('online')); await espera(150); await volverAHoy(); },
+      sinSenal: () => { enLinea = false; w.dispatchEvent(new w.Event('offline')); },
+    });
   } finally { w?.close(); await x.close(); }
 }
+
+// (G7) Con los turnos corridos media hora no abre el de las 14:00, con señal ni sin ella, y a las 14:30 pasa al turno nuevo.
+await celularReal('G7', '10:30', async (c) => {
+  ok(await c.hasta(() => c.rondaEnPantalla() === 'Ronda de las 06:00'), `(G7) A las 10:30, la ronda de las 06:00: ${c.pantalla().slice(0, 120)}`);
+  fijarReloj(en('10:40'));
+  await c.turnos(['06:30', '14:30', '22:30']);
+  fijarReloj(en('14:02'));
+  await c.conSenal();
+  igual(c.rondaEnPantalla(), 'Ronda de las 06:00', '(G7) A las 14:02, con señal, sigue la ronda de las 06:00: la de las 14:00 no se abre');
+  c.sinSenal();
+  fijarReloj(en('14:20'));
+  await c.volverAHoy();
+  igual(c.rondaEnPantalla(), 'Ronda de las 06:00', '(G7) Sin señal a las 14:20, también');
+  fijarReloj(en('14:31'));
+  await c.volverAHoy();
+  igual(c.rondaEnPantalla(), 'Ronda de las 14:30', '(G7) A las 14:31, sin señal, pasa a la ronda de las 14:30');
+});
+
+// (G7b) Decisión 7b en el celular: a las 14:10 la jefatura corrige el cambio a 06:45, 14:45 y 22:45. El de las
+// 14:00 ya se anunció y su hora pasó: sigue la ronda de las 06:00, con señal y sin ella, hasta las 14:45.
+await celularReal('G7b', '10:30', async (c) => {
+  ok(await c.hasta(() => c.rondaEnPantalla() === 'Ronda de las 06:00'), `(G7b) A las 10:30, la ronda de las 06:00: ${c.pantalla().slice(0, 120)}`);
+  fijarReloj(en('10:40'));
+  await c.turnos(['06:30', '14:30', '22:30']);
+  fijarReloj(en('14:02'));
+  await c.conSenal();
+  igual(c.rondaEnPantalla(), 'Ronda de las 06:00', '(G7b) A las 14:02 sigue la ronda de las 06:00');
+  fijarReloj(en('14:10'));
+  await c.turnos(['06:45', '14:45', '22:45']);
+  fijarReloj(en('14:12'));
+  await c.conSenal();
+  igual(c.rondaEnPantalla(), 'Ronda de las 06:00', '(G7b) A las 14:12, con señal, sigue la ronda de las 06:00: la de las 14:00 no vuelve a abrirse');
+  c.sinSenal();
+  fijarReloj(en('14:40'));
+  await c.volverAHoy();
+  igual(c.rondaEnPantalla(), 'Ronda de las 06:00', '(G7b) Sin señal a las 14:40, también');
+  fijarReloj(en('14:46'));
+  await c.volverAHoy();
+  igual(c.rondaEnPantalla(), 'Ronda de las 14:45', '(G7b) A las 14:46, sin señal, pasa a la ronda de las 14:45');
+});
 
 console.log(`PASS test-ronda: ${casos} casos; rutas y migraciones reales, sin red.`);

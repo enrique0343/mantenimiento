@@ -17,7 +17,7 @@ import {
   rondaLecturas, sucursales, tickets, ubicaciones, usuarios,
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
-import { minutosEstimadosChecklist, parseChecklist, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
+import { MENSAJE_PASO_SIN_NUMERO, minutosEstimadosChecklist, parseChecklist, pasoConRango, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
 import { accionesDelCelular, checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
 import { cambiarPrerrequisito, lecturaEscrita, liberacionParaCampo, mopDeOrdenes, prerrequisitoParaCampo, RechazoMop, registrarLiberacion } from "@/lib/mop";
 import { etiquetaOT } from "@/lib/orden-codigo";
@@ -30,7 +30,7 @@ import {
 } from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
-import { leerNumero } from "@/lib/numero";
+import { leerNumero, textoDeNumero } from "@/lib/numero";
 import { calcularVencimiento } from "@/lib/sla";
 
 type Db = ReturnType<typeof getDb>;
@@ -309,7 +309,8 @@ async function rondaParaSede(db: Db, sedeId: number) {
       pideOrden: LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0),
       actuarMin: p.minutosActuar ?? null,
       escalarMin: p.minutosEscalar ?? null,
-      ultima: ultimas.has(p.id) ? String(ultimas.get(p.id)) : null,
+      // Como texto que se vuelve a leer igual: 12.345 viaja «12.3450», no «12.345».
+      ultima: ultimas.has(p.id) ? textoDeNumero(ultimas.get(p.id)!) : null,
     })),
     lecturas: Object.fromEntries(lecturas.map((l) => [l.puntoId, { resultado: l.resultado, valor: l.valor, nota: l.nota }])),
     docs,
@@ -741,6 +742,9 @@ function numeroEscrito(raw: unknown) {
   return r;
 }
 
+/** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
+const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
 type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
 
 const sinPunto = (t: string) => t.trim().replace(/\.+\s*$/, "");
@@ -777,7 +781,7 @@ export function textoDeTrabajos(
   }
   const liberadas = (extra.liberaciones ?? [])
     .filter((l) => l.valorMedido != null || l.valorMedidoTexto?.trim())
-    .map((l) => `${l.etiqueta}: ${l.valorMedido != null ? `${l.valorMedido}${l.unidad ? ` ${l.unidad}` : ""}` : l.valorMedidoTexto!.trim()}`);
+    .map((l) => `${l.etiqueta}: ${l.valorMedido != null ? `${textoDeNumero(l.valorMedido)}${l.unidad ? ` ${l.unidad}` : ""}` : l.valorMedidoTexto!.trim()}`);
   if (liberadas.length) partes.push(`Lecturas de liberación: ${liberadas.join("; ")}.`);
   if (extra.reversa?.trim()) partes.push(`Reversa ejecutada: ${extra.reversa.trim().replace(/\.+\s*$/, "")}.`);
   if (nota?.trim()) partes.push(nota.trim());
@@ -916,11 +920,17 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const it = lista[idx];
       if (typeof it !== "object" || it === null) throw new RechazoCampo("Ese paso tiene un formato antiguo. Ábrelo en la ficha completa.");
       if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
+      // Un paso con rango se juzga por su número: lo escrito en él es el número que marcó el instrumento.
+      // Un texto que no es número se rechaza sin guardar nada; el mismo texto que ya estaba guardado no es un cambio.
+      const guardado = typeof it.valorMedido === "string" ? it.valorMedido.trim() : null;
+      if (leido.tipo === "texto" && String(op.valor).trim() !== guardado && pasoConRango({ esperadoMin: limiteDePaso(it.esperadoMin), esperadoMax: limiteDePaso(it.esperadoMax) })) {
+        throw new RechazoCampo(MENSAJE_PASO_SIN_NUMERO);
+      }
       it.estado = estado;
       delete it.hecho;
       // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
-      // Lo que no es un número queda escrito tal cual, como antes.
-      const valor = leido.tipo === "numero" ? String(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
+      // Lo que no es un número queda escrito tal cual, como antes. En el libro, el número va con textoDeNumero.
+      const valor = leido.tipo === "numero" ? textoDeNumero(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
       if (leido.tipo === "numero") it.valorMedido = leido.valor;
       else if (valor !== null) it.valorMedido = valor;
       if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;

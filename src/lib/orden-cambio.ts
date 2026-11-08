@@ -128,7 +128,8 @@ export async function aplicarCambioOrden(
     row = result.row;
     if (result.estado !== actual.estado) parsed.data.estado = result.estado as EstadoOT;
   } catch (error) {
-    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message }, { status: error.status });
+    // El motivo viaja en el cuerpo: la ficha reconoce la guarda de concurrencia por él, no por la frase.
+    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message, ...(error.motivo ? { motivo: error.motivo } : {}) }, { status: error.status });
     if (parsed.data.activoId !== undefined && parsed.data.activoId !== actual.activoId
       && await ordenesTienenConjunto(ctx, [id])) {
       return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });

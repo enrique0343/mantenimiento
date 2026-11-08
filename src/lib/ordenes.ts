@@ -4,7 +4,7 @@ import type { getDb } from "./db";
 import { activos, ordenes, ubicaciones, sucursales } from "./schema";
 import { parseArea, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
-import { leerNumero, numeroAlInicio, valorDe } from "./numero";
+import { leerNumero, numeroAlInicio, textoDeNumero, valorDe } from "./numero";
 
 
 /**
@@ -255,8 +255,11 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
           const n = Number(v);
           return Number.isFinite(n) ? n : undefined;
         };
-        // valorMedido puede ser "0": no se puede usar truthiness.
+        // valorMedido puede ser "0": no se puede usar truthiness. El celular lo
+        // guarda como número: se vuelve texto con textoDeNumero, para que 12.345
+        // no se lea como «12.345» (¿12345 o 12,345?).
         const vm = it?.valorMedido;
+        const vmTexto = typeof vm === "number" ? textoDeNumero(vm) : vm !== null && vm !== undefined ? String(vm) : "";
         const varId = num(it?.variableId);
         return {
           texto,
@@ -266,7 +269,7 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
           bloqueante: it?.bloqueante === true || it?.bloqueante === 1,
           minutos: Number.isFinite(minutos) && minutos > 0 ? minutos : undefined,
           materiales: it?.materiales ? String(it.materiales) : undefined,
-          valorMedido: vm !== null && vm !== undefined && String(vm) !== "" ? String(vm) : undefined,
+          valorMedido: vmTexto !== "" ? vmTexto : undefined,
           requiereValor: it?.requiereValor === true || it?.requiereValor === 1,
           unidad: it?.unidad ? String(it.unidad) : undefined,
           esperadoMin: num(it?.esperadoMin),
@@ -322,6 +325,13 @@ export function evaluarValorChecklist(it: ChecklistItem): {
   return { tiene, numero, dentro, rangoTexto };
 }
 
+// Una línea que pide valor tiene su lectura: con rango, un número; sin rango,
+// lo que se escribió. «aprox 14» o «1,200» en un paso con rango no es lectura.
+function pasoConLectura(it: ChecklistItem): boolean {
+  const ev = evaluarValorChecklist(it);
+  return pasoConRango(it) ? ev.numero !== null : ev.tiene;
+}
+
 // Líneas que piden número y lo tienen fuera del rango del SCP. No abrimos el
 // evento AOP aquí (lo hace el módulo de condición anormal): dejamos el dato.
 export function lecturasFueraDeRango(items: ChecklistItem[]): number[] {
@@ -343,7 +353,7 @@ export function progresoChecklist(items: ChecklistItem[]): { hechos: number; tot
   // Lecturas obligatorias sin número: bloquean el cierre igual que un pendiente.
   // Un paso marcado N/A no se midió a propósito, así que no se le exige lectura.
   const valoresFaltantes = items.filter(
-    (i) => i.requiereValor && i.estado !== "na" && !evaluarValorChecklist(i).tiene
+    (i) => i.requiereValor && i.estado !== "na" && !pasoConLectura(i)
   ).length;
   const fueraDeRango = lecturasFueraDeRango(items).length;
   const pct = total === 0 ? 0 : Math.round((hechos / total) * 100);
@@ -381,10 +391,11 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
 // Regla dura y aparte: una línea que pide número no se cierra sin número.
 // Va separada de validarChecklistParaCierre porque esta no la salta nadie —
 // es la evidencia del SOP («registro con fecha, hora, lectura y firma»).
+// Con rango, lo escrito sin número cuenta como sin lectura.
 export function validarLecturasChecklistParaCierre(items: ChecklistItem[]): { ok: boolean; error?: string } {
   const sinLectura = items
     .map((i, idx) => ({ i, idx }))
-    .filter(({ i }) => i.requiereValor && i.estado !== "na" && !evaluarValorChecklist(i).tiene);
+    .filter(({ i }) => i.requiereValor && i.estado !== "na" && !pasoConLectura(i));
   if (sinLectura.length === 0) return { ok: true };
   const nombres = sinLectura.slice(0, 3).map(({ i, idx }) => `«${i.texto || `línea ${idx + 1}`}»`).join(", ");
   const resto = sinLectura.length > 3 ? ` y ${sinLectura.length - 3} más` : "";

@@ -4,7 +4,7 @@ import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacio
 import {
   parseChecklist, validarChecklistParaCierre, validarLecturasChecklistParaCierre, transicionesPermitidas,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarLiberacionesEnRango, validarCausaRaizParaCierre, puedeCerrarSinLectura,
-  requiereCausaRaiz, MIN_CAUSA_RAIZ, type EstadoOT,
+  requiereCausaRaiz, MIN_CAUSA_RAIZ, pasoConRango, MENSAJE_PASO_SIN_NUMERO, type EstadoOT,
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
 import { leerNumero } from './numero';
@@ -13,10 +13,11 @@ import type { getDb } from './db';
 type DB = ReturnType<typeof getDb>;
 type Orden = typeof ordenes.$inferSelect;
 type User = { id: number; rol: string; nombre: string };
+/** Un rechazo de la regla. `motivo` lo lee quien llama sin depender de la frase: "otra-escritura" es la guarda de concurrencia. */
 export class ErrorVerificacion extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public motivo?: string) { super(message); }
 }
-const deny = (message: string, status = 403): never => { throw new ErrorVerificacion(message, status); };
+const deny = (message: string, status = 403, motivo?: string): never => { throw new ErrorVerificacion(message, status, motivo); };
 const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 'checklistEjecucion'];
 const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
 // Las horas del EOP. La de alarma, además, corre el plazo de la causa raíz.
@@ -34,6 +35,16 @@ async function criticidadDeActivo(db: DB, activoId: number | null | undefined): 
   const [a] = await db.select({ criticidad: activos.criticidadOperacional }).from(activos).where(eq(activos.id, activoId)).limit(1);
   return a?.criticidad ?? null;
 }
+/** La causa ya se guardó antes en la orden: cada evento guarda la orden antes y después del cambio, con su causa raíz. */
+async function causaYaGuardada(db: DB, ordenId: number, causa: string): Promise<boolean> {
+  const filas = await db.all(sql`
+    SELECT json_extract(evidencia_json, '$.antes.causaRaiz') AS causa FROM orden_verificacion_eventos WHERE orden_id = ${ordenId}
+    UNION SELECT json_extract(evidencia_json, '$.despues.causaRaiz') FROM orden_verificacion_eventos WHERE orden_id = ${ordenId}
+  `) as Array<{ causa: unknown }>;
+  return filas.some((f) => textoComparable(f.causa) === causa);
+}
+/** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
+const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
 // ── El checklist de la ficha, fusionado con lo que llegó del celular ──
 const ESTADOS_PUNTO = ['pendiente', 'ok', 'na', 'desviacion'];
@@ -204,7 +215,8 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
  * Server identities/timestamps cannot be supplied by callers. */
 export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString()) {
   input = { ...input };
-  // Lo que llegó igual a lo guardado no es un cambio: se deja fuera sin error.
+  // Lo que llegó igual a lo guardado, o viejo de una pestaña de antes, no es un
+  // cambio: se deja fuera sin error.
   let sinCambio = false;
   const igualAlGuardado = (key: string) => { delete input[key]; sinCambio = true; };
   const llegaEjecucion = executionFields.some((key) => key !== 'causaRaiz' && input[key] !== undefined);
@@ -222,9 +234,15 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   }
   // La causa raíz es de la jefatura, en cualquier estado. Igual a la guardada no
   // es un cambio, tampoco de la jefatura: no se escribe ni deja evento.
+  // La pestaña de antes de esta versión la manda junto con los trabajos al
+  // autoguardar, como la pintó al abrir: vacía no borra la guardada, e igual a
+  // una que ya se guardó antes en esta orden es vieja (no se escribe ni pasa a
+  // los trabajos). La ficha nueva la manda sola.
   if (input.causaRaiz !== undefined) {
     const causa = textoComparable(input.causaRaiz);
+    const conTrabajos = input.trabajosRealizados !== undefined || input.solucionAplicada !== undefined;
     if (causa === textoComparable(order.causaRaiz)) igualAlGuardado('causaRaiz');
+    else if (conTrabajos && (!causa || await causaYaGuardada(db, order.id, causa))) igualAlGuardado('causaRaiz');
     else if (!manager(user)) {
       if (!llegaEjecucion) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
       // Una pestaña vieja del técnico guarda la causa junto con los trabajos: se
@@ -236,6 +254,17 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
         if (!trabajos.includes(frase)) input.trabajosRealizados = trabajos ? `${trabajos} ${frase}` : frase;
       }
       igualAlGuardado('causaRaiz');
+    }
+  }
+  // La pestaña de antes de esta versión manda las cuatro horas juntas, con null
+  // en las vacías: una hora ya guardada, como la que registró el celular después
+  // de abrirla, no se borra con una vacía. Una hora vacía que llega sola (la
+  // ficha nueva manda solo lo que cambió) sigue las reglas de siempre.
+  if (HORAS_EOP.every((key) => input[key] !== undefined)) {
+    for (const key of HORAS_EOP) {
+      if (minutoEop(input[key]) !== null || minutoEop((order as any)[key]) === null) continue;
+      igualAlGuardado(key);
+      if (key === 'horaAlarma') delete input.causaRaizVencimiento;
     }
   }
   // Las horas de la emergencia las corrige la jefatura, en cualquier estado. Una
@@ -261,6 +290,16 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   // prerrequisitos (revisarPermisoMop): cerrada o cancelada, nadie los cambia; el
   // técnico asignado escribe el plan con la orden en curso y marca la reversa con
   // la orden empezada; enviada a verificación, la registra la jefatura.
+  // La pestaña de antes de esta versión manda el plan, la casilla y las notas
+  // juntos, como los pintó al abrir: una reversa ya marcada con sus notas (desde
+  // el celular, por ejemplo) no se desmarca ni pierde sus notas con la casilla
+  // vacía y sin notas; el plan sí se guarda. La ficha nueva manda solo lo que
+  // cambió: con ella se desmarca con las reglas de siempre.
+  if (['planReversa', 'reversaEjecutada', 'reversaNotas'].every((key) => input[key] !== undefined)
+    && order.reversaEjecutada && textoComparable(order.reversaNotas) && !input.reversaEjecutada && !textoComparable(input.reversaNotas)) {
+    igualAlGuardado('reversaEjecutada');
+    igualAlGuardado('reversaNotas');
+  }
   for (const key of ['planReversa', 'reversaNotas']) {
     if (input[key] !== undefined && textoComparable(input[key]) === textoComparable((order as any)[key])) igualAlGuardado(key);
   }
@@ -349,12 +388,14 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     }
     // El valor de un paso se lee con numero.ts: «1,200» puede ser 1200 o 1,2 y no
     // se adivina. Solo se revisa el valor que cambió; uno que llega como número pasa.
+    // En un paso con rango, lo escrito es el número que marcó el instrumento.
     const previos = listaChecklist(order.checklistEjecucion) ?? [];
     incoming.forEach((punto: any, i: number) => {
       const valor = punto?.valorMedido, antes = (previos[i] as any)?.valorMedido;
       if (valor === antes) return;
       const leido = leerNumero(valor);
       if (leido.tipo === 'ambiguo') deny(leido.mensaje, 400);
+      if (leido.tipo === 'texto' && pasoConRango({ esperadoMin: limiteDePaso(punto?.esperadoMin), esperadoMax: limiteDePaso(punto?.esperadoMax) })) deny(MENSAJE_PASO_SIN_NUMERO, 400);
     });
   }
   if (isReturn) {
@@ -466,7 +507,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     }
   }
   const results = await db.batch(batch as any);
-  if (!(results[1] as any[])?.length) deny('La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.', 409);
+  if (!(results[1] as any[])?.length) deny('La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.', 409, 'otra-escritura');
   const [row] = await db.select().from(ordenes).where(eq(ordenes.id, order.id)).limit(1);
   return { row, estado: destination, accion: eventAction, advancePM };
 }

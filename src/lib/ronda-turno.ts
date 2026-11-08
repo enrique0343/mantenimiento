@@ -10,7 +10,7 @@
 //                                                        → MOP si hay que intervenir
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { TURNOS_DEFECTO, ahoraSV, parsearTurnos, sumarDias, turnoActual, etiquetaTurno, type TurnoInfo } from "./turnos";
+import { TURNOS_DEFECTO, ahoraSV, laHora, parsearTurnos, sumarDias, turnoActual, etiquetaTurno, type TurnoInfo } from "./turnos";
 import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre, registrarAccion } from "./aop";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import {
@@ -109,7 +109,8 @@ export interface TurnoFecha {
 /**
  * Desde cuándo rige una lista de turnos. El primer tramo rige desde siempre; los
  * demás, desde `entra`. `omite`: los turnos de la lista anterior que no se abren
- * porque empezarían menos de 2 h antes de `entra`.
+ * porque empezarían menos de 2 h antes de `entra`, y los que un cambio
+ * reemplazado ya había anunciado así y ya empezaron.
  */
 export interface TramoTurnos {
   desde: number;
@@ -138,13 +139,22 @@ function turnosEntre(lista: string[], desdeMs: number, hastaMs: number): TurnoFe
   return out;
 }
 
+/** Turnos que no se abren, sin repetir y en orden de inicio. */
+function juntarOmitidos(...listas: TurnoFecha[][]): TurnoFecha[] {
+  const out: TurnoFecha[] = [];
+  for (const t of listas.flat()) if (!out.some((o) => o.fecha === t.fecha && o.turno === t.turno)) out.push(t);
+  return out.sort((a, b) => inicioTurno(a.fecha, a.turno) - inicioTurno(b.fecha, b.turno));
+}
+
 /**
  * Qué lista de turnos rige en cada momento. Cada cambio guarda la lista de
  * antes y cuándo se hizo; la lista nueva es la de antes del cambio siguiente,
  * o la de hoy si es el último. Un cambio entra cuando empieza el primer turno
  * de la lista nueva; hasta ahí siguen los turnos de antes, salvo el que
  * empezaría menos de 2 h antes: ese no se abre y el turno que corría sigue
- * hasta el nuevo. Un cambio que todavía no entraba lo reemplaza el que se hizo después.
+ * hasta el nuevo. Un cambio que todavía no entraba lo reemplaza el que se hizo
+ * después; un turno que ese cambio ya dejó sin abrir y cuya hora ya llegó sigue
+ * sin abrirse, aunque se cancele el cambio. Uno que no llegaba se calcula de nuevo.
  */
 export function lineaDeTurnos(
   ronda: Pick<Ronda, "id" | "turnos">,
@@ -159,13 +169,21 @@ export function lineaDeTurnos(
   const linea = lineaFija(cambios[0].antes);
   cambios.forEach((c, k) => {
     const nueva = cambios[k + 1]?.antes ?? actual;
-    while (linea.length > 1 && linea[linea.length - 1].desde >= c.ms) linea.pop();
+    // Lo que el cambio reemplazado ya anunció como «no se abre» y ya empezó no vuelve a abrirse.
+    const anunciados: TurnoFecha[] = [];
+    while (linea.length > 1 && linea[linea.length - 1].desde >= c.ms) {
+      anunciados.push(...linea.pop()!.omite.filter((t) => inicioTurno(t.fecha, t.turno) <= c.ms));
+    }
     const vigente = linea[linea.length - 1];
-    if (vigente.turnos.join() === nueva.join()) return;
+    if (vigente.turnos.join() === nueva.join()) {
+      // Vuelve a la lista que rige: los anunciados quedan en ella.
+      if (anunciados.length) linea[linea.length - 1] = { ...vigente, omite: juntarOmitidos(vigente.omite, anunciados) };
+      return;
+    }
     const entra = siguienteTurno(nueva, c.ms);
     const desde = inicioTurno(entra.fecha, entra.turno);
     const omite = turnosEntre(vigente.turnos, c.ms, desde).filter((t) => desde - inicioTurno(t.fecha, t.turno) < MARGEN_CAMBIO_MS);
-    linea.push({ desde, entra, turnos: nueva, omite });
+    linea.push({ desde, entra, turnos: nueva, omite: juntarOmitidos(anunciados, omite) });
   });
   return linea;
 }
@@ -231,7 +249,8 @@ export function siguienteInicio(linea: TramoTurnos[], ms = Date.now()): TurnoFec
 /** «10/11/2026» */
 export const fechaCorta = (fecha: string) => fecha.slice(0, 10).split("-").reverse().join("/");
 
-const lasHoras = (xs: TurnoFecha[]) => (xs.length === 1 ? `el de las ${xs[0].turno}` : `los de las ${xs.slice(0, -1).map((x) => x.turno).join(", las ")} y las ${xs.at(-1)!.turno}`);
+/** «el de las 14:00» · «los de la 01:00 y las 02:00» */
+const lasHoras = (xs: TurnoFecha[]) => (xs.length === 1 ? `el de ${laHora(xs[0].turno)}` : `los de ${xs.slice(0, -1).map((x) => laHora(x.turno)).join(", ")} y ${laHora(xs.at(-1)!.turno)}`);
 
 /**
  * Lo que pasa hasta que entra un cambio de turnos pendiente, en frases cortas:
@@ -244,10 +263,10 @@ export function avisoCambioTurnos(linea: TramoTurnos[], ms = Date.now()): string
   const corre = turnoEn(linea, ms);
   const ultimo = turnoEn(linea, p.desde - 1);
   const mismo = corre.fecha === ultimo.fecha && corre.turno === ultimo.turno;
-  const hasta = mismo ? `El turno de las ${corre.turno} sigue hasta esa hora` : `Hasta entonces siguen los de antes; el de las ${ultimo.turno} dura hasta esa hora`;
+  const hasta = mismo ? `El turno de ${laHora(corre.turno)} sigue hasta esa hora` : `Hasta entonces siguen los de antes; el de ${laHora(ultimo.turno)} dura hasta esa hora`;
   const omite = p.omite;
   const no = omite.length ? `${mismo ? ";" : " y"} ${lasHoras(omite)} ${omite.length === 1 ? "no se abre" : "no se abren"}` : "";
-  return `Los turnos nuevos entran a las ${p.entra.turno} del ${fechaCorta(p.entra.fecha)}. ${hasta}${no}.`;
+  return `Los turnos nuevos entran a ${laHora(p.entra.turno)} del ${fechaCorta(p.entra.fecha)}. ${hasta}${no}.`;
 }
 
 /** Las vigencias que pesan en una sede: su marca y los turnos de los recorridos que puede usar. */
