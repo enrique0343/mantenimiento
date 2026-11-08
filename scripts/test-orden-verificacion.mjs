@@ -24,7 +24,7 @@ async function mopConHistorial(resumenes) {
 const fixture = await setupConjuntos({ modules: {
   verification: 'lib/orden-verificacion', database: 'lib/db', attachment: 'pages/api/adjuntos/[id]',
   prerreq: 'pages/api/ordenes/[id]/prerrequisitos', liber: 'pages/api/ordenes/[id]/liberaciones',
-  sync: 'pages/api/campo/sync', reporte: 'lib/reporte-mantenimiento', mop: 'lib/mop', ordenes: 'lib/ordenes',
+  sync: 'pages/api/campo/sync', reporte: 'lib/reporte-mantenimiento', mop: 'lib/mop', ordenes: 'lib/ordenes', aop: 'lib/aop',
 } });
 const { app, sqlite, faults, call } = fixture;
 const one = (q, ...args) => sqlite.prepare(q).get(...args);
@@ -517,7 +517,8 @@ try {
   assert.equal(lista53[1].notas,'Contacto quemado'); assert.ok(lista53[0].hora && lista53[0].iniciales);
   const fin53=await sync([{opId:'reglas-fin-53',tipo:'orden.terminar',ordenId:53,nota:'Contactos limpiados y tensión medida.'}]);
   assert.equal(fin53.resultados[0].ok,true,JSON.stringify(fin53)); assert.equal(order(53).estado,'completada');
-  // Otro estado sin hora ni iniciales tampoco pisa el paso que el celular marcó (K18); en un paso pendiente entra como hoy.
+  // Otro estado sin hora ni iniciales tampoco pisa el paso que el celular marcó (K18): queda con su firma y, como no
+  // tenía nota, se le agrega la que llegó; en un paso pendiente entra como hoy.
   seed(54,{checklist:JSON.stringify(PASOS53)});
   const vieja54=JSON.parse(order(54).checklist_ejecucion);
   await sync([{opId:'reglas-paso-54',tipo:'orden.paso',ordenId:54,idx:0,texto:'Revisar tablero',estado:'ok'}]);
@@ -525,7 +526,7 @@ try {
   vieja54[0]={...vieja54[0],estado:'na',notas:'No aplica en este tablero'}; vieja54[1]={...vieja54[1],estado:'na',notas:'No aplica en este tablero'};
   assert.equal((await expect(patch(54,{checklistEjecucion:JSON.stringify(vieja54)},'jefe'))).pasosSinAplicar,undefined,'Sin base no hay choque');
   const lista54=JSON.parse(order(54).checklist_ejecucion);
-  assert.deepEqual(lista54[0],celular54,'El «ok» del celular queda entero, con su firma'); assert.equal(lista54[1].estado,'na');
+  assert.deepEqual(lista54[0],{...celular54,notas:'No aplica en este tablero'},'El «ok» del celular queda con su firma, más la nota'); assert.equal(lista54[1].estado,'na');
   // Solo pendientes viejos sobre pasos ya marcados: no hay nada que escribir.
   seed(59,{checklist:JSON.stringify(PASOS53)});
   const vieja59=order(59).checklist_ejecucion;
@@ -1098,6 +1099,95 @@ try {
   assert.equal(app.ordenes.evaluarValorChecklist(app.ordenes.parseChecklist(pasoLimite)[0]).rangoTexto,'9.1250 a 12.3450 A');
   seed(120,{tipo:'correctivo',checklist:pasoLimite});
   assert.equal((await app.reporte.reporteDeOrden(db,120)).pasos[0].rango,'9.1250 a 12.3450 A','También en el reporte');
+  // También el rango del AOP.
+  assert.deepEqual([app.aop.fmtRango(8,12.345,'A'),app.aop.fmtRango(12.345,null,'%'),app.aop.fmtRango(null,12.345,null),app.aop.fmtRango(35,60,'%'),app.aop.fmtRango(null,null)],['8–12.3450 A','≥ 12.3450 %','≤ 12.3450','35–60 %','sin rango definido']);
 
-  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base; old tabs keep marked steps, key merge, ambiguous thousands never conform, reversa by state and assignment, resent completion without event, collapsed root cause rows; stored numbers read back unambiguously, ranged steps need a number, old tabs' grouped hours, reversa and root cause don't erase newer data, cancelled MOP frozen, concurrency 409 with its motivo; a step changed on both sides keeps the saved one (pasosSinAplicar, or 409 paso-cambio with a state change), soloCambios skips the old-tab rules, an old tab's root cause is stale only when the work changed, step text compared trimmed, release readings written unambiguously, step range, unit and reading protected; an old tab's root cause is stale when another account wrote the last one (K16), the step conflict 409 after the permission rules, a signed step kept against an unsigned one without base (K18), the phone's base per step (K17), range limits written unambiguously. No network.`);
+  // ── K18 revisado: sin base, la desviación siempre queda y la nota que llega se agrega ──
+  // Lo que manda la pestaña de producción: el checklist como lo pintó al abrir (con la hora y las iniciales de entonces), sin base.
+  const comoAbrio=id=>JSON.parse(order(id).checklist_ejecucion).map(comoFicha);
+  const antesPendiente={estado:'pendiente',valor:null,nota:null};
+  const HUMEDAD='Se ve humedad en la unión; no liberar hasta cambiarla.';
+  // P7: la jefa abrió antes del «ok» firmado del celular y marca desviación con su nota: queda, y la orden no se envía.
+  seed(122,{trabajos:'Se revisó la línea de oxígeno del quirófano 2.',checklist:JSON.stringify(PASOS118)});
+  const pestana122=comoAbrio(122);
+  assert.equal((await sync([{opId:'reglas-k18b-122a',tipo:'orden.paso',ordenId:122,idx:0,texto:PASOS118[0].texto,estado:'ok',antes:antesPendiente}])).resultados[0].ok,true);
+  pestana122[0]={...pestana122[0],estado:'desviacion',notas:HUMEDAD};
+  await expect(patch(122,{checklistEjecucion:JSON.stringify(pestana122)},'jefe'));
+  assert.deepEqual(['estado','notas'].map(k=>JSON.parse(order(122).checklist_ejecucion)[0][k]),['desviacion',HUMEDAD],'La desviación de la jefatura queda, con su nota');
+  const fin122=await sync([
+    {opId:'reglas-k18b-122b',tipo:'orden.paso',ordenId:122,idx:1,texto:PASOS118[1].texto,estado:'ok',antes:antesPendiente},
+    {opId:'reglas-k18b-122c',tipo:'orden.terminar',ordenId:122,nota:'Unión revisada y enfermería avisada.'},
+  ]);
+  assert.equal(fin122.resultados[0].ok,true,JSON.stringify(fin122));
+  assert.equal(fin122.resultados[1].ok,false); assert.match(fin122.resultados[1].error,/punto crítico en desviación/);
+  assert.equal(order(122).estado,'en_proceso','La orden no se envía con el punto crítico desviado');
+  // P8: sobre un «ok» firmado y sin nota, la nota que llega sin firma se agrega; el «ok» y su firma quedan.
+  seed(123,{checklist:JSON.stringify(PASOS118)});
+  const pestana123=comoAbrio(123);
+  assert.equal((await sync([{opId:'reglas-k18b-123',tipo:'orden.paso',ordenId:123,idx:0,texto:PASOS118[0].texto,estado:'ok',antes:antesPendiente}])).resultados[0].ok,true);
+  const celular123=JSON.parse(order(123).checklist_ejecucion)[0];
+  pestana123[0]={...pestana123[0],estado:'ok',notas:'Revisado también por la jefatura.'};
+  await expect(patch(123,{checklistEjecucion:JSON.stringify(pestana123)},'jefe'));
+  assert.deepEqual(JSON.parse(order(123).checklist_ejecucion)[0],{...celular123,notas:'Revisado también por la jefatura.'},'La nota se agrega al «ok» firmado');
+  // La desviación que llega sin lectura conserva la guardada; con su lectura, entra como llegó.
+  const PRESION=[{texto:'Medir la presión de la línea de oxígeno',estado:'pendiente',bloqueante:true,requiereValor:true,unidad:'psi',esperadoMin:50,esperadoMax:55},{texto:'Avisar a enfermería',estado:'pendiente'},{texto:'Medir la presión de retorno',estado:'pendiente',requiereValor:true,unidad:'psi',esperadoMin:50,esperadoMax:55}];
+  seed(124,{checklist:JSON.stringify(PRESION)});
+  const pestana124=comoAbrio(124);
+  for (const idx of [0,2]) assert.equal((await sync([{opId:`reglas-k18b-124-${idx}`,tipo:'orden.paso',ordenId:124,idx,texto:PRESION[idx].texto,estado:'ok',valor:'52',antes:antesPendiente}])).resultados[0].ok,true);
+  pestana124[0]={...pestana124[0],estado:'desviacion',notas:HUMEDAD};
+  pestana124[2]={...pestana124[2],estado:'desviacion',notas:'El retorno bajó después del cambio.',valorMedido:'48'};
+  await expect(patch(124,{checklistEjecucion:JSON.stringify(pestana124)},'jefe'));
+  const lista124=JSON.parse(order(124).checklist_ejecucion);
+  assert.deepEqual(['estado','notas','valorMedido'].map(k=>lista124[0][k]),['desviacion',HUMEDAD,52],'La desviación queda con la lectura del celular');
+  assert.deepEqual(['estado','valorMedido'].map(k=>lista124[2][k]),['desviacion','48'],'Con su lectura, la desviación entra como llegó');
+  // Sobre una desviación firmada, ni un «ok» ni N/A ni otra desviación sin firma la pisan: queda entera, con su nota.
+  const TRES=[{texto:'Revisar la unión',estado:'pendiente'},{texto:'Revisar la válvula de zona',estado:'pendiente'},{texto:'Revisar el manómetro',estado:'pendiente'}];
+  seed(125,{checklist:JSON.stringify(TRES)});
+  const pestana125=comoAbrio(125);
+  for (const [idx,p] of TRES.entries()) assert.equal((await sync([{opId:`reglas-k18b-125-${idx}`,tipo:'orden.paso',ordenId:125,idx,texto:p.texto,estado:'desviacion',nota:`Fuga en el punto ${idx+1}.`,antes:antesPendiente}])).resultados[0].ok,true);
+  const celular125=order(125).checklist_ejecucion, eventos125=history(125).length;
+  pestana125[0]={...pestana125[0],estado:'ok'};
+  pestana125[1]={...pestana125[1],estado:'na',notas:'No aplica: la válvula se cambió ayer.'};
+  pestana125[2]={...pestana125[2],estado:'desviacion',notas:'Manómetro con la aguja pegada.'};
+  await expect(patch(125,{checklistEjecucion:JSON.stringify(pestana125)},'jefe'));
+  assert.equal(order(125).checklist_ejecucion,celular125,'Las tres desviaciones del celular quedan enteras, con su nota y su firma');
+  assert.equal(history(125).length,eventos125,'Sin cambios no deja evento');
+  // Un pendiente con iniciales y sin hora no lo vio marcado (como en 65b7088): la desviación con 40 psi y su nota, y el «ok», quedan.
+  seed(126,{checklist:JSON.stringify(PRESION)});
+  const pestana126=comoAbrio(126);
+  assert.equal((await sync([{opId:'reglas-k18b-126a',tipo:'orden.paso',ordenId:126,idx:0,texto:PRESION[0].texto,estado:'desviacion',valor:'40',nota:FUGA,antes:antesPendiente}])).resultados[0].ok,true);
+  assert.equal((await sync([{opId:'reglas-k18b-126b',tipo:'orden.paso',ordenId:126,idx:1,texto:PRESION[1].texto,estado:'ok',antes:antesPendiente}])).resultados[0].ok,true);
+  const celular126=JSON.parse(order(126).checklist_ejecucion);
+  pestana126[0]={...pestana126[0],iniciales:'J.P.'}; pestana126[1]={...pestana126[1],iniciales:'J.P.'}; pestana126[2]={...pestana126[2],estado:'ok',valorMedido:'53'};
+  await expect(patch(126,{checklistEjecucion:JSON.stringify(pestana126)},'tecnico'));
+  const lista126=JSON.parse(order(126).checklist_ejecucion);
+  assert.deepEqual(lista126.slice(0,2),celular126.slice(0,2),'Quedan los dos pasos del celular, con su lectura, su nota y su firma');
+  assert.equal(lista126[0].valorMedido,40); assert.deepEqual(['estado','valorMedido'].map(k=>lista126[2][k]),['ok','53'],'El paso pendiente se marca como hoy');
+
+  // ── K16: la última escritura de la causa es la más reciente, y se compara recortada ──
+  // Tres cuentas de jefatura escriben la causa por la ficha, cada una con su evento.
+  sqlite.prepare("INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(31,'Otra jefa','otra-jefa@example.invalid','x','jefe')").run();
+  const sesion31=new Headers();
+  app.setSessionCookie(sesion31,await app.createSessionToken({sub:31,nombre:'Otra jefa',email:'otra-jefa@example.invalid',rol:'jefe'},fixture.ctx('/').locals.runtime.env.JWT_SECRET));
+  const patchOtraJefa=async(id,data)=>{
+    const c=fixture.ctx(`/api/ordenes/${id}`,{method:'PATCH',id,data,rol:null});
+    c.request=new Request(c.request.url,{method:'PATCH',headers:{'content-type':'application/json',cookie:sesion31.get('set-cookie').split(';')[0]},body:JSON.stringify(data)});
+    const r=await app.order.PATCH(c); return {status:r.status,body:await r.json()};
+  };
+  const C3='La transferencia automática quedó en manual tras el mantenimiento.';
+  emergencia(127);
+  await expect(patch(127,{causaRaiz:C1,soloCambios:true},'admin')); await expect(patch(127,{causaRaiz:C2,soloCambios:true},'jefe')); await expect(patchOtraJefa(127,{causaRaiz:C3,soloCambios:true}));
+  assert.deepEqual(history(127).map(e=>e.actor_id),[1,2,31],'Cada cuenta deja su evento');
+  // El jefe, con su C2 pintada, y la admin, con su C1 (dos escrituras después), guardan sin soloCambios: queda la última, C3.
+  await expect(patch(127,pestana(C2),'jefe'));
+  await expect(patch(127,pestana(C1),'admin'));
+  assert.deepEqual([order(127).causa_raiz,history(127).length],[C3,3],'La causa de la tercera cuenta queda, sin evento');
+  // Con espacios alrededor en el antes y el después del evento, la causa vieja se reconoce igual.
+  emergencia(128);
+  await expect(patch(128,{causaRaiz:` ${C1} `,soloCambios:true},'admin')); await expect(patch(128,{causaRaiz:` ${C2}\n`,soloCambios:true},'jefe'));
+  assert.deepEqual(history(128).map(e=>JSON.parse(e.evidencia_json).despues.causaRaiz),[` ${C1} `,` ${C2}\n`],'Se guardan como llegaron');
+  await expect(patch(128,pestana(C1),'admin'));
+  assert.deepEqual([order(128).causa_raiz,history(128).length],[` ${C2}\n`,2],'La causa del jefe queda, sin evento');
+
+  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base; old tabs keep marked steps, key merge, ambiguous thousands never conform, reversa by state and assignment, resent completion without event, collapsed root cause rows; stored numbers read back unambiguously, ranged steps need a number, old tabs' grouped hours, reversa and root cause don't erase newer data, cancelled MOP frozen, concurrency 409 with its motivo; a step changed on both sides keeps the saved one (pasosSinAplicar, or 409 paso-cambio with a state change), soloCambios skips the old-tab rules, an old tab's root cause is stale only when the work changed, step text compared trimmed, release readings written unambiguously, step range, unit and reading protected; an old tab's root cause is stale when another account wrote the last one (K16), the step conflict 409 after the permission rules, a signed step kept against an unsigned one without base (K18), the phone's base per step (K17), range limits written unambiguously (also the AOP range); without base a deviation always stays and an arriving note is added (revised K18), the latest root cause write wins among three accounts, compared trimmed (K16). No network.`);
 } finally { await fixture.close(); }

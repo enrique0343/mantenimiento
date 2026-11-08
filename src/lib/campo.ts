@@ -586,8 +586,9 @@ const vencimientoDePlan = (p: typeof planesMantenimiento.$inferSelect) => {
   return v.toISOString();
 };
 
+/** Un rechazo por regla. `motivo` es el de la respuesta de la orden («otra-escritura», por ejemplo), si lo trae. */
 export class RechazoCampo extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public motivo?: string) { super(message); }
 }
 
 /** Mantenimiento fuera de la lista de trabajo: del plan del equipo o no programado. */
@@ -685,7 +686,7 @@ async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: 
   if (res.status >= 500) throw new Error(typeof j.error === "string" ? j.error : "Error del servidor");
   if (!res.ok) {
     const msg = typeof j.error === "string" ? j.error : "No se pudo guardar.";
-    throw new RechazoCampo(msg, res.status);
+    throw new RechazoCampo(msg, res.status, typeof j.motivo === "string" ? j.motivo : undefined);
   }
   return j;
 }
@@ -762,8 +763,8 @@ const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" 
  * tanto. Sin «antes» (un registro de un celular con la versión anterior), null: como siempre.
  */
 function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): string | null {
-  if (typeof antes !== "object" || antes === null || Array.isArray(antes)) return null;
-  const { estado, valor, nota } = antes as Record<string, unknown>;
+  if (!conAntes(antes)) return null;
+  const { estado, valor, nota } = antes;
   const lista = JSON.parse(checklist ?? "[]");
   const paso: Record<string, unknown> = { ...lista[idx], estado };
   for (const [clave, v] of [["valorMedido", valor], ["notas", nota]] as const) {
@@ -773,11 +774,70 @@ function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): s
   lista[idx] = paso;
   return JSON.stringify(lista);
 }
+/** La marca trae el paso como lo mostraba el celular («antes»). */
+const conAntes = (antes: unknown): antes is Record<string, unknown> => typeof antes === "object" && antes !== null && !Array.isArray(antes);
 /** El rechazo de una marca cuando el paso cambió en la ficha mientras tanto. N es el número que ve el técnico. */
 export const pasoCambioEnLaFicha = (emergencia: boolean, idx: number) =>
   emergencia
     ? `La acción ${idx + 1} cambió en la ficha mientras tanto: revísala y márcala otra vez.`
     : `El paso ${idx + 1} cambió en la ficha mientras tanto: revísalo y márcalo otra vez.`;
+/** El número del paso en la frase de pasoCambioEnLaFicha, guardada con el rechazo. */
+const PASO_DE_LA_FRASE = /^(?:El paso|La acción) (\d+) cambió en la ficha mientras tanto/;
+/** K19 · El envío que no sale mientras un paso que cambió en la ficha no se vuelva a marcar. `idxs`, ordenados. */
+export function envioConPasosCambiados(emergencia: boolean, idxs: number[]): string {
+  const n = idxs.map((i) => i + 1);
+  const cuales = n.length === 1 ? String(n[0]) : `${n.slice(0, -1).join(", ")} y ${n[n.length - 1]}`;
+  const que = emergencia
+    ? n.length === 1 ? `la acción ${cuales} cambió en la ficha mientras tanto. Revísala, márcala` : `las acciones ${cuales} cambiaron en la ficha mientras tanto. Revísalas, márcalas`
+    : n.length === 1 ? `el paso ${cuales} cambió en la ficha mientras tanto. Revísalo, márcalo` : `los pasos ${cuales} cambiaron en la ficha mientras tanto. Revísalos, márcalos`;
+  return `La orden no se envió: ${que} otra vez y vuelve a enviarla.`;
+}
+
+/** El estado de un paso como se compara: el viejo {hecho} cuenta como ok; sin uno válido, pendiente. */
+const estadoComparable = (p: any) => (["pendiente", "ok", "na", "desviacion"].includes(p?.estado) ? p.estado : p?.hecho === true ? "ok" : "pendiente");
+/** Una lectura como se compara: por su número si se lee como uno (leerNumero); si no, el texto recortado. Vacía es null. */
+const lecturaComparable = (v: unknown) => { const l = leerNumero(v); return JSON.stringify(l.tipo === "numero" ? l.valor : l.tipo === "vacio" ? null : String(v).trim()); };
+/**
+ * K17b · La ficha cambió el estado o la lectura del paso desde como lo mostraba el celular («antes») y la marca no
+ * deja lo mismo que dejó la ficha: otro estado u otra lectura (la que manda la marca o, si no manda ninguna, la de
+ * «antes»). Si la ficha solo cambió la nota, no: la marca se fusiona como siempre (K11).
+ */
+function marcaSobreCambioDeLaFicha(guardado: any, antes: Record<string, unknown>, estado: string, valor: unknown): boolean {
+  const cambio = estadoComparable(guardado) !== estadoComparable(antes) || lecturaComparable(guardado.valorMedido) !== lecturaComparable(antes.valor);
+  if (!cambio) return false;
+  const lectura = leerNumero(valor).tipo === "vacio" ? antes.valor : valor;
+  return estado !== estadoComparable(guardado) || lecturaComparable(lectura) !== lecturaComparable(guardado.valorMedido);
+}
+
+/** Un registro procesado después que otro: por recibido_en y, a la misma hora, el que se guardó después. */
+type Procesado = { recibidoEn: string; fila: number | null };
+const procesadoDespues = (a: Procesado, b: Procesado) => a.recibidoEn > b.recibidoEn || (a.recibidoEn === b.recibidoEn && a.fila != null && b.fila != null && a.fila > b.fila);
+/**
+ * K19 · Los pasos de la orden que este usuario marcó en el celular, que el servidor rechazó con la frase de K17 (el
+ * paso cambió en la ficha mientras tanto) y que no tienen una marca aceptada después del rechazo. Un paso que ya no
+ * existe en el checklist no cuenta. Sus índices, ordenados.
+ */
+async function pasosCambiadosSinMarcar(db: Db, user: Usuario, o: typeof ordenes.$inferSelect): Promise<number[]> {
+  const rechazos = await db
+    .select({ detalle: campoOperaciones.detalle, recibidoEn: campoOperaciones.recibidoEn, fila: sql<number>`rowid` })
+    .from(campoOperaciones)
+    .where(and(eq(campoOperaciones.usuarioId, user.id), eq(campoOperaciones.ordenId, o.id), eq(campoOperaciones.tipo, "orden.paso"), eq(campoOperaciones.resultado, "rechazada")));
+  const pasos = parseChecklist(o.checklistEjecucion).length;
+  const ultimo = new Map<number, Procesado>();
+  for (const r of rechazos) {
+    const n = PASO_DE_LA_FRASE.exec(r.detalle ?? "");
+    const idx = n ? Number(n[1]) - 1 : -1;
+    if (idx < 0 || idx >= pasos) continue;
+    const previo = ultimo.get(idx);
+    if (!previo || procesadoDespues(r, previo)) ultimo.set(idx, r);
+  }
+  if (!ultimo.size) return [];
+  const marcas = await db
+    .select({ idx: ordenPasoMarcas.pasoIdx, recibidoEn: ordenPasoMarcas.recibidoEn, fila: sql<number | null>`(SELECT c.rowid FROM campo_operaciones c WHERE c.op_id = orden_paso_marcas.op_id)` })
+    .from(ordenPasoMarcas)
+    .where(and(eq(ordenPasoMarcas.ordenId, o.id), inArray(ordenPasoMarcas.pasoIdx, [...ultimo.keys()])));
+  return [...ultimo].filter(([idx, r]) => !marcas.some((x) => x.idx === idx && procesadoDespues(x, r))).map(([idx]) => idx).sort((a, b) => a - b);
+}
 
 type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
 
@@ -912,6 +972,56 @@ async function ejecucionDeOp(db: Db, op: OperacionCampo, user: Usuario, m: Momen
   return ejecucion;
 }
 
+/**
+ * La marca de un paso sobre la orden como está guardada. Si el paso cambió en la ficha mientras tanto (K17, K17b),
+ * se rechaza con su frase y no se escribe nada, tampoco en el libro de marcas.
+ */
+async function aplicarMarcaDePaso(ctx: APIContext, db: Db, user: Usuario, orden: typeof ordenes.$inferSelect, op: OperacionCampo, idx: number, estado: string, m: Momento) {
+  let o = orden;
+  exigirEjecutor(user, o);
+  // Un número que se puede leer de dos formas («1,200») se rechaza con su frase. El mismo texto que ya
+  // estaba guardado en el paso, comparado recortado, no es un cambio: no se rechaza y queda como estaba.
+  const escrito = leerNumero(op.valor);
+  const mismoTexto = typeof op.valor === "string" && op.valor.trim() === textoGuardadoDePaso(o.checklistEjecucion, idx);
+  if (escrito.tipo === "ambiguo" && !mismoTexto) throw new RechazoCampo(escrito.mensaje);
+  const leido = escrito.tipo === "ambiguo" ? ({ tipo: "texto" } as const) : escrito;
+  o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
+  let lista: any[];
+  try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
+  if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
+  const it = lista[idx];
+  if (typeof it !== "object" || it === null) throw new RechazoCampo("Ese paso tiene un formato antiguo. Ábrelo en la ficha completa.");
+  if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
+  // Un paso con rango se juzga por su número: lo escrito en él es el número que marcó el instrumento.
+  // Un texto que no es número se rechaza sin guardar nada; el mismo texto que ya estaba guardado no es un cambio.
+  const guardado = typeof it.valorMedido === "string" ? it.valorMedido.trim() : null;
+  if (leido.tipo === "texto" && String(op.valor).trim() !== guardado && pasoConRango({ esperadoMin: limiteDePaso(it.esperadoMin), esperadoMax: limiteDePaso(it.esperadoMax) })) {
+    throw new RechazoCampo(MENSAJE_PASO_SIN_NUMERO);
+  }
+  const base = baseDeLaMarca(o.checklistEjecucion, idx, op.antes);
+  const cambioEnLaFicha = pasoCambioEnLaFicha(o.tipo === "emergencia", idx);
+  // K17b · Volver a guardar lo que mostraba el celular sobre un estado o una lectura que la ficha cambió no se aplica.
+  if (conAntes(op.antes) && marcaSobreCambioDeLaFicha(it, op.antes, estado, op.valor)) throw new RechazoCampo(cambioEnLaFicha, 409);
+  it.estado = estado;
+  delete it.hecho;
+  // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
+  // Lo que no es un número queda escrito tal cual, como antes. En el libro, el número va con textoDeNumero.
+  const valor = leido.tipo === "numero" ? textoDeNumero(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
+  if (leido.tipo === "numero") it.valorMedido = leido.valor;
+  else if (valor !== null) it.valorMedido = valor;
+  if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
+  if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
+  // Si alguien cambió ese paso en la ficha mientras tanto (K11), queda como está guardado y la marca se
+  // rechaza: no se escribe nada, tampoco en el libro de marcas.
+  const r = await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista), ...(base !== null ? { checklistBase: base } : {}) }, m.iso);
+  if (base !== null && Array.isArray(r?.pasosSinAplicar) && r.pasosSinAplicar.includes(idx)) throw new RechazoCampo(cambioEnLaFicha, 409);
+  await db.insert(ordenPasoMarcas).values({
+    ordenId: o.id, pasoIdx: idx, pasoTexto: String(it.texto ?? "").slice(0, 500), estado, valor,
+    nota: typeof op.nota === "string" ? op.nota.trim() || null : null,
+    ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
+  });
+}
+
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
   switch (op.tipo) {
     case "orden.iniciar": {
@@ -945,45 +1055,20 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const idx = Number(op.idx);
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
-      exigirEjecutor(user, o);
-      // Un número que se puede leer de dos formas («1,200») se rechaza con su frase. El mismo texto que ya
-      // estaba guardado en el paso, comparado recortado, no es un cambio: no se rechaza y queda como estaba.
-      const escrito = leerNumero(op.valor);
-      const mismoTexto = typeof op.valor === "string" && op.valor.trim() === textoGuardadoDePaso(o.checklistEjecucion, idx);
-      if (escrito.tipo === "ambiguo" && !mismoTexto) throw new RechazoCampo(escrito.mensaje);
-      const leido = escrito.tipo === "ambiguo" ? ({ tipo: "texto" } as const) : escrito;
-      o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
-      let lista: any[];
-      try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
-      if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
-      const it = lista[idx];
-      if (typeof it !== "object" || it === null) throw new RechazoCampo("Ese paso tiene un formato antiguo. Ábrelo en la ficha completa.");
-      if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
-      // Un paso con rango se juzga por su número: lo escrito en él es el número que marcó el instrumento.
-      // Un texto que no es número se rechaza sin guardar nada; el mismo texto que ya estaba guardado no es un cambio.
-      const guardado = typeof it.valorMedido === "string" ? it.valorMedido.trim() : null;
-      if (leido.tipo === "texto" && String(op.valor).trim() !== guardado && pasoConRango({ esperadoMin: limiteDePaso(it.esperadoMin), esperadoMax: limiteDePaso(it.esperadoMax) })) {
-        throw new RechazoCampo(MENSAJE_PASO_SIN_NUMERO);
+      try {
+        await aplicarMarcaDePaso(ctx, db, user, o, op, idx, estado, m);
+      } catch (e) {
+        // K17c · Con «antes», otra escritura del checklist entre la lectura y el guardado: se lee la orden otra vez y
+        // se arma de nuevo la marca con su base, una sola vez. Si vuelve a pasar, el paso cambió mientras tanto.
+        if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conAntes(op.antes)) throw e;
+        o = await ordenDeOp(db, op);
+        try {
+          await aplicarMarcaDePaso(ctx, db, user, o, op, idx, estado, m);
+        } catch (e2) {
+          if (e2 instanceof RechazoCampo && e2.motivo === "otra-escritura") throw new RechazoCampo(pasoCambioEnLaFicha(o.tipo === "emergencia", idx), 409);
+          throw e2;
+        }
       }
-      const base = baseDeLaMarca(o.checklistEjecucion, idx, op.antes);
-      it.estado = estado;
-      delete it.hecho;
-      // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
-      // Lo que no es un número queda escrito tal cual, como antes. En el libro, el número va con textoDeNumero.
-      const valor = leido.tipo === "numero" ? textoDeNumero(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
-      if (leido.tipo === "numero") it.valorMedido = leido.valor;
-      else if (valor !== null) it.valorMedido = valor;
-      if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
-      if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
-      // Si alguien cambió ese paso en la ficha mientras tanto (K11), queda como está guardado y la marca se
-      // rechaza: no se escribe nada, tampoco en el libro de marcas.
-      const r = await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista), ...(base !== null ? { checklistBase: base } : {}) }, m.iso);
-      if (base !== null && Array.isArray(r?.pasosSinAplicar) && r.pasosSinAplicar.includes(idx)) throw new RechazoCampo(pasoCambioEnLaFicha(o.tipo === "emergencia", idx), 409);
-      await db.insert(ordenPasoMarcas).values({
-        ordenId: o.id, pasoIdx: idx, pasoTexto: String(it.texto ?? "").slice(0, 500), estado, valor,
-        nota: typeof op.nota === "string" ? op.nota.trim() || null : null,
-        ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
-      });
       return { ordenId: o.id, m };
     }
     case "orden.terminar": {
@@ -991,6 +1076,10 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const [ultima] = await db.select({ en: ordenPasoMarcas.ocurridoEn }).from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, o.id)).orderBy(desc(ordenPasoMarcas.ocurridoEn)).limit(1);
       const m = momentoCapturado(op.at, ultima?.en ?? o.iniciadaEn);
       if (!["completada", "verificada", "cerrada"].includes(o.estado)) {
+        // K19 · Un paso cuya marca se rechazó porque cambió en la ficha no se envía como lo dejó la ficha: primero el
+        // técnico lo revisa y lo marca otra vez. No se escribe nada.
+        const porRevisar = await pasosCambiadosSinMarcar(db, user, o);
+        if (porRevisar.length) throw new RechazoCampo(envioConPasosCambiados(o.tipo === "emergencia", porRevisar), 409);
         const nota = typeof op.nota === "string" ? op.nota : null;
         // La causa raíz la escribe la jefatura. Si un celular viejo la manda, lo que el técnico vio queda en los trabajos.
         const causa = typeof op.causaRaiz === "string" ? op.causaRaiz.trim() : "";

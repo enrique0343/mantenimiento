@@ -152,7 +152,7 @@ input.campo,select.campo{min-height:48px}
 .marco-cuerpo{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:12px}
 .marco>.paso-pie{flex:none}
 .recorte,.dato b.recorte,.perm strong.recorte,.fila small.recorte{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
-.dato b.recorte.entero{display:block;-webkit-line-clamp:none;line-clamp:none;overflow:visible}
+.dato b.recorte.entero,.paso-cuerpo .marcado.entero{display:block;-webkit-line-clamp:none;line-clamp:none;overflow:visible}
 .simple{display:grid;gap:12px;padding:16px var(--gd) 12px var(--gi)}
 .simple h1{font-size:26px;line-height:1.14;font-weight:600;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
 .simple p{color:var(--tinta2)}
@@ -222,5 +222,14 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .ahora .otra{padding-top:8px;padding-bottom:8px}
   .ahora .otra::before{top:14px}
   .ahora .otra+.otra{margin-top:-6px}
+  /* También con el aviso de registros sin aceptar arriba, o con «Te la devolvieron» y un lugar de dos líneas: el aviso
+     en una franja del alto del pulgar, los botones en 52 y 44 px y, con el aviso, sin el saludo. La misma letra. */
+  .avisito{padding-top:0;padding-bottom:0;min-height:44px}
+  .ahora.lleno{gap:4px;padding-top:10px;padding-bottom:10px}
+  .ahora.lleno .b1{min-height:52px;margin-top:2px}
+  .ahora.lleno .b2{min-height:44px}
+  .ahora.lleno .otra+.otra{margin-top:-4px}
+  .hoy-cab.compacta h1{display:none}
+  .hoy-cab.compacta .etq{display:block}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}

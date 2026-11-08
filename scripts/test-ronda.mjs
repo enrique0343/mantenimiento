@@ -1074,6 +1074,16 @@ await escenario('10:30', async (e) => {
   igual(r.status, 200, '(7l) La marca se guarda');
   igual(globalThis.__auditoriaRonda.at(-1)?.resumen, 'Sede 1 no hace ronda desde el turno de las 14:00 del 10/11/2026', '(7l) El registro dice «desde el turno de las 14:00»');
 });
+// (7l) Con un turno de la 01:00, el registro dice «desde el turno de la 01:00».
+await escenario('23:20', async (e) => {
+  e.reloj('23:30');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['01:00', '09:00', '17:00'] })).body.aplicaDesde, { fecha: dia(1), turno: '01:00' }, '(7l) Los turnos nuevos entran a la 01:00 de mañana');
+  e.reloj('23:40');
+  globalThis.__auditoriaRonda = [];
+  const r = await puntosAnotado.PUT(e.x.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'hace_ronda', sucursalId: 1, haceRonda: false }, rol: 'jefe' }));
+  igual(r.status, 200, '(7l) La marca se guarda');
+  igual(globalThis.__auditoriaRonda.at(-1)?.resumen, 'Sede 1 no hace ronda desde el turno de la 01:00 del 11/11/2026', '(7l) El registro dice «desde el turno de la 01:00»');
+});
 
 // (8) La sede saca su recorrido propio mientras el técnico anota sin señal: la ronda se abre con el recorrido que traía el celular.
 await escenario('10:30', async (e) => {

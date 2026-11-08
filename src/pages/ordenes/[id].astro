@@ -1532,7 +1532,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                           {lib.valorEsperado && <span class="mr-2">Esperado: {lib.valorEsperado}</span>}
                           {(lib.minAceptable != null || lib.maxAceptable != null) && (
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
-                              Rango: {lib.minAceptable != null ? lib.minAceptable : "—"} a {lib.maxAceptable != null ? lib.maxAceptable : "—"}{lib.unidad ? ` ${lib.unidad}` : ""}
+                              Rango: {lib.minAceptable != null ? textoDeNumero(lib.minAceptable) : "—"} a {lib.maxAceptable != null ? textoDeNumero(lib.maxAceptable) : "—"}{lib.unidad ? ` ${lib.unidad}` : ""}
                             </span>
                           )}
                         </div>
@@ -2314,6 +2314,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
     });
 
+    // Sin señal, una transición o la verificación no salen: se dice, sin cambiar nada en pantalla.
+    const SIN_SENAL = "Sin señal: no se guardó. Vuelve a intentarlo cuando haya señal.";
     // Transiciones
     document.querySelectorAll("[data-transition]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -2353,7 +2355,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           evidenciaFallida(rechazo?.status, rechazo?.j);
           // Sin señal el envío no responde: se dice aquí, como sus otros errores.
           if (sinSenal) alert("Sin señal: la orden no se envió. Lo que marcaste y escribiste queda en este equipo; vuelve a enviarla cuando haya señal.");
-        }
+        } else if (sinSenal) alert(SIN_SENAL);
       });
     });
 
@@ -2373,7 +2375,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         sinLectura = pedido.value.trim();
         if (sinLectura.length < 20) { alert("Explica por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres)."); pedido.focus(); return; }
       }
-      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas, ...(sinLectura ? { cierreSinLecturaMotivo: sinLectura } : {}) });
+      let r = null;
+      try { r = await patchOrden({ estado: "verificada", verificacionNotas: notas, ...(sinLectura ? { cierreSinLecturaMotivo: sinLectura } : {}) }); }
+      catch { alert(SIN_SENAL); return; }
       if (r) location.reload();
     });
 
@@ -2911,13 +2915,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       return { tiene, num, dentro, min, max, sinLectura, na: estadoDe(it) === "na" };
     }
 
+    // Los límites se escriben con textoDeNumero, como en el servidor: 12.345 como «12.3450».
     function rangoTexto(idx) {
       const it = ckItem(idx);
       const u = it.unidad ? ` ${it.unidad}` : "";
       const { min, max } = evaluarLectura(idx);
-      if (min !== null && max !== null) return `${min} a ${max}${u}`;
-      if (min !== null) return `≥ ${min}${u}`;
-      if (max !== null) return `≤ ${max}${u}`;
+      const n = otNumero.textoDeNumero;
+      if (min !== null && max !== null) return `${n(min)} a ${n(max)}${u}`;
+      if (min !== null) return `≥ ${n(min)}${u}`;
+      if (max !== null) return `≤ ${n(max)}${u}`;
       return null;
     }
 
@@ -3064,8 +3070,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
     // El borrador es de la cuenta. El de antes de esta versión no la lleva en la
-    // clave: se ofrece una sola vez al abrir, cuando no hay uno de esta cuenta
-    // que ofrecer, y se borra.
+    // clave: sus textos se ofrecen una sola vez al abrir, cuando no hay uno de
+    // esta cuenta que ofrecer, y se borran; si es más viejo que el de la cuenta,
+    // se descartan sin ofrecerse. Su causa raíz la ofrece el bloque de la causa.
     const STORAGE_KEY = `ot-${id}-draft-${usuarioId}`;
     const STORAGE_KEY_VIEJA = `ot-${id}-draft`;
     // La causa raíz no va aquí: la escribe la jefatura y se guarda aparte, para
@@ -3104,56 +3111,98 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
       return payload;
     }
-
-    function guardarLocal(payload) {
-      try {
-        const base = Object.fromEntries(Object.keys(payload).map((c) => [c, ejecGuardado[c] ?? ""]));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, base, savedAt: Date.now() }));
-      } catch {}
+    // Solo viaja y queda en el borrador lo escrito que difiere de lo guardado
+    // (K20): un campo que la persona no tocó no se manda, así una pestaña abierta
+    // antes no borra lo que otra cuenta guardó después en ese campo.
+    function ejecCambios() {
+      const cambios = {};
+      for (const [campo, valor] of Object.entries(leerEjecPayload())) if ((valor ?? "") !== (ejecGuardado[campo] ?? "")) cambios[campo] = valor;
+      return cambios;
     }
-    function limpiarLocal() {
-      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+
+    // El borrador lleva cada campo que cambió aquí, con lo que tenía el servidor
+    // cuando se escribió. Dos pestañas de la misma cuenta lo comparten: cada una
+    // deja lo suyo y quita solo lo suyo que ya no espera o lo que el servidor ya
+    // tiene; el texto que dejó la otra se queda para ofrecerse al volver.
+    let ejecEscrito = {};
+    function guardarLocal() {
+      try {
+        let previo = null;
+        try { previo = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch {}
+        if (!previo || !previo.payload || typeof previo.payload !== "object") previo = null;
+        const cambios = ejecCambios();
+        const payload = {}, base = {}, mio = {};
+        for (const c of ejecFields) {
+          if (c in cambios) {
+            payload[c] = cambios[c];
+            base[c] = ejecGuardado[c] ?? "";
+            mio[c] = JSON.stringify([payload[c], base[c]]);
+          } else if (previo && previo.payload[c] !== undefined) {
+            const v = previo.payload[c], b = previo.base?.[c];
+            if (ejecEscrito[c] === JSON.stringify([v, b]) || (c in ejecGuardado && (v ?? "") === ejecGuardado[c])) continue;
+            payload[c] = v;
+            if (b !== undefined) base[c] = b;
+          }
+        }
+        ejecEscrito = mio;
+        if (!Object.keys(payload).length) { localStorage.removeItem(STORAGE_KEY); return; }
+        const savedAt = Object.keys(mio).length || !previo ? Date.now() : previo.savedAt;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, base, savedAt }));
+      } catch {}
     }
     // Lo escrito llegó al servidor y pasa a ser lo guardado. Lo que se siguió
     // escribiendo mientras viajaba queda en el borrador, con esa base.
     function textosGuardados(enviado) {
       for (const c of Object.keys(enviado)) ejecGuardado[c] = enviado[c] ?? "";
-      const ahora = leerEjecPayload();
-      if (Object.keys(ahora).every((c) => (ahora[c] ?? "") === (ejecGuardado[c] ?? ""))) limpiarLocal();
-      else guardarLocal(ahora);
+      guardarLocal();
     }
 
     let debounceTimer = null;
     let inFlight = false;
     let pending = false;
-    // El último guardado de lo escrito no llegó (sin señal o error del servidor):
-    // se reintenta al salir y el navegador avisa al cerrar.
+    // El último guardado de lo escrito no llegó (sin señal, error del servidor u
+    // otra escritura en medio): se reintenta al salir y el navegador avisa al cerrar.
     let textoReintentar = false;
     // La frase de la ventana que ya abrió el envío que no salió: el guardado que
     // se programa después no abre otra igual.
     let textoVentanaVista = null;
 
-    async function ejecutarGuardado() {
+    // reintento: el que sigue a otra escritura en medio (el guardado del
+    // checklist que salió a la vez). Es pasajera, como en el checklist: sin
+    // ventana, se reintenta una vez al rato y, si vuelve a pasar, espera la salida.
+    async function ejecutarGuardado(reintento = false) {
       if (inFlight) { pending = true; return; }
+      const payload = ejecCambios();
+      // Backup local antes de mandar al servidor
+      guardarLocal();
+      // Sin nada distinto de lo guardado no se llama al servidor.
+      if (!Object.keys(payload).length) { textoReintentar = false; setIndicador("idle", ""); return; }
       inFlight = true;
       setIndicador("guardando", "Guardando…");
-      const payload = leerEjecPayload();
-      // Backup local antes de mandar al servidor
-      guardarLocal(payload);
       const vista = textoVentanaVista;
       textoVentanaVista = null;
       let rechazo = 0;
+      let otraEscritura = false;
       try {
-        const r = await patchOrden(payload, (status, j) => { rechazo = status; return vista !== null && j?.error === vista; });
+        const r = await patchOrden(payload, (status, j) => {
+          rechazo = status;
+          otraEscritura = ckOtraEscritura(status, j);
+          return otraEscritura || (vista !== null && j?.error === vista);
+        });
         if (r) {
           textoReintentar = false;
           textosGuardados(payload);
           setIndicador("guardado", "✓ Guardado");
           setTimeout(() => { if (ejecIndicador?.dataset.status === "guardado") setIndicador("idle", ""); }, 2000);
+        } else if (otraEscritura && !reintento) {
+          textoReintentar = true;
+          if (!debounceTimer) debounceTimer = setTimeout(() => { debounceTimer = null; ejecutarGuardado(true); }, 1500);
         } else {
-          // Rechazado: queda en el equipo. Un error del servidor se reintenta al salir.
-          textoReintentar = rechazo >= 500;
-          setIndicador("offline", "Sin conexión — guardado localmente");
+          // Rechazado: queda en el equipo. Un error del servidor o la otra
+          // escritura que se repitió se reintentan al salir.
+          textoReintentar = rechazo >= 500 || otraEscritura;
+          if (rechazo >= 500) setIndicador("offline", "Sin conexión — guardado localmente");
+          else setIndicador("error", "Sin guardar");
         }
       } catch {
         textoReintentar = true;
@@ -3168,7 +3217,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       // Mostrar inmediatamente que hay cambios pendientes
       setIndicador("guardando", "Editando…");
       // Backup local instantáneo
-      guardarLocal(leerEjecPayload());
+      guardarLocal();
       // Debounce 1.5s. Al dispararse ya no espera: si el guardado no llega, lo
       // dice textoReintentar.
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -3196,40 +3245,62 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // guardado y descarta el borrador.
     (function checkDraftLocal() {
       const quitar = (clave) => { try { localStorage.removeItem(clave); } catch {} };
-      // Responde si el borrador de esa clave quedó resuelto sin preguntar nada.
-      function ofrecer(clave) {
-        const raw = localStorage.getItem(clave);
-        if (!raw) return true;
-        const { payload, base, savedAt } = JSON.parse(raw);
-        if (!payload) return true;
+      const leer = (clave) => {
+        try { const b = JSON.parse(localStorage.getItem(clave) || "null"); return b && b.payload && typeof b.payload === "object" ? b : null; } catch { return null; }
+      };
+      // Responde "nada" si no había qué ofrecer, "ofrecido" si preguntó y
+      // "espera" si hoy no se puede escribir ninguno de sus campos. soltar()
+      // saca los textos del equipo antes de restaurar: si el guardado no llega,
+      // el borrador vuelve a quedar solo con lo restaurado.
+      function ofrecer(borrador, soltar) {
+        const { payload, base, savedAt } = borrador;
+        const textos = ejecFields.filter((c) => payload[c] !== undefined);
+        if (!textos.length) return "nada";
         // Comparar con valores actuales del DOM (que vienen del servidor). Solo
         // cuentan los campos que hoy se pueden escribir en pantalla.
-        const campos = ejecFields.filter((c) => $(c) && !$(c).disabled && payload[c] !== undefined);
-        if (!campos.length) return false;
+        const campos = textos.filter((c) => $(c) && !$(c).disabled);
+        if (!campos.length) return "espera";
         const enServidor = (c) => ($(c).value || "").trim();
-        const cambios = campos.filter((c) => (payload[c] ?? "") !== enServidor(c));
-        if (!cambios.length) { quitar(clave); return true; }
+        const conBase = !!base && typeof base === "object";
+        // Un campo igual a su base no se tocó: ni se ofrece ni se restaura.
+        const cambios = campos.filter((c) => (payload[c] ?? "") !== enServidor(c) && !(conBase && typeof base[c] === "string" && (payload[c] ?? "") === base[c]));
+        if (!cambios.length) { soltar(); return "nada"; }
         // Los campos en que se guardó otro texto después de escribir el borrador.
         // El de antes de esta versión no trae la base: se ofrece como siempre.
-        const otros = base && typeof base === "object" ? cambios.filter((c) => typeof base[c] === "string" && base[c] !== enServidor(c)) : [];
+        const otros = conBase ? cambios.filter((c) => typeof base[c] === "string" && base[c] !== enServidor(c)) : [];
         const fechaSave = new Date(savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
         const uno = otros.length === 1;
         const mensaje = otros.length
           ? `Tienes cambios sin guardar de ${fechaSave} en esta OT. Después de que los escribiste en este equipo ${uno ? "se guardó otro texto" : "se guardaron otros textos"} en ${otros.map((c) => NOMBRE_CAMPO[c]).join(" y ")}. ¿${uno ? "Reemplazarlo" : "Reemplazarlos"} con lo que escribiste aquí? (Cancelar = dejar lo guardado)`
           : `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
         const restaurar = confirm(mensaje);
-        quitar(clave);
+        soltar();
         if (restaurar) {
           for (const c of cambios) if (payload[c] != null) $(c).value = payload[c];
           // Disparar guardado inmediato al servidor: si no llega, el borrador
           // vuelve a quedar en el equipo, sobre lo que se vio al abrir.
           ejecutarGuardado();
         }
-        return false;
+        return "ofrecido";
       }
-      // El de la clave vieja espera mientras haya uno de esta cuenta que ofrecer:
-      // no se borra sin haberlo ofrecido.
-      try { if (ofrecer(STORAGE_KEY)) ofrecer(STORAGE_KEY_VIEJA); } catch {}
+      try {
+        const cuenta = leer(STORAGE_KEY);
+        const vieja = leer(STORAGE_KEY_VIEJA);
+        const deCuenta = cuenta ? ofrecer(cuenta, () => quitar(STORAGE_KEY)) : "nada";
+        if (!vieja || !ejecFields.some((c) => vieja.payload[c] !== undefined)) return;
+        // De la clave vieja salen los textos; su causa raíz se queda hasta que la
+        // ofrezca el bloque de la causa a quien puede escribirla.
+        const soltarVieja = () => {
+          const causa = vieja.payload.causaRaiz;
+          if (typeof causa !== "string" || !causa.trim()) { quitar(STORAGE_KEY_VIEJA); return; }
+          try { localStorage.setItem(STORAGE_KEY_VIEJA, JSON.stringify({ payload: { causaRaiz: causa }, savedAt: vieja.savedAt })); } catch {}
+        };
+        // Más viejo que el de la cuenta, se descarta sin ofrecerse: no pisa lo más nuevo.
+        if (cuenta && Number(vieja.savedAt) < Number(cuenta.savedAt)) soltarVieja();
+        // Si no, espera mientras haya uno de esta cuenta que ofrecer: no se
+        // borra sin haberlo ofrecido.
+        else if (deCuenta === "nada") ofrecer(vieja, soltarVieja);
+      } catch {}
     })();
 
     // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
@@ -3255,7 +3326,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       const pasos = ckCambiado() ? ckEnvio() : null;
       ckEvidencia = pasos ? JSON.parse(pasos.checklistEjecucion) : null;
-      textoEvidencia = leerEjecPayload();
+      // Lo escrito viaja solo si difiere de lo guardado (K20).
+      textoEvidencia = ejecCambios();
       return { ...textoEvidencia, ...(pasos ?? {}) };
     }
     // El envío con la evidencia salió bien: lo escrito y lo marcado que viajaron
@@ -3310,10 +3382,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       try { localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: causaEl.value, base: causaGuardada, savedAt })); } catch {}
     }
     // La causa llegó al servidor: lo que se siguió escribiendo espera con esa base.
+    // El borrador sale solo si trae esa misma causa: el que dejó otra pestaña con
+    // otro texto se queda para ofrecerse al volver.
     function causaLlego(valor) {
       causaGuardada = valor;
-      if (causaEl.value.trim() !== valor) guardarBorradorCausa();
-      else { try { localStorage.removeItem(CAUSA_KEY); } catch {} }
+      if (causaEl.value.trim() !== valor) { guardarBorradorCausa(); return; }
+      let borrador = null;
+      try { borrador = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null"); } catch {}
+      try { if (typeof borrador?.valor !== "string" || borrador.valor.trim() === valor) localStorage.removeItem(CAUSA_KEY); } catch {}
     }
 
     function avisoCausa(texto, color) {
@@ -3339,12 +3415,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (falta) { avisoCausa(falta, "text-amber-700"); return false; }
       avisoCausa("Guardando…", "text-amber-600");
       try {
-        const res = await fetch(`/api/ordenes/${id}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ causaRaiz: valor || null, soloCambios: true }),
-        });
-        const j = await res.json().catch(() => ({}));
+        const mandar = async () => {
+          const res = await fetch(`/api/ordenes/${id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ causaRaiz: valor || null, soloCambios: true }),
+          });
+          return { res, j: await res.json().catch(() => ({})) };
+        };
+        let { res, j } = await mandar();
+        // Otra escritura en medio (lo escrito o el checklist que salieron a la
+        // vez, como al recuperar lo de antes al abrir) es pasajera: se reintenta una vez.
+        if (ckOtraEscritura(res.status, j)) ({ res, j } = await mandar());
         if (!res.ok) {
           avisoCausa(typeof j.error === "string" ? `Sin guardar: ${j.error}` : "Sin guardar", "text-red-600");
           return false;
@@ -3376,6 +3458,25 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         causaTimer = setTimeout(guardarCausa, 1500);
       });
       $("causaSave")?.addEventListener("click", () => { guardarCausa(); });
+      // La causa que la pestaña de antes de esta versión guardaba junto con los
+      // textos (la clave sin la cuenta) pasa a ser el borrador de esta cuenta, sin
+      // base, y se ofrece ahora, salvo que la cuenta ya tenga uno más nuevo.
+      // Después sale de esa clave. A quien no puede escribir la causa no se le
+      // ofrece y queda allí.
+      try {
+        const vieja = JSON.parse(localStorage.getItem(STORAGE_KEY_VIEJA) || "null");
+        const deAntes = typeof vieja?.payload?.causaRaiz === "string" ? vieja.payload.causaRaiz : "";
+        if (deAntes.trim()) {
+          let propio = null;
+          try { propio = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null"); } catch {}
+          const masNuevo = typeof propio?.valor === "string" && Number(propio.savedAt) > Number(vieja.savedAt);
+          if (!masNuevo && deAntes.trim() !== causaGuardada) localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: deAntes, savedAt: Number(vieja.savedAt) || Date.now() }));
+          const textos = { ...vieja.payload };
+          delete textos.causaRaiz;
+          if (ejecFields.some((c) => textos[c] !== undefined)) localStorage.setItem(STORAGE_KEY_VIEJA, JSON.stringify({ ...vieja, payload: textos }));
+          else localStorage.removeItem(STORAGE_KEY_VIEJA);
+        }
+      } catch {}
       // Lo que quedó sin guardar (sin señal, pestaña cerrada) se ofrece al volver.
       // Si después se guardó otra causa (otra cuenta en este navegador, la misma
       // en otro equipo), la pregunta lo dice: aceptar la reemplaza y la guarda;
@@ -3416,22 +3517,29 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
     function guardarAlSalir() {
       const payload = {};
-      // Lo escrito que esperaba su autoguardado, o cuyo último guardado no llegó.
-      const conTexto = !!debounceTimer || textoReintentar;
+      // Lo escrito que esperaba su autoguardado, que va en camino (puede cortarse
+      // al salir, como el del checklist) o cuyo último guardado no llegó. Viaja
+      // solo lo que difiere de lo guardado (K20) y queda también en el borrador,
+      // por si no llega.
+      const conTexto = !!debounceTimer || textoReintentar || inFlight;
       // Un guardado del checklist que estaba por salir, en camino o sin señal se
       // manda otra vez con keepalive: el que va en camino puede cortarse al salir.
       const conPasos = (!!ckSaveTimer || ckEnVuelo || ckReintentar) && ckCambiado();
       if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
-      const textos = conTexto ? leerEjecPayload() : null;
-      if (textos) Object.assign(payload, textos);
+      const cambios = conTexto ? ejecCambios() : {};
+      const textos = Object.keys(cambios).length ? cambios : null;
+      if (textos) { Object.assign(payload, textos); guardarLocal(); }
       if (conPasos) Object.assign(payload, ckEnvio());
       const enviado = conPasos ? JSON.parse(payload.checklistEjecucion) : null;
       if (Object.keys(payload).length) enviarAlSalir(payload, (bien, j, status) => {
         if (textos) {
-          textoReintentar = !bien && (bien === null || status >= 500);
+          // Sin señal o con un error del servidor queda en el equipo; la otra
+          // escritura en medio también se reintenta en la salida siguiente.
+          const pasajero = bien === null || status >= 500;
+          textoReintentar = !bien && (pasajero || ckOtraEscritura(status, j));
           if (bien) { textosGuardados(textos); setIndicador("guardado", "✓ Guardado"); }
-          else setIndicador(bien === false ? "error" : "offline", bien === false ? "Sin guardar" : "Sin conexión — guardado localmente");
+          else setIndicador(pasajero ? "offline" : "error", pasajero ? "Sin conexión — guardado localmente" : "Sin guardar");
         }
         if (conPasos) {
           const sinRechazo = bien === null || ckOtraEscritura(status, j) || status >= 500;
@@ -3454,6 +3562,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
         }
       });
+      // La causa sin guardar queda también en el borrador, como lo escrito: otra
+      // pestaña de la misma cuenta pudo cambiarlo mientras tanto.
+      if (causaEditable && causaEl.value.trim() !== causaGuardada) guardarBorradorCausa();
       if (causaTimer) {
         clearTimeout(causaTimer); causaTimer = null;
         const valor = causaEl.value.trim();

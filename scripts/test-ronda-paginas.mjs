@@ -456,12 +456,13 @@ try {
     g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede Uno',1)");
     g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
     const contenedor = await experimental_AstroContainer.create();
-    const html = await (await contenedor.renderToResponse(await cargar('ronda/puntos.astro.mjs'), { partial: false, request: new Request('https://local.test/ronda/puntos'), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } })).text();
+    const pagina = async () => (await contenedor.renderToResponse(await cargar('ronda/puntos.astro.mjs'), { partial: false, request: new Request('https://local.test/ronda/puntos'), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } })).text();
     const { JSDOM } = createRequire(import.meta.url)('jsdom');
     const url = 'https://local.test/ronda/puntos';
-    const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true, beforeParse: (win) => {
+    const dom = new JSDOM(await pagina(), { url, runScripts: 'dangerously', pretendToBeVisual: true, beforeParse: (win) => {
       win.fetch = async (destino, init = {}) => {
         const u = new URL(destino, url);
+        if (u.pathname === '/ronda/puntos') return new Response(await pagina(), { status: 200, headers: { 'content-type': 'text/html' } });
         if (u.pathname !== '/api/ronda-turno/puntos') return new Response('{}', { status: 404 });
         const j = await (await g.app.puntos[init.method](g.ctx(u.pathname, { method: init.method, data: init.body ? JSON.parse(init.body) : undefined, rol: 'jefe' }))).json();
         delete j.aviso;
@@ -469,10 +470,25 @@ try {
       };
     } });
     const d = dom.window.document;
-    d.getElementById('r_turnos').value = '06:30, 14:30, 22:30';
-    d.getElementById('form-turnos').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
-    for (let i = 0; i < 200 && !/^Guardado/.test(d.getElementById('turnos-estado').textContent); i++) await new Promise((r) => setTimeout(r, 15));
-    ok(d.getElementById('turnos-estado').textContent === 'Guardado: 06:30, 14:30, 22:30. Entran desde el turno de las 14:30 del 10/11/2026.', `Sin aviso del servidor, «el turno de las 14:30»: «${d.getElementById('turnos-estado').textContent}»`);
+    const guardarTurnos = async (turnos) => {
+      d.getElementById('turnos-estado').textContent = '';
+      d.getElementById('r_turnos').value = turnos;
+      d.getElementById('form-turnos').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+      for (let i = 0; i < 200 && !/^Guardado/.test(d.getElementById('turnos-estado').textContent); i++) await new Promise((r) => setTimeout(r, 15));
+      return d.getElementById('turnos-estado').textContent;
+    };
+    let dicho = await guardarTurnos('06:30, 14:30, 22:30');
+    ok(dicho === 'Guardado: 06:30, 14:30, 22:30. Entran desde el turno de las 14:30 del 10/11/2026.', `Sin aviso del servidor, «el turno de las 14:30»: «${dicho}»`);
+    // La copia de laHora de la pantalla también dice «la 01:00»: al guardar turnos y al marcar que la sede no hace ronda.
+    fijarReloj(en('23:40'));
+    dicho = await guardarTurnos('01:00, 09:00, 17:00');
+    ok(dicho === 'Guardado: 01:00, 09:00, 17:00. Entran desde el turno de la 01:00 del 11/11/2026.', `Sin aviso del servidor, «el turno de la 01:00»: «${dicho}»`);
+    d.querySelector('[data-accion="hace-ronda"][data-sede="1"]').click();
+    await new Promise((r) => setTimeout(r, 15));
+    d.getElementById('confirmOk').click();
+    const avisos = () => [...d.querySelectorAll('#toastContainer .aviso-toast')].map((t) => t.textContent);
+    for (let i = 0; i < 200 && !avisos().some((m) => /ronda desde/.test(m)); i++) await new Promise((r) => setTimeout(r, 15));
+    ok(avisos().includes('Sede Uno no hace ronda desde el turno de la 01:00 del 11/11/2026.'), `La marca de la sede, «desde el turno de la 01:00»: ${JSON.stringify(avisos())}`);
     dom.window.close();
   } finally { await g.close(); }
 }

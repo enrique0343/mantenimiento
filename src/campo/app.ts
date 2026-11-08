@@ -783,6 +783,8 @@ const cerradosConEmergencia = new Set<string>();
 /** El grupo que empieza abierto, además de los que tienen una emergencia sin atender. */
 let grupoPorDefecto: string | null = null;
 const LINEAS_EMERGENCIA = 2;
+/** Una frase que sigue de otra termina con su punto: si no lo trae, se le pone. Vacía queda vacía. */
+const conPunto = (t: string) => { const s = t.trim(); return !s || /[.!?…]$/.test(s) ? s : `${s}.`; };
 function lineasDeEmergencias(otras: Any[]): string {
   const lineas = otras.slice(0, LINEAS_EMERGENCIA).map((o) => {
     const rango = rangoEmergencia(o);
@@ -792,7 +794,7 @@ function lineasDeEmergencias(otras: Any[]): string {
   const mas = otras.length - LINEAS_EMERGENCIA;
   return lineas + (mas > 0 ? `<p class="otra-mas">y ${mas} más en Hoy</p>` : "");
 }
-function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
+function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[]; lleno?: boolean } {
   const p = E.p;
   // Desde el turno en que la sede ya no hace ronda, solo sigue la que ya empezó.
   const r = rondaQueSigue(p.ronda);
@@ -810,13 +812,16 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
     const donde = enPausa ? `En pausa${emergencia.motivoPausa ? `: ${emergencia.motivoPausa}` : ""}` : empezo ? dondeVas(emergencia) : "";
     // Con «Te la devolvieron», dónde va y por qué se la devolvieron van en un solo párrafo, sin «Sigues justo donde
     // quedaste»; con otras emergencias debajo, en dos líneas como máximo. Así «Ahora» lleno cabe en 360×640.
-    const conDevuelta = emergencia.devuelta ? [donde.replace(/ Sigues justo donde quedaste\.$/, ""), `Te la devolvieron: ${emergencia.devuelta}`].filter(Boolean).join(" ") : donde;
+    // «En pausa: Me pasaron a otra urgencia» se cierra con punto antes de «Te la devolvieron».
+    const conDevuelta = emergencia.devuelta ? [conPunto(donde.replace(/ Sigues justo donde quedaste\.$/, "")), `Te la devolvieron: ${emergencia.devuelta}`].filter(Boolean).join(" ") : donde;
     const parrafo = conDevuelta ? `<p class="recorte${emergencia.devuelta && otras.length ? " dos" : ""}">${esc(conDevuelta)}</p>` : "";
     // Con la emergencia ya empezada, la ronda del turno no se pierde de vista.
     const tambien = empezo && rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de ${esc(laHora(r.turno))}</button>` : "";
     return {
       ordenId: emergencia.id,
       enAhora: [emergencia, ...otras.slice(0, LINEAS_EMERGENCIA)].map((o: Any) => o.id),
+      // Con otras emergencias debajo, «Ahora» va lleno: en una pantalla baja se compacta para caber sin desplazar.
+      lleno: otras.length > 0,
       html: `<span class="etq urgente">${esc(etq)}</span><h2${otras.length ? ' class="recorte dos"' : ""}>${esc(tituloOrden(emergencia))}</h2>${det ? `<p>${esc(det)}</p>` : ""}${parrafo}<button class="b1 claro" data-a="ir" data-h="#orden-${emergencia.id}">${empezo ? "Seguir" : "Atender la emergencia"}</button>${lineasDeEmergencias(otras)}${tambien}`,
     };
   }
@@ -910,9 +915,10 @@ function vHoy() {
   const turno = p.ronda?.turno && !yaNoHaceRonda(p.ronda) ? ` · turno ${esc(p.ronda.turno)}` : "";
   const avisos = (E.sesionVencida ? `<div class="avisito"><span>Tu sesión venció.${E.pend.length ? ` ${E.pend.length} registros esperan.` : ""}</span><a class="link" href="/login?next=/campo">Entrar</a></div>` : "")
     + (E.rechazos.length ? `<div class="avisito"><span>${E.rechazos.length} registro${E.rechazos.length === 1 ? "" : "s"} sin aceptar</span><button class="link" data-a="verRechazos">Ver por qué</button></div>` : "");
-  return `<div class="hoy-cab"><div><span class="etq">${esc(fechaLarga)}${turno}</span><h1>Hola, ${esc(primerNombre(p.usuario?.nombre ?? NOMBRE))}</h1>${nombreSede ? `<button class="sede-btn" data-a="sede">${esc(nombreSede)}${ico.abajo}</button>` : ""}</div><span id="senal">${pillHtml()}</span></div>`
+  // Con un aviso arriba y «Ahora» lleno, en una pantalla baja el saludo deja su lugar (campo.css): todo «Ahora» queda a la vista.
+  return `<div class="hoy-cab${avisos && ahora.lleno ? " compacta" : ""}"><div><span class="etq">${esc(fechaLarga)}${turno}</span><h1>Hola, ${esc(primerNombre(p.usuario?.nombre ?? NOMBRE))}</h1>${nombreSede ? `<button class="sede-btn" data-a="sede">${esc(nombreSede)}${ico.abajo}</button>` : ""}</div><span id="senal">${pillHtml()}</span></div>`
     + avisos
-    + `<div class="ahora">${ahora.html}</div>`
+    + `<div class="ahora${ahora.lleno ? " lleno" : ""}">${ahora.html}</div>`
     + (filas ? `<div class="resto"><span class="etq">Después</span><div class="lista">${filas}</div></div>` : "");
 }
 
@@ -953,8 +959,14 @@ function abrirOrden(id: number) {
   // Al volver a la app: la misma pantalla y la misma hoja, si todavía tienen sentido.
   const previo = tomarRestauracion();
   E.restaurar = null;
-  if (previo?.flujo?.tipo === "pm" && previo.flujo.ordenId === id && s.vista !== "pausa" && pantallaValida(o, previo.vista, previo.flujo.i)) s = { vista: previo.vista, i: previo.flujo.i };
-  if (previo?.hoja && previo.vista === s.vista && (previo.flujo?.i ?? 0) === s.i) E.hojaPendiente = previo.hoja;
+  // K17 y K19 · Desde «Ver por qué», el paso que cambió en la ficha, como está guardado. En pausa, después de reanudar.
+  const alPaso = irAlPaso?.hash === `#orden-${id}` ? irAlPaso.i : null;
+  if (s.vista !== "pausa") irAlPaso = null;
+  if (alPaso !== null && s.vista !== "pausa" && pantallaValida(o, "paso", alPaso)) s = { vista: "paso", i: alPaso };
+  else {
+    if (previo?.flujo?.tipo === "pm" && previo.flujo.ordenId === id && s.vista !== "pausa" && pantallaValida(o, previo.vista, previo.flujo.i)) s = { vista: previo.vista, i: previo.flujo.i };
+    if (previo?.hoja && previo.vista === s.vista && (previo.flujo?.i ?? 0) === s.i) E.hojaPendiente = previo.hoja;
+  }
   irAPantalla(o, s);
 }
 /** Una pantalla guardada sigue valiendo si la orden todavía está en ese punto. */
@@ -1209,7 +1221,7 @@ function vPaso() {
   const claveLect = esRonda ? `rlect:${r.fecha}:${r.turno}:${p.id}` : `lect:${o.id}:${f.i}`;
   const lect = p.pideValor ? lecturaHtml(p, previo?.valor, claveLect) : "";
   const materiales = !esRonda && p.materiales ? `<p class="ayuda">Materiales: ${esc(p.materiales)}</p>` : "";
-  const nota = previo?.nota ? `<p class="ayuda">Anotaste: ${esc(previo.nota)}</p>` : "";
+  const nota = esRonda ? (previo?.nota ? `<p class="ayuda">Anotaste: ${esc(previo.nota)}</p>` : "") : comoEstaElPaso(o, p, claveLect);
   let pie: string;
   if (esEop) {
     // Las acciones del EOP no son críticas: se hacen o no se pudieron, y se sigue.
@@ -1229,6 +1241,28 @@ function vPaso() {
     + `<h1 class="${texto.length > 70 ? "largo" : ""}">${esc(texto)}</h1>${entrega}${ayuda ? `<p class="ayuda">${esc(ayuda)}</p>` : ""}${materiales}${lect}${nota}${atras}</div>`
     + `<div class="paso-pie">${pie}</div></div>`;
 }
+
+const ESTADO_DEL_PASO: Record<string, string> = { ok: "Hecho", na: "No aplica", desviacion: "Hay un problema" };
+/**
+ * Un paso ya marcado dice cómo está guardado: su estado (en una emergencia, «No se pudo») y su nota, que pudo
+ * escribir la jefatura: por eso no dice «Anotaste». Si el campo trae otra lectura escrita, también la guardada.
+ */
+function comoEstaElPaso(o: Any, p: Any, claveLect: string): string {
+  const emergencia = o.modo === "emergencia";
+  const noPudo = emergencia && p.estado === "desviacion";
+  const crudo = String(p.nota ?? "").trim();
+  const nota = noPudo ? crudo.replace(/^no se pudo\s*:?\s*/i, "") : crudo;
+  if (p.estado === "pendiente") return nota ? `<p class="ayuda recorte marcado" data-a="verTodo">Nota: ${esc(nota)}</p>` : "";
+  const estado = noPudo ? "No se pudo" : ESTADO_DEL_PASO[p.estado] ?? "";
+  const escrito = String(E.notas[claveLect] ?? "").trim();
+  const guardada = p.pideValor && comoTexto(p.valor) && escrito && !mismaLectura(escrito, p.valor) ? `, con ${comoTexto(p.valor)}${p.unidad ? ` ${p.unidad}` : ""}` : "";
+  return `<p class="ayuda recorte marcado" data-a="verTodo">${emergencia ? "Ya está marcada" : "Ya está marcado"}: <b>${esc(estado)}</b>${esc(guardada)}.${nota ? ` Nota: ${esc(nota)}` : ""}</p>`;
+}
+/** Dos lecturas iguales: por su número si alguna se lee como uno; si no, el texto recortado. */
+const mismaLectura = (a: unknown, b: unknown) => {
+  const x = valorDe(leerNumero(a)), y = valorDe(leerNumero(b));
+  return x != null || y != null ? x === y : String(a ?? "").trim() === String(b ?? "").trim();
+};
 
 /** Las dos preguntas de la emergencia. Cada «Sí» fija su hora con el toque. */
 function vPregunta(o: Any, pregunta: string, ayuda: string, si: string, accionSi: string, accionNo: string) {
@@ -1758,15 +1792,17 @@ function vHoja() {
       // Una orden que ya no se puede trabajar no se ofrece abrir: la ayuda no pide abrirla, dice por qué.
       const abrible = (x: Any) => (x.ordenId && !PERDIDA[x.motivo] ? ordenDe(Number(x.ordenId)) : null);
       const perdidas = new Set(lista.filter((x) => x.texto && x.ordenId && !abrible(x)).map((x) => x.motivo ?? ""));
-      const ayuda = !volvio ? "Tu jefatura puede verlos. Si hace falta, repite el trabajo o pide ayuda."
+      const ayuda = !volvio ? (lista.some((x) => abrible(x) && pasoCambiado(x.error) !== null) ? "«Abrir la orden» te lleva al paso que cambió en la ficha." : "Tu jefatura puede verlos. Si hace falta, repite el trabajo o pide ayuda.")
         : lista.some(abrible) ? "Lo que escribiste volvió a su orden: ábrela, corrige y envíala otra vez."
         : perdidas.size ? (perdidas.size === 1 ? PERDIDA[[...perdidas][0]] : null) ?? PERDIDA.otro
         : "Lo que escribiste volvió a donde lo escribiste: corrígelo y envíalo otra vez.";
       const filas = lista.map((x) => {
         const abierta = abrible(x);
+        // K17 y K19 · Desde un paso que cambió en la ficha, la orden se abre en ese paso.
+        const paso = abierta ? pasoCambiado(x.error) : null;
         return `<div class="fila"><span class="txt"><strong>${esc(x.que)}</strong><small>${esc([x.accion, x.error].filter(Boolean).join(": "))}</small>`
           + (x.texto ? `<small class="recorte">Lo que escribiste: «${esc(corto(x.texto, 160))}»</small>` : "")
-          + (abierta ? `<button class="link" data-a="ir" data-h="#orden-${abierta.id}">Abrir la orden</button>` : "")
+          + (abierta ? `<button class="link" data-a="ir" data-h="#orden-${abierta.id}"${paso !== null ? ` data-paso="${paso}"` : ""}>Abrir la orden</button>` : "")
           + `</span></div>`;
       }).join("");
       return `<div class="hoja-caja"><span class="etq">Sin aceptar</span><h2>El servidor no aceptó ${lista.length === 1 ? "este registro" : "estos registros"}</h2>`
@@ -1897,6 +1933,16 @@ function vHoja() {
   return "";
 }
 
+/**
+ * K17 y K19 · El primer paso que cambió en la ficha según la frase del rechazo (su índice), o null: «El paso 3
+ * cambió…», «La acción 3…» o «La orden no se envió: los pasos 2 y 3 cambiaron…». La frase sale de src/lib/campo.ts.
+ */
+const pasoCambiado = (error: unknown): number | null => {
+  const m = /(?:paso|acci[oó]n)(?:s|es)? (\d+)(?:, \d+)*(?: y \d+)? cambi(?:ó|aron) en la ficha mientras tanto/.exec(String(error ?? ""));
+  return m ? Number(m[1]) - 1 : null;
+};
+/** La orden que «Abrir la orden» lleva al paso que cambió: se abre en ese paso, no en el primero pendiente. */
+let irAlPaso: { hash: string; i: number } | null = null;
 /** Por qué ya no se puede trabajar la orden de un registro sin aceptar, como lo dice «Ver por qué». */
 const PERDIDA: Record<string, string> = {
   reasignada: "Esta orden ya no está a tu nombre: lo que escribiste queda aquí para tu jefatura.",
@@ -2095,10 +2141,12 @@ function abrirFalla(tipo: "emergencia.abrir" | "correctivo.abrir", datos: Record
 }
 /** Nunca decir que la jefatura ya lo ve si no hay señal. */
 const queVeLaJefatura = () => (E.enLinea ? "Tu jefatura ya lo ve." : "Tu jefatura no lo ve hasta que vuelva la señal; si es urgente, avísale por radio.");
+/** La lectura fuera de rango de la hoja del problema, por la clave del campo de su paso: vuelve ahí si la marca no entra. */
+const lecturaEscrita = (f: Flujo, valor: unknown) => (valor != null && valor !== "" ? { [`lect:${f.ordenId}:${f.i}`]: comoTexto(valor) } : {});
 /** Un punto crítico con novedad, o un equipo que no vuelve a servicio, detienen la secuencia: los pasos que siguen ya no aplican. */
 function detenerOrden(o: Any, nota: string, valor: unknown, escrito = "") {
   const f = E.flujo as Flujo;
-  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor != null && valor !== "" ? { valor } : {}), ...antesDe(o.pasos[f.i]), ...accionesMostradas(o), ...conTexto({ [`problema:${o.id}:${f.i}`]: escrito }) });
+  void despachar({ tipo: "orden.paso", ordenId: o.id, idx: f.i, texto: o.pasos[f.i].texto, estado: "desviacion", nota, ...(valor != null && valor !== "" ? { valor } : {}), ...antesDe(o.pasos[f.i]), ...accionesMostradas(o), ...conTexto({ [`problema:${o.id}:${f.i}`]: escrito, ...lecturaEscrita(f, valor) }) });
   void despachar({ tipo: "orden.pausar", ordenId: o.id, motivo: `Detenida: ${nota}`.slice(0, 300) });
   olvidar((k) => k === `lect:${o.id}:${f.i}`);
   zumbar();
@@ -2121,7 +2169,10 @@ function notaDeProblema(): string | null {
 
 // ── Acciones ────────────────────────────────────────────────────────────────
 const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
-  ir(d) { if (d.h) ir(d.h); },
+  ir(d) {
+    irAlPaso = d.h && d.paso !== undefined ? { hash: d.h, i: Number(d.paso) } : null;
+    if (d.h) ir(d.h);
+  },
   reintentar() { E.cargando = true; pintar(); void refrescarHoy(); },
   sync() { abrirHoja({ tipo: "sync" }); },
   enviarAhora() { E.sesionVencida = false; esperaMs = 5000; cerrarHoja(); void drenar(); },
@@ -2324,7 +2375,8 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const f = E.flujo as Flujo;
     const escrito = $<HTMLTextAreaElement>("#nota-problema")?.value ?? "";
     olvidarHoja();
-    marcarPaso("desviacion", { nota: final, ...(h.valor != null && h.valor !== "" ? { valor: h.valor } : {}) }, { [`problema:${f.ordenId}:${f.i}`]: escrito });
+    // La lectura fuera de rango también vuelve a su campo si el servidor no acepta la marca.
+    marcarPaso("desviacion", { nota: final, ...(h.valor != null && h.valor !== "" ? { valor: h.valor } : {}) }, { [`problema:${f.ordenId}:${f.i}`]: escrito, ...lecturaEscrita(f, h.valor) });
   },
   problemaCorrectivo() {
     const final = notaDeProblema();

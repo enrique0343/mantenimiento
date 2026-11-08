@@ -29,6 +29,11 @@
 // «Hecho» en una acción con lectura lleva el número; la desviación de otro día dice su fecha; la orden que se canceló
 // después de «Ver por qué» ya no se ofrece; el paso con lectura que no aplica no la pide; y «Te la devolvieron» en
 // «Ahora» lleno, en un solo párrafo.
+// Sexta ronda: el envío en la cola detrás de una marca que no entró porque el paso cambió en la ficha tampoco sale (K19);
+// «Ver por qué» ofrece abrirla y la abre en el paso que cambió, como quedó, con lo que el técnico escribió de vuelta en su
+// hoja y su campo; un paso ya marcado dice su estado y su nota sin «Anotaste»; dos marcas sin señal en el mismo paso; la
+// orden que «Ver por qué» dejó en el celular, renovada o abierta; la desviación de las 20:00 que en UTC ya es mañana; la
+// lectura en rango que corrige una desviación con lectura; y la pausa devuelta con su punto.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -899,7 +904,8 @@ try {
   await clic('cerrarHoja');
   ok(!hoja() && /Sin señal · 6 por enviar/.test(pill()), 'Cancelar no se lleva la foto de la lectura ya anotada: ' + pill());
   await clic('anterior');
-  ok(/Paso 2 de 3/.test(texto()) && /Anotaste: Filtro roto/.test(texto()), texto().slice(0, 160));
+  // Un paso ya marcado dice cómo está guardado, con su estado y su nota, sin «Anotaste».
+  ok(/Paso 2 de 3/.test(texto()) && texto().includes('Ya está marcado: Hay un problema. Nota: Filtro roto') && !/Anotaste/.test(texto()), texto().slice(0, 160));
   await clic('problema');
   await fotoEn('#foto-problema');
   ok(/Sin señal · 7 por enviar/.test(pill()), 'Una foto nueva en esta hoja: ' + pill());
@@ -1362,10 +1368,9 @@ try {
   anotar('rechazo de un paso que cambió en la ficha');
   await hasta(() => hoja().includes('El paso 1 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.') && doc.querySelector('#hoja [data-a="ir"][data-h="#orden-530"]'), '«Ver por qué» dice la frase y ofrece abrir la orden');
   doc.querySelector('#hoja [data-a="ir"][data-h="#orden-530"]').click(); await espera();
-  ok(/Paso 2 de 3/.test(texto()), 'La orden se abre en lo que falta: ' + texto().slice(0, 160));
-  await clic('anterior');
   anotar('el paso como lo tiene el servidor');
-  ok(/Paso 1 de 3/.test(texto()) && texto().includes(`Anotaste: ${NOTA_JEFA}`), 'El paso 1, como lo tiene el servidor: ' + texto().slice(0, 200));
+  // K19 · No en lo que falta (el paso 2): en el paso que cambió, como lo tiene el servidor, sin «Anotaste».
+  ok(/Paso 1 de 3/.test(texto()) && texto().includes(`Ya está marcado: Hay un problema. Nota: ${NOTA_JEFA}`) && !/Anotaste/.test(texto()), 'La orden se abre en el paso que cambió, como lo tiene el servidor: ' + texto().slice(0, 200));
   // Lo revisa y deja la orden en espera: la marca sale con el paso como se ve ahora y se aplica.
   await clic('problema');
   escribir('#nota-problema', 'Falta el candado: no se puede bloquear el tablero');
@@ -1377,6 +1382,184 @@ try {
   await clic('verRechazos');
   await clic('limpiarRechazos');
   sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=530");
+
+  // ══ K19 · Sin señal, el técnico anota «Hay un problema» en el paso 2 y una lectura fuera de rango en el 3, y envía a
+  // verificación; mientras tanto la jefatura marca «ok» el paso 2 en la ficha. Al volver la señal no entran ni la marca
+  // ni el envío: la orden sigue en curso. «Ver por qué» lo dice y ofrece abrirla; abierta, va al paso que cambió, como
+  // quedó en el servidor, y el técnico lo vuelve a marcar con lo que escribió y la envía ══
+  ahora = enSV('12:27');
+  orden(531, 'preventivo', '[Preventivo] Bimestral - CH-83', 83, 'aires', CHECKLIST);
+  await abrir('https://test.invalid/campo#orden-531');
+  await hasta(() => /3 pasos/.test(texto()), 'el preventivo 531');
+  await clic('empezar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=531').estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+  enLinea = false; w.dispatchEvent(new w.Event('offline'));
+  await clic('hecho');
+  await clic('problema');
+  const PROBLEMA_531 = 'Los filtros están rotos: hay que cambiarlos';
+  escribir('#nota-problema', PROBLEMA_531);
+  await clic('problemaSeguir');
+  escribir('#lectura', '15');
+  await clic('lectura');
+  escribir('#nota-problema', 'Corriente alta: el compresor calienta');
+  await clic('problemaSeguir');
+  await clic('verNota');
+  const FIN_531 = 'Revisé el chiller y medí la corriente del compresor.';
+  escribir('#nota-fin', FIN_531);
+  await clic('enviar');
+  ok(/Guardado en tu celular/.test(texto()), texto().slice(0, 120));
+  const base531 = one('SELECT checklist_ejecucion c FROM ordenes WHERE id=531').c;
+  const ficha531 = await app.order.PATCH(ctx('/api/ordenes/531', { method: 'PATCH', id: 531, rol: 'jefe', data: { checklistEjecucion: JSON.stringify(JSON.parse(base531).map((x, i) => (i === 1 ? { ...x, estado: 'ok' } : x))), checklistBase: base531, soloCambios: true } }));
+  igual(ficha531.status, 200, 'La jefatura marca «ok» el paso 2 en la ficha');
+  enLinea = true; w.dispatchEvent(new w.Event('online'));
+  await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=531 AND resultado='rechazada'").n === 2 && !enVuelo && !/Enviando/.test(pill()), 'el servidor no acepta la marca ni el envío');
+  const paso531 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=531').c)[i];
+  ok(one('SELECT estado FROM ordenes WHERE id=531').estado === 'en_proceso' && paso531(1).estado === 'ok' && paso531(2).estado === 'desviacion' && paso531(2).valorMedido === 15, 'La orden sigue en curso, con el paso 2 como lo dejó la jefatura: ' + JSON.stringify([paso531(1), paso531(2)]));
+  igual(one("SELECT detalle d FROM campo_operaciones WHERE orden_id=531 AND tipo='orden.terminar'").d, 'La orden no se envió: el paso 2 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.', 'El envío dice qué paso revisar');
+  await clic('ir', '[data-h="#hoy"]');
+  await hasta(() => /2 registros sin aceptar/.test(texto()), 'Hoy avisa');
+  await clic('verRechazos');
+  await hasta(() => doc.querySelectorAll('#hoja [data-a="ir"][data-h="#orden-531"][data-paso="1"]').length === 2, '«Ver por qué» ofrece abrir la orden en el paso que cambió, en los dos registros');
+  anotar('rechazos de un envío con un paso que cambió en la ficha');
+  ok(hoja().includes('Enviar a verificación: La orden no se envió: el paso 2 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.') && hoja().includes('Paso 2: El paso 2 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.'), 'Dice los dos rechazos: ' + hoja().slice(0, 400));
+  ok(hoja().includes(`«${PROBLEMA_531}»`) && hoja().includes(`«${FIN_531}»`) && /Lo que escribiste volvió a su orden: ábrela, corrige y envíala otra vez\./.test(hoja()), 'Con lo que escribió, de vuelta en su orden: ' + hoja().slice(0, 400));
+  ok(!/ya no se puede trabajar|ya no está a tu nombre|se canceló/.test(hoja()), 'Sin decir que la orden ya no se puede trabajar: ' + hoja().slice(0, 400));
+  doc.querySelector('#hoja [data-a="ir"][data-h="#orden-531"][data-paso="1"]').click(); await espera();
+  anotar('el paso que cambió, como quedó en el servidor');
+  ok(/Paso 2 de 3/.test(texto()) && texto().includes('Ya está marcado: Hecho.') && !/Anotaste/.test(texto()), 'Abre en el paso que cambió, como quedó: ' + texto().slice(0, 200));
+  // La línea se recorta a tres líneas; al tocarla se ve entera, dentro de su caja.
+  await clic('verTodo', '.marcado');
+  ok(doc.querySelector('.paso-cuerpo .marcado.recorte.entero') && (await fs.readFile('src/campo/campo.css', 'utf8')).includes('.paso-cuerpo .marcado.entero{display:block;-webkit-line-clamp:none'), 'Al tocarla, la línea se ve entera');
+  await clic('problema');
+  igual(doc.querySelector('#nota-problema')?.value, PROBLEMA_531, 'Lo que escribió vuelve a su hoja');
+  await clic('problemaSeguir');
+  ok(/3 de 3 pasos anotados/.test(texto()) && doc.querySelector('#nota-fin')?.value === FIN_531, 'Sigue al cierre, con su nota: ' + texto().slice(0, 160));
+  await clic('enviar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=531').estado === 'completada', 'marcado otra vez, la orden se envía');
+  igual(JSON.stringify(enviados.filter((op) => op.tipo === 'orden.paso' && op.ordenId === 531 && op.idx === 1).at(-1)?.antes), JSON.stringify({ estado: 'ok', valor: null, nota: null }), 'La marca sale con el paso como lo dejó la ficha');
+  const trabajos531 = one('SELECT trabajos_realizados t FROM ordenes WHERE id=531').t;
+  ok(paso531(1).estado === 'desviacion' && paso531(1).notas === PROBLEMA_531 && trabajos531.includes('2 con novedad') && trabajos531.includes(`Novedad en «Limpiar filtros»: ${PROBLEMA_531}.`) && trabajos531.includes('Medir corriente: 15 A') && trabajos531.includes(FIN_531), 'Con el problema y la lectura del técnico: ' + trabajos531);
+  await clic('ir', '[data-h="#hoy"]');
+  await clic('verRechazos');
+  await clic('limpiarRechazos');
+
+  // ══ K19 · La lectura fuera de rango de una marca que no entró vuelve a su campo, y el paso dice la que quedó guardada ══
+  ahora = enSV('12:27');
+  orden(536, 'preventivo', '[Preventivo] Cuatrimestral - CH-83', 83, 'aires', CHECKLIST);
+  await abrir('https://test.invalid/campo#orden-536');
+  await hasta(() => /3 pasos/.test(texto()), 'el preventivo 536');
+  await clic('empezar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=536').estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+  enLinea = false; w.dispatchEvent(new w.Event('offline'));
+  await clic('hecho'); await clic('hecho');
+  escribir('#lectura', '15');
+  await clic('lectura');
+  escribir('#nota-problema', 'Corriente alta: el compresor calienta');
+  await clic('problemaSeguir');
+  const paso536 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=536').c)[i];
+  const base536 = one('SELECT checklist_ejecucion c FROM ordenes WHERE id=536').c;
+  igual((await app.order.PATCH(ctx('/api/ordenes/536', { method: 'PATCH', id: 536, rol: 'jefe', data: { checklistEjecucion: JSON.stringify(JSON.parse(base536).map((x, i) => (i === 2 ? { ...x, estado: 'ok', valorMedido: 10 } : x))), checklistBase: base536, soloCambios: true } }))).status, 200, 'La jefatura anota 10 A en la ficha');
+  enLinea = true; w.dispatchEvent(new w.Event('online'));
+  await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=536 AND resultado='rechazada'").n === 1 && !enVuelo && !/Enviando/.test(pill()), 'la lectura no entra');
+  // Mientras tanto la jefatura la deja en espera: abierta desde «Ver por qué», primero la pausa; al reanudar, el paso que cambió.
+  igual((await app.order.PATCH(ctx('/api/ordenes/536', { method: 'PATCH', id: 536, rol: 'jefe', data: { estado: 'en_espera', motivo: 'Esperando el repuesto' } }))).status, 200, 'La jefatura la deja en espera');
+  w.dispatchEvent(new w.Event('online'));
+  for (let i = 0; i < 100 && (await leerGuardado('hoy:3'))?.ordenes?.find((o) => o.id === 536)?.estado !== 'en_espera'; i++) await espera(20);
+  await espera(60);
+  await clic('ir', '[data-h="#hoy"]');
+  await clic('verRechazos');
+  await hasta(() => doc.querySelector('#hoja [data-a="ir"][data-h="#orden-536"][data-paso="2"]'), 'ofrece abrirla en el paso 3');
+  doc.querySelector('#hoja [data-a="ir"][data-h="#orden-536"][data-paso="2"]').click(); await espera();
+  ok(/En pausa/.test(texto()) && doc.querySelector('[data-a="reanudar"]'), 'En espera: primero la pausa: ' + texto().slice(0, 160));
+  await clic('reanudar');
+  anotar('la lectura que no entró, de vuelta en su campo');
+  ok(/Paso 3 de 3/.test(texto()) && doc.querySelector('#lectura')?.value === '15' && texto().includes('Ya está marcado: Hecho, con 10 A.'), 'Su lectura en el campo y la guardada en la línea: ' + texto().slice(0, 240));
+  await clic('lectura');
+  igual(doc.querySelector('#nota-problema')?.value, 'Corriente alta: el compresor calienta', 'Y su nota, en la hoja');
+  await clic('problemaSeguir');
+  await hasta(() => paso536(2)?.estado === 'desviacion' && paso536(2).valorMedido === 15, 'su lectura entra con el paso como se ve ahora');
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /1 registro sin aceptar/.test(texto()), 'Hoy');
+  await clic('verRechazos');
+  await clic('limpiarRechazos');
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id IN (531, 536)");
+
+  // ══ P24 · Dos marcas sin señal en el mismo paso: la segunda sale con el paso como lo dejó la primera, y entra ══
+  orden(532, 'preventivo', '[Preventivo] Quincenal - CH-83', 83, 'aires', CHECKLIST);
+  await abrir('https://test.invalid/campo#orden-532');
+  await hasta(() => /3 pasos/.test(texto()), 'el preventivo 532');
+  await clic('empezar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=532').estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+  enLinea = false; w.dispatchEvent(new w.Event('offline'));
+  await clic('hecho'); await clic('hecho');
+  await clic('anterior');
+  ok(/Paso 2 de 3/.test(texto()) && texto().includes('Ya está marcado: Hecho.'), 'De vuelta en el paso 2, dice cómo está: ' + texto().slice(0, 160));
+  await clic('na');
+  enLinea = true; w.dispatchEvent(new w.Event('online'));
+  await hasta(() => one('SELECT COUNT(*) n FROM orden_paso_marcas WHERE orden_id=532 AND paso_idx=1').n === 2 && !enVuelo, 'las dos marcas llegan');
+  // Lo que no cupo en una vuelta sale otra vez en la siguiente: cada operación, una vez.
+  const dos532 = [...new Map(enviados.filter((op) => op.tipo === 'orden.paso' && op.ordenId === 532 && op.idx === 1).map((op) => [op.opId, op.antes])).values()];
+  igual(JSON.stringify(dos532), JSON.stringify([{ estado: 'pendiente', valor: null, nota: null }, { estado: 'ok', valor: null, nota: null }]), 'La segunda lleva el paso como lo dejó la primera, que todavía no salía');
+  ok(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=532').c)[1].estado === 'na' && one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=532 AND resultado='rechazada'").n === 0, 'Y entra: el paso queda «No aplica», sin rechazos');
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=532");
+
+  // ══ P16 · Un paso con «Hay un problema» y su lectura fuera de rango que recibe otra en rango vuelve a «ok» ══
+  orden(533, 'preventivo', '[Preventivo] Semanal - CH-83', 83, 'aires', JSON.stringify([{ texto: 'Medir corriente', requiereValor: true, unidad: 'A', esperadoMin: 8, esperadoMax: 12, estado: 'pendiente' }]));
+  await abrir('https://test.invalid/campo#orden-533');
+  await hasta(() => /1 pasos/.test(texto()), 'el preventivo 533');
+  await clic('empezar');
+  escribir('#lectura', '15');
+  await clic('lectura');
+  escribir('#nota-problema', 'Corriente alta: el compresor calienta');
+  await clic('problemaSeguir');
+  ok(/1 de 1 pasos anotados/.test(texto()) && /1 con novedad/.test(texto()), texto().slice(0, 160));
+  await clic('anterior');
+  ok(texto().includes('Ya está marcado: Hay un problema. Nota: Corriente alta: el compresor calienta'), 'El paso dice cómo está: ' + texto().slice(0, 200));
+  escribir('#lectura', '10');
+  await clic('lectura');
+  ok(/1 de 1 pasos anotados/.test(texto()) && /sin novedad/.test(texto()), 'Con la lectura en rango, vuelve a «ok»: ' + texto().slice(0, 200));
+  await hasta(() => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=533').c)[0].valorMedido === 10, 'llega al servidor');
+  igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=533').c)[0].estado, 'ok', 'En el servidor también');
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=533");
+
+  // ══ P10 · La orden en curso que «Ver por qué» dejó en el celular: si cambia en el servidor, al bajar el día la copia se
+  // renueva (535); si la jefatura la cancela mientras el técnico la tiene abierta, su copia se queda mientras la tenga
+  // abierta (534) ══
+  for (const id of [535, 534]) {
+    ahora = enSV('12:27');
+    orden(id, 'preventivo', '[Preventivo] Semestral - CH-83', 83, 'aires', CHECKLIST);
+    await abrir(`https://test.invalid/campo#orden-${id}`);
+    await hasta(() => /3 pasos/.test(texto()), `el preventivo ${id}`);
+    await clic('empezar');
+    await hasta(() => one('SELECT estado FROM ordenes WHERE id=?', id).estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+    enLinea = false; w.dispatchEvent(new w.Event('offline'));
+    await clic('hecho');
+    sqlite.exec(`UPDATE ordenes SET asignado_a=NULL WHERE id=${id}`);
+    enLinea = true; w.dispatchEvent(new w.Event('online'));
+    await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=? AND resultado='rechazada'", id).n === 1 && pedidasDe[String(id)] >= 1, 'el servidor no acepta lo anotado y el celular pregunta por qué');
+    await hasta(() => !enVuelo && !/Enviando/.test(pill()), 'todo llega');
+    ok(await copiaTrae(id), `(${id}) Sigue en curso: queda en el celular`);
+    const pedidas = pedidasDe[String(id)];
+    if (id === 535) {
+      const l = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=535').c);
+      l[1] = { ...l[1], estado: 'na', notas: 'No aplica: filtros nuevos.' };
+      sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=535').run(JSON.stringify(l));
+      await abrir('https://test.invalid/campo#hoy');
+    } else {
+      sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=534");
+      await abrir('https://test.invalid/campo#orden-534');
+    }
+    await hasta(() => pedidasDe[String(id)] > pedidas, `(${id}) al bajar el día, la pide otra vez`);
+    await hasta(() => !enVuelo, 'llega la respuesta');
+    await espera(60);
+    const copia = [...(await leerGuardado('hoy:3')).ordenes, ...(await leerGuardado('hoy:3')).libres].find((o) => o.id === id);
+    if (id === 535) ok(copia?.pasos?.[1]?.estado === 'na' && copia.pasos[1].nota === 'No aplica: filtros nuevos.', '(535) La copia se renueva con lo que tiene el servidor: ' + JSON.stringify(copia?.pasos?.[1]));
+    else ok(copia && /Paso 1 de 3/.test(texto()), '(534) La tiene abierta: su copia se queda y la orden sigue en pantalla: ' + texto().slice(0, 120));
+    if (id === 534) await clic('salir');
+    await clic('verRechazos');
+    await clic('limpiarRechazos');
+    sqlite.exec(`UPDATE ordenes SET estado='cancelada' WHERE id=${id}`);
+  }
 
   // ══ P12 · Un paso con lectura que no aplica no la pide al enviar ══
   orden(522, 'preventivo', '[Preventivo] Mensual - PE-01', 81, 'infraestructura', JSON.stringify([
@@ -1398,7 +1581,10 @@ try {
   await abrir('https://test.invalid/campo#orden-612');
   await hasta(() => doc.querySelector('[data-a="llegue"]'), 'la emergencia 612');
   await clic('llegue');
-  await clic('hecho'); await clic('hecho');
+  await clic('hecho');
+  await clic('nopudo');
+  escribir('#nota-nopudo', 'El chiller no tiene energía');
+  await clic('nopudoSeguir');
   ok(/Acción 3 de 3/.test(texto()) && doc.querySelector('#lectura') && doc.querySelector('.paso-pie [data-a="hecho"]'), 'La acción que pide lectura, con «Hecho»: ' + texto().slice(0, 160));
   const pasos612 = () => enviados.filter((op) => op.tipo === 'orden.paso' && op.ordenId === 612 && op.idx === 2).length;
   await clic('hecho');
@@ -1410,6 +1596,10 @@ try {
   const accion612 = enviados.find((op) => op.tipo === 'orden.paso' && op.ordenId === 612 && op.idx === 2);
   ok(accion612.estado === 'ok' && accion612.valor === 10.5, '«Hecho» llevó el número escrito: ' + JSON.stringify(accion612));
   await hasta(() => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=612').c)[2].valorMedido === 10.5, 'y el servidor lo guarda');
+  // De vuelta en una acción ya marcada, dice cómo está: «No se pudo» y su motivo, sin «Anotaste».
+  await clic('anterior'); await clic('anterior');
+  anotar('una acción que no se pudo, al volver');
+  ok(/Acción 2 de 3/.test(texto()) && texto().includes('Ya está marcada: No se pudo. Nota: El chiller no tiene energía') && !/Anotaste/.test(texto()), 'La acción dice cómo está: ' + texto().slice(0, 200));
   sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=612");
 
   // ══ El valor medido de una desviación es un número: «1,200» no sale (el servidor no abriría la
@@ -1603,6 +1793,8 @@ try {
     desviaciones: [
       { id: 9901, codigo: 'AOP-HVAC-01', titulo: 'Temperatura fuera de rango', estado: 'abierto', sala: 'Quirófano 2', escalarAntesDe: iso(enSV('01:30', d7)) },
       { id: 9902, codigo: 'AOP-GEN-01', titulo: 'Combustible bajo', estado: 'abierto', sala: 'Cuarto de máquinas', escalarAntesDe: iso(enSV('01:43', d8)) },
+      // A las 20:00 de El Salvador ya es otro día en UTC: sigue siendo de hoy.
+      { id: 9903, codigo: 'AOP-AGU-01', titulo: 'Presión de agua baja', estado: 'abierto', sala: 'Cisterna', escalarAntesDe: iso(enSV('20:00', d7)) },
     ],
     ordenes: [...p.ordenes, emergencia690],
   }));
@@ -1615,6 +1807,7 @@ try {
   await clic('grupo', '[data-g="aop"]');
   ok(/Escalar antes de la 01:30(?! del)/.test(texto()), '«Escalar antes de la 01:30»: ' + texto().slice(0, 400));
   ok(texto().includes(`Escalar antes de la 01:43 del ${d8.slice(8, 10)}/${d8.slice(5, 7)}/${d8.slice(0, 4)}`), 'La de mañana, con su fecha: ' + texto().slice(0, 500));
+  ok(/Escalar antes de las 20:00(?! del)/.test(texto()), 'La de hoy a las 20:00, sin fecha aunque en UTC ya sea mañana: ' + texto().slice(0, 600));
   anotar('desviaciones de la 01:10');
   // P17 · Con «Te la devolvieron» y otra emergencia debajo, dónde va y por qué se la devolvieron van en un solo párrafo
   // de dos líneas como máximo, sin «Sigues justo donde quedaste»: «Ahora» lleno cabe en 360×640 (medido en Chrome;
@@ -1628,6 +1821,24 @@ try {
   igual(doc.querySelector('.ahora p.recorte.dos')?.textContent, `Acción 1 de 1. Te la devolvieron: ${DEVUELTA}`, 'Dónde va y por qué se la devolvieron, en un solo párrafo');
   ok(!/Sigues justo donde quedaste/.test(bloque()), 'Sin «Sigues justo donde quedaste»: ' + bloque());
   ok(/\.ahora \.recorte\.dos\{-webkit-line-clamp:2;line-clamp:2\}/.test(await fs.readFile('src/campo/campo.css', 'utf8')), 'En dos líneas como máximo');
+  // P23 · «Ahora» lleno con el aviso de registros sin aceptar arriba también cabe en una pantalla baja sin desplazar, con
+  // «Seguir» y la ronda a la vista (medido en Chrome 360×640; 390×844 en Chrome y WebKit): el aviso en una franja de 44 px,
+  // los botones en 52 y 44 px y el saludo deja su lugar. La misma letra.
+  ok(doc.querySelector('.ahora.lleno') && !doc.querySelector('.hoy-cab.compacta'), '«Ahora» lleno, sin aviso: el saludo se queda');
+  await cambiarGuardado('rechazos:3', () => [{ que: 'OT-MG0001 · Chiller del edificio', accion: 'Paso 2', error: 'El paso 2 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.', at: iso(ahora), ordenId: null }]);
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /1 registro sin aceptar/.test(texto()) && doc.querySelector('.ahora.lleno'), 'el aviso arriba de «Ahora» lleno');
+  anotar('«Ahora» lleno con el aviso arriba');
+  ok(doc.querySelector('.hoy-cab.compacta') && doc.querySelector('.ahora .b1') && doc.querySelector('.ahora [data-a="ronda"]'), 'Con el aviso, el saludo deja su lugar; «Seguir» y la ronda siguen ahí');
+  const cssBaja = (await fs.readFile('src/campo/campo.css', 'utf8')).split('@media(max-height:700px)')[1] ?? '';
+  ok(['.avisito{padding-top:0;padding-bottom:0;min-height:44px}', '.ahora.lleno{gap:4px;padding-top:10px;padding-bottom:10px}', '.ahora.lleno .b1{min-height:52px;margin-top:2px}', '.ahora.lleno .b2{min-height:44px}', '.hoy-cab.compacta h1{display:none}', '.hoy-cab.compacta .etq{display:block}'].every((r) => cssBaja.includes(r)), 'En una pantalla baja, «Ahora» lleno se compacta');
+  await cambiarGuardado('rechazos:3', () => []);
+  // P22 · En pausa y devuelta: dónde va termina con su punto antes de «Te la devolvieron».
+  await cambiarGuardado('hoy:3', (p) => ({ ...p, ordenes: p.ordenes.filter((o) => o.id !== 692).map((o) => (o.id === 690 ? { ...o, estado: 'en_espera', motivoPausa: 'Me pasaron a otra urgencia', devuelta: DEVUELTA } : o)) }));
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /En pausa/.test(bloque()), 'la emergencia en pausa y devuelta');
+  anotar('emergencia en pausa y devuelta');
+  igual(doc.querySelector('.ahora p.recorte')?.textContent, `En pausa: Me pasaron a otra urgencia. Te la devolvieron: ${DEVUELTA}`, 'Con su punto antes de «Te la devolvieron»');
   await cambiarGuardado('hoy:3', (p) => ({ ...p, ordenes: p.ordenes.filter((o) => o.id !== 692).map((o) => (o.id === 690 ? { ...o, devuelta: null } : o)) }));
   // Una orden que el técnico empezó en este turno: la ronda también queda a la vista.
   await cambiarGuardado('hoy:3', (p) => ({ ...p, ordenes: [...p.ordenes.filter((o) => o.id !== 690), { id: 691, tipo: 'preventivo', modo: 'pasos', estado: 'en_proceso', titulo: '[Preventivo] Mensual - PE-01', asignadoA: 3, iniciadaEn: iso(enSV('01:05', d7)), activo: { id: 81, codigo: 'PE-01', nombre: 'Planta eléctrica de emergencia' }, lugar: { sede: 'Sede 14', ubicacion: 'Cuarto de máquinas' }, pasos: [{ idx: 0, texto: 'Revisar el nivel de aceite', estado: 'pendiente' }] }] }));
@@ -1673,6 +1884,6 @@ try {
     ok(horasDeInicio.every((h) => !v.t.includes(h)), `${v.donde}: una hora de inicio a la vista`);
     ok(v.fichas.every((h) => h.includes('?completa=1')), `${v.donde}: un enlace a la ficha completa: ${v.fichas}`);
   }
-  console.log(`PASS e2e-campo-emergencia: ${checks} verificaciones; emergencia sin señal y luego con señal, intervención con permiso, lectura fuera de rango y reversa, borrador que sobrevive a recargar; MOP-MSP-01 real con un permiso a la vista, lectura con rango que pide su número y cierre resumido; emergencias en «Ahora» con sus líneas y su «Vence»; emergencia sin documento al instante y por detrás, sin saltos y con límite; «acciones» en orden.iniciar; envío rechazado que devuelve el texto; foto de hoja cancelada que no sale y la de lo anotado que sí; orden reasignada nombrada igual y la cancelada o cerrada dicha como tal; números que no se adivinan y que vuelven al campo sin leerse de dos formas; paso con rango que pide su número; varias emergencias en el orden de «Ahora», con sus grupos abiertos; foto que se reduce mientras se anota, se cancela o se envía; hoja de la desviación con su documento en su caja; lo que llega por detrás sin saltos; orden libre que pasa a ser del técnico; cambio de turnos, «omite» y «noHaceRondaDesde» sin señal; la hora con su artículo; rangos con tres decimales; la emergencia de fecha sola; lecturas que faltan antes de enviar; la orden en curso que el día ya no trae; la marca que no pisa un paso cambiado en la ficha; ${vistas.length} pantallas sin tiempos.`);
+  console.log(`PASS e2e-campo-emergencia: ${checks} verificaciones; emergencia sin señal y luego con señal, intervención con permiso, lectura fuera de rango y reversa, borrador que sobrevive a recargar; MOP-MSP-01 real con un permiso a la vista, lectura con rango que pide su número y cierre resumido; emergencias en «Ahora» con sus líneas y su «Vence»; emergencia sin documento al instante y por detrás, sin saltos y con límite; «acciones» en orden.iniciar; envío rechazado que devuelve el texto; foto de hoja cancelada que no sale y la de lo anotado que sí; orden reasignada nombrada igual y la cancelada o cerrada dicha como tal; números que no se adivinan y que vuelven al campo sin leerse de dos formas; paso con rango que pide su número; varias emergencias en el orden de «Ahora», con sus grupos abiertos; foto que se reduce mientras se anota, se cancela o se envía; hoja de la desviación con su documento en su caja; lo que llega por detrás sin saltos; orden libre que pasa a ser del técnico; cambio de turnos, «omite» y «noHaceRondaDesde» sin señal; la hora con su artículo; rangos con tres decimales; la emergencia de fecha sola; lecturas que faltan antes de enviar; la orden en curso que el día ya no trae; la marca que no pisa un paso cambiado en la ficha y el envío que la espera; ${vistas.length} pantallas sin tiempos.`);
 } finally { for (const id of [...retenidas.keys()]) soltar(id); await cerrarPagina().catch(() => {}); await close(); globalThis.Date = RealDate; }
 process.exit(0);

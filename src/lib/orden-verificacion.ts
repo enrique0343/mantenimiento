@@ -148,23 +148,33 @@ function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRa
 const MENSAJE_PASO_CAMBIO = 'Un paso del checklist cambió mientras tanto. Revísalo y vuelve a enviar.';
 /** Un punto ya marcado: con estado y con la hora o las iniciales de quien lo marcó. */
 const puntoMarcado = (p: Record<string, unknown> | null) => !!p && p.estado !== 'pendiente' && (!!p.hora || !!p.iniciales);
+/** Quien manda el punto lo vio marcado: llega con la hora, o con las iniciales y no pendiente. Las iniciales solas de un pendiente no cuentan. */
+const vioMarcado = (p: Record<string, unknown>) => !!p.hora || (!!p.iniciales && p.estado !== 'pendiente');
 /**
  * Sin base (la pestaña de producción, o el celular sin `antes`): un punto
- * guardado ya marcado no se pisa con uno que llega sin hora y sin iniciales, en
- * cualquier estado (K18): quien lo manda no lo vio marcado, y queda entero como
- * está guardado. El que llega con la hora o las iniciales (la pestaña lo vio
- * marcado o lo marca el celular) y los demás puntos, como llegaron. Devuelve el
- * checklist con lo conservado, o undefined si no hubo que conservar nada.
+ * guardado ya marcado no se pisa con uno que llega sin haberlo visto marcado
+ * (K18). Queda como está guardado, con dos excepciones: una desviación que llega
+ * sobre un punto que no está en desviación se aplica como llegó, con la lectura
+ * guardada si no trae otra (la desviación siempre queda); y la nota que llega se
+ * agrega al guardado que no tiene nota. El que lo vio marcado (o lo marca el
+ * celular) y los demás puntos, como llegaron. Devuelve el checklist con lo
+ * conservado, o undefined si no hubo que conservar nada.
  */
 function conservarMarcados(guardadoRaw: string | null, nuevoRaw: unknown): string | undefined {
   const nuevo = listaChecklist(nuevoRaw), guardado = listaChecklist(guardadoRaw);
   if (!nuevo || !guardado || nuevo.length !== guardado.length) return undefined;
   let conserva = false;
   const lista = nuevo.map((punto, i) => {
-    const llega = puntoNormal(punto);
-    if (!llega || llega.hora || llega.iniciales || !puntoMarcado(puntoNormal(guardado[i]))) return punto;
+    const llega = puntoNormal(punto), previo = puntoNormal(guardado[i]);
+    if (!llega || !previo || vioMarcado(llega) || !puntoMarcado(previo)) return punto;
+    const crudo = punto as Record<string, unknown>, deGuardado = guardado[i] as Record<string, unknown>;
+    if (llega.estado === 'desviacion' && previo.estado !== 'desviacion') {
+      if (leerNumero(crudo.valorMedido).tipo !== 'vacio' || leerNumero(deGuardado.valorMedido).tipo === 'vacio') return punto;
+      conserva = true;
+      return { ...crudo, valorMedido: deGuardado.valorMedido };
+    }
     conserva = true;
-    return guardado[i];
+    return textoComparable(crudo.notas) && !textoComparable(deGuardado.notas) ? { ...deGuardado, notas: crudo.notas } : guardado[i];
   });
   return conserva ? JSON.stringify(lista) : undefined;
 }
