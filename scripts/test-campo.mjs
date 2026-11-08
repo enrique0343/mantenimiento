@@ -821,6 +821,17 @@ try {
   [r] = await enviar([op('orden.paso', hace(4), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: 'aprox 10' })]);
   igual(r.error, app.reglas.MENSAJE_PASO_SIN_NUMERO, 'Otro texto, sí');
   igual(paso9502(2).valorMedido, 'ok', 'Y lo guardado no cambia');
+  // K6: un número que se lee de dos formas y que ya estaba guardado así (de antes de esta versión) no es un cambio:
+  // comparado recortado, no se rechaza y queda como estaba, con rango o sin él. Uno distinto, sí, con su frase.
+  sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=9502').run(JSON.stringify(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9502').c).map((x, i) => (i === 2 || i === 3 ? { ...x, valorMedido: '1,200', estado: 'pendiente' } : x))));
+  [r] = await enviar([op('orden.paso', hace(3.5), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: ' 1,200 ' })]);
+  ok(r.ok && paso9502(3).estado === 'ok' && paso9502(3).valorMedido === '1,200', `El mismo «1,200» que ya estaba no se rechaza: ${JSON.stringify(r)}`);
+  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9502 AND paso_idx=3 ORDER BY id DESC LIMIT 1').v, '1,200', 'Y en el libro queda como estaba');
+  [r] = await enviar([op('orden.paso', hace(3.4), { ordenId: 9502, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: '1,200' })]);
+  ok(r.ok && paso9502(2).estado === 'ok' && paso9502(2).valorMedido === '1,200', `En un paso con rango, tampoco: ${JSON.stringify(r)}`);
+  [r] = await enviar([op('orden.paso', hace(3.3), { ordenId: 9502, idx: 3, texto: 'Anotar la placa del motor', estado: 'ok', valor: '1,250' })]);
+  igual(r.error, '¿1250 o 1,25? Escribe el número sin separador de miles.', 'Otro que se lee de dos formas, sí se rechaza');
+  igual(paso9502(3).valorMedido, '1,200', 'Y lo guardado no cambia');
   // K7: una lectura de liberación pasa a los trabajos escrita con textoDeNumero.
   igual(app.campo.textoDeTrabajos(null, '[Intervención] Cambio de compresor - AC-01', null, { liberaciones: [
     { etiqueta: 'Corriente de arranque', unidad: 'A', valorMedido: 12.345, valorMedidoTexto: null },

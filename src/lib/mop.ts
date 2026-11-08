@@ -15,7 +15,7 @@ import {
   plantillaPrerrequisitos,
 } from "./schema";
 import { evaluarConformeLiberacion, liberacionConRango, liberacionTieneLectura, MENSAJE_LECTURA_SIN_NUMERO, numeroDeLectura, PRERREQ_REFERENCIA_HINT, type PrerrequisitoTipo } from "./ordenes";
-import { leerNumero, numeroAlInicio } from "./numero";
+import { leerNumero, numeroAlInicio, textoDeNumero } from "./numero";
 import { logAudit } from "@/lib/audit";
 
 type Db = ReturnType<typeof getDb>;
@@ -248,7 +248,8 @@ export async function registrarLiberacion(
 
   const [row] = await db.update(ordenLiberaciones).set(data).where(eq(ordenLiberaciones.id, actual.id)).returning();
   if (tocaValor) {
-    const leido = row.valorMedido != null ? `${row.valorMedido}${row.unidad ? ` ${row.unidad}` : ""}` : row.valorMedidoTexto ?? "—";
+    // El número como se vuelve a escribir (textoDeNumero): 12.345 no sale «12.345» en el historial.
+    const leido = row.valorMedido != null ? `${textoDeNumero(Number(row.valorMedido))}${row.unidad ? ` ${row.unidad}` : ""}` : row.valorMedidoTexto ?? "—";
     await logAudit(ctx, {
       entidad: "orden",
       entidadId: orden.id,

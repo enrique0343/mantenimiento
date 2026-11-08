@@ -4,7 +4,7 @@ import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacio
 import {
   parseChecklist, validarChecklistParaCierre, validarLecturasChecklistParaCierre, transicionesPermitidas,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre, validarLiberacionesEnRango, validarCausaRaizParaCierre, puedeCerrarSinLectura,
-  requiereCausaRaiz, MIN_CAUSA_RAIZ, pasoConRango, MENSAJE_PASO_SIN_NUMERO, type EstadoOT,
+  requiereCausaRaiz, MIN_CAUSA_RAIZ, pasoConRango, MENSAJE_PASO_SIN_NUMERO, type ChecklistItem, type EstadoOT,
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
 import { leerNumero } from './numero';
@@ -13,9 +13,13 @@ import type { getDb } from './db';
 type DB = ReturnType<typeof getDb>;
 type Orden = typeof ordenes.$inferSelect;
 type User = { id: number; rol: string; nombre: string };
-/** Un rechazo de la regla. `motivo` lo lee quien llama sin depender de la frase: "otra-escritura" es la guarda de concurrencia. */
+/**
+ * Un rechazo de la regla. `motivo` lo lee quien llama sin depender de la frase:
+ * "otra-escritura" es la guarda de concurrencia; "paso-cambio", un paso del
+ * checklist que cambió mientras tanto. `campos` viaja también en el cuerpo.
+ */
 export class ErrorVerificacion extends Error {
-  constructor(message: string, public status = 400, public motivo?: string) { super(message); }
+  constructor(message: string, public status = 400, public motivo?: string, public campos?: Record<string, unknown>) { super(message); }
 }
 const deny = (message: string, status = 403, motivo?: string): never => { throw new ErrorVerificacion(message, status, motivo); };
 const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 'checklistEjecucion'];
@@ -68,6 +72,12 @@ function puntoComparable(punto: unknown): string {
   const p = puntoNormal(punto);
   return p ? JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]])) : JSON.stringify(punto ?? null);
 }
+/** Una clave de un punto como se compara entre dos lados: el texto recortado y, en la lectura, el número que se lee («10,5» y 10.5 son lo mismo). */
+function valorDeClave(k: string, v: unknown): string {
+  if (k === 'valorMedido') { const leido = leerNumero(v); if (leido.tipo === 'numero') return JSON.stringify(leido.valor); }
+  return JSON.stringify(typeof v === 'string' ? v.trim() || null : v ?? null);
+}
+const mismaClave = (k: string, a: unknown, b: unknown) => valorDeClave(k, a) === valorDeClave(k, b);
 /** Dos checklists con los mismos puntos, aunque la ficha haya rellenado claves vacías. */
 function mismoChecklist(aRaw: unknown, bRaw: unknown): boolean {
   const a = listaChecklist(aRaw), b = listaChecklist(bRaw);
@@ -75,15 +85,22 @@ function mismoChecklist(aRaw: unknown, bRaw: unknown): boolean {
 }
 /**
  * Un punto que cambió en la ficha y también en el servidor, los dos frente a la
- * base: gana cada clave que la ficha cambió; las demás quedan como están
- * guardadas. Así la jefatura marca N/A sin borrar la lectura del celular.
+ * base (K11). Si cada lado cambió claves distintas, se fusionan: gana cada clave
+ * que la ficha cambió y las demás quedan como están guardadas. Así la jefatura
+ * escribe una nota sin borrar la marca del celular. Si los dos cambiaron una
+ * misma clave a valores distintos, nadie pisa sin saberlo lo que el otro guardó:
+ * el punto queda entero como está guardado y vuelve null. La misma clave al
+ * mismo valor no choca.
  */
-function fusionarPunto(guardado: unknown, nuevo: unknown, base: unknown): unknown {
+function fusionarPunto(guardado: unknown, nuevo: unknown, base: unknown): Record<string, unknown> | null {
   const g = puntoNormal(guardado), n = puntoNormal(nuevo), b = puntoNormal(base);
-  if (!g || !n || !b) return nuevo;
+  // Sin claves que comparar (no es un objeto), cambiado en los dos lados choca.
+  if (!g || !n || !b) return null;
   const fusion: Record<string, unknown> = { ...(guardado as Record<string, unknown>) };
   for (const k of new Set([...Object.keys(n), ...Object.keys(b)])) {
-    if (JSON.stringify(n[k] ?? null) === JSON.stringify(b[k] ?? null)) continue;
+    // La ficha no la cambió, o ya está guardada como la dejó la ficha.
+    if (mismaClave(k, n[k], b[k]) || mismaClave(k, n[k], g[k])) continue;
+    if (!mismaClave(k, g[k], b[k])) return null;
     if (k === 'estado') { fusion.estado = n.estado; delete fusion.hecho; continue; }
     const crudo = (nuevo as Record<string, unknown>)[k];
     if (crudo === undefined) delete fusion[k]; else fusion[k] = crudo;
@@ -95,20 +112,28 @@ function fusionarPunto(guardado: unknown, nuevo: unknown, base: unknown): unknow
  * punto que la ficha no cambió frente a su base queda como está guardado, para
  * no deshacer lo que el técnico marcó en el celular mientras tanto; uno que solo
  * cambió en la ficha, como lo mandó; uno que cambió en los dos lados, fusionado
- * por clave.
+ * por clave. Uno que chocó en una misma clave queda como está guardado y su
+ * índice vuelve en `sinAplicar`.
  */
-function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRaw: unknown): string {
+function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRaw: unknown): { checklist: string; sinAplicar: number[] } {
   const nuevo = listaChecklist(nuevoRaw), base = listaChecklist(baseRaw);
   if (!nuevo || !base) throw new ErrorVerificacion('Checklist inválido.', 400);
   const guardado = listaChecklist(guardadoRaw) ?? [];
   if (nuevo.length !== base.length || base.length !== guardado.length) throw new ErrorVerificacion('El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.', 409);
-  return JSON.stringify(nuevo.map((punto, i) => {
+  const sinAplicar: number[] = [];
+  const checklist = JSON.stringify(nuevo.map((punto, i) => {
     const deBase = puntoComparable(base[i]);
     if (puntoComparable(punto) === deBase) return guardado[i];
     if (puntoComparable(guardado[i]) === deBase) return punto;
-    return fusionarPunto(guardado[i], punto, base[i]);
+    const fusion = puntoComparable(punto) === puntoComparable(guardado[i]) ? guardado[i] : fusionarPunto(guardado[i], punto, base[i]);
+    if (fusion !== null) return fusion;
+    sinAplicar.push(i);
+    return guardado[i];
   }));
+  return { checklist, sinAplicar };
 }
+/** El 409 de un paso que chocó cuando la misma solicitud cambia el estado de la orden (K11). */
+const MENSAJE_PASO_CAMBIO = 'Un paso del checklist cambió mientras tanto. Revísalo y vuelve a enviar.';
 /** Un punto ya marcado: con estado y con la hora o las iniciales de quien lo marcó. */
 const puntoMarcado = (p: Record<string, unknown> | null) => !!p && p.estado !== 'pendiente' && (!!p.hora || !!p.iniciales);
 /**
@@ -222,25 +247,42 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   const llegaEjecucion = executionFields.some((key) => key !== 'causaRaiz' && input[key] !== undefined);
   const checklistBase = input.checklistBase;
   delete input.checklistBase;
+  // La ficha nueva manda solo lo que cambió y lo dice con soloCambios (K12): con
+  // él no se aplican las reglas de la pestaña de antes (K9a, K9b y K9c).
+  const soloCambios = input.soloCambios === true;
+  delete input.soloCambios;
   let checklistFusionado = false;
+  let pasosSinAplicar: number[] = [];
   if (input.checklistEjecucion !== undefined) {
-    // Con su base, la ficha se fusiona por punto. Sin ella (pestaña vieja), un
-    // punto ya marcado en el celular no vuelve a pendiente.
-    const fusion = checklistBase !== undefined
-      ? fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase)
-      : conservarMarcados(order.checklistEjecucion, input.checklistEjecucion);
+    // Con su base, la ficha se fusiona por punto. Sin ella (pestaña vieja o
+    // celular), un punto ya marcado en el celular no vuelve a pendiente.
+    let fusion: string | undefined;
+    if (checklistBase !== undefined) {
+      const r = fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase);
+      fusion = r.checklist; pasosSinAplicar = r.sinAplicar;
+    } else fusion = conservarMarcados(order.checklistEjecucion, input.checklistEjecucion);
+    // Un paso que chocó queda como está guardado y lo demás se aplica (K11). Si
+    // la misma solicitud envía, verifica, cierra o devuelve la orden, no se aplica
+    // nada: quien la envía revisa antes ese paso.
+    const cambiaEstado = (input.estado !== undefined && input.estado !== order.estado) || input.accion !== undefined;
+    if (pasosSinAplicar.length && cambiaEstado) {
+      throw new ErrorVerificacion(MENSAJE_PASO_CAMBIO, 409, 'paso-cambio', { pasos: pasosSinAplicar, orden: { checklistEjecucion: order.checklistEjecucion } });
+    }
     if (fusion !== undefined) { input.checklistEjecucion = fusion; checklistFusionado = true; }
     if (mismoChecklist(input.checklistEjecucion, order.checklistEjecucion)) { igualAlGuardado('checklistEjecucion'); checklistFusionado = false; }
   }
   // La causa raíz es de la jefatura, en cualquier estado. Igual a la guardada no
   // es un cambio, tampoco de la jefatura: no se escribe ni deja evento.
   // La pestaña de antes de esta versión la manda junto con los trabajos al
-  // autoguardar, como la pintó al abrir: vacía no borra la guardada, e igual a
-  // una que ya se guardó antes en esta orden es vieja (no se escribe ni pasa a
-  // los trabajos). La ficha nueva la manda sola.
+  // autoguardar, como la pintó al abrir. Si los trabajos o la solución traen un
+  // cambio, la causa vacía no borra la guardada, e igual a una que ya se guardó
+  // antes en esta orden es vieja (no se escribe ni pasa a los trabajos). Si
+  // llegan iguales a lo guardado, el único cambio es la causa: es de la persona y
+  // sigue las reglas de siempre (K13). La ficha nueva la manda sola.
   if (input.causaRaiz !== undefined) {
     const causa = textoComparable(input.causaRaiz);
-    const conTrabajos = input.trabajosRealizados !== undefined || input.solucionAplicada !== undefined;
+    const conTrabajos = !soloCambios && ['trabajosRealizados', 'solucionAplicada']
+      .some((key) => input[key] !== undefined && textoComparable(input[key]) !== textoComparable((order as any)[key]));
     if (causa === textoComparable(order.causaRaiz)) igualAlGuardado('causaRaiz');
     else if (conTrabajos && (!causa || await causaYaGuardada(db, order.id, causa))) igualAlGuardado('causaRaiz');
     else if (!manager(user)) {
@@ -258,9 +300,10 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   }
   // La pestaña de antes de esta versión manda las cuatro horas juntas, con null
   // en las vacías: una hora ya guardada, como la que registró el celular después
-  // de abrirla, no se borra con una vacía. Una hora vacía que llega sola (la
-  // ficha nueva manda solo lo que cambió) sigue las reglas de siempre.
-  if (HORAS_EOP.every((key) => input[key] !== undefined)) {
+  // de abrirla, no se borra con una vacía. Una hora vacía que llega sola, o con
+  // soloCambios (la ficha nueva manda solo lo que cambió), sigue las reglas de
+  // siempre.
+  if (!soloCambios && HORAS_EOP.every((key) => input[key] !== undefined)) {
     for (const key of HORAS_EOP) {
       if (minutoEop(input[key]) !== null || minutoEop((order as any)[key]) === null) continue;
       igualAlGuardado(key);
@@ -294,8 +337,8 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   // juntos, como los pintó al abrir: una reversa ya marcada con sus notas (desde
   // el celular, por ejemplo) no se desmarca ni pierde sus notas con la casilla
   // vacía y sin notas; el plan sí se guarda. La ficha nueva manda solo lo que
-  // cambió: con ella se desmarca con las reglas de siempre.
-  if (['planReversa', 'reversaEjecutada', 'reversaNotas'].every((key) => input[key] !== undefined)
+  // cambió, con soloCambios: con ella se desmarca con las reglas de siempre.
+  if (!soloCambios && ['planReversa', 'reversaEjecutada', 'reversaNotas'].every((key) => input[key] !== undefined)
     && order.reversaEjecutada && textoComparable(order.reversaNotas) && !input.reversaEjecutada && !textoComparable(input.reversaNotas)) {
     igualAlGuardado('reversaEjecutada');
     igualAlGuardado('reversaNotas');
@@ -378,21 +421,28 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     eventAction = 'designacion_revisor';
   }
   // Existing checklist criteria and critical flags cannot be removed by the executor.
+  // Tampoco el rango, la unidad ni la lectura que pide un paso: sin ellos, lo
+  // escrito en el paso entraría sin la regla del número.
   if (input.checklistEjecucion !== undefined && input.checklistEjecucion !== order.checklistEjecucion) {
     let incoming: any;
     try { incoming = JSON.parse(input.checklistEjecucion ?? '[]'); } catch { deny('Checklist inválido.', 400); }
     if (!Array.isArray(incoming)) deny('Checklist inválido.', 400);
     const original = parseChecklist(order.checklistEjecucion), next = parseChecklist(input.checklistEjecucion);
-    if (original.length && (next.length !== original.length || original.some((item, i) => item.texto !== next[i]?.texto || !!item.bloqueante !== !!next[i]?.bloqueante || item.criterio !== next[i]?.criterio))) {
+    const otroPunto = (item: ChecklistItem, nuevo: ChecklistItem | undefined) =>
+      item.texto !== nuevo?.texto || !!item.bloqueante !== !!nuevo?.bloqueante || item.criterio !== nuevo?.criterio
+      || item.esperadoMin !== nuevo?.esperadoMin || item.esperadoMax !== nuevo?.esperadoMax || !!item.requiereValor !== !!nuevo?.requiereValor || item.unidad !== nuevo?.unidad;
+    if (original.length && (next.length !== original.length || original.some((item, i) => otroPunto(item, next[i])))) {
       deny('No se pueden eliminar puntos ni cambiar criterios o puntos críticos del checklist durante la ejecución.', 400);
     }
     // El valor de un paso se lee con numero.ts: «1,200» puede ser 1200 o 1,2 y no
-    // se adivina. Solo se revisa el valor que cambió; uno que llega como número pasa.
-    // En un paso con rango, lo escrito es el número que marcó el instrumento.
+    // se adivina. Solo se revisa el valor que cambió; uno que llega como número pasa,
+    // y un texto igual al guardado salvo espacios alrededor no es un cambio (el
+    // celular lo compara y lo guarda recortado). En un paso con rango, lo escrito
+    // es el número que marcó el instrumento.
     const previos = listaChecklist(order.checklistEjecucion) ?? [];
     incoming.forEach((punto: any, i: number) => {
       const valor = punto?.valorMedido, antes = (previos[i] as any)?.valorMedido;
-      if (valor === antes) return;
+      if (valor === antes || (typeof valor === 'string' && typeof antes === 'string' && valor.trim() === antes.trim())) return;
       const leido = leerNumero(valor);
       if (leido.tipo === 'ambiguo') deny(leido.mensaje, 400);
       if (leido.tipo === 'texto' && pasoConRango({ esperadoMin: limiteDePaso(punto?.esperadoMin), esperadoMax: limiteDePaso(punto?.esperadoMax) })) deny(MENSAJE_PASO_SIN_NUMERO, 400);
@@ -455,7 +505,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   for (const key of Object.keys(data)) if (data[key] === (order as any)[key]) { delete data[key]; sinCambio = true; }
   if (!Object.keys(data).length && !Object.keys(stateData).length) {
     // Todo lo que llegó era igual a lo guardado: no hay nada que escribir ni que rechazar.
-    if (sinCambio) return { row: order, estado: order.estado, accion: 'sin_cambios', advancePM: false };
+    if (sinCambio) return { row: order, estado: order.estado, accion: 'sin_cambios', advancePM: false, pasosSinAplicar };
     deny('No hay cambios.', 400);
   }
   // Approval can be delayed; recurrence stays anchored to actual execution.
@@ -509,7 +559,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   const results = await db.batch(batch as any);
   if (!(results[1] as any[])?.length) deny('La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.', 409, 'otra-escritura');
   const [row] = await db.select().from(ordenes).where(eq(ordenes.id, order.id)).limit(1);
-  return { row, estado: destination, accion: eventAction, advancePM };
+  return { row, estado: destination, accion: eventAction, advancePM, pasosSinAplicar };
 }
 
 /** The existing public ticket token may return pending work, never approve or

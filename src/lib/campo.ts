@@ -28,7 +28,7 @@ import {
   abrirEjecucion, buscarEjecucion, cerrarEjecucion, existeTurno, inicioTurno, ligarOrdenALectura, omitidosEntre, paradasDeEjecucion, proximoTramo, puntosDeRonda, recorridoConLinea,
   recorridoDe, registrarLectura, siguienteInicio, turnoEn, turnosEn, etiquetaTurno, type RondaEjecucion,
 } from "@/lib/ronda-turno";
-import { LINEAS_CON_ORDEN } from "@/lib/turnos";
+import { LINEAS_CON_ORDEN, laHora } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
 import { leerNumero, textoDeNumero } from "@/lib/numero";
 import { calcularVencimiento } from "@/lib/sla";
@@ -742,6 +742,16 @@ function numeroEscrito(raw: unknown) {
   return r;
 }
 
+/** Lo escrito en el valor de un paso tal como está guardado, recortado; null si no es un texto. */
+function textoGuardadoDePaso(checklist: string | null | undefined, idx: number): string | null {
+  try {
+    const it = JSON.parse(checklist ?? "[]")?.[idx];
+    return typeof it?.valorMedido === "string" ? it.valorMedido.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
 const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
@@ -912,7 +922,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
       exigirEjecutor(user, o);
-      const leido = numeroEscrito(op.valor);
+      // Un número que se puede leer de dos formas («1,200») se rechaza con su frase. El mismo texto que ya
+      // estaba guardado en el paso, comparado recortado, no es un cambio: no se rechaza y queda como estaba.
+      const escrito = leerNumero(op.valor);
+      const mismoTexto = typeof op.valor === "string" && op.valor.trim() === textoGuardadoDePaso(o.checklistEjecucion, idx);
+      if (escrito.tipo === "ambiguo" && !mismoTexto) throw new RechazoCampo(escrito.mensaje);
+      const leido = escrito.tipo === "ambiguo" ? ({ tipo: "texto" } as const) : escrito;
       o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
       let lista: any[];
       try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
@@ -1081,7 +1096,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (resultado === "ok" && punto.requiereValor && valido === null) throw new RechazoCampo("Falta la lectura de esta parada.");
       if (resultado === "fuera" && valido === null && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe qué viste.");
       const r = await registrarLectura(db, ejecucion, punto, { resultado: resultado as any, valor: valido, nota, usuarioId: user.id, momento: m, opId: op.opId });
-      if (r.eventoId && r.eventoNuevo) await avisarJefatura(ctx, db, `Desviación en ronda: ${punto.etiqueta}`, `${user.nombre}${valido !== null ? ` · leído ${valido}${punto.unidad ? ` ${punto.unidad}` : ""}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/aop/${r.eventoId}`);
+      if (r.eventoId && r.eventoNuevo) await avisarJefatura(ctx, db, `Desviación en ronda: ${punto.etiqueta}`, `${user.nombre}${valido !== null ? ` · leído ${textoDeNumero(valido)}${punto.unidad ? ` ${punto.unidad}` : ""}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/aop/${r.eventoId}`);
       else if (resultado === "no_verificado" && punto.critico) await avisarJefatura(ctx, db, `Parada crítica sin verificar: ${punto.etiqueta}`, `${user.nombre} · ${nota}`, `/ronda/${ejecucion.id}`);
       return { datos: { ejecucionId: ejecucion.id, eventoId: r.eventoId, ...(r.tardia ? { tardia: true } : {}) }, m };
     }
@@ -1099,7 +1114,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (op.firma !== true) throw new RechazoCampo("La ronda no se cierra sin firma.");
       const r = await cerrarEjecucion(db, ejecucion, user, typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) || null : null, m);
       if (!r.ok) throw new RechazoCampo(r.error ?? "No se pudo cerrar la ronda.");
-      if (r.fuera || r.sinVerificar) await avisarJefatura(ctx, db, `Ronda de las ${clave.turno} cerrada con novedades`, `${user.nombre} · ${r.fuera ?? 0} fuera de rango · ${r.sinVerificar ?? 0} sin verificar`, `/ronda/${ejecucion.id}`);
+      if (r.fuera || r.sinVerificar) await avisarJefatura(ctx, db, `Ronda de ${laHora(clave.turno)} cerrada con novedades`, `${user.nombre} · ${r.fuera ?? 0} fuera de rango · ${r.sinVerificar ?? 0} sin verificar`, `/ronda/${ejecucion.id}`);
       return { datos: { ejecucionId: ejecucion.id }, m };
     }
     default:

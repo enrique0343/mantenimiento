@@ -347,4 +347,83 @@ try {
     ok(/5 esperadas · 0 completas/.test(texto(doc)), 'Y no cuenta como esperada: 3 del lunes y 2 del martes');
   } finally { await g.close(); }
 }
+// ── La jefatura cancela a las 14:10 el cambio de las 10:40: el de las 14:00 ya se anunció como «no se abre» y su hora
+// pasó. Al guardar y al volver, la pantalla dice que el de las 06:00 sigue hasta las 22:00 y que el de las 14:00 no se abre ──
+{
+  const D = '2026-11-10';
+  const en = (hhmm) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`)).toISOString();
+  fijarReloj(en('10:30'));
+  const g = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede Uno',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const contenedor = await experimental_AstroContainer.create();
+    const html = async (url) => (await contenedor.renderToResponse(await cargar('ronda/puntos.astro.mjs'), { partial: false, request: new Request(`https://local.test${url}`), locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } })).text();
+    const modelo = g.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id;
+    fijarReloj(en('10:40'));
+    await (await g.app.puntos.PUT(g.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'turnos', rondaId: modelo, turnos: ['06:30', '14:30', '22:30'] }, rol: 'jefe' }))).json();
+    // La pantalla de verdad, con su script: a las 14:10 se vuelve a 06:00, 14:00 y 22:00.
+    fijarReloj(en('14:10'));
+    const { JSDOM, VirtualConsole } = createRequire(import.meta.url)('jsdom');
+    const errores = [];
+    const consola = new VirtualConsole();
+    consola.on('jsdomError', (e) => errores.push(String(e?.message ?? e)));
+    const url = 'https://local.test/ronda/puntos';
+    const dom = new JSDOM(await html('/ronda/puntos'), { url, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola, beforeParse: (win) => {
+      win.fetch = async (destino, init = {}) => {
+        const u = new URL(destino, url);
+        if (u.pathname !== '/api/ronda-turno/puntos') return new Response('{}', { status: 404 });
+        return g.app.puntos[init.method](g.ctx(u.pathname, { method: init.method, data: init.body ? JSON.parse(init.body) : undefined, rol: 'jefe' }));
+      };
+    } });
+    const d = dom.window.document;
+    ok(d.getElementById('turnos-estado').textContent === 'Los turnos nuevos entran a las 14:30 del 10/11/2026. El turno de las 06:00 sigue hasta esa hora; el de las 14:00 no se abre.', `Antes de cancelar, el cambio pendiente: «${d.getElementById('turnos-estado').textContent}»`);
+    d.getElementById('r_turnos').value = '06:00, 14:00, 22:00';
+    d.getElementById('form-turnos').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 200 && !/^Guardado/.test(d.getElementById('turnos-estado').textContent); i++) await new Promise((r) => setTimeout(r, 15));
+    const SIGUE = 'Siguen los turnos de ahora. El turno de las 06:00 sigue hasta las 22:00; el de las 14:00 no se abre.';
+    ok(d.getElementById('turnos-estado').textContent === `Guardado: 06:00, 14:00, 22:00. ${SIGUE}`, `Al cancelar, dice que el de las 14:00 no vuelve: «${d.getElementById('turnos-estado').textContent}»`);
+    ok(errores.filter((m) => !/Not implemented/.test(m)).length === 0, `Sin errores de script: ${errores.join(' | ')}`);
+    dom.window.close();
+    fijarReloj(en('14:12'));
+    ok(texto(porId(parseHtml(await html('/ronda/puntos')), 'turnos-estado')) === SIGUE, 'Y lo sigue diciendo al volver');
+    fijarReloj(en('22:01'));
+    ok(texto(porId(parseHtml(await html('/ronda/puntos')), 'turnos-estado')) === '', 'Desde las 22:00 ya no hay nada que decir');
+  } finally { await g.close(); }
+}
+// ── K15 y K7 en la ronda de la 01:00: «inició … a la 01:05», «llegó a la 01:20» y el valor normal escrito para
+// leerse igual («12.3450») ──
+{
+  const D = '2026-11-10';
+  const en = (hhmm, k = 0) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`) + k * 86400000).toISOString();
+  fijarReloj(en('20:00'));
+  const g = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', sync: 'pages/api/campo/sync', puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede Uno',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const modelo = g.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id;
+    await (await g.app.puntos.PUT(g.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'turnos', rondaId: modelo, turnos: ['01:00', '09:00', '17:00'] }, rol: 'jefe' }))).json();
+    g.sqlite.prepare("UPDATE ronda_puntos SET min_esperado=12.345 WHERE ronda_id=? AND etiqueta LIKE 'Quirófanos · temperatura%'").run(modelo);
+    fijarReloj(en('01:20', 1));
+    const ronda = (await g.call(g.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+    ok(ronda.turno === '01:00', `A la 01:20 corre la ronda de la 01:00: ${ronda.turno}`);
+    const clave = { rondaId: ronda.rondaId, sucursalId: 1, fecha: ronda.fecha, turno: '01:00' };
+    // Capturado sin señal desde la 01:05; llega a la 01:20.
+    let resto = [
+      { opId: 'k15-iniciar', tipo: 'ronda.iniciar', at: en('01:05', 1), ...clave },
+      ...ronda.puntos.map((pt, k) => ({ opId: `k15-lectura-${k}`, tipo: 'ronda.lectura', at: en('01:06', 1), ...clave, puntoId: pt.id, resultado: 'ok', ...(pt.pideValor ? { valor: pt.max ?? pt.min ?? 1 } : {}) })),
+      { opId: 'k15-cerrar', tipo: 'ronda.cerrar', at: en('01:10', 1), ...clave, firma: true, notas: 'Sin novedades.' },
+    ];
+    while (resto.length) { const x = await g.call(g.app.sync.POST, '/api/campo/sync', { method: 'POST', rol: 'tecnico', data: { ops: resto.slice(0, 20) } }); ok(x.body.resultados.every((y) => y.ok), `Lo anotado entra: ${JSON.stringify(x.body.resultados.filter((y) => !y.ok))}`); resto = resto.slice(x.body.resultados.length); }
+    const id = g.sqlite.prepare("SELECT id FROM ronda_ejecuciones WHERE turno='01:00'").get().id;
+    const contenedor = await experimental_AstroContainer.create();
+    const res = await contenedor.renderToResponse(await cargar('ronda/_id_.astro.mjs'), { partial: false, request: new Request(`https://local.test/ronda/${id}`), params: { id: String(id) }, locals: { user: { id: 2, nombre: 'Cuenta jefe', rol: 'jefe' }, runtime: { env: { DB: g.DB } } } });
+    const t = texto(parseHtml(await res.text()));
+    ok(/inició Prueba tecnico a la 01:05/.test(t), `«inició … a la 01:05»: ${t.match(/.{0,60}inició.{0,40}/)?.[0]}`);
+    ok(/Firma: ?Prueba tecnico · 01:10 · capturada sin señal, llegó a la 01:20/.test(t), `La firma «llegó a la 01:20»: ${t.match(/Firma:.{0,80}/)?.[0]}`);
+    ok(/01:06 · Prueba tecnico · (En rango|Conforme)[^·]* · capturada sin señal, llegó a la 01:20/.test(t), `Cada marca «llegó a la 01:20»: ${t.match(/01:06 ·.{0,90}/)?.[0]}`);
+    ok(!/llegó a las 01|a las 01:0/.test(t), 'Sin «a las 01:…»');
+    ok(/Normal: 12\.3450–22 °C/.test(t), `El valor normal, «12.3450–22 °C»: ${t.match(/Normal: 12.{0,20}/)?.[0]}`);
+  } finally { await g.close(); }
+}
 console.log(`PASS test-ronda-paginas: ${checks} verificaciones; pantallas construidas, migraciones reales.`);

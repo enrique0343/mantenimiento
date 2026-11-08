@@ -4,7 +4,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { asc, eq, inArray } from "drizzle-orm";
-import { paradasDeEjecucion, puedeVerRondas, rangoNormal, etiquetaTurno } from "@/lib/ronda-turno";
+import { laHora, paradasDeEjecucion, puedeVerRondas, rangoNormal, etiquetaTurno } from "@/lib/ronda-turno";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
 import { aopEventos, ordenes, procedimientos, rondaEjecuciones, rondaLecturas, rondaMarcas, sucursales, usuarios } from "@/lib/schema";
 import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
@@ -61,11 +61,11 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
     <span class={`badge ${cerrada ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{cerrada ? "Firmada" : "Sin cerrar"}</span>
   </div>
   <p class="mt-1 text-sm text-slate-500">
-    {fmtFechaSoloCompacta(ejec.fecha)} · {etiquetaTurno(ejec.turno)}{fila.inicio ? ` · inició ${fila.inicio}` : ""}{ejec.iniciadaEn ? ` a las ${fmtHora(ejec.iniciadaEn)}` : ""}{cerrada && ejec.minutosRonda != null ? ` · ${ejec.minutosRonda} min` : ""}
+    {fmtFechaSoloCompacta(ejec.fecha)} · {etiquetaTurno(ejec.turno)}{fila.inicio ? ` · inició ${fila.inicio}` : ""}{ejec.iniciadaEn ? ` a ${laHora(fmtHora(ejec.iniciadaEn))}` : ""}{cerrada && ejec.minutosRonda != null ? ` · ${ejec.minutosRonda} min` : ""}
   </p>
   <div class="card mt-4 p-4 text-sm">
     <p class="text-slate-600"><b>{anotados}</b> de {puntos.length} paradas anotadas · <b>{fuera}</b> fuera de rango · <b>{sinVerificar}</b> sin verificar</p>
-    {cerrada && <p class="mt-2"><b>Firma:</b> {ejec.firmaNombre} · {ejec.completadaEn ? fmtHora(ejec.completadaEn) : ""}{ejec.recibidaEn && ejec.completadaEn && Date.parse(ejec.recibidaEn) - Date.parse(ejec.completadaEn) > 120000 ? ` · capturada sin señal, llegó a las ${fmtHora(ejec.recibidaEn)}` : ""}</p>}
+    {cerrada && <p class="mt-2"><b>Firma:</b> {ejec.firmaNombre} · {ejec.completadaEn ? fmtHora(ejec.completadaEn) : ""}{ejec.recibidaEn && ejec.completadaEn && Date.parse(ejec.recibidaEn) - Date.parse(ejec.completadaEn) > 120000 ? ` · capturada sin señal, llegó a ${laHora(fmtHora(ejec.recibidaEn))}` : ""}</p>}
     {ejec.notas && <p class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"><b>Entrega de turno:</b> {ejec.notas}</p>}
   </div>
   <div class="mt-4 space-y-2">
@@ -92,7 +92,7 @@ const COLOR = { ok: "bg-emerald-100 text-emerald-700", fuera: "bg-orange-100 tex
               {historia.map(({ m, quien }) => (
                 <li>
                   {fmtHora(m.ocurridoEn)} · {quien ?? "—"} · {textoResultado(m.resultado, !!p.requiereValor)}{m.valor != null ? ` ${m.valor}` : ""}
-                  {m.sinSenal ? ` · capturada sin señal, llegó a las ${fmtHora(m.recibidoEn)}` : ""}{m.ajustado ? " · hora ajustada por el servidor" : ""}
+                  {m.sinSenal ? ` · capturada sin señal, llegó a ${laHora(fmtHora(m.recibidoEn))}` : ""}{m.ajustado ? " · hora ajustada por el servidor" : ""}
                   {cerrada && ejec.recibidaEn && m.recibidoEn > ejec.recibidaEn ? " · llegó después de la firma" : ""}
                   {m.aopEventoId && <a class="ml-1 font-semibold text-orange-700 underline" href={`/aop/${m.aopEventoId}`}>{mapaEventos.get(m.aopEventoId)?.codigo ?? "AOP"}</a>}
                 </li>

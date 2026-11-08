@@ -20,6 +20,10 @@
 // qué» con la orden cancelada o ya cerrada; la hoja de la desviación con su documento en su caja; y
 // las guardas de la segunda ronda (lo que llega por detrás, «Abriendo la orden…», #ronda sin ronda,
 // el valor 0, la liberación «14,5 A»).
+// Cuarta ronda: la hora con su artículo («Ronda de la 01:00», «antes de la 01:30», K15); un rango con tres decimales en
+// la hoja («máximo 1.1250»); la emergencia de fecha sola, que vence al final del día; la lectura que falta antes de
+// enviar (K8), con la frase de siempre; un texto en un paso sin rango; «Sin asignar» abierto con una emergencia; la
+// orden en curso que el día ya no trae, que «Ver por qué» ofrece abrir; y «Ahora» lleno, compacto en una pantalla baja.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -78,6 +82,9 @@ const retener = new Set(), retenidas = new Map();
 const sinRespuesta = new Set(); // Órdenes cuyo próximo pedido se pierde en el camino.
 const soltar = (id) => { retener.delete(id); for (const r of retenidas.get(id) ?? []) r(); retenidas.delete(id); };
 let demoraSync = 0; // Con señal lenta, la respuesta del envío llega después que el día.
+// Con señal lenta, el día puede llegar después que lo demás: frenarHoy() lo detiene hasta que la prueba lo suelta.
+let frenoHoy = null;
+const frenarHoy = () => { let suelta; frenoHoy = new Promise((r) => { suelta = r; }); return () => { frenoHoy = null; suelta(); }; };
 const sinEop = new Set(); // Emergencias que el paquete del día trae sin su documento.
 async function rutaReal(url, init = {}) {
   enVuelo++;
@@ -87,6 +94,7 @@ async function atender(url, init) {
   if (!enLinea) throw new TypeError('Failed to fetch');
   const u = new URL(url, 'https://test.invalid');
   if (u.pathname === '/api/campo/hoy') {
+    if (frenoHoy) await frenoHoy;
     if (hoyFalla) return new Response('', { status: 503 });
     const res = await app.hoy.GET(ctx(u.pathname + u.search, { rol: 'tecnico' }));
     if (!sinEop.size) return res;
@@ -159,7 +167,8 @@ let checks = 0; const ok = (...x) => { assert.ok(...x); checks++; }, igual = (..
 // Ningún tiempo de medición a la vista: ni reloj, ni estimados, ni horas de inicio. Sí los plazos y el turno.
 const vistas = [];
 const PROHIBIDO = /cron[oó]metro|min estimado|h estimado|minutos estimados|tiempo de trabajo|Quién y cuánto|Quién y cuándo|Tiempo registrado|En pausa desde|≈/i;
-const PLAZOS = [/Ronda de las \d{2}:\d{2}/g, /turno (de las? )?\d{2}:\d{2}/g, /antes de (las )?\d{2}:\d{2}/g, /Venc(e|ió) (hoy|\d{2}\/\d{2}\/\d{4}) \d{2}:\d{2}/g];
+// Con su artículo: «Ronda de la 01:00», «antes de la 01:30». En un reloj de la hoja, la etiqueta y la hora van juntas.
+const PLAZOS = [/[Rr]onda de las? \d{2}:\d{2}/g, /turno (de las? )?\d{2}:\d{2}/g, /antes de ?(las? )?\d{2}:\d{2}/g, /Venc(e|ió) (hoy|\d{2}\/\d{2}\/\d{4}) \d{2}:\d{2}/g];
 const anotar = (donde) => vistas.push({ donde, t: `${texto()} | ${hoja()} | ${doc.querySelector('#aviso').hidden ? '' : doc.querySelector('#aviso').textContent}`, fichas: [...doc.querySelectorAll('#movil a[href^="/ordenes/"]')].map((a) => a.getAttribute('href')) });
 const clic = async (accion, extra = '') => {
   const b = doc.querySelector(`#movil [data-a="${accion}"]${extra}`);
@@ -650,6 +659,17 @@ try {
   const grupoDe = (g) => doc.querySelector(`[data-a="grupo"][data-g="${g}"]`)?.getAttribute('aria-expanded');
   ok(grupoDe('Cisterna') === 'true' && grupoDe('Cuarto de máquinas') === 'true', 'Los dos grupos con una sin atender, abiertos también en una pantalla baja: ' + texto().slice(0, 500));
   ok(grupoDe('Azotea') === 'true', 'Y el de la pausada: ' + texto().slice(0, 500));
+  // En una pantalla baja (360×640, medida en Chrome; 390×844 en Chrome y WebKit), «Ahora» lleno cabe sin desplazar,
+  // con «Seguir» y la ronda a la vista: menos aire, la misma letra. Aquí, con su hoja de estilos.
+  const estiloAhora = doc.createElement('style');
+  estiloAhora.textContent = await fs.readFile('src/campo/campo.css', 'utf8');
+  doc.head.append(estiloAhora);
+  const reglasBajas = [...estiloAhora.sheet.cssRules].filter((r) => /max-height:\s*700px/.test(r.conditionText ?? r.media?.mediaText ?? '')).flatMap((r) => [...r.cssRules]);
+  const enBaja = (sel, prop) => reglasBajas.find((r) => r.selectorText === sel)?.style.getPropertyValue(prop);
+  ok(enBaja('.hoy-cab', 'padding-top') === '8px' && enBaja('.ahora', 'gap') === '6px' && enBaja('.ahora', 'padding-top') === '12px' && enBaja('.ahora', 'padding-bottom') === '12px'
+    && enBaja('.ahora .otra', 'padding-top') === '8px' && enBaja('.ahora .otra', 'padding-bottom') === '8px' && enBaja('.ahora .otra+.otra', 'margin-top') === '-6px', '«Ahora» se compacta en una pantalla baja');
+  ok(!reglasBajas.some((r) => /^\.(ahora|hoy-cab)/.test(r.selectorText) && r.style.getPropertyValue('font-size')), 'Sin achicar la letra');
+  estiloAhora.remove();
   await clic('grupo', '[data-g="Cisterna"]');
   ok(grupoDe('Cisterna') === 'false' && !doc.querySelector('.resto [data-h="#orden-625"]') && grupoDe('Cuarto de máquinas') === 'true', 'El técnico cierra uno; el otro sigue abierto');
   await clic('grupo', '[data-g="hechas"]');
@@ -660,6 +680,16 @@ try {
   ok(grupoDe('Cisterna') === 'true' && doc.querySelector('.resto [data-h="#orden-625"]'), 'Con otra emergencia sin atender, el grupo cerrado se abre otra vez');
   altoVentana = 768;
   sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id BETWEEN 620 AND 626");
+
+  // ══ Una emergencia que vence en una fecha sola vence al final de ese día: entre dos que nadie atiende, arriba va la
+  // que vence hoy a una hora ══
+  emergencia(627, '[Emergencia] Fuga en la cisterna', 85, svHoy);
+  emergencia(628, '[Emergencia] Tablero de la azotea caliente', 83, iso(enSV('20:00')));
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /Hola/.test(texto()) && doc.querySelector('.ahora .otra[data-h="#orden-627"]'), 'Hoy con la de fecha sola y la de hora');
+  anotar('fecha sola y hora del mismo día');
+  ok(principal() === '#orden-628' && /^Emergencia · Vence hoy 20:00$/.test(doc.querySelector('.ahora .etq').textContent) && lineas() === '#orden-627', 'Arriba la que vence hoy a las 20:00; la de fecha sola vence al final del día: ' + bloque());
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id IN (627,628)");
 
   // ══ Una emergencia que llegó sin su documento ni sus acciones se pide de nuevo, una vez ══
   ahora = enSV('11:40');
@@ -787,8 +817,12 @@ try {
     (608,1,'[Emergencia] Falla de energía - PE-01','infraestructura','emergencia',81,'abierta',NULL,8,81);
     INSERT INTO orden_prerrequisitos(orden_id,texto,tipo,obligatorio,orden) VALUES(703,'Permiso de trabajo firmado','permiso_trabajo',1,1);`);
   sqlite.prepare('UPDATE ordenes SET procedimiento_id=? WHERE id=608').run(eop.id);
+  altoVentana = 640;
   await abrir('https://test.invalid/campo#hoy');
   await hasta(() => /Sin asignar en esta sede/.test(texto()), 'las libres en Hoy');
+  // Con una emergencia que nadie atiende, «Sin asignar en esta sede» aparece abierto, también en una pantalla baja.
+  ok(doc.querySelector('[data-g="libres"]')?.getAttribute('aria-expanded') === 'true' && doc.querySelector('.resto [data-h="#orden-608"]') && doc.querySelector('.resto [data-h="#orden-703"]'), 'Con la emergencia libre, el grupo aparece abierto: ' + texto().slice(0, 300));
+  altoVentana = 768;
   enLinea = false; w.dispatchEvent(new w.Event('offline'));
   const abrirLibres = async () => { if (doc.querySelector('[data-g="libres"]')?.getAttribute('aria-expanded') !== 'true') await clic('grupo', '[data-g="libres"]'); };
   await abrirLibres();
@@ -1043,6 +1077,88 @@ try {
   igual(JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=511').c)[0].valorMedido, 0, 'Y el servidor guardó el 0');
   sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=511");
 
+  // ══ K7 · Un rango con tres decimales se escribe para leerse igual: solo el máximo, «máximo 1.1250»; mínimo y
+  // máximo, «1.1250 a 2.25». En el paso y en la hoja de la lectura fuera de rango ══
+  orden(516, 'preventivo', '[Preventivo] Mensual - PE-01', 81, 'infraestructura', JSON.stringify([
+    { texto: 'Medir el juego del eje', requiereValor: true, unidad: 'mm', esperadoMax: 1.125, estado: 'pendiente' },
+    { texto: 'Medir la holgura de la banda', requiereValor: true, unidad: 'mm', esperadoMin: 1.125, esperadoMax: 2.25, estado: 'pendiente' },
+  ]));
+  await abrir('https://test.invalid/campo#orden-516');
+  await hasta(() => /2 pasos/.test(texto()), 'el 516');
+  await clic('empezar');
+  ok(/Paso 1 de 2/.test(texto()) && /Normal: máximo 1\.1250 mm/.test(texto()), 'El paso dice su máximo escrito para leerse igual: ' + texto().slice(0, 200));
+  escribir('#lectura', '3');
+  await clic('lectura');
+  ok(/Lectura 3 mm · normal máximo 1\.1250 mm/.test(hoja()), 'Fuera de rango, la hoja dice «máximo 1.1250»: ' + hoja().slice(0, 160));
+  await clic('problemaSeguir');
+  ok(/Paso 2 de 2/.test(texto()) && /Normal: 1\.1250 a 2\.25 mm/.test(texto()), 'El segundo paso dice su rango: ' + texto().slice(0, 200));
+  escribir('#lectura', '3');
+  await clic('lectura');
+  ok(/Lectura 3 mm · normal 1\.1250 a 2\.25 mm/.test(hoja()), 'Y la hoja dice «1.1250 a 2.25»: ' + hoja().slice(0, 160));
+  await clic('cerrarHoja');
+  sqlite.exec("UPDATE ordenes SET estado='cancelada' WHERE id=516");
+
+  // ══ K8 · Antes de enviar a verificación, cada paso que pide lectura la tiene. Si falta, el celular lo dice con la
+  // frase de siempre y lleva a ese paso, sin enviar: el servidor no lo aceptaría. Un texto en un paso sin rango sí se acepta ══
+  orden(517, 'preventivo', '[Preventivo] Bimestral - PE-01', 81, 'infraestructura', JSON.stringify([
+    { texto: 'Medir corriente', requiereValor: true, unidad: 'A', esperadoMin: 8, esperadoMax: 12, estado: 'pendiente' },
+    { texto: 'Anotar la placa del motor', requiereValor: true, estado: 'pendiente' },
+  ]));
+  await abrir('https://test.invalid/campo#orden-517');
+  await hasta(() => /2 pasos/.test(texto()), 'el 517');
+  await clic('empezar');
+  // «Hay un problema» sin anotar la lectura: los dos pasos quedan sin ella.
+  for (const [i, nota] of [[1, 'El amperímetro no enciende'], [2, 'La placa del motor está ilegible']]) {
+    ok(new RegExp(`Paso ${i} de 2`).test(texto()), texto().slice(0, 120));
+    await clic('problema');
+    escribir('#nota-problema', nota);
+    await clic('problemaSeguir');
+  }
+  ok(/2 de 2 pasos anotados/.test(texto()), texto().slice(0, 120));
+  const terminadas = (id) => enviados.filter((op) => op.tipo === 'orden.terminar' && op.ordenId === id).length;
+  const avisoAhora = () => (doc.querySelector('#aviso').hidden ? '' : doc.querySelector('#aviso').textContent);
+  await clic('enviar');
+  anotar('falta la lectura antes de enviar');
+  ok(/Paso 1 de 2/.test(texto()) && doc.querySelector('#lectura') && avisoAhora() === 'Escribe la lectura para seguir.', 'Sin la lectura del paso con rango, lo dice y lleva a ese paso: ' + texto().slice(0, 160) + ' · ' + avisoAhora());
+  await espera(60);
+  igual(terminadas(517), 0, 'Y no envía');
+  escribir('#lectura', '10');
+  await clic('lectura');
+  ok(/2 de 2 pasos anotados/.test(texto()), texto().slice(0, 120));
+  await clic('enviar');
+  ok(/Paso 2 de 2/.test(texto()) && avisoAhora() === 'Escribe la lectura para seguir.', 'El paso sin rango y sin nada escrito, también: ' + texto().slice(0, 160));
+  // Un texto en un paso sin rango se acepta: no se juzga contra un rango.
+  escribir('#lectura', 'Placa WEG 14,5 A');
+  igual(doc.querySelector('#lect-estado').textContent, '', 'Mientras lo escribe, sin aviso');
+  await clic('lectura');
+  ok(/2 de 2 pasos anotados/.test(texto()), 'El texto se guarda y sigue: ' + texto().slice(0, 120));
+  await hasta(() => enviados.some((op) => op.tipo === 'orden.paso' && op.ordenId === 517 && op.idx === 1 && op.valor === 'Placa WEG 14,5 A'), 'sale como texto');
+  igual(terminadas(517), 0, 'Todavía no envía');
+  await clic('enviar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=517').estado === 'completada', 'con sus lecturas, se envía');
+  igual(one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=517 AND resultado='rechazada'").n, 0, 'Sin rechazos: ' + JSON.stringify(all("SELECT tipo, detalle FROM campo_operaciones WHERE orden_id=517 AND resultado='rechazada'")));
+  // Un paso con rango que ya tenía guardado un texto (de antes de esta versión): la frase del número. Con «1,200»,
+  // la de un número que se lee de dos formas.
+  orden(518, 'preventivo', '[Preventivo] Trimestral - PE-01', 81, 'infraestructura', JSON.stringify([
+    { texto: 'Medir corriente', requiereValor: true, unidad: 'A', esperadoMin: 8, esperadoMax: 12, estado: 'ok', valorMedido: 'ok' },
+    { texto: 'Medir voltaje', requiereValor: true, unidad: 'V', esperadoMin: 100, esperadoMax: 130, estado: 'ok', valorMedido: '1,200' },
+  ]));
+  sqlite.prepare("UPDATE ordenes SET estado='en_proceso', iniciada_en=? WHERE id=518").run(iso(enSV('12:25')));
+  await abrir('https://test.invalid/campo#orden-518');
+  await hasta(() => /2 de 2 pasos anotados/.test(texto()), 'el 518, con sus pasos anotados');
+  await clic('enviar');
+  ok(/Paso 1 de 2/.test(texto()) && doc.querySelector('#lect-estado').textContent === app.reglas.MENSAJE_PASO_SIN_NUMERO, 'Con un texto en el paso con rango, la frase del servidor, junto al campo: ' + texto().slice(0, 200));
+  escribir('#lectura', '10');
+  await clic('lectura');
+  await clic('enviar');
+  ok(/Paso 2 de 2/.test(texto()) && doc.querySelector('#lect-estado').textContent === '¿1200 o 1,2? Escribe el número sin separador de miles.', 'Con «1,200», la frase del número que se lee de dos formas: ' + texto().slice(0, 200));
+  await espera(60);
+  igual(terminadas(518), 0, 'Y no envía');
+  escribir('#lectura', '120');
+  await clic('lectura');
+  await clic('enviar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=518').estado === 'completada', 'con sus números, se envía');
+
   // ══ La jefatura reasigna la orden mientras el técnico la trabaja sin señal: «Ver por qué» la nombra igual
   // en cada registro, aunque el día llegue antes que la respuesta, y no pide abrir una orden que ya no es suya ══
   ahora = enSV('12:26');
@@ -1125,6 +1241,53 @@ try {
     ok(!doc.querySelector('#hoja [data-a="ir"][data-h^="#orden-"]') && !/ábrela|ya no está a tu nombre/.test(hoja()), 'No se ofrece abrirla ni se dice que se reasignó: ' + hoja().slice(0, 300));
     await clic('limpiarRechazos');
     hoyFalla = false;
+    sqlite.exec(`UPDATE ordenes SET estado='cancelada' WHERE id=${id}`);
+  }
+
+  // ══ La jefatura deja sin asignar una orden en curso mientras el técnico la trabaja sin señal: el paquete del día
+  // ya no la trae, pero sigue en curso. «Ver por qué» la deja en el celular y ofrece abrirla, llegue antes el día
+  // (519) o la respuesta de por qué (520) ══
+  const copiaTrae = async (id) => { const c = await leerGuardado('hoy:3'); return [...c.ordenes, ...c.libres].some((o) => o.id === id); };
+  for (const [id, primero] of [[519, 'el día'], [520, 'por qué']]) {
+    ahora = enSV('12:27');
+    orden(id, 'preventivo', '[Preventivo] Semestral - CH-83', 83, 'aires', CHECKLIST);
+    await abrir(`https://test.invalid/campo#orden-${id}`);
+    await hasta(() => /3 pasos/.test(texto()), `el preventivo ${id}`);
+    await clic('empezar');
+    await hasta(() => one('SELECT estado FROM ordenes WHERE id=?', id).estado === 'en_proceso' && !/por enviar|Enviando/.test(pill()), 'empieza en el servidor');
+    enLinea = false; w.dispatchEvent(new w.Event('offline'));
+    await clic('hecho');
+    sqlite.exec(`UPDATE ordenes SET asignado_a=NULL WHERE id=${id}`);
+    // Lo que llega primero se decide aquí: la respuesta de por qué espera al día, o el día a ella.
+    let soltarHoy = null;
+    if (primero === 'el día') retener.add(String(id)); else soltarHoy = frenarHoy();
+    const pedidas = pedidasDe[String(id)] ?? 0;
+    enLinea = true; w.dispatchEvent(new w.Event('online'));
+    await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=? AND resultado='rechazada'", id).n === 1 && pedidasDe[String(id)] === pedidas + 1, 'el servidor no acepta lo anotado y el celular pregunta por qué');
+    if (primero === 'el día') {
+      await hasta(() => enVuelo === 1, 'el día llega');
+      ok(!(await copiaTrae(id)), `(${id}) El día llegó primero y ya no la trae`);
+      soltar(String(id));
+    } else {
+      await espera(60);
+      ok(await copiaTrae(id), `(${id}) La respuesta de por qué llegó primero`);
+      soltarHoy();
+    }
+    await hasta(() => !enVuelo && !/Enviando/.test(pill()), 'todo llega');
+    await espera(60);
+    const delDia = await (await app.hoy.GET(ctx('/api/campo/hoy?sede=8', { rol: 'tecnico' }))).json();
+    ok(![...delDia.ordenes, ...delDia.libres].some((o) => o.id === id), `(${id}) El paquete del día ya no la trae`);
+    ok(await copiaTrae(id), `(${id}) Pero sigue en la copia del celular`);
+    await clic('salir');
+    await hasta(() => /1 registro sin aceptar/.test(texto()), 'Hoy avisa');
+    await clic('verRechazos');
+    ok(doc.querySelector(`#hoja [data-a="ir"][data-h="#orden-${id}"]`) && /Abrir la orden/.test(hoja()), `(${id}) «Ver por qué» ofrece abrir la orden que sigue en curso: ` + hoja().slice(0, 300));
+    anotar(`rechazo de una orden en curso que el día no trae (${id})`);
+    doc.querySelector(`#hoja [data-a="ir"][data-h="#orden-${id}"]`).click(); await espera();
+    ok(/Paso 1 de 3/.test(texto()) && texto().includes('Chiller del edificio'), `(${id}) Se abre en el celular: ` + texto().slice(0, 160));
+    await clic('salir');
+    await clic('verRechazos');
+    await clic('limpiarRechazos');
     sqlite.exec(`UPDATE ordenes SET estado='cancelada' WHERE id=${id}`);
   }
 
@@ -1303,6 +1466,65 @@ try {
   anotar('sin ronda desde la 01:00');
   ok(/Desde el turno de la 01:00 esta sede no hace ronda\./.test(bloque()), 'Con «la 01:00»: ' + bloque());
 
+  // ══ K15 · Toda hora en una frase lleva su artículo: «Ronda de la 01:00», «También falta la ronda de la 01:00»,
+  // «Escalar antes de la 01:30», los relojes «antes de la 01:30» y «(turno de la 01:00)». Sin señal, con la copia del día ══
+  const d6 = diaMas(6), d7 = diaMas(7);
+  sqlite.exec("INSERT INTO sucursales(id,nombre,activa,hace_ronda) VALUES(14,'Sede 14',1,1)");
+  ahora = enSV('13:00', d6);
+  await enSedeSinSenal(14);
+  const deLa = (r, extra = {}) => ({ ...r, turnos: ['01:00', '13:00'], turnosProximos: null, omite: [], fecha: d7, turno: '01:00', etiqueta: 'Turno 01:00 · mañana', estado: 'sin_iniciar', ejecucionId: null, iniciadaEn: null, lecturas: {}, entregaAnterior: null, ...extra });
+  const emergencia690 = { id: 690, tipo: 'emergencia', modo: 'emergencia', estado: 'en_proceso', titulo: '[Emergencia] Falla de energía - PE-01', codigo: null, asignadoA: 3, iniciadaEn: iso(enSV('01:02', d7)), vencimiento: iso(enSV('01:30', d7)), hitos: { llegada: true, mitigacion: false, restablecimiento: false }, eop: { codigo: 'EOP-ELE-01', titulo: eop.titulo }, lugar: { sede: 'Sede 14', ubicacion: 'Cuarto de máquinas' }, pasos: [{ idx: 0, texto: 'Arrancar la planta', estado: 'pendiente' }] };
+  await cambiarGuardado('hoy:3', (p) => ({
+    ...p,
+    // Dos paradas: la de la línea 1 y la temperatura, con su reloj de 20 y 50 minutos.
+    ronda: deLa(p.ronda, { puntos: p.ronda.puntos.filter((pt) => pt.linea === 1 || /^Quirófanos · temperatura/.test(pt.texto)).map((pt) => (/temperatura/.test(pt.texto) ? { ...pt, actuarMin: 20, escalarMin: 50 } : pt)) }),
+    desviaciones: [{ id: 9901, codigo: 'AOP-HVAC-01', titulo: 'Temperatura fuera de rango', estado: 'abierto', sala: 'Quirófano 2', escalarAntesDe: iso(enSV('01:30', d7)) }],
+    ordenes: [...p.ordenes, emergencia690],
+  }));
+  ahora = enSV('01:10', d7);
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /Hola/.test(texto()) && doc.querySelector('.ahora .b2[data-a="ronda"]'), 'Hoy de la 01:00, con la emergencia');
+  anotar('la ronda de la 01:00 con una emergencia');
+  igual(doc.querySelector('.ahora .b2[data-a="ronda"]').textContent, 'También falta la ronda de la 01:00', 'Con la emergencia empezada: «También falta la ronda de la 01:00»');
+  ok(/^Emergencia · Vence hoy 01:30$/.test(doc.querySelector('.ahora .etq').textContent), 'Con su plazo: ' + bloque());
+  await clic('grupo', '[data-g="aop"]');
+  ok(/Escalar antes de la 01:30/.test(texto()), '«Escalar antes de la 01:30»: ' + texto().slice(0, 400));
+  anotar('desviaciones de la 01:10');
+  // Una orden que el técnico empezó en este turno: la ronda también queda a la vista.
+  await cambiarGuardado('hoy:3', (p) => ({ ...p, ordenes: [...p.ordenes.filter((o) => o.id !== 690), { id: 691, tipo: 'preventivo', modo: 'pasos', estado: 'en_proceso', titulo: '[Preventivo] Mensual - PE-01', asignadoA: 3, iniciadaEn: iso(enSV('01:05', d7)), activo: { id: 81, codigo: 'PE-01', nombre: 'Planta eléctrica de emergencia' }, lugar: { sede: 'Sede 14', ubicacion: 'Cuarto de máquinas' }, pasos: [{ idx: 0, texto: 'Revisar el nivel de aceite', estado: 'pendiente' }] }] }));
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /Vas aquí/.test(bloque()) && doc.querySelector('.ahora .b2[data-a="ronda"]'), 'Hoy con la orden que empezó en este turno');
+  igual(doc.querySelector('.ahora .b2[data-a="ronda"]').textContent, 'También falta la ronda de la 01:00', 'Con una orden empezada en este turno, también');
+  // Sin la orden, la ronda es lo primero del turno.
+  await cambiarGuardado('hoy:3', (p) => ({ ...p, ordenes: p.ordenes.filter((o) => o.id !== 691) }));
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /Lo primero del turno/.test(bloque()), 'la ronda de la 01:00');
+  igual(doc.querySelector('.ahora h2').textContent, 'Ronda de la 01:00', '«Ronda de la 01:00» en Hoy');
+  await clic('ronda');
+  igual(doc.querySelector('.paso-tit strong').textContent, 'Ronda de la 01:00', 'Y en la cabecera de la parada');
+  await paradaBien();
+  await clic('salir');
+  await hasta(() => /Vas aquí/.test(bloque()), 'Hoy, con la ronda empezada');
+  igual(doc.querySelector('.ahora h2').textContent, 'Ronda de la 01:00', 'Con la ronda empezada, también');
+  await clic('ronda');
+  ok(/Parada 2 de 2/.test(texto()), texto().slice(0, 120));
+  escribir('#lectura', '30');
+  await clic('lectura');
+  await clic('novedadSeguir');
+  anotar('relojes de la 01:10');
+  igual([...doc.querySelectorAll('#hoja .relojes b')].map((b) => b.textContent).join(' | '), 'la 01:30 | las 02:00', 'Los relojes de la hoja: actuar antes de la 01:30, escalar antes de las 02:00');
+  await clic('aopSeguir');
+  igual(doc.querySelector('.final > .etq')?.textContent, 'Ronda de la 01:00', 'El cierre de la ronda: «Ronda de la 01:00»');
+  anotar('cierre de la ronda de la 01:00');
+  // El turno de las 13:00 recibe lo que dejó el de la 01:00.
+  await cambiarGuardado('hoy:3', (p) => ({ ...p, ronda: deLa(p.ronda, { turno: '13:00', etiqueta: 'Turno 13:00 · tarde', entregaAnterior: { firma: 'Ana Pérez', turno: '01:00', notas: 'Sin novedades.' } }) }));
+  ahora = enSV('13:10', d7);
+  await abrir('https://test.invalid/campo#hoy');
+  await hasta(() => /Ronda de las 13:00/.test(bloque()), 'la ronda de las 13:00');
+  await clic('ronda');
+  ok(/Dejó Ana Pérez \(turno de la 01:00\): Sin novedades\./.test(texto()), '«(turno de la 01:00)»: ' + texto().slice(0, 300));
+  anotar('entrega del turno de la 01:00');
+
   // ══ Ninguna pantalla mostró tiempos de medición ni mandó a la ficha ══
   const horasDeInicio = [horaSV(enSV('09:02')), horaSV(llegue), horaSV(enSV('10:35'))];
   for (const v of vistas) {
@@ -1312,6 +1534,6 @@ try {
     ok(horasDeInicio.every((h) => !v.t.includes(h)), `${v.donde}: una hora de inicio a la vista`);
     ok(v.fichas.every((h) => h.includes('?completa=1')), `${v.donde}: un enlace a la ficha completa: ${v.fichas}`);
   }
-  console.log(`PASS e2e-campo-emergencia: ${checks} verificaciones; emergencia sin señal y luego con señal, intervención con permiso, lectura fuera de rango y reversa, borrador que sobrevive a recargar; MOP-MSP-01 real con un permiso a la vista, lectura con rango que pide su número y cierre resumido; emergencias en «Ahora» con sus líneas y su «Vence»; emergencia sin documento al instante y por detrás, sin saltos y con límite; «acciones» en orden.iniciar; envío rechazado que devuelve el texto; foto de hoja cancelada que no sale y la de lo anotado que sí; orden reasignada nombrada igual y la cancelada o cerrada dicha como tal; números que no se adivinan y que vuelven al campo sin leerse de dos formas; paso con rango que pide su número; varias emergencias en el orden de «Ahora», con sus grupos abiertos; foto que se reduce mientras se anota, se cancela o se envía; hoja de la desviación con su documento en su caja; lo que llega por detrás sin saltos; orden libre que pasa a ser del técnico; cambio de turnos, «omite» y «noHaceRondaDesde» sin señal; ${vistas.length} pantallas sin tiempos.`);
+  console.log(`PASS e2e-campo-emergencia: ${checks} verificaciones; emergencia sin señal y luego con señal, intervención con permiso, lectura fuera de rango y reversa, borrador que sobrevive a recargar; MOP-MSP-01 real con un permiso a la vista, lectura con rango que pide su número y cierre resumido; emergencias en «Ahora» con sus líneas y su «Vence»; emergencia sin documento al instante y por detrás, sin saltos y con límite; «acciones» en orden.iniciar; envío rechazado que devuelve el texto; foto de hoja cancelada que no sale y la de lo anotado que sí; orden reasignada nombrada igual y la cancelada o cerrada dicha como tal; números que no se adivinan y que vuelven al campo sin leerse de dos formas; paso con rango que pide su número; varias emergencias en el orden de «Ahora», con sus grupos abiertos; foto que se reduce mientras se anota, se cancela o se envía; hoja de la desviación con su documento en su caja; lo que llega por detrás sin saltos; orden libre que pasa a ser del técnico; cambio de turnos, «omite» y «noHaceRondaDesde» sin señal; la hora con su artículo; rangos con tres decimales; la emergencia de fecha sola; lecturas que faltan antes de enviar; la orden en curso que el día ya no trae; ${vistas.length} pantallas sin tiempos.`);
 } finally { for (const id of [...retenidas.keys()]) soltar(id); await cerrarPagina().catch(() => {}); await close(); globalThis.Date = RealDate; }
 process.exit(0);

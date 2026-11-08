@@ -47,6 +47,9 @@ const updateSchema = z.object({
   // El checklist tal como la ficha lo recibió: con él, el servidor fusiona por
   // punto y no deshace lo que el celular marcó mientras tanto.
   checklistBase: z.string().nullable().optional(),
+  // La ficha nueva manda solo lo que cambió y lo dice: sin las reglas de la
+  // pestaña de antes (K9a, K9b y K9c). No se guarda.
+  soloCambios: z.boolean().optional(),
   // Verificacion (solo se setea via accion explicita; aqui aceptamos notas)
   verificacionNotas: z.string().nullable().optional(),
   // Motivo opcional al reasignar (solo se usa para el email al técnico nuevo)
@@ -123,13 +126,17 @@ export async function aplicarCambioOrden(
   // Quién marca la reversa, en qué estado y con qué notas lo revisa actualizarOrdenConVerificacion.
 
   let row: typeof ordenes.$inferSelect;
+  // Los pasos del checklist que chocaron y quedaron como estaban guardados (K11).
+  let pasosSinAplicar: number[] = [];
   try {
     const result = await actualizarOrdenConVerificacion(db, actual, user, entrada, now);
     row = result.row;
+    pasosSinAplicar = result.pasosSinAplicar;
     if (result.estado !== actual.estado) parsed.data.estado = result.estado as EstadoOT;
   } catch (error) {
-    // El motivo viaja en el cuerpo: la ficha reconoce la guarda de concurrencia por él, no por la frase.
-    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message, ...(error.motivo ? { motivo: error.motivo } : {}) }, { status: error.status });
+    // El motivo y los campos del rechazo viajan en el cuerpo: la ficha reconoce la
+    // guarda de concurrencia o el paso que cambió por el motivo, no por la frase.
+    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message, ...(error.motivo ? { motivo: error.motivo } : {}), ...(error.campos ?? {}) }, { status: error.status });
     if (parsed.data.activoId !== undefined && parsed.data.activoId !== actual.activoId
       && await ordenesTienenConjunto(ctx, [id])) {
       return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
@@ -385,5 +392,5 @@ export async function aplicarCambioOrden(
     } catch {}
   }
 
-  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}) });
+  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}), ...(pasosSinAplicar.length ? { pasosSinAplicar } : {}) });
 }

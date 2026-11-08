@@ -18,6 +18,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import {
   FAMILIAS_RONDA,
   avisoCambioTurnos,
+  avisoTurnosSinAbrir,
   cambiosDeSede,
   inicioTurno,
   lineaDeTurnos,
@@ -89,14 +90,16 @@ for (const u of [...umbrales.filter(generico), ...umbrales.filter((x) => !generi
 
 // Los turnos de este recorrido y, si el cambio todavía no entró, cuándo entran, qué turno llega hasta
 // esa hora y cuál no se abre. Un cambio de turnos entra cuando empieza el primer turno de la lista nueva;
-// la marca de una sede, en el siguiente turno.
+// la marca de una sede, en el siguiente turno. Cancelado el cambio, lo mismo que dijo al guardar: el
+// turno que se anunció como «no se abre» y cuya hora ya pasó sigue sin abrirse.
 const ahora = Date.now();
 const turnosRonda = ronda ? parsearTurnos(ronda.turnos) : [];
 const fechaTurno = (t: { fecha: string; turno: string }) => `el turno ${t.turno} del ${fmtFechaSoloCompacta(t.fecha)}`;
 function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
   return [...lista].sort((a, b) => b.hasta.localeCompare(a.hasta))[0] ?? null;
 }
-const avisoTurnos = ronda ? avisoCambioTurnos(lineaDeTurnos(ronda, vigencias), ahora) : null;
+const lineaRonda = ronda ? lineaDeTurnos(ronda, vigencias) : null;
+const avisoTurnos = lineaRonda ? avisoCambioTurnos(lineaRonda, ahora) ?? avisoTurnosSinAbrir(lineaRonda, ahora) : null;
 
 // Cada sede: qué recorrido usa, si hace ronda y, si se acaba de cambiar, desde qué turno entra.
 const filasSede = sedes.map((s) => {

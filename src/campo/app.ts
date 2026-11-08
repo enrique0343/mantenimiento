@@ -610,6 +610,7 @@ async function refrescarHoy() {
     if (enCursoAqui && (j.ronda?.fecha !== enCursoAqui.fecha || j.ronda?.turno !== enCursoAqui.turno)) j.ronda = enCursoAqui;
     // El servidor no pudo leer la ronda: se conserva la que ya había; no es que no haya ronda.
     if (j.rondaError && !j.ronda && E.base?.ronda && Number(E.base.ronda.sucursalId) === Number(j.sedeId)) j.ronda = E.base.ronda;
+    for (const o of enCursoSinAceptar(j)) (j[o.asignadoA === UID ? "ordenes" : "libres"] ??= []).push(o);
     E.base = j;
     E.sesionVencida = false;
     E.enLinea = true;
@@ -666,6 +667,11 @@ const saltado = (clave: string, id: number) => (E.saltos[clave] ?? []).includes(
 const preHecho = (o: Any, k: number) => { const p = o.prerrequisitos[k]; return !!p.cumplido || (!p.obligatorio && saltado(`pre:${o.id}`, p.id)); };
 const faltanObligatorios = (o: Any) => (o.prerrequisitos ?? []).some((p: Any) => p.obligatorio && !p.cumplido);
 const conRango = (l: Any) => l.min != null || l.max != null;
+/**
+ * Un paso que pide lectura y no la tiene, como lo juzga el servidor al enviar a verificación: con rango, sin
+ * su número (K8); sin rango, sin nada escrito. Un paso que no aplica no se mide.
+ */
+const pasoSinLectura = (p: Any) => !!p.pideValor && p.estado !== "na" && (conRango(p) ? valorDe(leerNumero(p.valor)) == null : leerNumero(p.valor).tipo === "vacio");
 /** Una lectura con mínimo o máximo solo cuenta como medida si trae el número del instrumento: igual que el servidor. */
 const medidaConNumero = (l: Any) => !!l.medida && (!conRango(l) || l.conforme != null);
 /** Una lectura de liberación queda resuelta si se midió en rango. Una opcional, también fuera de rango o saltada. */
@@ -772,7 +778,7 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
     const donde = enPausa ? `En pausa${emergencia.motivoPausa ? `: ${emergencia.motivoPausa}` : ""}` : empezo ? dondeVas(emergencia) : "";
     const devuelta = emergencia.devuelta ? `<p class="recorte">Te la devolvieron: ${esc(emergencia.devuelta)}</p>` : "";
     // Con la emergencia ya empezada, la ronda del turno no se pierde de vista.
-    const tambien = empezo && rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de las ${esc(r.turno)}</button>` : "";
+    const tambien = empezo && rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de ${esc(laHora(r.turno))}</button>` : "";
     return {
       ordenId: emergencia.id,
       enAhora: [emergencia, ...otras.slice(0, LINEAS_EMERGENCIA)].map((o: Any) => o.id),
@@ -786,7 +792,7 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
   const activaDeEsteTurno = !!activa?.iniciadaEn && Date.parse(activa.iniciadaEn) >= inicioTurno;
   if (activa && (!rondaPendiente || activaDeEsteTurno)) {
     const devuelta = activa.devuelta ? `<p>Te la devolvieron: ${esc(activa.devuelta)}</p>` : "";
-    const tambien = rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de las ${esc(r.turno)}</button>` : "";
+    const tambien = rondaPendiente ? `<button class="b2" data-a="ronda">También falta la ronda de ${esc(laHora(r.turno))}</button>` : "";
     return { ordenId: activa.id, enAhora: [activa.id], html: `<span class="etq">Vas aquí</span><h2>${esc(tituloOrden(activa))}</h2><p>${esc(dondeVas(activa))}</p>${devuelta}<button class="b1 claro" data-a="ir" data-h="#orden-${activa.id}">Seguir</button>${tambien}` };
   }
   if (!E.sede) return { enAhora: [], html: `<span class="etq">Antes de empezar</span><h2>¿En qué sede estás hoy?</h2><p>La ronda y los equipos dependen de la sede.</p><button class="b1 claro" data-a="sede">Elegir sede</button>` };
@@ -794,8 +800,8 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[] } {
   const frase = sinRonda ? `<p class="sin-ronda">${esc(sinRonda)}</p>` : "";
   if (r && r.estado !== "completada") {
     const hechas = Object.keys(r.lecturas).length;
-    if (r.estado === "sin_iniciar" && !hechas) return { enAhora: [], html: `<span class="etq">Lo primero del turno</span><h2>Ronda de las ${esc(r.turno)}</h2><p>${r.puntos.length} paradas</p><button class="b1 claro" data-a="ronda">Empezar la ronda</button>` };
-    return { enAhora: [], html: `<span class="etq">Vas aquí</span><h2>Ronda de las ${esc(r.turno)}</h2><p>${hechas} de ${r.puntos.length} paradas. Sigues justo donde quedaste.</p>${frase}<button class="b1 claro" data-a="ronda">Seguir la ronda</button>` };
+    if (r.estado === "sin_iniciar" && !hechas) return { enAhora: [], html: `<span class="etq">Lo primero del turno</span><h2>Ronda de ${esc(laHora(r.turno))}</h2><p>${r.puntos.length} paradas</p><button class="b1 claro" data-a="ronda">Empezar la ronda</button>` };
+    return { enAhora: [], html: `<span class="etq">Vas aquí</span><h2>Ronda de ${esc(laHora(r.turno))}</h2><p>${hechas} de ${r.puntos.length} paradas. Sigues justo donde quedaste.</p>${frase}<button class="b1 claro" data-a="ronda">Seguir la ronda</button>` };
   }
   const sig = siguienteOrden();
   if (sig) {
@@ -856,7 +862,7 @@ function vHoy() {
   for (const [clave, lista] of grupos) filas += grupoHtml(clave, clave, `${lista.length} por hacer`, lista.map(filaOrden).join(""), abierto, marcas.get(clave));
   if (p.locales?.length) filas += grupoHtml("locales", "Guardadas en tu celular", `${p.locales.length} por enviar`, p.locales.map((l: Any) => `<div class="fila sub"><span class="marca"></span><span class="txt"><strong>${esc(l.titulo)}</strong><small>Se envía sola cuando vuelva la señal</small></span></div>`).join(""), abierto);
   if (p.desviaciones?.length) {
-    filas += grupoHtml("aop", "Desviaciones abiertas", `${p.desviaciones.length} con reloj`, p.desviaciones.map((d: Any) => `<a class="fila sub" href="/aop/${d.id}" data-fuera><span class="txt"><strong>${esc(d.codigo ?? "AOP")}${d.sala ? ` · ${esc(d.sala)}` : ""}</strong><small>${d.escalarAntesDe ? `Escalar antes de las ${hora(d.escalarAntesDe)}` : esc(d.titulo ?? "")}</small></span>${ico.flecha}</a>`).join(""), abierto);
+    filas += grupoHtml("aop", "Desviaciones abiertas", `${p.desviaciones.length} con reloj`, p.desviaciones.map((d: Any) => `<a class="fila sub" href="/aop/${d.id}" data-fuera><span class="txt"><strong>${esc(d.codigo ?? "AOP")}${d.sala ? ` · ${esc(d.sala)}` : ""}</strong><small>${d.escalarAntesDe ? `Escalar antes de ${laHora(hora(d.escalarAntesDe))}` : esc(d.titulo ?? "")}</small></span>${ico.flecha}</a>`).join(""), abierto);
   }
   if (p.tickets?.length) filas += grupoHtml("tickets", "Reportes asignados", `${p.tickets.length} por atender`, p.tickets.map((t: Any) => `<a class="fila sub" href="/tickets/${t.id}" data-fuera><span class="txt"><strong>${esc(t.asunto)}</strong><small>${esc([t.solicitante, t.sede].filter(Boolean).join(" · "))}</small></span>${ico.flecha}</a>`).join(""), abierto);
   if (p.libres?.length) filas += grupoHtml("libres", "Sin asignar en esta sede", `${p.libres.length} para tomar`, p.libres.map(filaOrden).join(""), abierto, marcaLibres);
@@ -967,6 +973,16 @@ async function pedirOrden(id: number, limiteMs: number): Promise<Pedido> {
     }
   })();
   try { return await Promise.race([pedido, tarde]); } finally { clearTimeout(reloj); }
+}
+/**
+ * Las órdenes de la copia del día que siguen en curso según «Ver por qué» y que el paquete nuevo ya no trae (la
+ * jefatura la dejó sin asignar, por ejemplo): siguen en el celular, para abrirlas desde ahí, hasta «Entendido».
+ */
+function enCursoSinAceptar(nuevo: Any): Any[] {
+  const ids = new Set(E.rechazos.filter((x) => x.motivo === "en_curso").map((x) => Number(x.ordenId)));
+  if (!ids.size) return [];
+  const trae = new Set([...(nuevo.ordenes ?? []), ...(nuevo.libres ?? [])].map((o: Any) => o.id));
+  return [...(E.base?.ordenes ?? []), ...(E.base?.libres ?? [])].filter((o: Any) => ids.has(o.id) && !trae.has(o.id));
 }
 /** La orden que llegó del servidor queda en la copia del día, en la lista que le toca, y se guarda. */
 function ponerEnBase(orden: Any) {
@@ -1112,7 +1128,7 @@ function bitacoraHtml(r: Any) {
   const e = r.entregaAnterior;
   if (!E.enLinea && !e) return `<p class="ayuda">Sin señal: la entrega del turno anterior y las desviaciones llegan cuando vuelva.</p>`;
   const abiertas = E.p?.desviaciones?.length ?? 0;
-  const dejo = e ? `Dejó ${esc(e.firma ?? "el turno anterior")}${e.turno ? ` (turno de las ${esc(e.turno)})` : ""}: ${esc(String(e.notas ?? "sin novedades").slice(0, 200))}` : "Sin entrega registrada.";
+  const dejo = e ? `Dejó ${esc(e.firma ?? "el turno anterior")}${e.turno ? ` (turno de ${esc(laHora(e.turno))})` : ""}: ${esc(String(e.notas ?? "sin novedades").slice(0, 200))}` : "Sin entrega registrada.";
   return `<p class="ayuda">${dejo} ${abiertas ? `${abiertas} desviación${abiertas === 1 ? "" : "es"} abierta${abiertas === 1 ? "" : "s"} en esta sede.` : "Sin desviaciones abiertas en esta sede."}</p>`;
 }
 
@@ -1123,7 +1139,7 @@ function cabOrden(o: Any) {
   const pausa = o.estado === "en_proceso" ? `<button class="ic" data-a="pausar" aria-label="Pausar el trabajo">${ico.pausa}</button>` : "";
   return `<div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button><div class="paso-tit"><strong>${esc(titulo)}</strong><span>${esc(sub)}</span></div>${pausa}<span id="senal">${pillHtml()}</span></div>`;
 }
-const cabRonda = (r: Any, p: Any) => `<div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button><div class="paso-tit"><strong>${esc(`Ronda de las ${r.turno}`)}</strong><span>${esc(p.sistema === "otro" ? "" : SISTEMAS[p.sistema] ?? r.nombre)}</span></div><span id="senal">${pillHtml()}</span></div>`;
+const cabRonda = (r: Any, p: Any) => `<div class="paso-cab"><button class="ic" data-a="salir" aria-label="Volver a Hoy">${ico.x}</button><div class="paso-tit"><strong>${esc(`Ronda de ${laHora(r.turno)}`)}</strong><span>${esc(p.sistema === "otro" ? "" : SISTEMAS[p.sistema] ?? r.nombre)}</span></div><span id="senal">${pillHtml()}</span></div>`;
 const segmentos = (n: number, actual: number, hecho: (k: number) => boolean, clase = "") => `<div class="segs${clase ? ` ${clase}` : ""}">${Array.from({ length: n }, (_, k) => `<i class="${k === actual ? "a" : hecho(k) ? "h" : ""}"></i>`).join("")}</div>`;
 /** «Volver al…» de cada pantalla del trabajo, si hay a dónde volver. */
 function enlaceAtras(o: Any, vista: string, i: number) {
@@ -1254,6 +1270,17 @@ function pedirNumero(mensaje: string, campo?: HTMLInputElement) {
   const b = $("#btn-lect");
   if (b) b.textContent = "Guardar lectura";
   campo?.focus();
+}
+/**
+ * Antes de enviar a verificación: el paso que pide su lectura y no la tiene. Se va a ese paso y se dice qué
+ * falta, con la frase de siempre: sin nada escrito, la de la lectura que falta; con un texto, la del número.
+ */
+function pedirLecturaDePaso(o: Any, i: number) {
+  const leido = leerNumero(o.pasos[i].valor);
+  irAPantalla(o, { vista: "paso", i });
+  const campo = $<HTMLInputElement>("#lectura") ?? undefined;
+  if (leido.tipo === "vacio") { aviso("Escribe la lectura para seguir."); campo?.focus(); return; }
+  pedirNumero(leido.tipo === "ambiguo" ? leido.mensaje : MENSAJE_PASO_SIN_NUMERO, campo);
 }
 function evaluarLectura() {
   const l = $<HTMLInputElement>("#lectura");
@@ -1387,8 +1414,8 @@ function abrirHojaDeDesviacion(pt: Any, valorTxt: string, at: string, nota: stri
   // El reloj de la parada manda sobre el del documento cuando la guía distingue condiciones.
   abrirHoja({ tipo: "aop", doc: { ...doc, actuarMin: pt.actuarMin ?? doc.actuarMin, escalarMin: pt.escalarMin ?? doc.escalarMin }, valorTxt, seguir: true, at, nota, pideOrden: !!pt.pideOrden });
 }
-/** «Actuar antes de las 08:12» desde la hora capturada; un plazo de un día o más se dice en horas. */
-const limite = (at: string | undefined, m: number | null | undefined) => (m == null ? "Sin plazo" : !at || m >= 720 ? plazo(m) : hora(Date.parse(at) + m * 60000));
+/** «Actuar antes de las 08:12», «antes de la 01:30», desde la hora capturada; un plazo de un día o más se dice en horas. */
+const limite = (at: string | undefined, m: number | null | undefined) => (m == null ? "Sin plazo" : !at || m >= 720 ? plazo(m) : laHora(hora(Date.parse(at) + m * 60000)));
 const origenRonda = () => {
   if (E.flujo?.tipo !== "ronda") return {};
   const r = E.p.ronda;
@@ -1426,7 +1453,7 @@ function vFinRonda() {
   const sugerida = [fuera.length ? `Quedan abiertas: ${nombres(fuera)}.` : "", nov.length ? `Sin verificar: ${nombres(nov)}.` : ""].filter(Boolean).join(" ");
   const entrega = E.notas[clave] ?? sugerida;
   const conReloj = fuera.filter((x: Any) => x.pt.aop).length;
-  return `<div class="final"><span class="etq">Ronda de las ${esc(r.turno)}</span><h1>${lect.length - nov.length} de ${r.puntos.length} paradas verificadas</h1>`
+  return `<div class="final"><span class="etq">Ronda de ${esc(laHora(r.turno))}</span><h1>${lect.length - nov.length} de ${r.puntos.length} paradas verificadas</h1>`
     + `<div class="dato"><span class="etq">Desviaciones abiertas</span><b>${fuera.length ? `${conReloj ? `${conReloj} con su reloj corriendo. ` : `${fuera.length} sin reloj. `}${E.enLinea ? "Tu jefatura ya las ve." : "Tu jefatura las ve cuando vuelva la señal."}` : "Ninguna"}</b></div>`
     + (nov.length ? `<div class="dato"><span class="etq">Sin verificar</span><b>${nov.length}, con su razón escrita.</b></div>` : "")
     + (lecturas.length ? `<div class="dato solo-alto"><span class="etq">Lecturas</span><b>${esc(lecturas.slice(0, 4).join(" · "))}${lecturas.length > 4 ? ` y ${lecturas.length - 4} más` : ""}</b></div>` : "")
@@ -2359,6 +2386,9 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const nota = ($<HTMLTextAreaElement>("#nota-fin")?.value ?? E.notas[`fin:${o.id}`] ?? "").trim();
     const err = $("#err-fin");
     const decir = (m: string) => { if (err) { err.textContent = m; err.hidden = false; } };
+    // Un paso que pide lectura y no la tiene no se envía: el servidor no lo aceptaría y lo escrito volvería a la orden.
+    const sinLectura = (o.pasos ?? []).findIndex(pasoSinLectura);
+    if (sinLectura >= 0) { pedirLecturaDePaso(o, sinLectura); return; }
     if (o.modo !== "pasos" && nota.length < 10) { decir("Escribe qué encontraste y qué hiciste (al menos 10 letras)."); $<HTMLTextAreaElement>("#nota-fin")?.focus(); return; }
     if (o.modo === "pasos" && !o.pasos.length && nota.length < 10) { decir("Describe lo que hiciste (al menos 10 letras)."); return; }
     if (o.modo === "intervencion" && !o.reversa?.ejecutada) {

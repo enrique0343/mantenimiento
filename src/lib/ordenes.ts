@@ -574,7 +574,8 @@ export function validarLiberacionesEnRango(
 ): { ok: boolean; error?: string; fuera: string[] } {
   if (tipo !== "intervencion") return { ok: true, fuera: [] };
   const fuera = liberacionesFueraDeRango(liberaciones).map((l) => {
-    const leido = l.valorMedido != null ? `${l.valorMedido}${l.unidad ? ` ${l.unidad}` : ""}` : String(l.valorMedidoTexto ?? "").trim();
+    // El número como se vuelve a escribir (textoDeNumero): 12.345 no sale «12.345».
+    const leido = l.valorMedido != null ? `${textoDeNumero(Number(l.valorMedido))}${l.unidad ? ` ${l.unidad}` : ""}` : String(l.valorMedidoTexto ?? "").trim();
     const rango = rangoLiberacionTexto(l.minAceptable, l.maxAceptable, l.unidad);
     return `${l.etiqueta}: leído ${leido}${rango ? `, normal ${rango}` : ""}`;
   });

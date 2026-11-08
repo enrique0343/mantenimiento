@@ -1,8 +1,10 @@
 // La ronda de turno: rutas reales, migraciones reales, SQLite en memoria. Sin red.
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 import { fijarReloj } from './test-support/reloj.mjs';
@@ -457,6 +459,8 @@ async function escenario(desde, fn) {
       semana: async () => { const r = await x.app.rt.resumenSemana(db, 1, lunesDeD); return { r, celda: (fecha, turno) => r.celdas.find((c) => c.fecha === fecha && c.turno === turno)?.estado ?? 'sin fila' }; },
       ejecucion: (fecha, turno) => x.sqlite.prepare('SELECT * FROM ronda_ejecuciones WHERE sucursal_id=1 AND fecha=? AND turno=?').get(fecha, turno),
       modeloId: x.sqlite.prepare('SELECT id FROM rondas WHERE sucursal_id IS NULL').get().id,
+      // La línea de tiempo del modelo, como la arma el servidor.
+      linea: () => x.app.rt.lineaDeTurnos(x.sqlite.prepare('SELECT id, turnos FROM rondas WHERE sucursal_id IS NULL').get(), x.sqlite.prepare('SELECT id, ronda_id AS rondaId, turnos_antes AS turnosAntes, hasta FROM ronda_vigencias').all()),
       // Lecturas «conforme» de las primeras paradas, como las manda el celular.
       lecturas: (ronda, clave, at, n = 3) => ronda.puntos.slice(0, n).map((pt) => e.op('ronda.lectura', at, { ...clave, puntoId: pt.id, resultado: 'ok', ...(pt.pideValor ? { valor: pt.min ?? pt.max ?? 1 } : {}) })),
     };
@@ -839,13 +843,15 @@ await escenario('10:30', async (e) => {
 });
 
 // (7f) Si a las 14:10 la jefatura cancela el cambio (vuelve a 06:00, 14:00 y 22:00), el de las 14:00 sigue sin
-// abrirse: ya se anunció y su hora ya pasó. El de las 06:00 corre hasta las 22:00.
+// abrirse: ya se anunció y su hora ya pasó. El de las 06:00 corre hasta las 22:00, y la respuesta lo dice.
 await escenario('10:30', async (e) => {
   e.reloj('10:40');
   await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:30', '14:30', '22:30'] });
   e.reloj('14:10');
   const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
-  igual(s.body.aviso, 'Siguen los turnos de ahora: el cambio que estaba pendiente ya no entra.', '(7f) La respuesta dice que el cambio ya no entra');
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 06:00 sigue hasta las 22:00; el de las 14:00 no se abre.', '(7f) La respuesta dice que el de las 06:00 sigue hasta las 22:00 y que el de las 14:00 no vuelve');
+  igual(e.x.app.rt.avisoTurnosSinAbrir(e.linea(), Date.parse(en('21:59'))), s.body.aviso, '(7f) Hasta las 22:00 se sigue diciendo lo mismo');
+  igual(e.x.app.rt.avisoTurnosSinAbrir(e.linea(), Date.parse(en('22:01'))), null, '(7f) Desde las 22:00 ya no hay nada que decir');
   e.reloj('14:12');
   const p = await e.hoy();
   igual([p.fecha, p.turno, p.turnos, p.turnosProximos, p.omite], [D, '06:00', ['06:00', '14:00', '22:00'], null, [{ fecha: D, turno: '14:00' }]], '(7f) A las 14:12 sigue la de las 06:00 y el de las 14:00 no se abre');
@@ -861,6 +867,38 @@ await escenario('10:30', async (e) => {
   igual((await e.fila({ fecha: D, turno: '06:00' })).estado, 'no_se_hizo', '(7f) La de las 06:00 terminó a las 22:00');
   const { r: sem, celda } = await e.semana();
   igual(sem.turnos.map((tt) => `${tt} ${celda(D, tt)}`), ['06:00 no_se_hizo', '14:00 no_aplica', '22:00 sin_iniciar'], '(7f) En la semana, la de las 14:00 no se exige');
+});
+
+// (7f) A medianoche: a las 23:00 se pasa a 07:00 y 19:00 y el de las 06:00 de mañana no se abre. A las 06:30 se cancela:
+// el de las 06:00 sigue sin abrirse y el de las 22:00 corre hasta las 14:00.
+await escenario('22:50', async (e) => {
+  e.reloj('23:00');
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['07:00', '19:00'] });
+  e.reloj('06:30', 1);
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:00', '22:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 22:00 sigue hasta las 14:00; el de las 06:00 no se abre.', '(7f) A medianoche, la respuesta dice que el de las 22:00 corre hasta las 14:00');
+  e.reloj('06:35', 1);
+  let p = await e.hoy();
+  igual([p.fecha, p.turno, p.turnosProximos, p.omite], [D, '22:00', null, [{ fecha: dia(1), turno: '06:00' }]], '(7f) A las 06:35 sigue el de las 22:00 de ayer');
+  const [x06] = await e.sync([e.op('ronda.iniciar', en('06:35', 1), { sucursalId: 1, fecha: dia(1), turno: '06:00' })]);
+  ok(!x06.ok && x06.error === YA_NO_EXISTE && !e.ejecucion(dia(1), '06:00'), `(7f) El de las 06:00 no se abre: ${x06.error}`);
+  e.reloj('13:59', 1);
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [D, '22:00'], '(7f) A las 13:59 sigue el de las 22:00');
+  e.reloj('14:01', 1);
+  p = await e.hoy();
+  igual([p.fecha, p.turno], [dia(1), '14:00'], '(7f) A las 14:00 corre el de las 14:00');
+});
+
+// (7f) Dos turnos anunciados como «no se abre» y ya pasados: la respuesta nombra los dos.
+await escenario('05:00', async (e) => {
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:30', '15:30', '22:00'] });
+  e.reloj('10:40');
+  igual((await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['16:00', '23:00'] })).body.aviso, 'Los turnos nuevos entran a las 16:00 del 10/11/2026. El turno de las 06:00 sigue hasta esa hora; los de las 14:30 y las 15:30 no se abren.', '(7f) A las 10:40, 16:00 y 23:00');
+  e.reloj('15:45');
+  const s = await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['06:00', '14:30', '15:30', '22:00'] });
+  igual(s.body.aviso, 'Siguen los turnos de ahora. El turno de las 06:00 sigue hasta las 22:00; los de las 14:30 y las 15:30 no se abren.', '(7f) Cancelado a las 15:45, nombra los dos');
+  igual((await e.hoy()).turno, '06:00', '(7f) Y sigue el de las 06:00');
 });
 
 // (7g) Cancelado a las 12:00, antes de la hora del de las 14:00: ese turno se calcula de nuevo y se abre como siempre.
@@ -910,6 +948,66 @@ await escenario('23:20', async (e) => {
   igual(aviso(['01:00', '17:00'], ['04:00', '16:00'], '18:00'), 'Los turnos nuevos entran a las 04:00 del 11/11/2026. Hasta entonces siguen los de antes; el de la 01:00 dura hasta esa hora.', '(7i) «el de la 01:00 dura hasta esa hora»');
   igual(aviso(['01:00', '09:00', '17:00'], ['02:00', '10:00', '18:00'], '22:00'), 'Los turnos nuevos entran a las 02:00 del 11/11/2026. El turno de las 17:00 sigue hasta esa hora; el de la 01:00 no se abre.', '(7i) «el de la 01:00 no se abre»');
   igual(aviso(['01:00', '02:00', '12:00'], ['02:30', '12:30'], '23:00'), 'Los turnos nuevos entran a las 02:30 del 11/11/2026. El turno de las 12:00 sigue hasta esa hora; los de la 01:00 y las 02:00 no se abren.', '(7i) «los de la 01:00 y las 02:00»');
+});
+
+// La ruta del celular con un aviso a la jefatura que se anota, en lugar del que no hace nada: así se lee lo que le llega.
+async function syncConAvisos() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ronda-avisos-'));
+  const archivo = path.join(dir, 'sync.mjs');
+  await build({
+    entryPoints: [path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'src/pages/api/campo/sync.ts')],
+    outfile: archivo, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent',
+    plugins: [{ name: 'avisos-anotados', setup(b) {
+      b.onResolve({ filter: /^@\/lib\/(email|smtp-worker|telegram|notificaciones|notif-app|audit|especialidad)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'avisos' }));
+      b.onLoad({ filter: /.*/, namespace: 'avisos' }, () => ({ contents: `
+        export const crearNotificacion=async(_ctx,p)=>{(globalThis.__avisosRonda??=[]).push(p)};
+        export const sendMail=async()=>{}; export const emailLayout=()=>''; export const sendTelegram=async()=>{};
+        export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b; export const jefesNotificar=async()=>[];
+        export const disparadorOT=async()=>{}; export const disparadorProyecto=async()=>{};
+      `, loader: 'js' }));
+    } }],
+  });
+  return import(pathToFileURL(archivo).href);
+}
+
+// (7j) K15 y K7 en lo que le llega a la jefatura: la ronda de la 01:00 cerrada con novedades; la desviación leída
+// 12.345 y la lectura corregida a 12.345, escritas para leerse igual («12.3450»), y el rango normal también.
+const syncAnotado = await syncConAvisos();
+await escenario('20:00', async (e) => {
+  await e.put({ accion: 'turnos', rondaId: e.modeloId, turnos: ['01:00', '09:00', '17:00'] });
+  const temp = (await e.hoy()).puntos.find((pt) => /^Quirófanos · temperatura/.test(pt.texto));
+  const hum = (await e.hoy()).puntos.find((pt) => /humedad/.test(pt.texto) && pt.pideValor);
+  // La temperatura, de 10 a 14: 25 sale de rango y 12.345 vuelve a él.
+  e.x.sqlite.prepare('UPDATE ronda_puntos SET min_esperado=10, max_esperado=14 WHERE id=?').run(temp.id);
+  e.reloj('01:05', 1);
+  const p = await e.hoy();
+  igual([p.fecha, p.turno], [dia(1), '01:00'], '(7j) A la 01:05 corre el de la 01:00');
+  const clave = { rondaId: p.rondaId, sucursalId: 1, fecha: dia(1), turno: '01:00' };
+  e.reloj('01:12', 1);
+  globalThis.__avisosRonda = [];
+  const enviarAnotado = async (ops) => (await e.x.call(syncAnotado.POST, '/api/campo/sync', { method: 'POST', data: { ops }, rol: 'tecnico' })).body.resultados;
+  const todas = [
+    e.op('ronda.iniciar', en('01:05', 1), clave),
+    ...e.lecturas(p, clave, en('01:06', 1), p.puntos.length),
+    e.op('ronda.lectura', en('01:07', 1), { ...clave, puntoId: hum.id, resultado: 'ok', valor: 12.345 }),
+    e.op('ronda.lectura', en('01:07', 1), { ...clave, puntoId: temp.id, resultado: 'ok', valor: 25 }),
+    e.op('ronda.lectura', en('01:08', 1), { ...clave, puntoId: temp.id, resultado: 'ok', valor: 12.345 }),
+    e.op('ronda.cerrar', en('01:10', 1), { ...clave, firma: true, notas: 'Queda la humedad baja en quirófanos.' }),
+  ];
+  const r = [];
+  for (let resto = todas; resto.length;) { const v = await enviarAnotado(resto.slice(0, 20)); assert.ok(v.length >= 1, 'Cada vuelta avanza'); r.push(...v); resto = resto.slice(v.length); }
+  ok(r.length === todas.length && r.every((y) => y.ok), `(7j) Todo entra: ${JSON.stringify(r.filter((y) => !y.ok))}`);
+  const avisos = globalThis.__avisosRonda.filter((a) => a.usuarioId === 2);
+  ok(avisos.some((a) => a.titulo === 'Ronda de la 01:00 cerrada con novedades'), `(7j) «Ronda de la 01:00 cerrada con novedades»: ${JSON.stringify(avisos.map((a) => a.titulo))}`);
+  const desv = avisos.find((a) => a.titulo === `Desviación en ronda: ${hum.texto}`);
+  ok(desv && desv.mensaje.includes(`leído 12.3450${hum.unidad ? ` ${hum.unidad}` : ''}`), `(7j) La desviación dice «leído 12.3450»: ${JSON.stringify(desv)}`);
+  const corregida = e.x.sqlite.prepare("SELECT a.resultado FROM aop_evento_acciones a JOIN aop_eventos v ON v.id = a.evento_id WHERE v.ronda_punto_id=? AND a.accion='Lectura corregida en la ronda'").get(temp.id);
+  igual(corregida?.resultado, `Nueva lectura: 12.3450${temp.unidad ? ` ${temp.unidad}` : ''}`, '(7j) El historial del AOP dice «Nueva lectura: 12.3450»');
+  const { rangoNormal } = e.x.app.rt;
+  igual(rangoNormal({ requiereValor: true, minEsperado: 12.345, maxEsperado: 22, unidad: '°C' }), '12.3450–22 °C', '(7j) El rango normal, con 12.3450');
+  igual(rangoNormal({ requiereValor: true, minEsperado: 12.345, maxEsperado: null, unidad: '%' }), '≥ 12.3450 %', '(7j) Solo el mínimo, también');
+  igual(rangoNormal({ requiereValor: true, minEsperado: null, maxEsperado: 12.345, unidad: null }), '≤ 12.3450', '(7j) Y solo el máximo');
+  igual(rangoNormal({ requiereValor: true, minEsperado: 20, maxEsperado: 22.5, unidad: '°C' }), '20–22.5 °C', '(7j) Los demás números, como siempre');
 });
 
 // (8) La sede saca su recorrido propio mientras el técnico anota sin señal: la ronda se abre con el recorrido que traía el celular.

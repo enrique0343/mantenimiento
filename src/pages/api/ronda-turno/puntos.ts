@@ -12,7 +12,7 @@ import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit, type DiffEntry } from "@/lib/audit";
-import { FAMILIAS_RONDA, avisoCambioTurnos, fechaCorta, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
+import { FAMILIAS_RONDA, avisoCambioTurnos, avisoTurnosSinAbrir, fechaCorta, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
 import { procedimientos, rondaPuntos, rondaVigencias, rondas, sucursales } from "@/lib/schema";
 
 export const prerender = false;
@@ -358,8 +358,10 @@ async function cambiarTurnos(ctx: APIContext, db: Db, user: Usuario, rondaId: nu
   ]);
   // Entran con el primer turno de la lista nueva. Hasta ahí siguen los de antes, salvo el que
   // empezaría menos de 2 h antes: ese no se abre y el turno que corría sigue hasta el nuevo.
+  // Cancelado el cambio, un turno que ya se anunció como «no se abre» y cuya hora ya pasó sigue sin abrirse: se dice.
   const aplicaDesde = siguienteTurno(turnos, Date.parse(ahora));
-  const aviso = avisoCambioTurnos(lineaDeTurnos(actualizada[0], vigencias), Date.parse(ahora))
+  const linea = lineaDeTurnos(actualizada[0], vigencias);
+  const aviso = avisoCambioTurnos(linea, Date.parse(ahora)) ?? avisoTurnosSinAbrir(linea, Date.parse(ahora))
     ?? "Siguen los turnos de ahora: el cambio que estaba pendiente ya no entra.";
   const cambios = { turnos: { antes, despues: turnos } };
   await logAudit(ctx, {

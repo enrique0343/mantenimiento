@@ -1,8 +1,26 @@
 // Authenticated OT routes, actual migrations, isolated SQLite/D1; no network.
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 import { fijarReloj } from './test-support/reloj.mjs';
 fijarReloj();
+// mop.ts con un logAudit que anota el resumen que recibe: así se lee lo que queda en el historial.
+async function mopConHistorial(resumenes) {
+  const carpeta=await fs.mkdtemp(path.join(os.tmpdir(),'mantenimiento-historial-'));
+  const salida=path.join(carpeta,'mop.mjs');
+  globalThis.__resumenesHistorial=resumenes;
+  await build({ stdin:{ contents:"export * as mop from './src/lib/mop'; export * as database from './src/lib/db';", resolveDir:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'), loader:'ts' },
+    outfile:salida, bundle:true, platform:'node', format:'esm', logLevel:'silent',
+    plugins:[{ name:'historial', setup(b) {
+      b.onResolve({ filter:/^@\/lib\/audit$/ },()=>({ path:'audit', namespace:'historial' }));
+      b.onLoad({ filter:/.*/, namespace:'historial' },()=>({ contents:'export const logAudit=async(_ctx,args)=>{ globalThis.__resumenesHistorial.push(args.resumen); };', loader:'js' }));
+    } }] });
+  try { return await import(pathToFileURL(salida).href); } finally { await fs.rm(carpeta,{ recursive:true, force:true }); }
+}
 const fixture = await setupConjuntos({ modules: {
   verification: 'lib/orden-verificacion', database: 'lib/db', attachment: 'pages/api/adjuntos/[id]',
   prerreq: 'pages/api/ordenes/[id]/prerrequisitos', liber: 'pages/api/ordenes/[id]/liberaciones',
@@ -452,24 +470,33 @@ try {
   await expect(patch(48,{checklistEjecucion:JSON.stringify(marcaFicha),checklistBase:actual48},'jefe'),409);
   assert.equal(JSON.parse(order(48).checklist_ejecucion)[1].estado,'desviacion');
 
-  // ── El mismo punto cambió en la ficha y en el celular: gana cada clave que cambió la ficha ──
+  // ── El mismo punto cambió en la ficha y en el celular, en una misma clave (K11): no se pisa ──
   const PASOS51=[{texto:'Medir la corriente de fase',estado:'pendiente',requiereValor:true,unidad:'A',esperadoMin:8,esperadoMax:12},{texto:'Revisar tablero',estado:'pendiente'}];
   seed(51,{tipo:'intervencion',checklist:JSON.stringify(PASOS51)});
   const base51=order(51).checklist_ejecucion;
   assert.equal((await sync([{opId:'reglas-paso-51',tipo:'orden.paso',ordenId:51,idx:0,texto:PASOS51[0].texto,estado:'ok',valor:'10,4'}])).resultados[0].ok,true);
   const celular51=JSON.parse(order(51).checklist_ejecucion)[0];
+  // N/A desde una base vieja sobre el «ok» del celular choca: el paso del celular queda entero y lo demás se aplica.
   const ficha51=JSON.parse(base51).map(comoFicha);
   ficha51[0]={...ficha51[0],estado:'na',notas:'Se midió en el tablero de respaldo',hora:'10:31',iniciales:'J.P.'};
-  await expect(patch(51,{checklistEjecucion:JSON.stringify(ficha51),checklistBase:base51},'jefe'));
+  ficha51[1]={...ficha51[1],estado:'ok'};
+  const choque51=await expect(patch(51,{checklistEjecucion:JSON.stringify(ficha51),checklistBase:base51},'jefe'));
+  assert.deepEqual(choque51.pasosSinAplicar,[0],'El índice del paso que chocó');
+  assert.deepEqual(JSON.parse(order(51).checklist_ejecucion)[0],celular51,'El «ok» y la lectura del celular quedan enteros');
+  assert.equal(JSON.parse(order(51).checklist_ejecucion)[1].estado,'ok','El otro paso se aplica');
+  // Con la base al día, N/A se aplica y la lectura queda.
+  const base51b=order(51).checklist_ejecucion, ficha51b=JSON.parse(base51b).map(comoFicha);
+  ficha51b[0]={...ficha51b[0],estado:'na',notas:'Se midió en el tablero de respaldo',hora:'10:31',iniciales:'J.P.'};
+  assert.equal((await expect(patch(51,{checklistEjecucion:JSON.stringify(ficha51b),checklistBase:base51b},'jefe'))).pasosSinAplicar,undefined);
   const fusion51=JSON.parse(order(51).checklist_ejecucion)[0];
-  assert.deepEqual([fusion51.estado,fusion51.notas,fusion51.hora,fusion51.iniciales],['na','Se midió en el tablero de respaldo','10:31','J.P.'],'Lo que cambió la ficha gana');
+  assert.deepEqual([fusion51.estado,fusion51.notas,fusion51.hora,fusion51.iniciales],['na','Se midió en el tablero de respaldo','10:31','J.P.']);
   assert.equal(fusion51.valorMedido,celular51.valorMedido,'La lectura del celular se conserva'); assert.equal(Number(fusion51.valorMedido),10.4);
-  // Si la ficha solo cambió la nota del paso que el celular marcó, el paso sigue marcado.
+  // Claves distintas en cada lado se fusionan: la ficha solo cambió la nota del paso que el celular marcó, y el paso sigue marcado.
   seed(52,{checklist:JSON.stringify([{texto:'Revisar tablero',estado:'pendiente'},{texto:'Limpiar contactos',estado:'pendiente'}])});
   const base52=order(52).checklist_ejecucion;
   await sync([{opId:'reglas-paso-52',tipo:'orden.paso',ordenId:52,idx:0,texto:'Revisar tablero',estado:'ok'}]);
   const ficha52=JSON.parse(base52); ficha52[0].notas='Revisar también el neutro';
-  await expect(patch(52,{checklistEjecucion:JSON.stringify(ficha52),checklistBase:base52},'jefe'));
+  assert.equal((await expect(patch(52,{checklistEjecucion:JSON.stringify(ficha52),checklistBase:base52},'jefe'))).pasosSinAplicar,undefined,'Sin choque');
   const fusion52=JSON.parse(order(52).checklist_ejecucion)[0];
   assert.equal(fusion52.estado,'ok'); assert.equal(fusion52.notas,'Revisar también el neutro'); assert.ok(fusion52.hora && fusion52.iniciales,'Con la firma del celular');
 
@@ -494,7 +521,7 @@ try {
   const vieja54=JSON.parse(order(54).checklist_ejecucion);
   await sync([{opId:'reglas-paso-54',tipo:'orden.paso',ordenId:54,idx:0,texto:'Revisar tablero',estado:'ok'}]);
   vieja54[0]={...vieja54[0],estado:'na',notas:'No aplica en este tablero'};
-  await expect(patch(54,{checklistEjecucion:JSON.stringify(vieja54)},'jefe'));
+  assert.equal((await expect(patch(54,{checklistEjecucion:JSON.stringify(vieja54)},'jefe'))).pasosSinAplicar,undefined,'Sin base no hay choque');
   assert.equal(JSON.parse(order(54).checklist_ejecucion)[0].estado,'na');
   // Solo pendientes viejos sobre pasos ya marcados: no hay nada que escribir.
   seed(59,{checklist:JSON.stringify(PASOS53)});
@@ -787,5 +814,173 @@ try {
   assert.deepEqual(await expect(patch(88,{estado:'completada'},'tecnico'),409),{error:'La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.',motivo:'otra-escritura'});
   assert.equal((await expect(patch(88,{trabajosRealizados:'Cambio después de enviarla a verificación.'},'tecnico'),409)).motivo,undefined,'Otro 409 no lo lleva');
 
-  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base; old tabs keep marked steps, key merge, ambiguous thousands never conform, reversa by state and assignment, resent completion without event, collapsed root cause rows; stored numbers read back unambiguously, ranged steps need a number, old tabs' grouped hours, reversa and root cause don't erase newer data, cancelled MOP frozen, concurrency 409 with its motivo. No network.`);
+  // ── K11: un paso que cambió en el servidor y en lo que llega, en una misma clave y con otro valor, no se pisa ──
+  const PASO_CAMBIO='Un paso del checklist cambió mientras tanto. Revísalo y vuelve a enviar.';
+  const PASOS89=[{texto:'Verificar que la planta arrancó',estado:'pendiente'},{texto:'Confirmar la transferencia',estado:'pendiente'},{texto:'Avisar a enfermería',estado:'pendiente'}];
+  const DESVIACION='La transferencia no retornó a normal.';
+  const desviaEnCelular=async(id,idx)=>assert.equal((await sync([{opId:`reglas-k11-${id}-${idx}`,tipo:'orden.paso',ordenId:id,idx,texto:PASOS89[idx].texto,estado:'desviacion',nota:DESVIACION}])).resultados[0].ok,true);
+  // Lo que manda la ficha que abrió con esa base, con lo que marcó en cada punto.
+  const fichaVieja=(base,cambios)=>JSON.stringify(JSON.parse(base).map(comoFicha).map((p,i)=>({...p,...(cambios[i]??{})})));
+  // La ficha marcó «ok» sin señal; el celular registró una desviación con su nota en el mismo paso; vuelve la señal y la ficha marca otro.
+  seed(89,{tipo:'emergencia',checklist:JSON.stringify(PASOS89)});
+  const base89=order(89).checklist_ejecucion;
+  await desviaEnCelular(89,1);
+  const celular89=JSON.parse(order(89).checklist_ejecucion)[1];
+  const r89=await expect(patch(89,{checklistEjecucion:fichaVieja(base89,{1:{estado:'ok'},2:{estado:'ok'}}),checklistBase:base89},'jefe'));
+  assert.deepEqual(r89.pasosSinAplicar,[1],'200 con el índice del paso que chocó');
+  const lista89=JSON.parse(order(89).checklist_ejecucion);
+  assert.deepEqual(lista89[1],celular89,'La desviación del celular queda entera'); assert.equal(lista89[1].notas,DESVIACION);
+  assert.equal(lista89[2].estado,'ok','Lo demás se aplica');
+  assert.deepEqual(JSON.parse(r89.orden.checklistEjecucion),lista89,'La respuesta trae el checklist guardado');
+  // Con el envío a verificación en la misma solicitud no se aplica nada: 409 con los pasos y el checklist guardado.
+  seed(90,{tipo:'emergencia',trabajos:'Planta en manual; transferencia operada con un segundo técnico.',checklist:JSON.stringify(PASOS89.slice(0,2))});
+  const base90=order(90).checklist_ejecucion;
+  await desviaEnCelular(90,1);
+  const guardado90=order(90).checklist_ejecucion, antes90=JSON.stringify([order(90),history(90),version(90)]);
+  const envio90=await expect(patch(90,{trabajosRealizados:'Planta en manual y transferencia probada con carga.',checklistEjecucion:fichaVieja(base90,{0:{estado:'ok'},1:{estado:'ok'}}),checklistBase:base90,estado:'completada'},'tecnico'),409);
+  assert.deepEqual(envio90,{error:PASO_CAMBIO,motivo:'paso-cambio',pasos:[1],orden:{checklistEjecucion:guardado90}});
+  assert.equal(order(90).estado,'en_proceso'); assert.equal(JSON.stringify([order(90),history(90),version(90)]),antes90,'Todo queda como estaba');
+  // También el envío sin lectura de la jefatura y la verificación.
+  seed(91,{tipo:'intervencion',trabajos:'Válvula de zona reemplazada sin poder medir',checklist:JSON.stringify(PASOS89.slice(0,2))});
+  liberacion(91);
+  const base91=order(91).checklist_ejecucion;
+  await desviaEnCelular(91,0);
+  const sinLectura91=await expect(patch(91,{checklistEjecucion:fichaVieja(base91,{0:{estado:'ok'},1:{estado:'ok'}}),checklistBase:base91,estado:'completada',cierreSinLecturaMotivo:MOTIVO},'jefe'),409);
+  assert.deepEqual([sinLectura91.motivo,sinLectura91.pasos],['paso-cambio',[0]]);
+  assert.deepEqual([order(91).estado,order(91).cierre_sin_lectura_motivo],['en_proceso',null]);
+  seed(92,{trabajos:'Tablero revisado y probado con carga.',checklist:JSON.stringify([{texto:'Revisar tablero',estado:'ok',hora:'09:00',iniciales:'P.T.'}])});
+  await expect(patch(92,{estado:'completada'},'tecnico'));
+  const base92=order(92).checklist_ejecucion;
+  sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=92').run(JSON.stringify([{texto:'Revisar tablero',estado:'desviacion',notas:'Neutro flojo en la barra principal.',hora:'09:40',iniciales:'P.T.'}]));
+  const cierre92=await expect(patch(92,{estado:'verificada',verificacionNotas:'Revisé el tablero y la prueba de carga.',checklistEjecucion:fichaVieja(base92,{0:{estado:'na'}}),checklistBase:base92},'jefe'),409);
+  assert.deepEqual([cierre92.motivo,cierre92.pasos],['paso-cambio',[0]]); assert.equal(order(92).estado,'completada');
+  // La misma clave al mismo valor no choca (la misma lectura escrita de otra forma, la misma nota con espacios), y claves distintas se fusionan.
+  seed(93,{checklist:JSON.stringify([{texto:'Medir la corriente de fase',estado:'pendiente',requiereValor:true,unidad:'A',esperadoMin:8,esperadoMax:12},{texto:'Revisar tablero',estado:'pendiente'},{texto:'Cerrar el tablero',estado:'pendiente'}])});
+  const base93=order(93).checklist_ejecucion;
+  const pasos93=[...(await sync([
+    {opId:'reglas-k11-93a',tipo:'orden.paso',ordenId:93,idx:0,texto:'Medir la corriente de fase',estado:'ok',valor:'10,5'},
+    {opId:'reglas-k11-93b',tipo:'orden.paso',ordenId:93,idx:1,texto:'Revisar tablero',estado:'desviacion',nota:'Neutro flojo en la barra principal.'},
+  ])).resultados, ...(await sync([{opId:'reglas-k11-93c',tipo:'orden.paso',ordenId:93,idx:2,texto:'Cerrar el tablero',estado:'ok'}])).resultados];
+  assert.ok(pasos93.length===3 && pasos93.every(r=>r.ok),JSON.stringify(pasos93));
+  const celular93=JSON.parse(order(93).checklist_ejecucion);
+  const r93=await expect(patch(93,{checklistEjecucion:fichaVieja(base93,{0:{estado:'ok',valorMedido:'10,5'},1:{estado:'desviacion',notas:' Neutro flojo en la barra principal. '},2:{notas:'Cerrar con la llave del cuarto eléctrico.'}}),checklistBase:base93},'jefe'));
+  assert.equal(r93.pasosSinAplicar,undefined,'Sin choque');
+  const lista93=JSON.parse(order(93).checklist_ejecucion);
+  assert.deepEqual(lista93.slice(0,2),celular93.slice(0,2),'Queda lo del celular, con su firma y su número');
+  assert.deepEqual([lista93[2].estado,lista93[2].notas,lista93[2].hora],['ok','Cerrar con la llave del cuarto eléctrico.',celular93[2].hora],'La marca del celular y la nota de la ficha');
+  // Un punto de formato viejo (no es objeto) cambiado en los dos lados también choca.
+  seed(109,{checklist:JSON.stringify(['Revisar tablero',{texto:'Limpiar contactos',estado:'pendiente'}])});
+  const base109=order(109).checklist_ejecucion, otraPestana109={texto:'Revisar tablero',estado:'ok',hora:'09:10',iniciales:'P.T.'};
+  sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=109').run(JSON.stringify([otraPestana109,{texto:'Limpiar contactos',estado:'pendiente'}]));
+  const r109=await expect(patch(109,{checklistEjecucion:JSON.stringify([{texto:'Revisar tablero',estado:'na'},{texto:'Limpiar contactos',estado:'ok'}]),checklistBase:base109},'jefe'));
+  assert.deepEqual(r109.pasosSinAplicar,[0]);
+  assert.deepEqual(JSON.parse(order(109).checklist_ejecucion),[otraPestana109,{texto:'Limpiar contactos',estado:'ok'}]);
+  // Sin base (pestaña de producción o celular), todo sigue como hoy: el paso marcado se conserva y el envío entra.
+  seed(94,{trabajos:'Contactos limpiados y tablero revisado.',checklist:JSON.stringify(PASOS53.slice(0,2))});
+  const vieja94=JSON.parse(order(94).checklist_ejecucion);
+  assert.equal((await sync([{opId:'reglas-k11-94',tipo:'orden.paso',ordenId:94,idx:0,texto:'Revisar tablero',estado:'desviacion',nota:'Tornillo flojo en la barra.'}])).resultados[0].ok,true);
+  vieja94[1]={...vieja94[1],estado:'ok'};
+  const r94=await expect(patch(94,{checklistEjecucion:JSON.stringify(vieja94),estado:'completada'},'tecnico'));
+  assert.equal(r94.pasosSinAplicar,undefined); assert.equal(order(94).estado,'completada');
+  assert.deepEqual(JSON.parse(order(94).checklist_ejecucion).map(p=>p.estado),['desviacion','ok']);
+
+  // ── La ficha nueva manda soloCambios (K12): sin las reglas de la pestaña de antes ──
+  // Plan nuevo, casilla vacía y notas vacías en un mismo guardado: con soloCambios se desmarca; sin él, como hoy (K9b).
+  for (const [id,solo] of [[95,true],[96,false]]) {
+    seed(id,{tipo:'intervencion',trabajos:'Cambio del interruptor de la rama crítica.'});
+    sqlite.prepare("UPDATE ordenes SET plan_reversa='Plan corto.',reversa_ejecutada=1,reversa_notas=? WHERE id=?").run(NOTAS,id);
+    await expect(patch(id,{planReversa:PLAN,reversaEjecutada:false,reversaNotas:null,...(solo?{soloCambios:true}:{})},'jefe'));
+  }
+  assert.deepEqual(reversa(95),{p:PLAN,e:0,n:null},'Con soloCambios se desmarca y las notas se borran');
+  assert.deepEqual(reversa(96),{p:PLAN,e:1,n:NOTAS},'Sin soloCambios, la reversa sigue marcada');
+  // soloCambios no se guarda ni cuenta como un cambio.
+  assert.equal('soloCambios' in JSON.parse(history(95).at(-1).evidencia_json).despues,false);
+  const eventos95=history(95).length, version95=version(95);
+  await expect(patch(95,{planReversa:` ${PLAN} `,soloCambios:true},'jefe'));
+  assert.deepEqual([history(95).length,version(95)],[eventos95,version95],'Igual a lo guardado: sin evento');
+  // Las cuatro horas con una vacía: con soloCambios la jefatura la borra y el técnico no; sin él, como hoy (K9a).
+  const RESTA='2026-10-01T10:00:00.000Z';
+  const conHoras=(id,r=RESTA)=>{ seed(id,{tipo:'emergencia'}); sqlite.prepare('UPDATE ordenes SET hora_alarma=?,causa_raiz_vencimiento=?,hora_llegada=?,hora_mitigacion=?,hora_restablecimiento=? WHERE id=?').run(ALARMA,VENCE,LLEGADA,MITIGA,r,id); };
+  const corregidas=cuatro('2026-10-01T02:55:00-06:00','2026-10-01T03:15:00-06:00','2026-10-01T03:35:00-06:00',null);
+  conHoras(97);
+  await expect(patch(97,{...corregidas,soloCambios:true},'jefe'));
+  assert.deepEqual(horas(97),{a:'2026-10-01T02:55:00-06:00',l:'2026-10-01T03:15:00-06:00',m:'2026-10-01T03:35:00-06:00',r:null,v:'2026-10-04T08:55:00.000Z'},'Corrige tres y borra el restablecimiento');
+  conHoras(98,null);
+  assert.match((await expect(patch(98,{...cuatro('2026-10-01T03:00:00-06:00','2026-10-01T03:20:00-06:00',null,null),soloCambios:true},'tecnico'),403)).error,SOLO_JEFATURA_HORAS);
+  assert.deepEqual(horas(98),{a:ALARMA,l:LLEGADA,m:MITIGA,r:null,v:VENCE},'El técnico no borra una hora');
+  conHoras(99);
+  await expect(patch(99,corregidas,'jefe'));
+  assert.equal(horas(99).r,RESTA,'Sin soloCambios, la vacía no borra la guardada');
+  // Con soloCambios, la causa que llega con los trabajos tampoco se toma por vieja.
+  seed(100,{tipo:'emergencia',trabajos:T80});
+  await expect(patch(100,{causaRaiz:CAUSA},'jefe'));
+  await expect(patch(100,{causaRaiz:`${CAUSA}; lo confirmó el proveedor`},'jefe'));
+  await expect(patch(100,{trabajosRealizados:`${T80} Se revisó también el tablero B.`,causaRaiz:CAUSA,solucionAplicada:null,soloCambios:true},'jefe'));
+  assert.equal(order(100).causa_raiz,CAUSA); assert.match(order(100).trabajos_realizados,/tablero B/);
+
+  // ── K13: la causa de la pestaña de antes es vieja solo si los trabajos o la solución traen un cambio ──
+  const C1='El breaker se disparó por sobrecarga', C2='El breaker se disparó por sobrecarga del circuito';
+  // La jefatura escribe la causa en la pestaña de producción, la alarga y la deja como estaba: con los trabajos iguales, se aplica.
+  for (const [id,rol] of [[101,'jefe'],[102,'admin']]) {
+    seed(id,{tipo:'emergencia',trabajos:T80});
+    for (const causaRaiz of [C1,C2,C1]) await expect(patch(id,{trabajosRealizados:T80,causaRaiz,solucionAplicada:null},rol));
+    assert.equal(order(id).causa_raiz,C1,`La vuelta atrás se aplica (${rol})`);
+  }
+  // Vieja junto con los trabajos cambiados: no se aplica (como hoy) y lo demás sí.
+  await expect(patch(101,{trabajosRealizados:`${T80} Se revisó también el tablero B.`,causaRaiz:C2,solucionAplicada:null},'jefe'));
+  assert.equal(order(101).causa_raiz,C1); assert.match(order(101).trabajos_realizados,/tablero B/);
+  // Vacía con los trabajos cambiados no borra.
+  const T101=`${T80} Se revisó también el tablero B y el C.`;
+  await expect(patch(101,{trabajosRealizados:T101,causaRaiz:null,solucionAplicada:null},'jefe'));
+  assert.equal(order(101).causa_raiz,C1); assert.equal(order(101).trabajos_realizados,T101);
+  // Vacía con los trabajos iguales se vacía si las reglas de siempre lo permiten: en proceso, sí; enviada, no.
+  await expect(patch(101,{trabajosRealizados:T101,causaRaiz:null,solucionAplicada:null},'jefe'));
+  assert.equal(order(101).causa_raiz,null);
+  seed(103,{tipo:'emergencia',estado:'completada',trabajos:T80});
+  sqlite.prepare('UPDATE ordenes SET causa_raiz=? WHERE id=103').run(CAUSA);
+  assert.match((await expect(patch(103,{trabajosRealizados:T80,causaRaiz:null,solucionAplicada:null},'jefe'),400)).error,/al menos 20 caracteres/);
+  assert.equal(order(103).causa_raiz,CAUSA);
+
+  // ── K8: un texto igual al guardado salvo espacios alrededor no es un cambio ──
+  const pasoConTexto=valorMedido=>JSON.stringify([{texto:'Medir la corriente de fase',estado:'pendiente',requiereValor:true,unidad:'A',esperadoMin:8,esperadoMax:12,valorMedido}]);
+  for (const [id,guardado] of [[104,'aprox 14 '],[105,' aprox 14'],[106,'aprox 14\n']]) {
+    // El celular lo compara y lo guarda recortado.
+    seed(id,{checklist:pasoConTexto(guardado)});
+    const marca=(await sync([{opId:`reglas-recorte-${id}`,tipo:'orden.paso',ordenId:id,idx:0,texto:'Medir la corriente de fase',estado:'ok',valor:guardado}])).resultados[0];
+    assert.equal(marca.ok,true,`${JSON.stringify(guardado)}: ${marca.error}`);
+    const paso=JSON.parse(order(id).checklist_ejecucion)[0];
+    assert.deepEqual([paso.estado,paso.valorMedido],['ok','aprox 14'],JSON.stringify(guardado));
+    // Por la ficha, con otros espacios alrededor.
+    const base=order(id).checklist_ejecucion, l=JSON.parse(base); l[0]={...l[0],valorMedido:` ${guardado}\n`,notas:'Lectura aproximada, sin pinza.'};
+    await expect(patch(id,{checklistEjecucion:JSON.stringify(l),checklistBase:base},'tecnico'));
+    assert.equal(JSON.parse(order(id).checklist_ejecucion)[0].notas,'Lectura aproximada, sin pinza.');
+  }
+  const base104=order(104).checklist_ejecucion, otro104=JSON.parse(base104); otro104[0]={...otro104[0],valorMedido:'aprox 15'};
+  assert.equal((await expect(patch(104,{checklistEjecucion:JSON.stringify(otro104),checklistBase:base104},'tecnico'),400)).error,PASO_SIN_NUMERO,'Otro texto sigue rechazado');
+
+  // ── La lectura de liberación se escribe con textoDeNumero (K7): 12.345 no sale «12.345» ──
+  assert.deepEqual(app.ordenes.validarLiberacionesEnRango('intervencion',[{etiqueta:'Corriente de fase',unidad:'A',minAceptable:8,maxAceptable:12,valorMedido:12.345,obligatoria:true}]).fuera,['Corriente de fase: leído 12.3450 A, normal 8 a 12 A']);
+  assert.match((await expect(patch(87,{estado:'completada'},'tecnico'),400)).error,/· Corriente de fase: leído 12\.3450 A, normal 8 a 12 A\n/,'Al enviar a verificación');
+  // El resumen del historial que deja registrarLiberacion.
+  const resumenes=[], historial=await mopConHistorial(resumenes), ctxHistorial=fixture.ctx('/');
+  seed(107,{tipo:'intervencion'});
+  const l107=liberacion(107);
+  await historial.mop.registrarLiberacion(ctxHistorial,historial.database.getDb(ctxHistorial),{id:107,estado:'en_proceso',asignadoA:3},{id:2,rol:'jefe'},{itemId:l107,valorMedido:12.345});
+  assert.deepEqual(resumenes,['Liberación «Presión de línea»: 12.3450 psi — FUERA DE RANGO']);
+
+  // ── El rango, la unidad y la lectura de un paso no se cambian durante la ejecución ──
+  seed(108,{checklist:JSON.stringify([{texto:'Medir la corriente de fase',estado:'pendiente',requiereValor:true,unidad:'A',esperadoMin:8,esperadoMax:12},{texto:'Revisar tablero',estado:'pendiente'}])});
+  const base108=order(108).checklist_ejecucion;
+  const paso108=cambio=>{ const l=JSON.parse(base108); l[0]={...l[0],estado:'ok',...cambio}; return JSON.stringify(l); };
+  for (const cambio of [{esperadoMin:null,esperadoMax:null},{esperadoMin:undefined},{esperadoMax:20},{requiereValor:false},{unidad:'V'},{unidad:null},{esperadoMin:null,esperadoMax:null,valorMedido:'aprox 14'}]) {
+    for (const datos of [{checklistEjecucion:paso108(cambio),checklistBase:base108},{checklistEjecucion:paso108(cambio)}]) {
+      assert.match((await expect(patch(108,datos,'tecnico'),400)).error,/No se pueden eliminar puntos/,JSON.stringify(datos));
+    }
+  }
+  assert.equal(order(108).checklist_ejecucion,base108,'El rango queda');
+  assert.equal((await expect(patch(108,{checklistEjecucion:paso108({valorMedido:'aprox 14'}),checklistBase:base108},'tecnico'),400)).error,PASO_SIN_NUMERO,'Un texto en ese paso sigue rechazado');
+  await expect(patch(108,{checklistEjecucion:paso108({valorMedido:'10,4'}),checklistBase:base108},'tecnico'));
+  assert.deepEqual(JSON.parse(order(108).checklist_ejecucion)[0],{...JSON.parse(base108)[0],estado:'ok',valorMedido:'10,4'},'Con su número entra como siempre');
+
+  console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base; old tabs keep marked steps, key merge, ambiguous thousands never conform, reversa by state and assignment, resent completion without event, collapsed root cause rows; stored numbers read back unambiguously, ranged steps need a number, old tabs' grouped hours, reversa and root cause don't erase newer data, cancelled MOP frozen, concurrency 409 with its motivo; a step changed on both sides keeps the saved one (pasosSinAplicar, or 409 paso-cambio with a state change), soloCambios skips the old-tab rules, an old tab's root cause is stale only when the work changed, step text compared trimmed, release readings written unambiguously, step range, unit and reading protected. No network.`);
 } finally { await fixture.close(); }

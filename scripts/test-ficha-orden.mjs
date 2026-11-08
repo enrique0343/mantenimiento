@@ -3,7 +3,8 @@
 // pantalla al guardar, con las rutas reales detrás. Los cruces son reales: el técnico
 // registra por /api/campo/sync y después la jefatura guarda en la ficha que tenía
 // abierta. También los números escritos a mano (la copia de src/lib/numero.ts),
-// lo marcado sin señal o mientras viaja un guardado, y el reporte de la orden.
+// lo marcado sin señal o mientras viaja un guardado, el paso que cambió en el servidor
+// mientras tanto (K11), las copias del equipo por cuenta (K14) y el reporte de la orden.
 // Correr después de npm run build.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -31,6 +32,8 @@ const ok = (c, m) => { assert.ok(c, m); checks++; };
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 const USUARIO = { admin: 1, jefe: 2, tecnico: 3, visualizador: 4 };
 const AREA = 'infraestructura';
+// La copia del checklist en el equipo lleva la cuenta en la clave (K14).
+const CK = (id, rol) => `ot-${id}-ck-${USUARIO[rol]}`;
 
 try {
   const eop = one("SELECT id FROM procedimientos WHERE codigo_corto='EOP-ELE-01'").id;
@@ -193,6 +196,42 @@ try {
   // El error del servidor al guardar el plan de reversa.
   orden(175, { tipo: 'intervencion', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), plan_reversa: 'Volver al tablero anterior.' });
   reqs(175); lectura(175);
+  // K11: un paso que cambió en el servidor mientras tanto (M1, M2, M3 y T6).
+  emergencia(180); emergencia(181); emergencia(182); emergencia(184); emergencia(200); emergencia(201); emergencia(203);
+  emergencia(202, { checklist_ejecucion: JSON.stringify(PASOS.map((texto) => ({ texto, hecho: false }))) });
+  emergencia(183, { trabajos_realizados: 'Planta en manual; transferencia operada con un segundo técnico.', checklist_ejecucion: lista(PASOS[0], PASOS[1]) });
+  emergencia(205, { trabajos_realizados: 'Planta en manual; transferencia operada con un segundo técnico.', checklist_ejecucion: lista(PASOS[0], PASOS[1]) });
+  orden(198, { tipo: 'intervencion', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(2), trabajos_realizados: 'Cambio del interruptor del tablero de la rama crítica.',
+    checklist_ejecucion: lista('Desenergizar el tablero', 'Cambiar el interruptor') });
+  reqs(198); lectura(198);
+  // K14: la copia y los borradores son de cada cuenta.
+  emergencia(185); emergencia(186, { checklist_ejecucion: null }); emergencia(187, { checklist_ejecucion: null });
+  // F18 y F19: lo que no cambió o ya llegó, comparado como el servidor.
+  emergencia(188); conMedida(189, 'Limpiar el tablero'); conMedida(204);
+  // F20: lecturas con rango que quedaron sin número, y una sin rango en texto.
+  orden(190, { tipo: 'preventivo', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), checklist_ejecucion: JSON.stringify([
+    { texto: 'Medir la corriente de fase', estado: 'ok', requiereValor: true, unidad: 'A', esperadoMin: 8, esperadoMax: 12, valorMedido: 'ok', hora: '10:00', iniciales: 'P.T.' },
+    { texto: 'Medir el CO2 de la sala', estado: 'ok', requiereValor: true, unidad: 'ppm', esperadoMax: 1000, valorMedido: '1,200', hora: '10:05', iniciales: 'P.T.' },
+    { texto: 'Anotar cómo quedó el tablero', estado: 'ok', requiereValor: true, valorMedido: 'sin alarmas' }]) });
+  // F21: el envío a verificación que falla.
+  emergencia(191, { checklist_ejecucion: lista(PASOS[0], PASOS[1]) }); emergencia(192, { checklist_ejecucion: lista(PASOS[0], PASOS[1]) }); emergencia(199);
+  // F22 y F23: «Guardar horas», la clasificación, «Vincular» y la reversa. El
+  // equipo del sistema eléctrico hace que el sistema resuelva el EOP que rige.
+  sqlite.exec(`INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,criticidad_operacional,sistema) VALUES(2,'ELE-ATS-02','Transferencia automática','general','${AREA}',1,'alta','electrico')`);
+  emergencia(193, { activo_id: 2, checklist_ejecucion: null });
+  emergencia(194, { iniciada_en: hace(2), hora_alarma: hace(2), hora_llegada: hace(1.8), hora_mitigacion: hace(1.5), hora_restablecimiento: hace(1), causa_raiz_vencimiento: hace(-70), checklist_ejecucion: null });
+  orden(195, { tipo: 'intervencion', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), plan_reversa: 'Volver al tablero anterior.' });
+  reqs(195); lectura(195);
+  // F24: un punto sin texto al inicio no cuenta en la numeración.
+  emergencia(196, { checklist_ejecucion: JSON.stringify([{ texto: '', estado: 'pendiente' }, { texto: PASOS[0], estado: 'pendiente' }, { texto: PASOS[1], estado: 'pendiente' }]) });
+  // F25: una orden que nació en dos rondas, la de la 01:00 y la de las 14:00.
+  orden(197, { tipo: 'correctivo', estado: 'abierta', activo_id: 1 });
+  sqlite.exec(`
+    INSERT INTO rondas(id,codigo,nombre) VALUES(9001,'RONDA-FICHA','Ronda de la ficha');
+    INSERT INTO ronda_puntos(id,ronda_id,sistema,etiqueta) VALUES(9001,9001,'electrico','Planta de emergencia · nivel de combustible');
+    INSERT INTO ronda_ejecuciones(id,ronda_id,sucursal_id,fecha,turno,recorrido_json) VALUES(9001,9001,1,'2026-11-08','01:00','[]'),(9002,9001,1,'2026-11-08','14:00','[]');
+    INSERT INTO ronda_lecturas(ejecucion_id,punto_id,resultado,orden_id,registrado_por) VALUES(9001,9001,'fuera',197,3),(9002,9001,'fuera',197,3);
+  `);
 
   const container = await experimental_AstroContainer.create();
   const html = async (id, rol, uid = USUARIO[rol], componente = pagina, ruta = `/ordenes/${id}`) => {
@@ -308,9 +347,11 @@ try {
   // compartido: un localStorage que comparten las pestañas del mismo equipo, como en un navegador.
   // red.demora: cuánto tarda cada envío en llegar al servidor.
   // red.falsas: lo que responde el servidor, en orden, a los PATCH siguientes de la orden.
+  // red.sinRespuesta: el envío llega al servidor, pero la página no lee la respuesta (se cerró al salir).
   // recargas: las veces que la ficha se volvió a cargar.
+  // confirmaciones: lo que la ficha preguntó con confirm. desplazados: a qué se llevó la vista.
   const abrir = async (id, rol, { almacen = {}, compartido = null } = {}) => {
-    const enviados = [], avisos = [], errores = [], recargas = [], red = { caida: false, demora: 0, falsas: [] };
+    const enviados = [], avisos = [], errores = [], recargas = [], confirmaciones = [], desplazados = [], red = { caida: false, demora: 0, falsas: [], sinRespuesta: false };
     const consola = new VirtualConsole();
     consola.on('jsdomError', (e) => {
       const m = e.detail?.message ?? e.message;
@@ -322,7 +363,8 @@ try {
       beforeParse(w) {
         if (compartido) Object.defineProperty(w, 'localStorage', { value: compartido, configurable: true });
         for (const [k, v] of Object.entries(almacen)) w.localStorage.setItem(k, v);
-        w.alert = (m) => avisos.push(m); w.confirm = () => true; w.prompt = () => null;
+        w.alert = (m) => avisos.push(m); w.confirm = (m) => { confirmaciones.push(m); return true; }; w.prompt = () => null;
+        w.Element.prototype.scrollIntoView = function () { desplazados.push(this.id); };
         w.fetch = async (url, init = {}) => {
           const u = new URL(url, 'https://local.test');
           const data = init.body ? JSON.parse(init.body) : undefined;
@@ -333,7 +375,8 @@ try {
           const m = u.pathname.match(/^\/api\/ordenes\/(\d+)(\/liberaciones)?$/);
           const falsa = m && !m[2] && init.method === 'PATCH' ? red.falsas.shift() : undefined;
           const r = falsa ?? (m && init.method === 'PATCH' ? await call(m[2] ? app.liberaciones.PATCH : app.order.PATCH, u.pathname, { method: 'PATCH', id: Number(m[1]), data, rol }) : { status: 200, body: {} });
-          envio.respuesta = r.body;
+          envio.respuesta = r.body; envio.status = r.status;
+          if (red.sinRespuesta) throw new TypeError('Failed to fetch');
           return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
         };
       },
@@ -345,7 +388,7 @@ try {
     const marcar = (idx, estado) => w.document.querySelector(`.ck-estado-btn[data-idx="${idx}"][data-estado="${estado}"]`).click();
     const indicador = () => w.document.querySelector('#ckAutosave')?.textContent ?? '';
     const caja = () => (w.document.querySelector('#ckConflicto').classList.contains('hidden') ? '' : w.document.querySelector('#ckConflictoMsg').textContent);
-    return { w, doc: w.document, enviados, avisos, errores, recargas, hasta, escribir, red, patches, marcar, indicador, caja };
+    return { w, doc: w.document, enviados, avisos, errores, recargas, confirmaciones, desplazados, hasta, escribir, red, patches, marcar, indicador, caja };
   };
   // Un localStorage que comparten las pestañas del mismo equipo.
   class Almacen {
@@ -450,7 +493,7 @@ try {
     p.doc.querySelector('#eopSave').click();
     await p.hasta(() => p.doc.querySelector('#horaLlegada').value !== '', 'pinta lo que respondió el servidor');
     const envios = p.enviados.filter((e) => e.metodo === 'PATCH').map((e) => e.data);
-    ok(envios.length === 1 && JSON.stringify(envios[0]) === JSON.stringify({ horaAlarma: `${corregida}:00-06:00` }), `Solo viaja la hora que cambió, sin null para las demás: ${JSON.stringify(envios)}`);
+    ok(envios.length === 1 && JSON.stringify(envios[0]) === JSON.stringify({ horaAlarma: `${corregida}:00-06:00`, soloCambios: true }), `Solo viaja la hora que cambió, sin null para las demás, con soloCambios: ${JSON.stringify(envios)}`);
     const o = one('SELECT hora_alarma a, hora_llegada l FROM ordenes WHERE id=120');
     ok(o.l === llegada && Date.parse(o.a) === Date.parse(`${corregida}:00-06:00`), `Queda la alarma corregida y la llegada del técnico: ${JSON.stringify(o)}`);
     ok(p.doc.querySelector('#horaLlegada').value === app.ordenes.isoALocalInput(llegada) && p.doc.querySelector('#horaAlarma').value === corregida, 'La ficha muestra la llegada que puso el técnico');
@@ -472,7 +515,7 @@ try {
     p.doc.querySelector('#reversaSave').click();
     await p.hasta(() => p.doc.querySelector('#reversaEjecutada').checked, 'pinta la reversa que marcó el técnico');
     const envios = p.enviados.filter((e) => e.metodo === 'PATCH').map((e) => e.data);
-    ok(envios.length === 1 && JSON.stringify(envios[0]) === JSON.stringify({ planReversa: plan }), `Solo viaja el plan: ${JSON.stringify(envios)}`);
+    ok(envios.length === 1 && JSON.stringify(envios[0]) === JSON.stringify({ planReversa: plan, soloCambios: true }), `Solo viaja el plan, con soloCambios: ${JSON.stringify(envios)}`);
     const o = one('SELECT plan_reversa p, reversa_ejecutada e, reversa_notas n FROM ordenes WHERE id=121');
     ok(o.e === 1 && o.n === notas && o.p === plan, `La reversa y sus notas siguen en la base: ${JSON.stringify(o)}`);
     ok(p.doc.querySelector('#reversaNotas').value === notas, 'La ficha muestra las notas del técnico');
@@ -534,7 +577,7 @@ try {
     ok(p.doc.querySelector('#ckConflictoMsg').textContent === 'El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.', `Muestra el mensaje del servidor: ${p.doc.querySelector('#ckConflictoMsg').textContent}`);
     ok(/Volver a cargar la ficha/.test(p.doc.querySelector('#ckRecargar')?.textContent ?? ''), 'Ofrece volver a cargar la ficha');
     ok(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=124').c === otro && p.avisos.length === 0, 'No se pisó nada y no salta ningún aviso');
-    ok(p.w.localStorage.getItem('ot-124-ck') === null, 'Lo que no se puede fusionar no queda en el equipo para mandarlo al volver');
+    ok(p.w.localStorage.getItem(CK(124, 'jefe')) === null, 'Lo que no se puede fusionar no queda en el equipo para mandarlo al volver');
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     await pausa(50);
     ok(p.patches().length === 1 && !p.enviados.some((e) => e.keepalive), `El 409 por largo no se reintenta ni sale al irse: ${p.patches().length} envíos`);
@@ -701,7 +744,7 @@ try {
     const marca = viejo.doc.querySelector('.ck-aviso[data-idx="0"]');
     ok(!marca.classList.contains('hidden') && marca.textContent === '¿2500 o 2,5? Escribe el número sin separador de miles.', `Un valor guardado que se lee de dos formas se marca al abrir: ${marca.textContent}`);
     viejo.escribir('.ck-num[data-idx="0"]', '2.500');
-    ok(/Registrado/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent) && !/Dentro del rango/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent), `«2.500» no se juzga como 2,5 dentro del rango: ${viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent}`);
+    ok(/Sin lectura — bloquea el cierre/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent) && !/Dentro del rango/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent), `«2.500» no se juzga como 2,5 dentro del rango: con rango, sin número es sin lectura: ${viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent}`);
     await pausa(1200);
     ok(viejo.patches().length === 0, 'Escribirlo otra vez igual no manda nada');
     viejo.w.close();
@@ -814,8 +857,8 @@ try {
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     await pausa(50);
     const almacen = almacenDe(p.w);
-    const local = JSON.parse(almacen['ot-137-ck'] ?? 'null');
-    ok(local?.usuarioId === 3 && JSON.parse(local.checklist)[0].estado === 'ok' && JSON.parse(local.base).every((x) => x.estado === 'pendiente'), `El paso queda en el equipo con su base: ${almacen['ot-137-ck']}`);
+    const local = JSON.parse(almacen[CK(137, 'tecnico')] ?? 'null');
+    ok(local?.usuarioId === 3 && JSON.parse(local.checklist)[0].estado === 'ok' && JSON.parse(local.base).every((x) => x.estado === 'pendiente'), `El paso queda en el equipo con su base: ${almacen[CK(137, 'tecnico')]}`);
     ok(estados(137) === 'pendiente, pendiente, pendiente', 'El servidor no recibió nada');
     p.w.close();
     const [paso] = await celular({ tipo: 'orden.paso', ordenId: 137, idx: 1, estado: 'ok', texto: PASOS[1] });
@@ -823,7 +866,7 @@ try {
     const delCelular = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=137').c)[1];
     const otra = await abrir(137, 'jefe', { almacen });
     await pausa(300);
-    ok(otra.patches().length === 0 && !!otra.w.localStorage.getItem('ot-137-ck'), 'Otra cuenta en el mismo equipo no lo manda en su nombre ni lo borra');
+    ok(otra.patches().length === 0 && !!otra.w.localStorage.getItem(CK(137, 'tecnico')), 'Otra cuenta en el mismo equipo no lo manda en su nombre ni lo borra');
     otra.w.close();
     const q = await abrir(137, 'tecnico', { almacen });
     await q.hasta(() => estados(137) === 'ok, ok, pendiente', 'al volver a abrir, el paso llega al servidor');
@@ -832,7 +875,7 @@ try {
     const guardado = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=137').c);
     ok(JSON.stringify(guardado[1]) === JSON.stringify(delCelular) && !!guardado[1].hora && !!guardado[1].iniciales, `El paso del celular se conserva con su hora e iniciales: ${JSON.stringify(guardado[1])}`);
     await q.hasta(() => /Guardado/.test(q.doc.querySelector('#ckAutosave').textContent), 'la ficha lo da por guardado');
-    ok(enPantalla(q, 3) === 'ok, ok, pendiente' && q.w.localStorage.getItem('ot-137-ck') === null, `La ficha muestra los dos pasos y ya no guarda copia: ${enPantalla(q, 3)}`);
+    ok(enPantalla(q, 3) === 'ok, ok, pendiente' && q.w.localStorage.getItem(CK(137, 'tecnico')) === null, `La ficha muestra los dos pasos y ya no guarda copia: ${enPantalla(q, 3)}`);
     ok(q.errores.length === 0 && q.avisos.length === 0, `Sin errores ni avisos: ${q.errores.join(' | ')} ${q.avisos.join(' | ')}`);
     q.w.close();
   }
@@ -852,13 +895,13 @@ try {
     const a = await abrir(153, 'tecnico', { almacen: enviadaAntes });
     await pausa(300);
     ok(a.patches().length === 0 && conflicto(a) === 'Lo que marcaste sin señal no se guardó: ya no puedes marcar pasos en esta orden.', `Enviada mientras tanto: lo dice y no lo manda: ${conflicto(a)}`);
-    ok(a.w.localStorage.getItem('ot-153-ck') === null, 'Y no lo vuelve a intentar');
+    ok(a.w.localStorage.getItem(CK(153, 'tecnico')) === null, 'Y no lo vuelve a intentar');
     a.w.close();
     const otraForma = await marcarSinSenal(154);
     sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=154').run(lista(PASOS[0], PASOS[1]));
     const b = await abrir(154, 'tecnico', { almacen: otraForma });
     await pausa(300);
-    ok(b.patches().length === 0 && conflicto(b) === 'Lo que marcaste sin señal no se guardó: el checklist cambió mientras tanto. Márcalo otra vez.' && b.w.localStorage.getItem('ot-154-ck') === null, `El checklist cambió de forma: lo dice y no lo manda: ${conflicto(b)}`);
+    ok(b.patches().length === 0 && conflicto(b) === 'Lo que marcaste sin señal no se guardó: el checklist cambió mientras tanto. Márcalo otra vez.' && b.w.localStorage.getItem(CK(154, 'tecnico')) === null, `El checklist cambió de forma: lo dice y no lo manda: ${conflicto(b)}`);
     b.w.close();
   }
 
@@ -886,7 +929,7 @@ try {
     await pausa(300);
     ok(q.patches().length === 0 && JSON.stringify(punto(156, 1)) === JSON.stringify(delCelular), `La marca vieja no se manda: la desviación del celular queda con su nota: ${JSON.stringify(punto(156, 1))}`);
     ok(q.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.', `La ficha dice qué paso revisar: ${q.caja()}`);
-    ok(enPantalla(q, 3) === 'pendiente, desviacion, pendiente' && q.w.localStorage.getItem('ot-156-ck') === null, `Muestra la desviación y la marca vieja ya no espera en el equipo: ${enPantalla(q, 3)}`);
+    ok(enPantalla(q, 3) === 'pendiente, desviacion, pendiente' && q.w.localStorage.getItem(CK(156, 'jefe')) === null, `Muestra la desviación y la marca vieja ya no espera en el equipo: ${enPantalla(q, 3)}`);
     ok(q.errores.length === 0 && q.avisos.length === 0, `Sin errores ni ventanas: ${q.errores.join(' | ')} ${q.avisos.join(' | ')}`);
     q.w.close();
   }
@@ -917,7 +960,7 @@ try {
     await celular({ tipo: 'orden.paso', ordenId: 159, idx: 0, estado: 'ok', texto: PASOS[0] });
     const q = await abrir(159, 'tecnico', { almacen });
     await pausa(300);
-    ok(q.patches().length === 0 && q.caja() === '' && q.w.localStorage.getItem('ot-159-ck') === null, `Ni envío ni aviso, y la copia se va: ${q.caja()}`);
+    ok(q.patches().length === 0 && q.caja() === '' && q.w.localStorage.getItem(CK(159, 'tecnico')) === null, `Ni envío ni aviso, y la copia se va: ${q.caja()}`);
     q.w.close();
   }
   { // Lo que se desmarca antes de salir ya no espera en el equipo: al volver no se manda.
@@ -925,10 +968,10 @@ try {
     p.red.caida = true;
     p.marcar(0, 'ok');
     await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
-    ok(!!p.w.localStorage.getItem('ot-176-ck'), 'La marca espera en el equipo');
+    ok(!!p.w.localStorage.getItem(CK(176, 'tecnico')), 'La marca espera en el equipo');
     p.marcar(0, 'pendiente');
     await pausa(50);
-    ok(p.w.localStorage.getItem('ot-176-ck') === null, `Desmarcada, ya no espera: ${p.w.localStorage.getItem('ot-176-ck')}`);
+    ok(p.w.localStorage.getItem(CK(176, 'tecnico')) === null, `Desmarcada, ya no espera: ${p.w.localStorage.getItem(CK(176, 'tecnico'))}`);
     const almacen = almacenDe(p.w);
     p.w.close();
     const q = await abrir(176, 'tecnico', { almacen });
@@ -943,7 +986,7 @@ try {
     ok(fin.ok && one('SELECT estado FROM ordenes WHERE id=177').estado === 'completada', `El celular la envía a verificación: ${JSON.stringify(fin)}`);
     const q = await abrir(177, 'tecnico', { almacen });
     await pausa(300);
-    ok(q.caja() === '' && q.patches().length === 0 && q.w.localStorage.getItem('ot-177-ck') === null, `Sin aviso falso y sin copia: ${q.caja()}`);
+    ok(q.caja() === '' && q.patches().length === 0 && q.w.localStorage.getItem(CK(177, 'tecnico')) === null, `Sin aviso falso y sin copia: ${q.caja()}`);
     q.w.close();
   }
   { // F9 · Dos pestañas de la misma orden en el mismo equipo, las dos sin señal: cada una marca un paso.
@@ -955,14 +998,14 @@ try {
     await a.hasta(() => /Sin guardar/.test(a.indicador()), 'A sin señal');
     b.marcar(1, 'na');
     await b.hasta(() => /Sin guardar/.test(b.indicador()), 'B sin señal');
-    const enEquipo = () => JSON.parse(JSON.parse(equipo.getItem('ot-160-ck')).checklist).map((x) => x.estado).join(', ');
+    const enEquipo = () => JSON.parse(JSON.parse(equipo.getItem(CK(160, 'jefe'))).checklist).map((x) => x.estado).join(', ');
     ok(enEquipo() === 'ok, na, pendiente', `La copia del equipo lleva los dos pasos: ${enEquipo()}`);
     a.w.dispatchEvent(new a.w.Event('pagehide')); b.w.dispatchEvent(new b.w.Event('pagehide'));
     await pausa(50);
     a.w.close(); b.w.close();
     const c = await abrir(160, 'jefe', { compartido: equipo });
     await c.hasta(() => estados(160) === 'ok, na, pendiente', 'al volver a abrir con señal llegan los dos');
-    await c.hasta(() => equipo.getItem('ot-160-ck') === null, 'guardados, ya no queda copia');
+    await c.hasta(() => equipo.getItem(CK(160, 'jefe')) === null, 'guardados, ya no queda copia');
     ok(c.patches().length === 1 && c.caja() === '', `En un solo envío y sin aviso: ${JSON.stringify(c.patches())}`);
     c.w.close();
   }
@@ -978,14 +1021,14 @@ try {
     a.w.close();
     b.marcar(2, 'ok');
     await b.hasta(() => /Guardado/.test(b.indicador()), 'B guarda');
-    const copia = JSON.parse(equipo.getItem('ot-161-ck') ?? 'null');
+    const copia = JSON.parse(equipo.getItem(CK(161, 'jefe')) ?? 'null');
     const lista = (t) => JSON.parse(t).map((x) => x.estado).join(', ');
     ok(estados(161) === 'pendiente, pendiente, ok' && copia && lista(copia.checklist) === 'ok, pendiente, ok' && lista(copia.base) === 'pendiente, pendiente, ok',
-      `B quita de la copia solo lo suyo: ${equipo.getItem('ot-161-ck')}`);
+      `B quita de la copia solo lo suyo: ${equipo.getItem(CK(161, 'jefe'))}`);
     b.w.close();
     const c = await abrir(161, 'jefe', { compartido: equipo });
     await c.hasta(() => estados(161) === 'ok, pendiente, ok', 'al volver a abrir llega el paso de A');
-    await c.hasta(() => equipo.getItem('ot-161-ck') === null, 'ya no queda copia');
+    await c.hasta(() => equipo.getItem(CK(161, 'jefe')) === null, 'ya no queda copia');
     c.w.close();
   }
   { // F10 · Marca sin señal, vuelve la señal y la envía a verificación: lo marcado viajó con el envío y no se avisa al volver.
@@ -998,7 +1041,7 @@ try {
     a.red.caida = false;
     a.doc.querySelector('[data-transition="completada"]').click();
     await a.hasta(() => one('SELECT estado FROM ordenes WHERE id=162').estado === 'completada' && a.recargas.length > 0, 'la envía a verificación y vuelve a cargar');
-    ok(equipo.getItem('ot-162-ck') === null && punto(162, 0).estado === 'ok' && !!punto(162, 0).hora, `Lo que viajó con el envío ya no espera en el equipo: ${JSON.stringify(punto(162, 0))}`);
+    ok(equipo.getItem(CK(162, 'tecnico')) === null && punto(162, 0).estado === 'ok' && !!punto(162, 0).hora, `Lo que viajó con el envío ya no espera en el equipo: ${JSON.stringify(punto(162, 0))}`);
     a.w.close();
     const c = await abrir(162, 'tecnico', { compartido: equipo });
     await pausa(300);
@@ -1010,7 +1053,7 @@ try {
     sqlite.prepare('UPDATE ordenes SET asignado_a=8 WHERE id=163').run();
     const q = await abrir(163, 'tecnico', { almacen });
     await pausa(300);
-    ok(q.patches().length === 0 && q.caja() === 'Lo que marcaste sin señal no se guardó: ya no puedes marcar pasos en esta orden.' && q.w.localStorage.getItem('ot-163-ck') === null,
+    ok(q.patches().length === 0 && q.caja() === 'Lo que marcaste sin señal no se guardó: ya no puedes marcar pasos en esta orden.' && q.w.localStorage.getItem(CK(163, 'tecnico')) === null,
       `Reasignada: lo dice, no lo manda y no lo vuelve a intentar: ${q.caja()}`);
     q.w.close();
   }
@@ -1020,14 +1063,461 @@ try {
     p.red.caida = true;
     p.marcar(0, 'ok'); p.marcar(1, 'ok');
     await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
-    ok(!!equipo.getItem('ot-164-ck'), 'Sin señal, lo marcado espera en el equipo');
+    ok(!!equipo.getItem(CK(164, 'jefe')), 'Sin señal, lo marcado espera en el equipo');
     p.red.caida = false;
     p.doc.querySelector('#sinLecturaBtn').click();
     p.doc.querySelector('#sinLecturaMotivo').value = 'La pinza calibrada no estaba disponible; se mide el lunes.';
     p.doc.querySelector('#sinLecturaConfirm').click();
     await p.hasta(() => one('SELECT estado FROM ordenes WHERE id=164').estado === 'completada' && p.recargas.length > 0, 'la envía sin lectura y vuelve a cargar');
-    ok(estados(164) === 'ok, ok' && equipo.getItem('ot-164-ck') === null, `Lo marcado llegó con el envío y ya no espera en el equipo: ${estados(164)}`);
+    ok(estados(164) === 'ok, ok' && equipo.getItem(CK(164, 'jefe')) === null, `Lo marcado llegó con el envío y ya no espera en el equipo: ${estados(164)}`);
     p.w.close();
+  }
+
+  // ── K11 · Un paso que cambió en el servidor mientras tanto no se pisa ──
+  const NOTA_CELULAR = 'La transferencia no retornó a normal; quedó en manual.';
+  // El técnico registra en el celular una desviación con su nota en ese paso.
+  const desviacionDelCelular = async (id, idx, texto = PASOS[idx]) => {
+    const [paso] = await celular({ tipo: 'orden.paso', ordenId: id, idx, estado: 'desviacion', nota: NOTA_CELULAR, texto });
+    const guardado = punto(id, idx);
+    assert.ok(paso.ok && guardado.estado === 'desviacion' && guardado.notas === NOTA_CELULAR, `El celular registra la desviación: ${JSON.stringify(paso)} · ${JSON.stringify(guardado)}`);
+    return JSON.stringify(guardado);
+  };
+  { // M1 · Con la ficha abierta, el paso marcado sin señal sale al marcar otro; el celular registró una desviación en ese paso mientras tanto.
+    const p = await abrir(180, 'jefe');
+    p.red.caida = true;
+    p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(180, 1);
+    p.red.caida = false;
+    p.marcar(2, 'ok');
+    await p.hasta(() => /Guardado/.test(p.indicador()), 'guarda el otro paso');
+    ok(JSON.stringify(punto(180, 1)) === delCelular && punto(180, 2).estado === 'ok', `La desviación del celular queda con su nota y el otro paso se guarda: ${one('SELECT checklist_ejecucion c FROM ordenes WHERE id=180').c}`);
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.', `La ficha dice qué paso revisar: ${p.caja()}`);
+    ok(enPantalla(p, 3) === 'pendiente, desviacion, ok' && p.doc.querySelector('.ck-nota[data-idx="1"]').value === NOTA_CELULAR, `Pinta el paso como lo tiene el servidor, con la nota del celular: ${enPantalla(p, 3)}`);
+    ok(p.w.localStorage.getItem(CK(180, 'jefe')) === null && p.avisos.length === 0 && p.errores.length === 0, `La marca vieja ya no espera en el equipo, sin ventanas ni errores: ${p.avisos.join(' | ')} ${p.errores.join(' | ')}`);
+    p.w.close();
+  }
+  { // M1 · El paso que el servidor no tomó se pinta como lo tiene él aunque se haya tocado mientras viajaba el guardado.
+    const p = await abrir(201, 'jefe');
+    p.red.caida = true;
+    p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(201, 1);
+    p.red.caida = false; p.red.demora = 300;
+    p.marcar(2, 'ok');
+    await p.hasta(() => p.patches().length === 2, 'sale el guardado');
+    p.marcar(1, 'na');
+    await p.hasta(() => p.caja() !== '', 'responde el servidor');
+    await pausa(1500);
+    ok(JSON.stringify(punto(201, 1)) === delCelular && punto(201, 2).estado === 'ok' && p.patches().length === 2, `La desviación del celular queda con su nota: ${JSON.stringify(punto(201, 1))} · ${p.patches().length} envíos`);
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.' && enPantalla(p, 3) === 'pendiente, desviacion, ok', `Pinta el paso como lo tiene el servidor y avisa: ${enPantalla(p, 3)}`);
+    p.w.close();
+  }
+  { // M2 · La marca sin señal sale al dejar la página; el celular registró una desviación en ese paso. La respuesta se lee: la ficha avisa.
+    const equipo = new Almacen();
+    const p = await abrir(181, 'jefe', { compartido: equipo });
+    p.red.caida = true;
+    p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(181, 1);
+    p.red.caida = false;
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await p.hasta(() => p.caja() !== '', 'responde el envío al salir');
+    const alSalir = p.enviados.find((e) => e.keepalive);
+    ok(alSalir?.status === 200 && JSON.stringify(alSalir.respuesta?.pasosSinAplicar) === '[1]' && JSON.stringify(punto(181, 1)) === delCelular, `El servidor no pisa la desviación y dice qué paso no tomó: ${JSON.stringify(alSalir?.respuesta?.pasosSinAplicar)}`);
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.' && enPantalla(p, 3) === 'pendiente, desviacion, pendiente' && equipo.getItem(CK(181, 'jefe')) === null,
+      `Avisa, pinta la desviación y la marca vieja deja de esperar en el equipo: ${p.caja()}`);
+    p.w.close();
+  }
+  { // M2 · Lo mismo, pero la página ya no lee la respuesta: la marca queda en el equipo y la ficha avisa al volver a abrir.
+    const equipo = new Almacen();
+    const p = await abrir(182, 'jefe', { compartido: equipo });
+    p.red.caida = true;
+    p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(182, 1);
+    p.red.caida = false; p.red.sinRespuesta = true;
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await p.hasta(() => p.enviados.some((e) => e.keepalive && e.respuesta), 'el envío al salir llega al servidor');
+    await pausa(50);
+    ok(JSON.stringify(punto(182, 1)) === delCelular && !!equipo.getItem(CK(182, 'jefe')), `El servidor no pisa la desviación; sin la respuesta, la marca sigue en el equipo: ${JSON.stringify(punto(182, 1))}`);
+    p.w.close();
+    const q = await abrir(182, 'jefe', { compartido: equipo });
+    await pausa(300);
+    ok(q.patches().length === 0 && JSON.stringify(punto(182, 1)) === delCelular, `Al volver a abrir no se manda la marca vieja: ${JSON.stringify(q.patches())}`);
+    ok(q.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.' && enPantalla(q, 3) === 'pendiente, desviacion, pendiente' && equipo.getItem(CK(182, 'jefe')) === null,
+      `La ficha avisa y la marca vieja ya no espera: ${q.caja()}`);
+    q.w.close();
+  }
+  { // M3 · El técnico marca sin señal; el celular registra una desviación en uno de esos pasos; con señal, la envía a verificación.
+    const p = await abrir(183, 'tecnico');
+    p.red.caida = true;
+    p.marcar(0, 'ok'); p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(183, 1);
+    p.red.caida = false;
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => p.caja() !== '', 'el envío vuelve con el paso que cambió');
+    const envio = p.enviados.find((e) => e.data?.estado === 'completada');
+    ok(envio?.status === 409 && envio.respuesta?.motivo === 'paso-cambio' && JSON.stringify(envio.respuesta?.pasos) === '[1]', `El servidor no aplica nada y dice qué paso cambió: ${JSON.stringify(envio?.respuesta)}`);
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y vuelve a enviar.', `La ficha lo dice junto al checklist: ${p.caja()}`);
+    ok(one('SELECT estado FROM ordenes WHERE id=183').estado === 'en_proceso' && JSON.stringify(punto(183, 1)) === delCelular, 'No se envía y la desviación del celular queda con su nota');
+    ok(p.recargas.length === 0 && p.avisos.length === 0 && p.desplazados.includes('ckConflicto'), `Sin volver a cargar ni ventana; la vista queda en el checklist: ${p.recargas.length} · ${p.avisos.join(' | ')} · ${p.desplazados.join(', ')}`);
+    ok(enPantalla(p, 2) === 'ok, desviacion' && p.doc.querySelector('.ck-nota[data-idx="1"]').value === NOTA_CELULAR, `Pinta la desviación del celular y conserva lo demás marcado: ${enPantalla(p, 2)}`);
+    const enEquipo = JSON.parse(JSON.parse(p.w.localStorage.getItem(CK(183, 'tecnico')) ?? '{"checklist":"[]"}').checklist).map((x) => x.estado).join(', ');
+    ok(enEquipo === 'ok, desviacion', `En el equipo espera solo lo demás; el paso que cambió ya no: ${enEquipo}`);
+    await p.hasta(() => punto(183, 0).estado === 'ok' && /Guardado/.test(p.indicador()), 'lo demás que marcó se guarda solo');
+    ok(JSON.stringify(punto(183, 1)) === delCelular && p.caja() === 'El paso 2 cambió mientras tanto: revísalo y vuelve a enviar.' && p.w.localStorage.getItem(CK(183, 'tecnico')) === null,
+      `Guardado lo demás, el aviso sigue y ya no queda copia: ${p.caja()}`);
+    p.w.close();
+  }
+  { // M3 · Si lo único marcado era ese paso, nada queda esperando en el equipo: al volver a abrir no se repite el aviso.
+    const equipo = new Almacen();
+    const p = await abrir(205, 'tecnico', { compartido: equipo });
+    p.red.caida = true;
+    p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(205, 1);
+    p.red.caida = false;
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => p.caja() !== '', 'el envío vuelve con el paso que cambió');
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y vuelve a enviar.' && equipo.getItem(CK(205, 'tecnico')) === null, `El paso que cambió sale de la copia del equipo: ${equipo.getItem(CK(205, 'tecnico'))}`);
+    p.w.close();
+    const q = await abrir(205, 'tecnico', { compartido: equipo });
+    await pausa(300);
+    ok(q.patches().length === 0 && q.caja() === '' && JSON.stringify(punto(205, 1)) === delCelular, `Al volver a abrir no se repite el aviso ni se manda la marca vieja: ${q.caja()}`);
+    q.w.close();
+  }
+  { // M3 · Con «Enviar a verificación sin lectura» también: no se envía, la ventana se cierra y el aviso va junto al checklist.
+    const p = await abrir(198, 'jefe');
+    p.red.caida = true;
+    p.marcar(0, 'ok'); p.marcar(1, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    const delCelular = await desviacionDelCelular(198, 1, 'Cambiar el interruptor');
+    p.red.caida = false;
+    p.doc.querySelector('#sinLecturaBtn').click();
+    p.doc.querySelector('#sinLecturaMotivo').value = 'La pinza calibrada no estaba disponible; se mide el lunes.';
+    p.doc.querySelector('#sinLecturaConfirm').click();
+    await p.hasta(() => p.caja() !== '', 'el envío vuelve con el paso que cambió');
+    ok(p.caja() === 'El paso 2 cambió mientras tanto: revísalo y vuelve a enviar.' && p.doc.querySelector('#sinLecturaModal').classList.contains('hidden'), `Se cierra la ventana y el aviso va junto al checklist: ${p.caja()}`);
+    ok(one('SELECT estado FROM ordenes WHERE id=198').estado === 'en_proceso' && JSON.stringify(punto(198, 1)) === delCelular && p.recargas.length === 0, 'No se envía, la desviación queda y la ficha no se vuelve a cargar');
+    await p.hasta(() => punto(198, 0).estado === 'ok', 'lo demás que marcó se guarda solo');
+    p.doc.querySelector('#sinLecturaBtn').click();
+    ok(p.doc.querySelector('#sinLecturaMotivo').value === 'La pinza calibrada no estaba disponible; se mide el lunes.', 'Al volver a abrir la ventana, el motivo escrito sigue ahí');
+    p.w.close();
+  }
+  { // T6 · Dos pestañas de la misma cuenta: A, sin señal, marca OK; B, con señal, marca N/A el mismo paso; A recupera la señal y sale.
+    const equipo = new Almacen();
+    const a = await abrir(184, 'jefe', { compartido: equipo });
+    const b = await abrir(184, 'jefe', { compartido: equipo });
+    a.red.caida = true;
+    a.marcar(0, 'ok');
+    await a.hasta(() => /Sin guardar/.test(a.indicador()), 'A sin señal');
+    b.marcar(0, 'na');
+    await b.hasta(() => /Guardado/.test(b.indicador()), 'B guarda');
+    const deB = JSON.stringify(punto(184, 0));
+    a.red.caida = false;
+    a.w.dispatchEvent(new a.w.Event('pagehide'));
+    await a.hasta(() => a.caja() !== '', 'responde el envío de A al salir');
+    ok(JSON.stringify(punto(184, 0)) === deB && punto(184, 0).estado === 'na', `Lo que guardó B no se pisa: ${JSON.stringify(punto(184, 0))}`);
+    ok(a.caja() === 'El paso 1 cambió mientras tanto: revísalo y márcalo otra vez.' && enPantalla(a, 3) === 'na, pendiente, pendiente' && equipo.getItem(CK(184, 'jefe')) === null,
+      `A avisa, pinta lo de B y no deja copia: ${a.caja()} · ${enPantalla(a, 3)}`);
+    a.w.close(); b.w.close();
+  }
+
+  { // T6 · A y C, de la misma cuenta, marcan el mismo paso sin señal; el celular registra una desviación; A sale con señal y avisa. La marca vieja de C sale de la copia: el aviso no se repite al volver a abrir.
+    const equipo = new Almacen();
+    const a = await abrir(200, 'jefe', { compartido: equipo });
+    const c = await abrir(200, 'jefe', { compartido: equipo });
+    a.red.caida = true; c.red.caida = true;
+    a.marcar(0, 'ok');
+    await a.hasta(() => /Sin guardar/.test(a.indicador()), 'A sin señal');
+    c.marcar(0, 'na');
+    await c.hasta(() => /Sin guardar/.test(c.indicador()), 'C sin señal');
+    const delCelular = await desviacionDelCelular(200, 0);
+    a.red.caida = false;
+    a.w.dispatchEvent(new a.w.Event('pagehide'));
+    await a.hasta(() => a.caja() !== '', 'responde el envío de A al salir');
+    ok(a.caja() === 'El paso 1 cambió mientras tanto: revísalo y márcalo otra vez.' && JSON.stringify(punto(200, 0)) === delCelular && equipo.getItem(CK(200, 'jefe')) === null,
+      `A avisa y ninguna marca vieja del paso 1 queda en el equipo: ${equipo.getItem(CK(200, 'jefe'))}`);
+    c.w.dispatchEvent(new c.w.Event('pagehide'));
+    await pausa(50);
+    a.w.close(); c.w.close();
+    const d = await abrir(200, 'jefe', { compartido: equipo });
+    await pausa(300);
+    ok(d.patches().length === 0 && d.caja() === '' && JSON.stringify(punto(200, 0)) === delCelular, `Al volver a abrir no se repite el aviso ni se manda la marca vieja: ${d.caja()}`);
+    d.w.close();
+  }
+  { // T6 · Si C marcó el paso ya sobre la desviación del celular, su marca no es vieja: queda en la copia y sale al volver a abrir.
+    const equipo = new Almacen();
+    const a = await abrir(203, 'jefe', { compartido: equipo });
+    a.red.caida = true;
+    a.marcar(0, 'ok');
+    await a.hasta(() => /Sin guardar/.test(a.indicador()), 'A sin señal');
+    await desviacionDelCelular(203, 0);
+    // C abre después: avisa la marca vieja de A y marca N/A sobre la desviación, sin señal.
+    const c = await abrir(203, 'jefe', { compartido: equipo });
+    ok(c.caja() === 'El paso 1 cambió mientras tanto: revísalo y márcalo otra vez.', `C avisa la marca vieja de A: ${c.caja()}`);
+    c.red.caida = true;
+    c.marcar(0, 'na');
+    await c.hasta(() => /Sin guardar/.test(c.indicador()), 'C sin señal');
+    a.red.caida = false;
+    a.w.dispatchEvent(new a.w.Event('pagehide'));
+    await a.hasta(() => a.caja() !== '', 'responde el envío de A al salir');
+    const copia = JSON.parse(equipo.getItem(CK(203, 'jefe')) ?? 'null');
+    ok(a.caja() === 'El paso 1 cambió mientras tanto: revísalo y márcalo otra vez.' && JSON.parse(copia?.checklist ?? '[]')[0]?.estado === 'na', `La marca de C sigue en el equipo: ${equipo.getItem(CK(203, 'jefe'))}`);
+    c.w.dispatchEvent(new c.w.Event('pagehide'));
+    await pausa(50);
+    a.w.close(); c.w.close();
+    const d = await abrir(203, 'jefe', { compartido: equipo });
+    await d.hasta(() => punto(203, 0).estado === 'na', 'al volver a abrir sale la marca de C');
+    ok(d.caja() === '' && estados(203) === 'na, pendiente, pendiente', `Sin aviso: ${d.caja()} · ${estados(203)}`);
+    d.w.close();
+  }
+
+  // ── K14 · La copia y los borradores en el equipo son de cada cuenta ──
+  { // T5 · Otra cuenta en el mismo navegador: la jefatura marca sin señal y sale; el técnico marca otro paso con señal; la jefatura vuelve.
+    const equipo = new Almacen();
+    const j = await abrir(185, 'jefe', { compartido: equipo });
+    j.red.caida = true;
+    j.marcar(0, 'ok');
+    await j.hasta(() => /Sin guardar/.test(j.indicador()), 'sin señal no se guarda');
+    j.w.dispatchEvent(new j.w.Event('pagehide'));
+    await pausa(50);
+    j.w.close();
+    ok(!!equipo.getItem(CK(185, 'jefe')) && equipo.getItem('ot-185-ck') === null, 'La marca de la jefatura espera en el equipo, con su cuenta en la clave');
+    const t = await abrir(185, 'tecnico', { compartido: equipo });
+    await pausa(300);
+    ok(t.patches().length === 0 && t.caja() === '', 'El técnico no manda ni ve lo que marcó la jefatura');
+    t.marcar(2, 'ok');
+    await t.hasta(() => /Guardado/.test(t.indicador()), 'el técnico guarda su paso');
+    ok(estados(185) === 'pendiente, pendiente, ok' && !!equipo.getItem(CK(185, 'jefe')) && equipo.getItem(CK(185, 'tecnico')) === null, `Lo que guarda el técnico no borra la copia de la jefatura: ${[...equipo.m.keys()].join(', ')}`);
+    t.w.close();
+    const q = await abrir(185, 'jefe', { compartido: equipo });
+    await q.hasta(() => estados(185) === 'ok, pendiente, ok', 'al volver a abrir sale lo de la jefatura');
+    await q.hasta(() => equipo.getItem(CK(185, 'jefe')) === null, 'guardado, ya no queda copia');
+    ok(q.patches().length === 1 && q.caja() === '', `En un envío y sin aviso: ${JSON.stringify(q.patches())}`);
+    q.w.close();
+  }
+  { // El borrador de antes de esta versión, sin la cuenta en la clave, se ofrece una sola vez y se borra.
+    const texto = 'Planta en manual; se reemplazó el fusible de control.';
+    const equipo = new Almacen();
+    equipo.setItem('ot-186-draft', JSON.stringify({ payload: { trabajosRealizados: texto }, savedAt: Date.now() - 60000 }));
+    const p = await abrir(186, 'tecnico', { compartido: equipo });
+    ok(p.confirmaciones.length === 1 && /cambios sin guardar/.test(p.confirmaciones[0]) && equipo.getItem('ot-186-draft') === null, `Se ofrece y la clave vieja se borra: ${p.confirmaciones.join(' | ')}`);
+    await p.hasta(() => one('SELECT trabajos_realizados t FROM ordenes WHERE id=186').t === texto, 'lo recuperado se guarda');
+    await p.hasta(() => equipo.getItem('ot-186-draft-3') === null, 'guardado, no queda borrador');
+    p.w.close();
+    const q = await abrir(186, 'tecnico', { compartido: equipo });
+    ok(q.confirmaciones.length === 0, 'Una sola vez: al volver a abrir ya no se ofrece');
+    q.escribir('#trabajosRealizados', `${texto} Se probó la transferencia.`);
+    ok(!!equipo.getItem('ot-186-draft-3') && equipo.getItem('ot-186-draft') === null, 'Lo que se escribe ahora queda con la cuenta en la clave');
+    q.w.close();
+    // Sin un campo que se pueda escribir no se ofrece, como hoy: queda para cuando se pueda.
+    const enviadaYa = await abrir(102, 'tecnico', { almacen: { 'ot-102-draft': JSON.stringify({ payload: { trabajosRealizados: 'Texto de antes.' }, savedAt: Date.now() }) } });
+    ok(enviadaYa.confirmaciones.length === 0 && enviadaYa.w.localStorage.getItem('ot-102-draft') !== null, 'Sin campos que se puedan escribir, no se ofrece y queda');
+    enviadaYa.w.close();
+  }
+  { // El borrador de otra cuenta, con la clave nueva, no se ofrece ni se borra.
+    const ajeno = JSON.stringify({ payload: { trabajosRealizados: 'Borrador de otra cuenta en este equipo.' }, savedAt: Date.now() });
+    const p = await abrir(187, 'tecnico', { almacen: { 'ot-187-draft-8': ajeno } });
+    ok(p.confirmaciones.length === 0 && p.doc.querySelector('#trabajosRealizados').value === '' && p.w.localStorage.getItem('ot-187-draft-8') === ajeno, `No se ofrece y queda como estaba: ${p.confirmaciones.join(' | ')}`);
+    p.w.close();
+  }
+
+  // ── F18 y F19 · Al volver a abrir, la marca se compara como la compara el servidor ──
+  { // R11 · Una pestaña de producción (sin base) guarda el checklist con sus claves vacías: la marca sin señal sale, sin aviso falso.
+    const almacen = await sinSenal(188, 'jefe', [[0, 'ok']]);
+    const relleno = (texto, estado) => ({ texto, estado, notas: '', criterio: null, bloqueante: false, minutos: null, materiales: null, valorMedido: '', requiereValor: false, unidad: null, esperadoMin: null, esperadoMax: null });
+    const r = await patch(188, 'tecnico', { checklistEjecucion: JSON.stringify([relleno(PASOS[0], 'pendiente'), relleno(PASOS[1], 'pendiente'), relleno(PASOS[2], 'ok')]) });
+    ok(r.status === 200 && punto(188, 0).notas === '' && punto(188, 2).estado === 'ok', `La pestaña de producción guarda con sus claves vacías: ${JSON.stringify(r.body?.error ?? punto(188, 0))}`);
+    const q = await abrir(188, 'jefe', { almacen });
+    await q.hasta(() => estados(188) === 'ok, pendiente, ok', 'la marca sale');
+    ok(q.caja() === '' && q.patches().length === 1, `Sin aviso falso: ${q.caja()}`);
+    await q.hasta(() => q.w.localStorage.getItem(CK(188, 'jefe')) === null, 'guardada, ya no queda copia');
+    q.w.close();
+  }
+  { // R10 · Formato viejo {hecho}: la marca sin señal ya llegó por otra vía como {hecho: true}; no se manda ni se avisa.
+    const almacen = await sinSenal(202, 'jefe', [[0, 'ok']]);
+    const l = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=202').c);
+    l[0] = { texto: PASOS[0], hecho: true };
+    sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=202').run(JSON.stringify(l));
+    const q = await abrir(202, 'jefe', { almacen });
+    await pausa(300);
+    ok(q.patches().length === 0 && q.caja() === '' && q.w.localStorage.getItem(CK(202, 'jefe')) === null, `Ni envío ni aviso, y la copia se va: «${q.caja()}» · ${JSON.stringify(q.patches())}`);
+    q.w.close();
+  }
+  { // R8 · Lectura «10,5» y OK sin señal; el celular anota 10,5 y OK en el mismo paso: ya llegó, no se manda ni se avisa.
+    const p = await abrir(189, 'tecnico');
+    p.red.caida = true;
+    p.escribir('.ck-num[data-idx="0"]', '10,5');
+    p.marcar(0, 'ok');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await pausa(50);
+    const almacen = almacenDe(p.w);
+    p.w.close();
+    const marca = JSON.parse(JSON.parse(almacen[CK(189, 'tecnico')]).checklist)[0];
+    ok(marca.valorMedido === '10,5' && marca.estado === 'ok' && !!marca.hora, `La marca espera con su lectura y la hora que selló la ficha: ${JSON.stringify(marca)}`);
+    const [paso] = await celular({ tipo: 'orden.paso', ordenId: 189, idx: 0, estado: 'ok', valor: '10,5', texto: medida.texto });
+    ok(paso.ok && punto(189, 0).valorMedido === 10.5 && !!punto(189, 0).hora && !!punto(189, 0).iniciales, `El celular la guarda como número, con su hora e iniciales: ${JSON.stringify(punto(189, 0))}`);
+    const q = await abrir(189, 'tecnico', { almacen });
+    await pausa(300);
+    ok(q.patches().length === 0 && q.caja() === '' && q.w.localStorage.getItem(CK(189, 'tecnico')) === null, `Ni envío ni aviso, y la copia se va: «${q.caja()}» · ${JSON.stringify(q.patches())}`);
+    q.w.close();
+  }
+
+  { // R8 · Solo las iniciales, escritas sin señal: son lo que la persona marcó y salen al volver a abrir.
+    const p = await abrir(204, 'tecnico');
+    p.red.caida = true;
+    p.escribir('.ck-iniciales[data-idx="0"]', 'A.M.');
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no se guarda');
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await pausa(50);
+    const almacen = almacenDe(p.w);
+    p.w.close();
+    const q = await abrir(204, 'tecnico', { almacen });
+    await q.hasta(() => punto(204, 0).iniciales === 'A.M.', 'al volver a abrir salen las iniciales');
+    ok(q.caja() === '' && q.patches().length === 1, `Sin aviso: ${q.caja()} · ${JSON.stringify(q.patches())}`);
+    q.w.close();
+  }
+
+  // ── F20 · Con rango, lo escrito sin número es «Sin lectura» ──
+  {
+    const v = await ver(190, 'jefe');
+    const fila = (doc, i) => ({ etiqueta: doc.querySelector(`.ck-rango[data-idx="${i}"]`).textContent.trim(), caja: doc.querySelector(`.ck-num[data-idx="${i}"]`).closest('div.mt-2').className });
+    for (const i of [0, 1]) ok(fila(v.doc, i).etiqueta === 'Sin lectura — bloquea el cierre' && /\bbg-amber-50\b/.test(fila(v.doc, i).caja), `Paso ${i + 1}, con rango y guardado sin número: ${JSON.stringify(fila(v.doc, i))}`);
+    ok(fila(v.doc, 2).etiqueta === 'Registrado' && /\bbg-slate-50\b/.test(fila(v.doc, 2).caja), `Sin rango, un texto sí es lectura: ${JSON.stringify(fila(v.doc, 2))}`);
+    const insignias = [...v.doc.querySelectorAll('span')].map((s) => s.textContent.trim()).filter((s) => /^\d+ sin lectura$/.test(s));
+    ok(JSON.stringify(insignias) === '["2 sin lectura"]', `El progreso cuenta los mismos: ${insignias.join(' | ')}`);
+    const p = await abrir(190, 'tecnico');
+    p.escribir('.ck-num[data-idx="0"]', '10');
+    ok(fila(p.doc, 0).etiqueta === '✓ Dentro del rango' && /\bbg-emerald-50\b/.test(fila(p.doc, 0).caja), `Con el número, se juzga: ${JSON.stringify(fila(p.doc, 0))}`);
+    p.escribir('.ck-num[data-idx="0"]', 'alto');
+    ok(fila(p.doc, 0).etiqueta === 'Sin lectura — bloquea el cierre' && /\bbg-amber-50\b/.test(fila(p.doc, 0).caja), `Sin número, la pantalla dice lo mismo: ${JSON.stringify(fila(p.doc, 0))}`);
+    p.w.close();
+  }
+
+  // ── F21 · Un envío a verificación que falla no deja nada sin guardar ──
+  { // E4 · Marca con señal y enseguida «Enviar a verificación», que falla (sin trabajos): lo marcado se guarda solo.
+    const p = await abrir(191, 'tecnico');
+    p.marcar(0, 'ok'); p.marcar(1, 'ok');
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => p.avisos.length > 0, 'el envío falla');
+    ok(/Describe los trabajos realizados/.test(p.avisos[0]) && one('SELECT estado FROM ordenes WHERE id=191').estado === 'en_proceso', `El servidor lo rechaza: ${p.avisos.join(' | ')}`);
+    const cerrar = new p.w.Event('beforeunload', { cancelable: true });
+    p.w.dispatchEvent(cerrar);
+    ok(cerrar.defaultPrevented, `Mientras no se guarda, el navegador avisa al cerrar: «${p.indicador()}»`);
+    await p.hasta(() => estados(191) === 'ok, ok' && /Guardado/.test(p.indicador()), 'lo marcado se guarda solo');
+    ok(p.recargas.length === 0 && p.w.localStorage.getItem(CK(191, 'tecnico')) === null, 'Guardado, ya no queda copia');
+    p.w.close();
+  }
+  { // E4 · Con lo escrito también: el envío falla por un paso pendiente y lo escrito y lo marcado se guardan solos.
+    const trabajos = 'Planta en manual; transferencia operada con un segundo técnico.';
+    const p = await abrir(192, 'tecnico');
+    p.escribir('#trabajosRealizados', trabajos);
+    p.marcar(0, 'ok');
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => p.avisos.length > 0, 'el envío falla');
+    ok(/pendiente/.test(p.avisos[0]) && one('SELECT estado FROM ordenes WHERE id=192').estado === 'en_proceso', `El servidor lo rechaza por el paso pendiente: ${p.avisos.join(' | ')}`);
+    await p.hasta(() => one('SELECT trabajos_realizados t FROM ordenes WHERE id=192').t === trabajos && estados(192) === 'ok, pendiente', 'lo escrito y lo marcado se guardan solos');
+    await p.hasta(() => /Guardado/.test(p.doc.querySelector('#autosaveIndicador').textContent), 'la ficha lo da por guardado');
+    p.w.close();
+  }
+  { // E4 · Sin señal al enviar: lo marcado queda pendiente, el navegador avisa al cerrar y sale al dejar la página.
+    const p = await abrir(199, 'tecnico');
+    p.red.caida = true;
+    p.marcar(0, 'ok');
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => /Sin guardar/.test(p.indicador()), 'sin señal no sale');
+    const cerrar = new p.w.Event('beforeunload', { cancelable: true });
+    p.w.dispatchEvent(cerrar);
+    ok(cerrar.defaultPrevented && !!p.w.localStorage.getItem(CK(199, 'tecnico')), 'Queda pendiente: el navegador avisa al cerrar y la copia sigue en el equipo');
+    p.red.caida = false;
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await p.hasta(() => estados(199) === 'ok, pendiente, pendiente', 'al salir se manda');
+    p.w.close();
+  }
+
+  // ── F22 · El error del servidor se muestra tal cual ──
+  {
+    const p = await abrir(193, 'jefe');
+    const OTRA = 'La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.';
+    p.red.falsas.push({ status: 409, body: { error: OTRA, motivo: 'otra-escritura' } });
+    p.doc.querySelector('#horaLlegada').value = app.ordenes.isoALocalInput(hace(0.4));
+    p.doc.querySelector('#eopSave').click();
+    await p.hasta(() => p.doc.querySelector('#eopMsg').textContent !== '', 'responde el servidor a las horas');
+    ok(p.doc.querySelector('#eopMsg').textContent === OTRA, `«Guardar horas» dice el error del servidor: ${p.doc.querySelector('#eopMsg').textContent}`);
+    p.red.falsas.push({ status: 400, body: { error: 'Solo la jefatura puede modificar los datos de la orden.' } });
+    p.doc.querySelector('#clasifSave').click();
+    await p.hasta(() => p.doc.querySelector('#clasifMsg').textContent !== '', 'responde el servidor a la clasificación');
+    ok(p.doc.querySelector('#clasifMsg').textContent === 'Solo la jefatura puede modificar los datos de la orden.', `La clasificación también: ${p.doc.querySelector('#clasifMsg').textContent}`);
+    p.red.falsas.push({ status: 400, body: { error: 'El procedimiento ya no está vigente.' } });
+    p.doc.querySelector('#rigeVincular').click();
+    await p.hasta(() => p.doc.querySelector('#rigeMsg').textContent !== '', 'responde el servidor al vincular');
+    ok(p.doc.querySelector('#rigeMsg').textContent === 'El procedimiento ya no está vigente.', `«Vincular» también: ${p.doc.querySelector('#rigeMsg').textContent}`);
+    ok(p.recargas.length === 0 && p.avisos.length === 0, 'Sin volver a cargar ni ventanas');
+    p.w.close();
+  }
+
+  // ── F23 · K12: lo que la ficha cambia en un mismo guardado se aplica tal cual ──
+  { // N5 · La jefatura corrige tres horas y borra la cuarta en un mismo «Guardar horas»: la cuarta queda borrada.
+    const p = await abrir(194, 'jefe');
+    const nuevas = { horaAlarma: hace(2.2), horaLlegada: hace(1.9), horaMitigacion: hace(1.6) };
+    for (const [c, iso] of Object.entries(nuevas)) p.doc.querySelector(`#${c}`).value = app.ordenes.isoALocalInput(iso);
+    p.doc.querySelector('#horaRestablecimiento').value = '';
+    p.doc.querySelector('#eopSave').click();
+    await p.hasta(() => p.enviados.some((e) => e.metodo === 'PATCH' && e.respuesta), 'guarda las horas');
+    const envio = p.patches()[0];
+    ok(envio.soloCambios === true && envio.horaRestablecimiento === null && Object.keys(envio).length === 5, `Viajan las cuatro horas con soloCambios: ${JSON.stringify(envio)}`);
+    const o = one('SELECT hora_alarma a, hora_llegada l, hora_mitigacion m, hora_restablecimiento r FROM ordenes WHERE id=194');
+    const minuto = (iso) => Math.floor(Date.parse(iso) / 60000);
+    ok(o.r === null && minuto(o.a) === minuto(nuevas.horaAlarma) && minuto(o.l) === minuto(nuevas.horaLlegada) && minuto(o.m) === minuto(nuevas.horaMitigacion), `La cuarta queda borrada y las otras tres corregidas: ${JSON.stringify(o)}`);
+    p.w.close();
+  }
+  { // N3 · La jefatura cambia el plan, desmarca la reversa y borra sus notas en un mismo «Guardar plan de reversa»: la reversa queda desmarcada.
+    const notas = 'Se volvió al tablero anterior; el interruptor nuevo no cerró.';
+    const [rev] = await celular({ tipo: 'mop.reversa', ordenId: 195, notas });
+    ok(rev.ok && one('SELECT reversa_ejecutada e FROM ordenes WHERE id=195').e === 1, `El técnico marca la reversa en el celular: ${JSON.stringify(rev)}`);
+    const p = await abrir(195, 'jefe');
+    ok(p.doc.querySelector('#reversaEjecutada').checked && p.doc.querySelector('#reversaNotas').value === notas, 'La ficha abre con la reversa del celular');
+    const plan = 'Volver al tablero anterior y avisar a la jefatura de turno.';
+    p.doc.querySelector('#planReversa').value = plan;
+    p.doc.querySelector('#reversaEjecutada').checked = false;
+    p.doc.querySelector('#reversaNotas').value = '';
+    p.doc.querySelector('#reversaSave').click();
+    await p.hasta(() => p.enviados.some((e) => e.metodo === 'PATCH' && e.respuesta) && p.recargas.length === 1, 'guarda y vuelve a cargar por la reversa');
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan, reversaEjecutada: false, reversaNotas: null, soloCambios: true }]), `Viajan los tres campos con soloCambios: ${JSON.stringify(p.patches())}`);
+    const o = one('SELECT plan_reversa p, reversa_ejecutada e, reversa_notas n FROM ordenes WHERE id=195');
+    ok(o.e === 0 && o.n === null && o.p === plan, `La reversa queda desmarcada, sin notas y con el plan nuevo: ${JSON.stringify(o)}`);
+    p.w.close();
+  }
+
+  // ── F24 · Cada paso dice su número ──
+  {
+    const v = await ver(196, 'jefe');
+    const numeros = [...v.doc.querySelectorAll('.ck-row')].map((li) => li.querySelector('.ck-paso')?.textContent.trim());
+    ok(JSON.stringify(numeros) === JSON.stringify(['Paso 1', 'Paso 2']), `Se numeran los pasos que se ven, como en el celular: ${numeros.join(' | ')}`);
+    const clase = v.doc.querySelector('.ck-paso').className;
+    ok(/\btext-xs\b/.test(clase) && /\btabular-nums\b/.test(clase) && /\btext-slate-500\b/.test(clase), `Pequeño, con números tabulares y en el color secundario: ${clase}`);
+    const almacen = await sinSenal(196, 'jefe', [[1, 'ok']]);
+    const l = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=196').c);
+    Object.assign(l[2], { estado: 'desviacion', notas: NOTA_CELULAR, hora: '10:30', iniciales: 'P.T.' });
+    sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=196').run(JSON.stringify(l));
+    const q = await abrir(196, 'jefe', { almacen });
+    await pausa(300);
+    const fila = q.doc.querySelector('.ck-row[data-idx="1"]');
+    ok(q.caja() === 'El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.' && fila.querySelector('.ck-paso').textContent.trim() === 'Paso 2' && fila.textContent.includes(PASOS[1]),
+      `El aviso nombra el paso con el número de su fila: ${q.caja()}`);
+    q.w.close();
+  }
+
+  // ── F25 · K15: la hora del turno en una frase ──
+  {
+    const v = await ver(197, 'jefe');
+    const rondas = [...v.doc.querySelectorAll('a[href^="/ronda/"]')].map((a) => a.textContent.replace(/\s+/g, ' ').trim());
+    ok(rondas.some((t) => t.startsWith('Ronda de la 01:00 · Sede Uno · 08/11/2026')) && rondas.some((t) => t.startsWith('Ronda de las 14:00 · Sede Uno')) && !/Ronda de las 01:00/.test(v.texto),
+      `«Ronda de la 01:00» y «Ronda de las 14:00»: ${rondas.join(' | ')}`);
   }
 
   // ── El guardado del checklist en vuelo ─────────────────────────────────
@@ -1106,14 +1596,14 @@ try {
       ok(!q.doc.querySelector('#ckConflicto').classList.contains('hidden') && /^La orden cambió durante la operación/.test(q.doc.querySelector('#ckConflictoMsg').textContent), `Avisa que la orden cambió: ${q.doc.querySelector('#ckConflictoMsg').textContent}`);
       const cerrar = new q.w.Event('beforeunload', { cancelable: true });
       q.w.dispatchEvent(cerrar);
-      ok(cerrar.defaultPrevented && !!q.w.localStorage.getItem(`ot-${id}-ck`), 'Queda pendiente: el navegador avisa al cerrar y la copia sigue en el equipo');
+      ok(cerrar.defaultPrevented && !!q.w.localStorage.getItem(CK(id, 'jefe')), 'Queda pendiente: el navegador avisa al cerrar y la copia sigue en el equipo');
       return q;
     };
     const q = await dosVeces(139);
     q.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
     await q.hasta(() => estados(139) === 'ok, na, ok', 'el guardado siguiente lleva los dos puntos');
     await q.hasta(() => q.doc.querySelector('#ckConflicto').classList.contains('hidden'), 'un guardado que sale bien quita el aviso');
-    ok(q.w.localStorage.getItem('ot-139-ck') === null && q.patches().at(-1).checklistBase === q.patches()[0].checklistBase, 'Sale con la misma base y ya no queda copia en el equipo');
+    ok(q.w.localStorage.getItem(CK(139, 'jefe')) === null && q.patches().at(-1).checklistBase === q.patches()[0].checklistBase, 'Sale con la misma base y ya no queda copia en el equipo');
     q.w.close();
     const s = await dosVeces(152);
     s.w.dispatchEvent(new s.w.Event('pagehide'));
@@ -1121,7 +1611,7 @@ try {
     const alSalir = s.enviados.filter((e) => e.metodo === 'PATCH').at(-1);
     ok(alSalir.keepalive && alSalir.data.checklistBase === s.patches()[0].checklistBase, `Al salir sale con keepalive y la misma base: ${JSON.stringify(alSalir)}`);
     await s.hasta(() => s.doc.querySelector('#ckConflicto').classList.contains('hidden'), 'al salir bien también se quita el aviso');
-    ok(s.w.localStorage.getItem('ot-152-ck') === null, 'Guardado al salir, ya no queda copia en el equipo');
+    ok(s.w.localStorage.getItem(CK(152, 'jefe')) === null, 'Guardado al salir, ya no queda copia en el equipo');
     faults.beforeBatch = null;
     s.w.close();
   }
@@ -1132,7 +1622,7 @@ try {
     faults.statement = () => true;
     p.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
     try { await p.hasta(() => p.avisos.length === 1, 'el servidor falla'); } finally { console.error = registrar; }
-    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem('ot-155-ck'), `No se guardó y la copia sigue en el equipo: ${p.avisos.join(' | ')}`);
+    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem(CK(155, 'jefe')), `No se guardó y la copia sigue en el equipo: ${p.avisos.join(' | ')}`);
     const cerrar = new p.w.Event('beforeunload', { cancelable: true });
     p.w.dispatchEvent(cerrar);
     ok(cerrar.defaultPrevented, 'Queda pendiente: el navegador avisa al cerrar');
@@ -1140,10 +1630,10 @@ try {
     faults.statement = () => true;
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     try { await p.hasta(() => p.enviados.some((e) => e.keepalive), 'al salir se manda'); await pausa(100); } finally { console.error = registrar; }
-    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem('ot-155-ck'), 'Si al salir también falla el servidor, la copia sigue en el equipo');
+    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem(CK(155, 'jefe')), 'Si al salir también falla el servidor, la copia sigue en el equipo');
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     await p.hasta(() => estados(155) === 'pendiente, na, pendiente', 'a la siguiente salida se manda');
-    await p.hasta(() => p.w.localStorage.getItem('ot-155-ck') === null, 'guardado, ya no queda copia');
+    await p.hasta(() => p.w.localStorage.getItem(CK(155, 'jefe')) === null, 'guardado, ya no queda copia');
     faults.statement = null;
     p.w.close();
   }
@@ -1160,13 +1650,13 @@ try {
     };
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     await p.hasta(() => p.enviados.some((e) => e.keepalive) && p.caja() !== '', 'el envío al salir recibe el 409');
-    ok(/^La orden cambió durante la operación/.test(p.caja()) && estados(167) === 'ok, pendiente, pendiente' && !!p.w.localStorage.getItem('ot-167-ck'), `La copia queda y el aviso se ve: ${p.caja()}`);
+    ok(/^La orden cambió durante la operación/.test(p.caja()) && estados(167) === 'ok, pendiente, pendiente' && !!p.w.localStorage.getItem(CK(167, 'jefe')), `La copia queda y el aviso se ve: ${p.caja()}`);
     const cerrar = new p.w.Event('beforeunload', { cancelable: true });
     p.w.dispatchEvent(cerrar);
     ok(cerrar.defaultPrevented, 'Queda pendiente: el navegador avisa al cerrar');
     p.w.dispatchEvent(new p.w.Event('pagehide'));
     await p.hasta(() => estados(167) === 'ok, pendiente, ok', 'a la salida siguiente se guarda');
-    await p.hasta(() => p.w.localStorage.getItem('ot-167-ck') === null && p.caja() === '', 'guardado, ya no quedan copia ni aviso');
+    await p.hasta(() => p.w.localStorage.getItem(CK(167, 'jefe')) === null && p.caja() === '', 'guardado, ya no quedan copia ni aviso');
     p.w.close();
   }
   { // K10 · El 409 de la guarda de concurrencia se reconoce por su motivo y, si no viene, por la frase: se reintenta una vez.
@@ -1198,7 +1688,7 @@ try {
     p.red.demora = 0;
     p.doc.querySelector('#eopSave').click();
     await p.hasta(() => p.patches().length === 2 && !!one('SELECT hora_mitigacion h FROM ordenes WHERE id=145').h, 'sale la mitigación');
-    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ horaMitigacion: `${aLocal(30)}:00-06:00` }), `El segundo guardado lleva solo la hora que faltaba: ${JSON.stringify(p.patches()[1])}`);
+    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ horaMitigacion: `${aLocal(30)}:00-06:00`, soloCambios: true }), `El segundo guardado lleva solo la hora que faltaba: ${JSON.stringify(p.patches()[1])}`);
     ok(Date.parse(one('SELECT hora_llegada h FROM ordenes WHERE id=145').h) === Date.parse(`${aLocal(9)}:00-06:00`), 'La llegada quedó como se mandó');
     p.w.close();
   }
@@ -1217,7 +1707,7 @@ try {
     p.red.demora = 0;
     p.doc.querySelector('#reversaSave').click();
     await p.hasta(() => p.patches().length === 2 && one('SELECT reversa_notas n FROM ordenes WHERE id=146').n === notas, 'salen las notas');
-    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan }, { reversaNotas: notas }]), `Cada guardado lleva solo lo suyo: ${JSON.stringify(p.patches())}`);
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan, soloCambios: true }, { reversaNotas: notas, soloCambios: true }]), `Cada guardado lleva solo lo suyo: ${JSON.stringify(p.patches())}`);
     ok(one('SELECT plan_reversa p FROM ordenes WHERE id=146').p === plan, 'El plan quedó como se mandó');
     p.w.close();
   }
@@ -1237,7 +1727,7 @@ try {
     p.red.demora = 0;
     p.doc.querySelector('#eopSave').click();
     await p.hasta(() => p.recargas.length === 1, 'guardada la mitigación, se vuelve a cargar por el plazo nuevo');
-    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ horaMitigacion: `${aLocal(30)}:00-06:00` }), `El segundo guardado lleva la mitigación: ${JSON.stringify(p.patches()[1])}`);
+    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ horaMitigacion: `${aLocal(30)}:00-06:00`, soloCambios: true }), `El segundo guardado lleva la mitigación: ${JSON.stringify(p.patches()[1])}`);
     p.w.close();
   }
   { // J4: marcar la reversa cambia lo que se exige, pero la ficha no se vuelve a cargar mientras falta guardar el plan escrito durante el viaje.
@@ -1256,7 +1746,7 @@ try {
     p.red.demora = 0;
     p.doc.querySelector('#reversaSave').click();
     await p.hasta(() => p.recargas.length === 1, 'guardado el plan, se vuelve a cargar por la reversa');
-    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ planReversa: plan }) && one('SELECT reversa_ejecutada e FROM ordenes WHERE id=166').e === 1, `El segundo guardado lleva el plan: ${JSON.stringify(p.patches()[1])}`);
+    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ planReversa: plan, soloCambios: true }) && one('SELECT reversa_ejecutada e FROM ordenes WHERE id=166').e === 1, `El segundo guardado lleva el plan: ${JSON.stringify(p.patches()[1])}`);
     p.w.close();
   }
   { // El error del servidor al guardar el plan de reversa se muestra tal cual, no «No se guardó».
@@ -1297,6 +1787,7 @@ try {
     p.w.close();
     const q = await abrir(148, 'jefe');
     q.escribir('#causaRaiz', 'Breaker flojo');
+    ok(q.w.localStorage.getItem('ot-148-causa-2') !== null && q.w.localStorage.getItem('ot-148-causa') === null, 'El borrador de la causa lleva la cuenta en la clave');
     await q.hasta(() => one('SELECT causa_raiz c FROM ordenes WHERE id=148').c === 'Breaker flojo', 'en proceso guarda el borrador');
     ok(JSON.stringify(q.patches()) === JSON.stringify([{ causaRaiz: 'Breaker flojo' }]), `En proceso, el borrador corto sí se guarda: ${JSON.stringify(q.patches())}`);
     q.w.close();
@@ -1322,7 +1813,7 @@ try {
     p.doc.querySelector('#planReversa').value = plan;
     p.doc.querySelector('#reversaSave').click();
     await p.hasta(() => one('SELECT plan_reversa p FROM ordenes WHERE id=129').p === plan, 'guarda el plan');
-    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan }]), `Del técnico, con la orden abierta, viaja solo el plan: ${JSON.stringify(p.patches())}`);
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan, soloCambios: true }]), `Del técnico, con la orden abierta, viaja solo el plan: ${JSON.stringify(p.patches())}`);
     ok(one('SELECT reversa_ejecutada e FROM ordenes WHERE id=129').e === 0 && p.avisos.length === 0, 'La reversa sigue sin marcar');
     p.w.close();
   }

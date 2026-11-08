@@ -16,9 +16,11 @@ import {
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
   liberacionTieneLectura, liberacionesFueraDeRango, liberacionConRango, requiereCausaRaiz, causaRaizVencida,
   tiemposEmergencia, fmtDuracionHoras, etiquetaMitigacion, isoALocalInput,
-  puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ, MENSAJE_PASO_SIN_NUMERO,
+  puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ, MENSAJE_PASO_SIN_NUMERO, pasoConRango,
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
 } from "@/lib/ordenes";
+// La hora de un turno en una frase: «Ronda de las 14:00», «Ronda de la 01:00».
+import { laHora } from "@/lib/turnos";
 // Un número guardado vuelve a su campo escrito con textoDeNumero: 12.345 como
 // «12.3450», porque «12.345» se leería de dos formas.
 import { textoDeNumero } from "@/lib/numero";
@@ -437,7 +439,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {fmtFechaSoloCompacta(scheduledPM.proximaFecha)}</p>
     </div>}
     {roundsOrigins.map(origin => <div class="mt-3 rounded bg-teal-50 p-3">
-      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de las {origin.turno} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
+      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de {laHora(origin.turno)} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
       <p class="mt-1">{origin.etiqueta}{origin.valor != null ? ` · leído ${origin.valor}` : ""}</p>
       {origin.nota && <p class="mt-1 whitespace-pre-wrap">{origin.nota}</p>}
       <p class="mt-1 text-xs text-slate-500">{origin.registradoPor} · la ronda conserva su propio registro.</p>
@@ -1354,6 +1356,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               return (
                 <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
                   <div class="text-sm font-medium text-slate-900">
+                    {/* El número que nombran los avisos («El paso 2 cambió…») y el celular («Paso 2 de 5»). */}
+                    <span class="ck-paso mr-1.5 align-middle text-xs font-normal tabular-nums text-slate-500">Paso {idx + 1}</span>
                     {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">CRÍTICO</span>}
                     {it.texto}
                   </div>
@@ -1366,8 +1370,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   )}
                   {it.requiereValor ? (() => {
                     const ev = evaluarValorChecklist(it);
+                    // Con rango, lo escrito sin número («ok», «1,200» de antes) no es
+                    // lectura: el progreso lo cuenta sin lectura y la fila lo dice igual.
+                    const sinLectura = !ev.tiene || (pasoConRango(it) && ev.numero === null);
                     return (
-                      <div class:list={["mt-2 rounded-lg p-2", ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" : ev.dentro === true ? "bg-emerald-50" : !ev.tiene ? "bg-amber-50" : "bg-slate-50"]}>
+                      <div class:list={["mt-2 rounded-lg p-2", ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" : ev.dentro === true ? "bg-emerald-50" : sinLectura ? "bg-amber-50" : "bg-slate-50"]}>
                         <div class="flex flex-wrap items-end gap-2">
                           <div>
                             <label class="mb-1 block text-xs font-medium text-slate-700">
@@ -1381,7 +1388,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">Rango normal: {ev.rangoTexto}</span>
                           )}
                           <span class="ck-rango text-xs font-medium" data-idx={idx}>
-                            {!ev.tiene ? <span class="text-amber-700">Sin lectura — bloquea el cierre</span>
+                            {sinLectura ? <span class="text-amber-700">Sin lectura — bloquea el cierre</span>
                               : ev.dentro === true ? <span class="text-emerald-700">✓ Dentro del rango</span>
                               : ev.dentro === false ? <span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>
                               : <span class="text-slate-500">Registrado</span>}
@@ -2200,7 +2207,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     let ckBase = ckLeer(ckBaseTexto);
     let checklist = ckLeer(ckBaseTexto);
 
-    async function patchOrden(payload) {
+    // alRechazo(status, j): quien llama atiende el rechazo; si responde true, no sale la ventana.
+    async function patchOrden(payload, alRechazo) {
       const res = await fetch(`/api/ordenes/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -2208,6 +2216,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
+        if (alRechazo?.(res.status, j)) return null;
         // El rechazo del valor de un paso que viajó en este envío va junto a su
         // campo; lo demás marcado sale en el guardado siguiente.
         if (payload.checklistEjecucion && ckRechazoDeValor(res.status, j, payload)) { if (ckCambiado()) programarGuardadoChecklist(); }
@@ -2325,11 +2334,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           motivo = prompt(estado === "en_espera" ? "Motivo del bloqueo o espera:" : "Motivo de devolución o reapertura (mínimo 10 caracteres):");
           if (!motivo?.trim()) return;
         }
-        const r = await patchOrden({ estado, ...evidencia, ...(motivo ? { motivo } : {}) });
+        // Un paso que cambió mientras tanto se avisa junto al checklist, no en una ventana.
+        let rechazo = null;
+        let r = null;
+        try {
+          r = await patchOrden({ estado, ...evidencia, ...(motivo ? { motivo } : {}) },
+            (status, j) => { rechazo = { status, j }; return estado === "completada" && ckEsPasoCambio(status, j); });
+        } catch {}
         if (r) {
-          if (estado === "completada") evidenciaGuardada(r.orden);
+          // Un paso que el servidor no tomó se queda a la vista, sin volver a cargar.
+          if (estado === "completada" && evidenciaGuardada(r.orden, r.pasosSinAplicar)) return;
           location.reload();
-        }
+        } else if (estado === "completada") evidenciaFallida(rechazo?.status, rechazo?.j);
       });
     });
 
@@ -2400,6 +2416,23 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
     const mismoPunto = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const ckCambiado = () => checklist.length !== ckBase.length || checklist.some((it, i) => !mismoPunto(it, ckBase[i]));
+    // Un punto como lo compara el servidor (puntoNormal y puntoComparable de
+    // src/lib/orden-verificacion.ts): sin claves vacías, null ni false, con el
+    // estado viejo {hecho} traducido y bloqueante y requiereValor como booleanos.
+    // Una pestaña de antes rellena claves vacías al guardar; eso no es un cambio.
+    function puntoNormal(punto) {
+      if (typeof punto !== "object" || punto === null || Array.isArray(punto)) return null;
+      const p = { ...punto };
+      if (!["pendiente", "ok", "na", "desviacion"].includes(p.estado)) p.estado = p.hecho === true ? "ok" : "pendiente";
+      delete p.hecho;
+      for (const k of ["bloqueante", "requiereValor"]) if (k in p) p[k] = p[k] === true || p[k] === 1;
+      for (const k of Object.keys(p)) if (p[k] === null || p[k] === undefined || p[k] === "" || p[k] === false) delete p[k];
+      return p;
+    }
+    function puntoComparable(punto) {
+      const p = puntoNormal(punto);
+      return p ? JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]])) : JSON.stringify(punto ?? null);
+    }
 
     const COLOR_FILA = {
       ok: "bg-emerald-50 border border-emerald-200",
@@ -2472,7 +2505,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const ind = $("ckAutosave");
       if (ind) { ind.textContent = texto; ind.className = color; }
     }
+    // Los números de paso que avisa la caja, cuando avisa pasos que cambiaron.
+    let ckAvisoPasos = [];
     function ckConflicto(msg) {
+      ckAvisoPasos = [];
       const texto = typeof msg === "string" && msg.trim() ? msg : "El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.";
       const caja = $("ckConflicto");
       if (!caja) { alert(texto); return; }
@@ -2481,12 +2517,47 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
     $("ckRecargar")?.addEventListener("click", () => location.reload());
     // Un guardado que salió bien quita el aviso de conflicto.
-    function ckSinConflicto() { $("ckConflicto")?.classList.add("hidden"); }
+    function ckSinConflicto() { ckAvisoPasos = []; $("ckConflicto")?.classList.add("hidden"); }
+    // «El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.» Con el
+    // envío a verificación, «…revísalo y vuelve a enviar.»
+    function fraseCambiaron(numeros, alEnviar) {
+      const uno = numeros.length === 1;
+      const despues = alEnviar ? "vuelve a enviar" : uno ? "márcalo otra vez" : "márcalos otra vez";
+      return uno
+        ? `El paso ${numeros[0]} cambió mientras tanto: revísalo y ${despues}.`
+        : `Los pasos ${numeros.slice(0, -1).join(", ")} y ${numeros.at(-1)} cambiaron mientras tanto: revísalos y ${despues}.`;
+    }
+    // Avisa los pasos que cambiaron en el servidor mientras tanto (posiciones en
+    // el arreglo), con el número que ve la persona, junto con los que la caja ya
+    // avisa. Responde si avisó alguno.
+    function ckAvisarPasos(posiciones, alEnviar) {
+      const visible = !!$("ckConflicto") && !$("ckConflicto").classList.contains("hidden");
+      const nuevos = posiciones.filter((i) => ckPos.includes(i)).map((i) => ckPos.indexOf(i) + 1);
+      if (!nuevos.length) return false;
+      const numeros = [...new Set([...(visible ? ckAvisoPasos : []), ...nuevos])].sort((a, b) => a - b);
+      ckConflicto(fraseCambiaron(numeros, alEnviar));
+      ckAvisoPasos = numeros;
+      return true;
+    }
+    // Los pasos que el servidor no tomó porque cambiaron allá, en la misma clave,
+    // mientras tanto: él conserva su punto entero.
+    const ckSinAplicar = (j) => (Array.isArray(j?.pasosSinAplicar) ? j.pasosSinAplicar.filter((i) => Number.isInteger(i) && i >= 0 && i < checklist.length) : []);
+    // Un punto que se toma del servidor se pinta entero como lo tiene él, también
+    // el número escrito que no se guardó.
+    function ckSoltarCampos(posiciones) {
+      for (const i of posiciones) {
+        const idx = ckPos.indexOf(i);
+        if (idx < 0) continue;
+        document.querySelectorAll(`.ck-num[data-idx="${idx}"], .ck-valor[data-idx="${idx}"]`).forEach((el) => { el.dataset.sinGuardar = ""; });
+        avisoValor(idx, "");
+      }
+    }
 
     // Lo que respondió el servidor, ya fusionado, pasa a ser la base y se pinta.
     // Un punto que se cambió aquí mientras viajaba el guardado conserva ese
-    // cambio: sale en el guardado siguiente.
-    function tomarChecklist(orden, enviado) {
+    // cambio: sale en el guardado siguiente. Uno que el servidor no tomó
+    // (sinAplicar) queda como lo tiene él, aunque se haya tocado en el viaje.
+    function tomarChecklist(orden, enviado, sinAplicar = []) {
       if (!orden || !("checklistEjecucion" in orden)) return;
       const texto = orden.checklistEjecucion ?? null;
       const fusion = ckLeer(texto);
@@ -2495,11 +2566,36 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         ckConflicto();
         return;
       }
-      checklist = fusion.map((p, i) => (enviado && !mismoPunto(checklist[i], enviado[i]) ? checklist[i] : JSON.parse(JSON.stringify(p))));
+      checklist = fusion.map((p, i) => (enviado && !sinAplicar.includes(i) && !mismoPunto(checklist[i], enviado[i]) ? checklist[i] : JSON.parse(JSON.stringify(p))));
       ckBaseTexto = texto;
       ckBase = fusion;
       ckPosiciones();
+      ckSoltarCampos(sinAplicar);
       repintarChecklist();
+    }
+    // El 409 del envío a verificación con un paso que cambió en el servidor
+    // mientras tanto: el servidor no aplicó nada.
+    const ckEsPasoCambio = (status, j) => status === 409 && j?.motivo === "paso-cambio";
+    // Ese paso se pinta como lo tiene el servidor y sale de la copia del equipo;
+    // lo demás sigue marcado aquí, con su base, y se guarda solo. El aviso va
+    // junto al checklist. Responde si era eso.
+    function ckPasoCambio(status, j) {
+      if (!ckEsPasoCambio(status, j)) return false;
+      const pasos = (Array.isArray(j?.pasos) ? j.pasos : []).filter((i) => Number.isInteger(i) && i >= 0 && i < checklist.length);
+      const servidor = j?.orden && "checklistEjecucion" in j.orden ? ckLeer(j.orden.checklistEjecucion) : [];
+      if (servidor.length === checklist.length) {
+        for (const i of pasos) {
+          checklist[i] = JSON.parse(JSON.stringify(servidor[i]));
+          ckBase[i] = JSON.parse(JSON.stringify(servidor[i]));
+        }
+        ckBaseTexto = JSON.stringify(ckBase);
+        ckSoltarCampos(pasos);
+        repintarChecklist();
+        ckGuardarLocal(pasos);
+      }
+      if (!ckAvisarPasos(pasos, true)) ckConflicto(j?.error);
+      $("ckConflicto")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      return true;
     }
 
     // Lo que viaja: el checklist de esta pantalla y la base con que se armó.
@@ -2509,17 +2605,27 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // punto por punto y cada uno con la base con que se marcó: sin señal no se
     // pierde al salir ni al recargar. Dos pestañas de la misma orden comparten la
     // copia: cada una fusiona lo suyo con lo que ya hay y quita solo lo suyo o lo
-    // que el servidor ya tiene.
-    const CK_KEY = `ot-${id}-ck`;
+    // que el servidor ya tiene. La copia es de la cuenta: otra cuenta en el
+    // mismo navegador tiene la suya y no la toca.
+    const CK_KEY = `ot-${id}-ck-${usuarioId}`;
     // Lo que esta pestaña dejó en la copia, por punto.
     let ckEscrito = {};
     const mismoValor = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    // Una lectura vale por su número: «10,5» es la misma que 10.5.
+    function mismaLectura(a, b) {
+      const x = otNumero.leerNumero(a), y = otNumero.leerNumero(b);
+      return x.tipo === "numero" && y.tipo === "numero" ? x.valor === y.valor : mismoValor(a, b);
+    }
     // Una marca ya llegó si el servidor tiene, en cada clave que la marca
-    // cambió, el valor marcado.
+    // cambió, el valor marcado. Se compara como el servidor. La hora y las
+    // iniciales las sella quien guarda: no cuentan si la marca cambió algo más.
     function yaGuardado(marca, base, servidor) {
-      const objeto = (x) => !!x && typeof x === "object";
-      if (!objeto(marca) || !objeto(base) || !objeto(servidor)) return mismoPunto(marca, servidor);
-      return [...new Set([...Object.keys(marca), ...Object.keys(base)])].every((k) => mismoValor(marca[k], base[k]) || mismoValor(servidor[k], marca[k]));
+      const m = puntoNormal(marca), b = puntoNormal(base), s = puntoNormal(servidor);
+      if (!m || !b || !s) return puntoComparable(marca) === puntoComparable(servidor);
+      const igual = (k, x, y) => (k === "valorMedido" ? mismaLectura(x, y) : mismoValor(x, y));
+      const cambiadas = [...new Set([...Object.keys(m), ...Object.keys(b)])].filter((k) => !igual(k, m[k], b[k]));
+      const sinSello = cambiadas.filter((k) => k !== "hora" && k !== "iniciales");
+      return (sinSello.length ? sinSello : cambiadas).every((k) => igual(k, s[k], m[k]));
     }
     function ckLeerCopia() {
       try {
@@ -2539,16 +2645,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         localStorage.setItem(CK_KEY, JSON.stringify({ usuarioId, checklist: JSON.stringify(marcado), base: JSON.stringify(base), savedAt: Date.now() }));
       } catch {}
     }
-    function ckGuardarLocal() {
+    // quitar: los puntos que el servidor no tomó porque cambiaron allá. Salen de
+    // la copia aunque los haya dejado otra pestaña, salvo uno marcado ya sobre lo
+    // que tiene el servidor.
+    function ckGuardarLocal(quitar = []) {
       const copia = ckLeerCopia();
       const propia = copiaPropia(copia) ? copia : null;
-      // La copia de otra cuenta no se mezcla: sin nada marcado aquí, queda como está.
+      // Una copia de otro checklist no se mezcla: sin nada marcado aquí, queda como está.
       if (copia && !propia && !ckCambiado()) return;
       const mio = {};
       const pares = checklist.map((p, i) => {
         if (!mismoPunto(p, ckBase[i])) { mio[i] = JSON.stringify([p, ckBase[i]]); return [p, ckBase[i]]; }
         if (!propia || !esperaEn(propia, i)) return null;
         const par = [propia.marcado[i], propia.base[i]];
+        if (quitar.includes(i) && puntoComparable(par[1]) !== puntoComparable(ckBase[i])) return null;
         // Lo que dejó esta pestaña y ya no espera, o lo que el servidor ya tiene, sale.
         return ckEscrito[i] === JSON.stringify(par) || yaGuardado(par[0], par[1], ckBase[i]) ? null : par;
       });
@@ -2577,6 +2687,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // El último guardado no llegó (sin señal u otra escritura en medio): se
     // reintenta al salir.
     let ckReintentar = false;
+    // El guardado siguiente no quita el aviso: lo que se guarda solo después del
+    // aviso de un paso que cambió.
+    let ckAvisoFijo = false;
     function programarGuardadoChecklist() {
       ckIndicador("Guardando…", "text-amber-600");
       ckGuardarLocal();
@@ -2594,9 +2707,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // conservarAviso: el guardado de lo recuperado al abrir no quita el aviso de
     // los pasos que cambiaron mientras tanto.
     async function guardarChecklist(opciones) {
-      const conservarAviso = opciones?.conservarAviso === true;
       if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
       if (ckEnVuelo) { ckOtraVez = true; return; }
+      const conservarAviso = opciones?.conservarAviso === true || ckAvisoFijo;
+      ckAvisoFijo = false;
       if (!ckCambiado()) { ckIndicador("", "text-slate-400"); return; }
       ckEnVuelo = true;
       let payload = ckEnvio();
@@ -2612,7 +2726,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           ({ res, j } = await ckMandar(payload));
         }
         ckReintentar = false;
-        if (res.ok) { bien = true; if (!conservarAviso) ckSinConflicto(); tomarChecklist(j.orden, enviado); ckGuardarLocal(); }
+        if (res.ok) {
+          bien = true;
+          if (!conservarAviso) ckSinConflicto();
+          // Lo demás quedó guardado; un paso que cambió allá mientras tanto se pinta como lo tiene el servidor y se avisa.
+          const sinAplicar = ckSinAplicar(j);
+          tomarChecklist(j.orden, enviado, sinAplicar);
+          ckGuardarLocal(sinAplicar);
+          ckAvisarPasos(sinAplicar, false);
+        }
         else if (ckOtraEscritura(res.status, j)) { ckReintentar = true; ckConflicto(j.error); }
         else {
           // Rechazado: no se puede aplicar, así que tampoco se manda al volver.
@@ -2737,7 +2859,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (num !== null && (min !== null || max !== null)) {
         dentro = (min === null || num >= min) && (max === null || num <= max);
       }
-      return { tiene, num, dentro, min, max };
+      // Con rango, lo escrito sin número («ok», «1,200» de antes) no es lectura, como en el servidor.
+      const sinLectura = !tiene || ((Number.isFinite(min) || Number.isFinite(max)) && num === null);
+      return { tiene, num, dentro, min, max, sinLectura };
     }
 
     function rangoTexto(idx) {
@@ -2759,12 +2883,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         caja.className = "mt-2 rounded-lg p-2 " + (
           ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" :
           ev.dentro === true ? "bg-emerald-50" :
-          !ev.tiene ? "bg-amber-50" : "bg-slate-50"
+          ev.sinLectura ? "bg-amber-50" : "bg-slate-50"
         );
       }
       if (etiqueta) {
         etiqueta.innerHTML =
-          !ev.tiene ? '<span class="text-amber-700">Sin lectura — bloquea el cierre</span>' :
+          ev.sinLectura ? '<span class="text-amber-700">Sin lectura — bloquea el cierre</span>' :
           ev.dentro === true ? '<span class="text-emerald-700">✓ Dentro del rango</span>' :
           ev.dentro === false ? '<span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>' :
           '<span class="text-slate-500">Registrado</span>';
@@ -2865,26 +2989,27 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
       const { marcado, base } = copia;
       const espera = marcado.map((p, i) => esperaEn(copia, i) && !yaGuardado(p, base[i], checklist[i]));
-      const manda = espera.map((e, i) => e && editable && mismoPunto(checklist[i], base[i]));
-      // El número de cada paso como lo ve la persona en pantalla.
-      const cambiaron = espera.flatMap((e, i) => (e && editable && !manda[i] && ckPos.includes(i) ? [ckPos.indexOf(i) + 1] : []));
+      // El servidor tiene el punto como estaba al marcarlo, comparado como él lo compara.
+      const manda = espera.map((e, i) => e && editable && puntoComparable(checklist[i]) === puntoComparable(base[i]));
+      const cambiaron = espera.flatMap((e, i) => (e && editable && !manda[i] ? [i] : []));
       // Cada punto de la copia queda resuelto aquí; lo que se manda vuelve a ella como de esta pestaña.
       ckEscribirCopia([]);
       if (!editable) { if (espera.some(Boolean)) ckConflicto(SIN_PERMISO); return; }
-      if (cambiaron.length) ckConflicto(cambiaron.length === 1
-        ? `El paso ${cambiaron[0]} cambió mientras tanto: revísalo y márcalo otra vez.`
-        : `Los pasos ${cambiaron.slice(0, -1).join(", ")} y ${cambiaron.at(-1)} cambiaron mientras tanto: revísalos y márcalos otra vez.`);
+      const avisa = ckAvisarPasos(cambiaron, false);
       if (!manda.some(Boolean)) return;
       checklist = checklist.map((p, i) => (manda[i] ? marcado[i] : p));
       ckPosiciones();
       repintarChecklist();
       ckGuardarLocal();
       ckIndicador("Guardando…", "text-amber-600");
-      guardarChecklist({ conservarAviso: cambiaron.length > 0 });
+      guardarChecklist({ conservarAviso: avisa });
     })();
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
-    const STORAGE_KEY = `ot-${id}-draft`;
+    // El borrador es de la cuenta. El de antes de esta versión no la lleva en la
+    // clave: se ofrece una sola vez al abrir y se borra.
+    const STORAGE_KEY = `ot-${id}-draft-${usuarioId}`;
+    const STORAGE_KEY_VIEJA = `ot-${id}-draft`;
     // La causa raíz no va aquí: la escribe la jefatura y se guarda aparte, para
     // que lo que guarda el técnico nunca la borre.
     const ejecFields = ["trabajosRealizados", "solucionAplicada"];
@@ -2981,8 +3106,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // ofrecer restaurarlo
     (function checkDraftLocal() {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        // El de la clave vieja se ofrece si no hay uno de esta cuenta. Una vez
+        // ofrecido, o sin nada que recuperar, sale del equipo.
+        const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY_VIEJA);
         if (!raw) return;
+        const olvidarViejo = () => { try { localStorage.removeItem(STORAGE_KEY_VIEJA); } catch {} };
         const { payload, savedAt } = JSON.parse(raw);
         if (!payload) return;
         // Comparar con valores actuales del DOM (que vienen del servidor). Solo
@@ -2990,10 +3118,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const campos = ejecFields.filter((c) => $(c) && !$(c).disabled && payload[c] !== undefined);
         if (!campos.length) return;
         const cambios = campos.filter((c) => (payload[c] ?? "") !== ($(c).value || "").trim());
-        if (!cambios.length) { limpiarLocal(); return; }
+        if (!cambios.length) { limpiarLocal(); olvidarViejo(); return; }
         const fechaSave = new Date(savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
         const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
-        if (confirm(mensaje)) {
+        const restaurar = confirm(mensaje);
+        olvidarViejo();
+        if (restaurar) {
           for (const c of cambios) if (payload[c] != null) $(c).value = payload[c];
           // Disparar guardado inmediato al servidor
           ejecutarGuardado();
@@ -3016,31 +3146,53 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // El checklist solo viaja si algo cambió aquí, y con su base: lo que el
     // técnico marcó en el celular no se pisa.
     let ckEvidencia = null;
+    // Lo escrito esperaba su autoguardado cuando salió el envío.
+    let textoEnEspera = false;
     function evidenciaPendiente() {
       if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      textoEnEspera = !!debounceTimer;
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       const pasos = ckCambiado() ? ckEnvio() : null;
       ckEvidencia = pasos ? JSON.parse(pasos.checklistEjecucion) : null;
       return { ...leerEjecPayload(), ...(pasos ?? {}) };
     }
     // El envío con la evidencia salió bien: lo marcado que viajó en él ya está en
-    // el servidor y deja de esperar en la copia del equipo.
-    function evidenciaGuardada(orden) {
+    // el servidor y deja de esperar en la copia del equipo. Un paso que el
+    // servidor no tomó se pinta como lo tiene él y se avisa. Responde si quedó
+    // alguno así: entonces la ficha no se vuelve a cargar.
+    function evidenciaGuardada(orden, pasosSinAplicar) {
       const enviado = ckEvidencia;
       ckEvidencia = null;
-      if (!enviado) return;
+      textoEnEspera = false;
+      if (!enviado) return false;
       ckReintentar = false;
-      tomarChecklist(orden, enviado);
-      ckGuardarLocal();
+      const sinAplicar = ckSinAplicar({ pasosSinAplicar });
+      tomarChecklist(orden, enviado, sinAplicar);
+      ckGuardarLocal(sinAplicar);
+      return ckAvisarPasos(sinAplicar, true);
+    }
+    // El envío no salió, por la causa que sea: lo que esperaba su autoguardado
+    // se vuelve a programar. Si un paso cambió en el servidor mientras tanto, se
+    // pinta como lo tiene él y se avisa junto al checklist, y lo demás se guarda
+    // sin quitar el aviso. Responde si fue eso.
+    function evidenciaFallida(status, j) {
+      ckEvidencia = null;
+      const pasoCambio = ckPasoCambio(status, j);
+      if (textoEnEspera) programarGuardado();
+      textoEnEspera = false;
+      if (ckCambiado()) { ckAvisoFijo = pasoCambio; programarGuardadoChecklist(); }
+      return pasoCambio;
     }
     window.otEvidenciaPendiente = evidenciaPendiente;
     window.otEvidenciaGuardada = evidenciaGuardada;
+    window.otEvidenciaFallida = evidenciaFallida;
 
     // ── Causa raíz: la escribe la jefatura, también con la orden enviada ──
     // Viaja sola, nunca junto con lo que escribe el técnico.
     const causaEl = $("causaRaiz");
     const causaEditable = !!causaEl && !causaEl.disabled;
-    const CAUSA_KEY = `ot-${id}-causa`;
+    // El borrador de la causa es de la cuenta, como el de lo escrito.
+    const CAUSA_KEY = `ot-${id}-causa-${usuarioId}`;
     let causaTimer = null;
     let causaGuardada = causaEl ? causaEl.value.trim() : "";
 
@@ -3152,7 +3304,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (conPasos) {
           const sinRechazo = bien === null || ckOtraEscritura(status, j) || status >= 500;
           ckReintentar = !bien && sinRechazo;
-          if (bien) { ckSinConflicto(); tomarChecklist(j?.orden, enviado); ckGuardarLocal(); }
+          if (bien) {
+            ckSinConflicto();
+            const sinAplicar = ckSinAplicar(j);
+            tomarChecklist(j?.orden, enviado, sinAplicar);
+            ckGuardarLocal(sinAplicar);
+            ckAvisarPasos(sinAplicar, false);
+          }
           else {
             if (!sinRechazo) {
               ckOlvidarLocal();
@@ -3403,10 +3561,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
           const msg = typeof j.error === "string" ? j.error : "No se pudo guardar. Revisa los datos.";
-          window.showToast?.(msg, "error");
-          return { ok: false, error: msg, data: j };
+          // Un paso que cambió mientras tanto se avisa junto al checklist.
+          if (j?.motivo !== "paso-cambio") window.showToast?.(msg, "error");
+          return { ok: false, error: msg, data: j, status: res.status };
         }
-        return { ok: true, data: j };
+        return { ok: true, data: j, status: res.status };
       } catch (e) {
         window.showToast?.("Sin conexión: no se pudo guardar.", "error");
         return { ok: false, error: "Sin conexión: no se pudo guardar." };
@@ -3433,7 +3592,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         window.showToast?.("Procedimiento vinculado a la orden.", "success");
         location.reload();
       } else {
-        aviso(g("rigeMsg"), "No se vinculó", false);
+        aviso(g("rigeMsg"), r.error ?? "No se vinculó", false);
       }
     });
 
@@ -3451,7 +3610,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         window.showToast?.("Clasificación guardada.", "success");
         location.reload();
       } else {
-        aviso(g("clasifMsg"), "No se guardó", false);
+        aviso(g("clasifMsg"), r.error ?? "No se guardó", false);
       }
     });
 
@@ -3515,7 +3674,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const enviadas = Object.fromEntries(Object.keys(cambios).map((c) => [c, g(c).value]));
       const btn = g("eopSave");
       btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
+      // soloCambios: lo que viaja es lo que se cambió aquí, también una hora
+      // borrada junto con las otras; no es la pestaña de antes que manda las cuatro.
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", { ...cambios, soloCambios: true });
       btn.disabled = false;
       if (r.ok && r.data?.orden) {
         const pendientes = pintarHorasEop(r.data.orden, enviadas);
@@ -3527,7 +3688,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         // escrito sin guardar.
         if (!pendientes && (r.data.orden.causaRaizVencimiento ?? null) !== venceCausa) location.reload();
       } else {
-        aviso(g("eopMsg"), "No se guardó", false);
+        aviso(g("eopMsg"), r.error ?? "No se guardó", false);
       }
     });
 
@@ -3566,7 +3727,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (!Object.keys(cambios).length) { aviso(g("reversaMsg"), "Sin cambios", true); return; }
       const btn = g("reversaSave");
       btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
+      // soloCambios: la casilla desmarcada y las notas borradas son de esta
+      // persona, no de la pestaña de antes que manda los tres campos juntos.
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", { ...cambios, soloCambios: true });
       btn.disabled = false;
       if (r.ok && r.data?.orden) {
         const pendientes = pintarReversa(r.data.orden, cambios);
@@ -3757,7 +3920,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       };
       sinLecturaBtn.addEventListener("click", () => {
         // Si ya se envió una vez sin lectura y volvió, se parte del mismo motivo.
-        g("sinLecturaMotivo").value = motivoPrevio;
+        // Lo escrito en esta pantalla y no enviado (un paso cambió mientras tanto) se queda.
+        if (!g("sinLecturaMotivo").value.trim()) g("sinLecturaMotivo").value = motivoPrevio;
         g("sinLecturaMsg").classList.add("hidden");
         sinLecturaModal.classList.remove("hidden");
         sinLecturaModal.classList.add("flex");
@@ -3784,11 +3948,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         });
         btn.disabled = false;
         if (r.ok) {
-          window.otEvidenciaGuardada?.(r.data?.orden);
+          // Un paso que el servidor no tomó se queda a la vista, sin volver a cargar.
+          if (window.otEvidenciaGuardada?.(r.data?.orden, r.data?.pasosSinAplicar)) { cerrarModal(); return; }
           window.showToast?.("Enviada a verificación sin lectura de liberación. Queda pendiente de verificación y registrada con tu nombre.", "success");
           location.reload();
           return;
         }
+        // No salió: lo marcado y escrito vuelve a guardarse solo. Si un paso
+        // cambió mientras tanto, el aviso está junto al checklist.
+        if (window.otEvidenciaFallida?.(r.status, r.data)) { cerrarModal(); return; }
         msg.textContent = r.error || "No se pudo enviar a verificación.";
         msg.className = "mt-2 text-sm text-red-600";
         msg.classList.remove("hidden");

@@ -12,6 +12,7 @@ import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "dri
 import { getDb } from "./db";
 import { TURNOS_DEFECTO, ahoraSV, laHora, parsearTurnos, sumarDias, turnoActual, etiquetaTurno, type TurnoInfo } from "./turnos";
 import { abrirEvento, ahoraISO, evaluarLectura, minutosEntre, registrarAccion } from "./aop";
+import { textoDeNumero } from "./numero";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import {
   aopEventos,
@@ -269,6 +270,22 @@ export function avisoCambioTurnos(linea: TramoTurnos[], ms = Date.now()): string
   return `Los turnos nuevos entran a ${laHora(p.entra.turno)} del ${fechaCorta(p.entra.fecha)}. ${hasta}${no}.`;
 }
 
+/**
+ * Sin cambio pendiente: los turnos que un cambio ya anunció como «no se abre» y cuya hora ya llegó
+ * mientras sigue el turno de antes. Se dice qué turno sigue, hasta qué hora y cuáles no se abren:
+ * «Siguen los turnos de ahora. El turno de las 06:00 sigue hasta las 22:00; el de las 14:00 no se abre.»
+ * Sin ninguno así, null.
+ */
+export function avisoTurnosSinAbrir(linea: TramoTurnos[], ms = Date.now()): string | null {
+  if (proximoTramo(linea, ms)) return null;
+  const corre = turnoEn(linea, ms);
+  const empezo = inicioTurno(corre.fecha, corre.turno);
+  const omite = tramoEn(linea, ms).omite.filter((t) => inicioTurno(t.fecha, t.turno) > empezo && inicioTurno(t.fecha, t.turno) <= ms);
+  if (!omite.length) return null;
+  const hasta = siguienteInicio(linea, ms);
+  return `Siguen los turnos de ahora. El turno de ${laHora(corre.turno)} sigue hasta ${laHora(hasta.turno)}; ${lasHoras(omite)} ${omite.length === 1 ? "no se abre" : "no se abren"}.`;
+}
+
 /** Las vigencias que pesan en una sede: su marca y los turnos de los recorridos que puede usar. */
 const vigenciasDeSede = (db: Db, sucursalId: number) =>
   db.select().from(rondaVigencias).where(or(
@@ -412,14 +429,14 @@ export function fueraDeRango(punto: Pick<RondaPunto, "minEsperado" | "maxEsperad
   return false;
 }
 
-/** "20–24 °C" · "≥ 50 %" · el texto esperado cuando no es numérico. */
+/** "20–24 °C" · "≥ 50 %" · el texto esperado cuando no es numérico. Cada número, escrito para leerse igual: 12.345 va «12.3450». */
 export function rangoNormal(punto: RondaPunto): string {
   const u = punto.unidad ? ` ${punto.unidad}` : "";
   if (punto.requiereValor) {
     const { minEsperado: mn, maxEsperado: mx } = punto;
-    if (mn != null && mx != null) return `${mn}–${mx}${u}`;
-    if (mn != null) return `≥ ${mn}${u}`;
-    if (mx != null) return `≤ ${mx}${u}`;
+    if (mn != null && mx != null) return `${textoDeNumero(mn)}–${textoDeNumero(mx)}${u}`;
+    if (mn != null) return `≥ ${textoDeNumero(mn)}${u}`;
+    if (mx != null) return `≤ ${textoDeNumero(mx)}${u}`;
     return `sin rango definido${u ? ` (${punto.unidad})` : ""}`;
   }
   return punto.valorEsperadoTexto || "sin valor normal definido";
@@ -541,7 +558,7 @@ export async function registrarLectura(
 
   if (eventoNuevo && eventoId && lectura) await db.update(aopEventos).set({ rondaLecturaId: lectura.id }).where(eq(aopEventos.id, eventoId));
   if (lectura?.aopEventoId && resultado !== "fuera") {
-    await registrarAccion(db, lectura.aopEventoId, "Lectura corregida en la ronda", valor != null ? `Nueva lectura: ${valor}${punto.unidad ? ` ${punto.unidad}` : ""}` : "Marcada sin desviación", input.usuarioId ?? null);
+    await registrarAccion(db, lectura.aopEventoId, "Lectura corregida en la ronda", valor != null ? `Nueva lectura: ${textoDeNumero(valor)}${punto.unidad ? ` ${punto.unidad}` : ""}` : "Marcada sin desviación", input.usuarioId ?? null);
   }
   return { eventoId, eventoNuevo, fuera: resultado === "fuera", tardia: false };
 }

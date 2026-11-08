@@ -214,5 +214,12 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .hoja-caja.con-pie .relojes b{font-size:20px}
   .hoja-caja.con-pie .hoja-campos{gap:6px}
   .hoja-caja.con-pie textarea{min-height:60px}
+  /* «Ahora» lleno (la emergencia que se atiende, dos líneas, «y N más» y la ronda) cabe en 360×640 sin desplazar:
+     menos aire, la misma letra. Cada línea conserva su alto para el pulgar. */
+  .hoy-cab{padding-top:8px;padding-bottom:6px}
+  .ahora{gap:6px;padding-top:12px;padding-bottom:12px}
+  .ahora .otra{padding-top:8px;padding-bottom:8px}
+  .ahora .otra::before{top:14px}
+  .ahora .otra+.otra{margin-top:-6px}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}
