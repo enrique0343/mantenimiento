@@ -324,8 +324,12 @@ const puedeConfigurarMop = otAbiertaParaRegistro && (user.rol === "admin" || use
 // Al técnico no se le muestran: el celular las registra al primer toque.
 const puedeEditarTiempos = esJefatura;
 // El plan de reversa se guarda en la orden: del técnico, el servidor solo lo
-// acepta si la tiene asignada.
+// acepta si la tiene asignada. Como en el servidor: con la orden abierta el
+// técnico escribe solo el plan, porque la reversa se marca después de empezar;
+// enviada, la registra la jefatura; cerrada o cancelada, nadie.
 const puedeGuardarReversa = puedeRegistrarMop;
+const reversaAntesDeEmpezar = esTecnico && estadoActual === "abierta";
+const puedeMarcarReversa = puedeGuardarReversa && !reversaAntesDeEmpezar;
 const muestraMop = esMop || prerrequisitos.length > 0 || liberaciones.length > 0 || !!o.planReversa;
 const muestraEop = esEop || !!o.horaAlarma || !!o.horaLlegada || !!o.horaMitigacion || !!o.horaRestablecimiento;
 
@@ -1061,15 +1065,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                         placeholder="Ej. Si la planta arranca pero la transferencia no retorna a normal: operar la retransferencia en manual según el SCP-ELE-01 con dos técnicos, mantener la planta hasta confirmar red estable y abrir orden correctiva.">{o.planReversa ?? ""}</textarea>
             </div>
             <label class:list={["flex items-start gap-2 rounded-lg p-2", o.reversaEjecutada ? "bg-amber-50" : ""]}>
-              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeGuardarReversa} />
+              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeMarcarReversa} />
               <span>
                 <span class="text-sm font-medium text-slate-900">Se ejecutó la reversa</span>
                 <span class="block text-xs text-slate-500">El sistema no volvió solo: hubo que revertir. Describe abajo qué se revirtió y cómo quedó. Con la reversa marcada no se exigen las lecturas de liberación: el sistema quedó como estaba.</span>
               </span>
             </label>
+            {puedeGuardarReversa && reversaAntesDeEmpezar && (
+              <p id="reversaAntes" class="text-xs text-slate-600">La reversa se marca después de empezar la intervención.</p>
+            )}
             <div>
               <label class="label text-xs" for="reversaNotas">Qué se revirtió y cómo quedó el sistema</label>
-              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeGuardarReversa}
+              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeMarcarReversa}
                         placeholder="Mínimo 10 caracteres. Ej. Retransferencia en manual con dos técnicos; planta sostenida hasta confirmar red estable; se abrió la orden correctiva OT-MG...">{o.reversaNotas ?? ""}</textarea>
             </div>
             {puedeGuardarReversa && (
@@ -1363,9 +1370,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                             <label class="mb-1 block text-xs font-medium text-slate-700">
                               Lectura obligatoria{it.unidad ? ` (${it.unidad})` : ""}
                             </label>
-                            <input class="ck-num input text-sm w-28" type="number" step="any" data-idx={idx}
+                            <input class="ck-num input text-sm w-28" type="text" inputmode="decimal" autocomplete="off" data-idx={idx}
                                    data-min={it.esperadoMin ?? ""} data-max={it.esperadoMax ?? ""} data-unidad={it.unidad ?? ""}
-                                   value={it.valorMedido ?? ""} disabled={!puedeEditar} />
+                                   value={it.valorMedido ?? ""} placeholder="Ej. 14,5" disabled={!puedeEditar} />
                           </div>
                           {ev.rangoTexto && (
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">Rango normal: {ev.rangoTexto}</span>
@@ -1377,6 +1384,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                               : <span class="text-slate-500">Registrado</span>}
                           </span>
                         </div>
+                        <p class="ck-aviso mt-2 hidden text-xs font-medium text-red-700" data-idx={idx} role="alert"></p>
                         <div class="mt-2 flex flex-wrap items-end gap-2">
                           <div>
                             <label class="mb-1 block text-[11px] text-slate-500">Hora</label>
@@ -1394,6 +1402,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     <div class="mt-2">
                       <label class="mb-1 block text-xs text-slate-600">Valor medido / resultado</label>
                       <input class="ck-valor input text-sm w-full max-w-xs" data-idx={idx} value={it.valorMedido ?? ""} placeholder="Ej: 125 psi" disabled={!puedeEditar} />
+                      <p class="ck-aviso mt-1 hidden text-xs font-medium text-red-700" data-idx={idx} role="alert"></p>
                     </div>
                   )}
                   {puedeEditar ? (
@@ -2075,6 +2084,79 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   </div>
   )}
 
+  <!-- Cómo se lee un número escrito a mano: la regla de src/lib/numero.ts, copiada
+       porque un script en línea no puede importarla. scripts/test-ficha-orden.mjs
+       compara las dos con los mismos casos. -->
+  <script is:inline>
+    window.otNumero = (() => {
+      // Coma o punto decimal. El separador de miles no se adivina: «1,200» vuelve
+      // como «ambiguo», con la frase que pide escribirlo sin separador.
+      function mensajeAmbiguo(entero, decimal) {
+        return decimal
+          ? `¿${entero} o ${decimal}? Escribe el número sin separador de miles.`
+          : `Escribe el número sin separador de miles: ${entero}.`;
+      }
+      const SIMPLE = /^([-+]?)(\d+)$/;
+      const DECIMAL = /^([-+]?)(\d+)[.,](\d+)$/;
+      // Dos o más grupos de tres cifras con el mismo separador: 1,234,567 · 1.234.567 · 1 234 567.
+      const AGRUPADO = /^([-+]?)(\d{1,3})((?:([.,\u0020\u00a0])\d{3})(?:\4\d{3})+)$/;
+      // Un grupo de miles con espacio: 1 200.
+      const ESPACIO = /^([-+]?)(\d{1,3})[\u0020\u00a0](\d{3})$/;
+      // Miles con un separador y decimales con el otro: 1,234.5 · 1.234,5 · 1 234,5.
+      const MIXTO = /^([-+]?)(\d{1,3}(?:([.,\u0020\u00a0])\d{3})+)([.,])(\d+)$/;
+      function clasificar(t) {
+        let m = SIMPLE.exec(t);
+        if (m) return { tipo: "numero", valor: Number(m[1] + m[2]) };
+        m = DECIMAL.exec(t);
+        if (m) {
+          const [, signo, ent, dec] = m;
+          // «1,200» o «360.000»: tres cifras después de un entero de una a tres cifras que no empieza en 0.
+          if (dec.length === 3 && /^[1-9]\d{0,2}$/.test(ent)) {
+            const sinCeros = dec.replace(/0+$/, "");
+            return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${signo}${ent}${dec}`, sinCeros ? `${signo}${ent},${sinCeros}` : `${signo}${ent}`) };
+          }
+          return { tipo: "numero", valor: Number(`${signo}${ent}.${dec}`) };
+        }
+        m = ESPACIO.exec(t);
+        if (m) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${m[2]}${m[3]}`, null) };
+        m = AGRUPADO.exec(t);
+        if (m) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${(m[2] + m[3]).replace(/[^\d]/g, "")}`, null) };
+        m = MIXTO.exec(t);
+        if (m && m[3] !== m[4]) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${m[2].replace(/[^\d]/g, "")},${m[5]}`, null) };
+        return { tipo: "texto" };
+      }
+      // Lo escrito completo es un número: la lectura obligatoria o el valor de un paso.
+      function leerNumero(v) {
+        if (typeof v === "number") return Number.isFinite(v) ? { tipo: "numero", valor: v } : { tipo: "texto" };
+        const t = typeof v === "string" ? v.trim() : v === null || v === undefined ? "" : String(v).trim();
+        if (!t) return { tipo: "vacio" };
+        return clasificar(t);
+      }
+      // El número con que empieza lo escrito, con la unidad al lado: «14,5 A».
+      // Un espacio cuenta como separador de miles solo si lo siguen tres cifras.
+      const AL_INICIO = /^([-+]?\d+(?:[.,\u0020\u00a0]\d+)*)/;
+      function numeroAlInicio(v) {
+        if (typeof v === "number") return Number.isFinite(v) ? { tipo: "numero", valor: v } : { tipo: "texto" };
+        const t = typeof v === "string" ? v.trim() : v === null || v === undefined ? "" : String(v).trim();
+        if (!t) return { tipo: "vacio" };
+        const m = AL_INICIO.exec(t);
+        if (!m) return { tipo: "texto" };
+        let token = m[1];
+        // Un espacio que no separa miles termina el número: «12 5 A» se lee 12.
+        const partes = token.split(/[\u0020\u00a0]/);
+        if (partes.length > 1) {
+          let i = 1;
+          while (i < partes.length && /^\d{3}(?:[.,]\d+)?$/.test(partes[i])) i++;
+          token = partes.slice(0, i).join(" ");
+        }
+        const r = clasificar(token);
+        return r.tipo === "texto" ? { tipo: "texto" } : r;
+      }
+      const valorDe = (r) => (r.tipo === "numero" ? r.valor : null);
+      return { mensajeAmbiguo, leerNumero, numeroAlInicio, valorDe };
+    })();
+  </script>
+
   <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({
     id,
     area,
@@ -2092,6 +2174,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   }) }}>
     const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId, usuarioId, causaObligatoria, minCausa } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
+    // Cómo se lee un número escrito a mano (copia de src/lib/numero.ts).
+    const otNumero = window.otNumero;
     // El checklist como lo mandó el servidor por última vez (la base con que el
     // servidor fusiona lo que se guarda aquí) y la copia que se edita en
     // pantalla. Blindaje: si checklistEjecucion quedara con datos no-JSON, no
@@ -2348,14 +2432,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         actualizarNotaVisible(idx);
         const poner = (clase, v) => {
           const el = document.querySelector(`.${clase}[data-idx="${idx}"]`);
+          // Un número escrito que no se guardó («1,200») queda para corregirlo.
+          if (!el || el.dataset.sinGuardar === "1") return;
           const t = v === null || v === undefined ? "" : String(v);
-          if (el && el.value !== t) el.value = t;
+          if (el.value !== t) el.value = t;
         };
         poner("ck-nota", it.notas);
         poner("ck-valor", it.valorMedido);
         poner("ck-num", it.valorMedido);
         poner("ck-hora", it.hora);
         poner("ck-iniciales", it.iniciales);
+        const campo = document.querySelector(`.ck-num[data-idx="${idx}"]`) ?? document.querySelector(`.ck-valor[data-idx="${idx}"]`);
+        if (campo && !campo.disabled && campo.dataset.sinGuardar !== "1") avisoValor(idx, campo.value.trim() ? problemaDeValor(campo) : "");
         if (document.querySelector(`.ck-num[data-idx="${idx}"]`)) mostrarLectura(idx);
       });
     }
@@ -2372,6 +2460,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       caja.classList.remove("hidden");
     }
     $("ckRecargar")?.addEventListener("click", () => location.reload());
+    // Un guardado que salió bien quita el aviso de conflicto.
+    function ckSinConflicto() { $("ckConflicto")?.classList.add("hidden"); }
 
     // Lo que respondió el servidor, ya fusionado, pasa a ser la base y se pinta.
     // Un punto que se cambió aquí mientras viajaba el guardado conserva ese
@@ -2395,35 +2485,70 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // Lo que viaja: el checklist de esta pantalla y la base con que se armó.
     const ckEnvio = () => ({ checklistEjecucion: JSON.stringify(checklist), checklistBase: ckBaseTexto ?? "[]" });
 
+    // Lo marcado queda también en este equipo, con su base, hasta que el
+    // servidor lo acepta: sin señal no se pierde al salir ni al recargar.
+    const CK_KEY = `ot-${id}-ck`;
+    function ckGuardarLocal() {
+      try {
+        if (ckCambiado()) localStorage.setItem(CK_KEY, JSON.stringify({ usuarioId, checklist: JSON.stringify(checklist), base: ckBaseTexto ?? "[]", savedAt: Date.now() }));
+        else localStorage.removeItem(CK_KEY);
+      } catch {}
+    }
+    function ckOlvidarLocal() {
+      try { localStorage.removeItem(CK_KEY); } catch {}
+    }
+    // El 409 de la guarda de concurrencia: otra escritura entró entre la lectura
+    // y la escritura del servidor. No es el de un checklist que cambió de forma.
+    const ckOtraEscritura = (status, j) => status === 409 && /^La orden cambió durante la operación/.test(typeof j?.error === "string" ? j.error : "");
+
     let ckSaveTimer = null;
     let ckEnVuelo = false;
     let ckOtraVez = false;
-    // El último guardado no llegó por falta de señal: se reintenta al salir.
+    // El último guardado no llegó (sin señal u otra escritura en medio): se
+    // reintenta al salir.
     let ckReintentar = false;
     function programarGuardadoChecklist() {
       ckIndicador("Guardando…", "text-amber-600");
+      ckGuardarLocal();
       if (ckSaveTimer) clearTimeout(ckSaveTimer);
       ckSaveTimer = setTimeout(guardarChecklist, 1000);
+    }
+    async function ckMandar(payload) {
+      const res = await fetch(`/api/ordenes/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return { res, j: await res.json().catch(() => ({})) };
     }
     async function guardarChecklist() {
       if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
       if (ckEnVuelo) { ckOtraVez = true; return; }
       if (!ckCambiado()) { ckIndicador("", "text-slate-400"); return; }
       ckEnVuelo = true;
-      const payload = ckEnvio();
-      const enviado = JSON.parse(payload.checklistEjecucion);
+      let payload = ckEnvio();
+      let enviado = JSON.parse(payload.checklistEjecucion);
       let bien = false;
       try {
-        const res = await fetch(`/api/ordenes/${id}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const j = await res.json().catch(() => ({}));
+        let { res, j } = await ckMandar(payload);
+        // Con otra escritura en medio se reintenta una vez con la misma base: la
+        // fusión del servidor conserva lo que llegó del celular.
+        if (ckOtraEscritura(res.status, j)) {
+          payload = ckEnvio();
+          enviado = JSON.parse(payload.checklistEjecucion);
+          ({ res, j } = await ckMandar(payload));
+        }
         ckReintentar = false;
-        if (res.ok) { bien = true; tomarChecklist(j.orden, enviado); }
-        else if (res.status === 409) ckConflicto(j.error);
-        else alert(typeof j.error === "string" ? j.error : "Error");
+        if (res.ok) { bien = true; ckSinConflicto(); tomarChecklist(j.orden, enviado); ckGuardarLocal(); }
+        else if (ckOtraEscritura(res.status, j)) { ckReintentar = true; ckConflicto(j.error); }
+        else {
+          // Rechazado: no se puede aplicar, así que tampoco se manda al volver.
+          // Un error del servidor no es un rechazo: se reintenta al salir.
+          if (res.status >= 500) ckReintentar = true;
+          else ckOlvidarLocal();
+          if (res.status === 409) ckConflicto(j.error);
+          else alert(typeof j.error === "string" ? j.error : "Error");
+        }
       } catch { ckReintentar = true; }
       ckEnVuelo = false;
       ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
@@ -2454,11 +2579,42 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
     });
 
+    // El valor de un paso se lee con la regla de numero.ts, como en el celular:
+    // con rango, la lectura obligatoria lleva el número del instrumento; sin
+    // rango y en «Valor medido / resultado» también vale un texto. Un número que
+    // se lee de dos formas («1,200») no se guarda: el punto conserva lo que tiene
+    // el servidor y el aviso dice cómo escribirlo.
+    const SOLO_NUMERO = "Anota solo el número que marcó el instrumento (por ejemplo 14,5).";
+    function problemaDeValor(campo) {
+      const leido = otNumero.leerNumero(campo.value);
+      if (leido.tipo === "ambiguo") return leido.mensaje;
+      const conRango = campo.classList.contains("ck-num") && ((campo.dataset.min ?? "") !== "" || (campo.dataset.max ?? "") !== "");
+      return leido.tipo === "texto" && conRango ? SOLO_NUMERO : "";
+    }
+    function avisoValor(idx, texto) {
+      const el = document.querySelector(`.ck-aviso[data-idx="${idx}"]`);
+      if (!el) return;
+      el.textContent = texto;
+      el.classList.toggle("hidden", !texto);
+    }
+    // Pasa lo escrito al punto si se puede guardar. Responde si lo tomó.
+    function tomarValor(campo, it, idx) {
+      const problema = problemaDeValor(campo);
+      avisoValor(idx, problema);
+      campo.dataset.sinGuardar = problema ? "1" : "";
+      if (!problema) { it.valorMedido = campo.value; return true; }
+      const base = ckBase[ckPos[idx]];
+      if (base && typeof base === "object" && "valorMedido" in base) it.valorMedido = base.valorMedido;
+      else delete it.valorMedido;
+      return false;
+    }
+
     document.querySelectorAll(".ck-valor").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const it = ckItem(Number(inp.dataset.idx));
+        const idx = Number(inp.dataset.idx);
+        const it = ckItem(idx);
         if (!it) return;
-        it.valorMedido = inp.value;
+        tomarValor(inp, it, idx);
         programarGuardadoChecklist();
       });
     });
@@ -2471,10 +2627,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     function evaluarLectura(idx) {
       const it = ckItem(idx);
       if (!it) return { tiene: false, dentro: null };
-      const crudo = it.valorMedido;
-      const tiene = crudo !== null && crudo !== undefined && String(crudo).trim() !== "";
-      const n = tiene ? Number(String(crudo).replace(",", ".")) : NaN;
-      const num = Number.isFinite(n) ? n : null;
+      // Como el servidor: «1,200» no se adivina y queda sin número.
+      const leido = otNumero.leerNumero(it.valorMedido);
+      const tiene = leido.tipo !== "vacio";
+      const num = otNumero.valorDe(leido);
       const min = it.esperadoMin === null || it.esperadoMin === undefined || it.esperadoMin === "" ? null : Number(it.esperadoMin);
       const max = it.esperadoMax === null || it.esperadoMax === undefined || it.esperadoMax === "" ? null : Number(it.esperadoMax);
       let dentro = null;
@@ -2553,10 +2709,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const idx = Number(inp.dataset.idx);
         const it = ckItem(idx);
         if (!it) return;
-        it.valorMedido = inp.value;
+        const tomado = tomarValor(inp, it, idx);
         // La hora de la lectura se sella sola la primera vez: en el formato
         // impreso del MOP esa columna se llena durante la ejecución.
-        if (inp.value !== "" && !String(it.hora || "").trim()) {
+        if (tomado && inp.value.trim() !== "" && !String(it.hora || "").trim()) {
           it.hora = horaAhora();
           const h = document.querySelector(`.ck-hora[data-idx="${idx}"]`);
           if (h) h.value = it.hora;
@@ -2583,6 +2739,44 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         programarGuardadoChecklist();
       });
     });
+
+    // Un valor guardado que no se lee como número («1,200») se marca al abrir.
+    document.querySelectorAll(".ck-num, .ck-valor").forEach((campo) => {
+      if (!campo.disabled && campo.value.trim()) avisoValor(Number(campo.dataset.idx), problemaDeValor(campo));
+    });
+
+    // Al abrir: lo que se marcó aquí y no llegó al servidor (sin señal, pestaña
+    // cerrada) se manda con la base con que se marcó. Cada punto marcado va con
+    // su base y los demás como están ahora en el servidor: la fusión conserva lo
+    // que llegó del celular. Solo lo manda quien lo marcó, si todavía puede marcar;
+    // si ya no se puede aplicar, la ficha lo dice.
+    (function ckRecuperar() {
+      let local = null;
+      try { local = JSON.parse(localStorage.getItem(CK_KEY) || "null"); } catch {}
+      if (!local || typeof local.checklist !== "string" || local.usuarioId !== usuarioId) return;
+      // Sin checklist en pantalla (vacío o ilegible) no hay dónde aplicarlo ni decirlo.
+      if (!checklist.length) { ckOlvidarLocal(); return; }
+      const marcado = ckLeer(local.checklist);
+      const baseLocal = ckLeer(local.base);
+      const mismaForma = marcado.length === checklist.length && baseLocal.length === checklist.length;
+      const falta = mismaForma ? marcado.map((p, i) => !mismoPunto(p, baseLocal[i]) && !mismoPunto(p, checklist[i])) : [];
+      if (mismaForma && !falta.some(Boolean)) { ckOlvidarLocal(); return; }
+      const editable = !!document.querySelector(".ck-estado-btn");
+      if (!editable || !mismaForma) {
+        ckOlvidarLocal();
+        ckConflicto(editable
+          ? "Lo que marcaste sin señal no se guardó: el checklist cambió mientras tanto. Márcalo otra vez."
+          : "Lo que marcaste sin señal no se guardó: la orden ya no está en ejecución.");
+        return;
+      }
+      checklist = checklist.map((p, i) => (falta[i] ? marcado[i] : p));
+      ckBase = ckBase.map((p, i) => (falta[i] ? baseLocal[i] : p));
+      ckBaseTexto = JSON.stringify(ckBase);
+      ckPosiciones();
+      repintarChecklist();
+      ckIndicador("Guardando…", "text-amber-600");
+      guardarChecklist();
+    })();
 
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
     const STORAGE_KEY = `ot-${id}-draft`;
@@ -2706,7 +2900,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
     window.addEventListener("beforeunload", (e) => {
-      if (debounceTimer || inFlight || causaTimer) {
+      if (debounceTimer || inFlight || causaTimer || ckSaveTimer || ckEnVuelo || ckReintentar) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -2736,11 +2930,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (m) { m.textContent = texto; m.className = "text-xs " + color; }
     }
 
+    // Enviada o cerrada, la causa raíz ya es evidencia del cierre: el servidor
+    // no la acepta vacía ni más corta que el mínimo, así que un texto corto no
+    // se manda. En proceso se guarda como borrador.
+    const causaFirme = causaObligatoria && ["completada", "verificada", "cerrada"].includes(estadoActual);
+    function faltanCaracteres(valor) {
+      const n = causaFirme ? minCausa - valor.length : 0;
+      return n <= 0 ? "" : n === 1 ? "Falta 1 carácter para guardar" : `Faltan ${n} caracteres para guardar`;
+    }
+
     async function guardarCausa() {
       if (causaTimer) { clearTimeout(causaTimer); causaTimer = null; }
       if (!causaEditable) return true;
       const valor = causaEl.value.trim();
       if (valor === causaGuardada) return true;
+      const falta = faltanCaracteres(valor);
+      if (falta) { avisoCausa(falta, "text-amber-700"); return false; }
       avisoCausa("Guardando…", "text-amber-600");
       try {
         const res = await fetch(`/api/ordenes/${id}`, {
@@ -2826,16 +3031,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           else setIndicador(bien === false ? "error" : "offline", bien === false ? "Sin guardar" : "Sin conexión — guardado localmente");
         }
         if (conPasos) {
-          ckReintentar = bien === null;
-          if (bien) tomarChecklist(j?.orden, enviado);
-          else if (status === 409) ckConflicto(j?.error);
+          const sinRechazo = bien === null || ckOtraEscritura(status, j) || status >= 500;
+          ckReintentar = !bien && sinRechazo;
+          if (bien) { ckSinConflicto(); tomarChecklist(j?.orden, enviado); ckGuardarLocal(); }
+          else {
+            if (!sinRechazo) ckOlvidarLocal();
+            if (status === 409) ckConflicto(j?.error);
+          }
           ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
         }
       });
       if (causaTimer) {
         clearTimeout(causaTimer); causaTimer = null;
         const valor = causaEl.value.trim();
-        if (valor !== causaGuardada) enviarAlSalir({ causaRaiz: valor || null }, (bien) => {
+        if (valor !== causaGuardada && faltanCaracteres(valor)) avisoCausa(faltanCaracteres(valor), "text-amber-700");
+        else if (valor !== causaGuardada) enviarAlSalir({ causaRaiz: valor || null }, (bien) => {
           if (bien) {
             causaGuardada = valor;
             try { localStorage.removeItem(CAUSA_KEY); } catch {}
@@ -3053,6 +3263,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       el.className = "text-xs " + (ok ? "text-emerald-600" : "text-red-600");
       if (ok) setTimeout(() => { el.textContent = ""; }, 2500);
     }
+    // Lo que se escribió mientras viajaba un guardado sale en el siguiente.
+    function avisoPendiente(el) {
+      if (!el) return;
+      el.textContent = "Guardado. Falta guardar lo último que escribiste.";
+      el.className = "text-xs text-amber-700";
+    }
 
     async function llamar(ruta, metodo, payload) {
       try {
@@ -3141,17 +3357,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // Se guarda el valor con que se pintó cada hora y solo viaja la que la
     // jefatura cambió: la que el técnico registró desde el celular mientras la
     // ficha estaba abierta no se borra. Después se pinta lo que respondió el
-    // servidor, con la hora del técnico incluida.
+    // servidor, con la hora del técnico incluida, en cada hora que sigue como
+    // se mandó o se pintó: la que se escribió mientras viajaba el guardado queda
+    // en pantalla y sale en el siguiente. Responde si quedó alguna así.
     const HORAS_EOP = ["horaAlarma", "horaLlegada", "horaMitigacion", "horaRestablecimiento"];
     const horasPintadas = {};
     for (const c of HORAS_EOP) if (g(c)) horasPintadas[c] = g(c).value;
 
-    function pintarHorasEop(orden) {
+    function pintarHorasEop(orden, enviadas = {}) {
       for (const c of HORAS_EOP) {
         const el = g(c);
         if (!el) continue;
-        el.value = isoALocal(orden[c]);
-        horasPintadas[c] = el.value;
+        const delServidor = isoALocal(orden[c]);
+        if (el.value === (c in enviadas ? enviadas[c] : horasPintadas[c])) el.value = delServidor;
+        horasPintadas[c] = delServidor;
       }
       const poner = (idEl, txt) => { const el = g(idEl); if (el) el.textContent = txt; };
       poner("eopRespuesta", duracion(orden.horaAlarma, orden.horaLlegada));
@@ -3159,6 +3378,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       poner("eopReparacion", duracion(orden.horaAlarma, orden.horaRestablecimiento));
       const alReves = !!orden.horaAlarma && !!orden.horaLlegada && Date.parse(orden.horaLlegada) < Date.parse(orden.horaAlarma);
       g("eopOrdenAviso")?.classList.toggle("hidden", !alReves);
+      return HORAS_EOP.some((c) => g(c) && g(c).value !== horasPintadas[c]);
     }
 
     g("eopSave")?.addEventListener("click", async () => {
@@ -3168,17 +3388,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (el && el.value !== horasPintadas[c]) cambios[c] = localAIso(el.value);
       }
       if (!Object.keys(cambios).length) { aviso(g("eopMsg"), "Sin cambios", true); return; }
+      // Cada hora que viaja, tal como estaba escrita.
+      const enviadas = Object.fromEntries(Object.keys(cambios).map((c) => [c, g(c).value]));
       const btn = g("eopSave");
       btn.disabled = true;
       const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
       btn.disabled = false;
       if (r.ok && r.data?.orden) {
-        pintarHorasEop(r.data.orden);
-        aviso(g("eopMsg"), "✓ Guardado", true);
+        const pendientes = pintarHorasEop(r.data.orden, enviadas);
+        if (pendientes) avisoPendiente(g("eopMsg"));
+        else aviso(g("eopMsg"), "✓ Guardado", true);
         window.showToast?.("Horas registradas. El plazo de la causa raíz corre desde la alarma.", "success");
         // Con la alarma se mueve el plazo de la causa raíz, que se dibuja en
-        // varias tarjetas: se vuelve a cargar la ficha.
-        if ((r.data.orden.causaRaizVencimiento ?? null) !== venceCausa) location.reload();
+        // varias tarjetas: se vuelve a cargar la ficha, cuando no queda nada
+        // escrito sin guardar.
+        if (!pendientes && (r.data.orden.causaRaizVencimiento ?? null) !== venceCausa) location.reload();
       } else {
         aviso(g("eopMsg"), "No se guardó", false);
       }
@@ -3187,7 +3411,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // ── MOP · plan de reversa ───────────────────────────────────────────────
     // Igual que las horas: solo viaja lo que cambió respecto de lo pintado. La
     // reversa que el técnico marcó desde el celular no se desmarca ni se borran
-    // sus notas.
+    // sus notas, y lo que se escribió mientras viajaba el guardado se queda.
     function leerReversa() {
       return {
         planReversa: g("planReversa").value.trim() || null,
@@ -3196,13 +3420,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       };
     }
     let reversaPintada = g("reversaSave") ? leerReversa() : null;
+    const textoReversa = (v) => String(v ?? "").replace(/\r\n?/g, "\n").trim() || null;
 
-    function pintarReversa(orden) {
-      g("planReversa").value = orden.planReversa ?? "";
-      g("reversaEjecutada").checked = !!orden.reversaEjecutada;
-      g("reversaNotas").value = orden.reversaNotas ?? "";
+    // Pinta lo que respondió el servidor en cada campo que sigue como se mandó o
+    // se pintó. Responde si quedó algo escrito sin guardar.
+    function pintarReversa(orden, enviados = {}) {
+      const leido = leerReversa();
+      const esperado = { ...reversaPintada, ...enviados };
+      if (leido.planReversa === esperado.planReversa) g("planReversa").value = orden.planReversa ?? "";
+      if (leido.reversaEjecutada === esperado.reversaEjecutada) g("reversaEjecutada").checked = !!orden.reversaEjecutada;
+      if (leido.reversaNotas === esperado.reversaNotas) g("reversaNotas").value = orden.reversaNotas ?? "";
       g("reversaEjecutada").closest("label")?.classList.toggle("bg-amber-50", !!orden.reversaEjecutada);
-      reversaPintada = leerReversa();
+      reversaPintada = { planReversa: textoReversa(orden.planReversa), reversaEjecutada: !!orden.reversaEjecutada, reversaNotas: textoReversa(orden.reversaNotas) };
+      const ahora = leerReversa();
+      return Object.keys(ahora).some((k) => ahora[k] !== reversaPintada[k]);
     }
 
     g("reversaSave")?.addEventListener("click", async () => {
@@ -3215,12 +3446,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       const r = await llamar(`/api/ordenes/${otId}`, "PATCH", cambios);
       btn.disabled = false;
       if (r.ok && r.data?.orden) {
-        pintarReversa(r.data.orden);
-        aviso(g("reversaMsg"), "✓ Guardado", true);
+        const pendientes = pintarReversa(r.data.orden, cambios);
+        if (pendientes) avisoPendiente(g("reversaMsg"));
+        else aviso(g("reversaMsg"), "✓ Guardado", true);
         window.showToast?.("Plan de reversa guardado.", "success");
         // Con la reversa marcada o desmarcada cambia lo que se exige para
-        // enviar la intervención: se vuelve a cargar la ficha.
-        if (!!r.data.orden.reversaEjecutada !== reversaInicial) location.reload();
+        // enviar la intervención: se vuelve a cargar la ficha, cuando no queda
+        // nada escrito sin guardar.
+        if (!pendientes && !!r.data.orden.reversaEjecutada !== reversaInicial) location.reload();
       } else {
         aviso(g("reversaMsg"), "No se guardó", false);
       }
@@ -3294,9 +3527,22 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     });
 
     // ── MOP · lecturas de liberación ────────────────────────────────────────
-    // Con mínimo o máximo, la lectura es el número del instrumento (acepta coma)
-    // y no hay texto libre. Si lo escrito no es un número, el servidor dice qué
-    // falta y se muestra tal cual junto al campo.
+    // Con mínimo o máximo, la lectura es el número del instrumento (acepta coma
+    // o punto decimal) y no hay texto libre. Un número que se lee de dos formas
+    // («1,200») no se manda: el aviso junto al campo dice cómo escribirlo. Si lo
+    // escrito no es un número, el servidor dice qué falta y se muestra tal cual.
+    const otNumero = window.otNumero;
+    function avisoLectura(msg, texto) {
+      if (!msg) return;
+      msg.textContent = texto;
+      msg.classList.toggle("hidden", !texto);
+    }
+    document.querySelectorAll('.liber-valor[data-rango="1"]').forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const leido = otNumero.numeroAlInicio(inp.value);
+        avisoLectura(document.querySelector(`.liber-msg[data-id="${inp.dataset.id}"]`), leido.tipo === "ambiguo" ? leido.mensaje : "");
+      });
+    });
     document.querySelectorAll(".liber-save").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const itemId = Number(btn.dataset.id);
@@ -3312,10 +3558,19 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           num?.focus();
           return;
         }
+        // Con rango puede venir con la unidad al lado («14,5 A»); sin rango, el
+        // campo es solo número.
+        const leido = conRango ? otNumero.numeroAlInicio(crudo) : otNumero.leerNumero(crudo);
+        if (leido.tipo === "ambiguo") {
+          avisoLectura(msg, leido.mensaje);
+          num?.focus();
+          return;
+        }
+        const solo = otNumero.leerNumero(crudo);
         const lectura = !conRango
-          ? { valorMedido: crudo === "" ? null : Number(crudo), valorMedidoTexto: texto || null }
-          : /^[-+]?\d+(?:[.,]\d+)?$/.test(crudo)
-            ? { valorMedido: Number(crudo.replace(",", ".")), valorMedidoTexto: null }
+          ? { valorMedido: otNumero.valorDe(solo), valorMedidoTexto: texto || null }
+          : solo.tipo === "numero"
+            ? { valorMedido: solo.valor, valorMedidoTexto: null }
             : { valorMedido: null, valorMedidoTexto: crudo };
         btn.disabled = true;
         const r = await llamar(`/api/ordenes/${otId}/liberaciones`, "PATCH", { itemId, ...lectura });

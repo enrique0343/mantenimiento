@@ -64,7 +64,8 @@ const updateSchema = z.object({
   horaLlegada: z.string().nullable().optional(),
   horaMitigacion: z.string().nullable().optional(),
   horaRestablecimiento: z.string().nullable().optional(),
-  // Plan de reversa del MOP: se escribe antes de empezar.
+  // Plan de reversa del MOP: se escribe antes de empezar. La reversa se marca
+  // con la orden empezada; enviada a verificación, la registra la jefatura.
   planReversa: z.string().nullable().optional(),
   reversaEjecutada: z.boolean().optional(),
   reversaNotas: z.string().nullable().optional(),
@@ -119,17 +120,7 @@ export async function aplicarCambioOrden(
   if (parsed.data.tipo === "emergencia" && parsed.data.clasePrioridad === undefined && !actual.clasePrioridad) {
     entrada.clasePrioridad = "P1";
   }
-  // «Cualquier reversa se informa a la jefatura antes de cerrar»: no se marca
-  // ejecutada sin decir qué se revirtió.
-  if (parsed.data.reversaEjecutada === true) {
-    const notas = (parsed.data.reversaNotas ?? actual.reversaNotas ?? "").trim();
-    if (notas.length < 10) {
-      return Response.json(
-        { error: "Para marcar la reversa como ejecutada, describe qué se revirtió y cómo quedó el sistema (mínimo 10 caracteres). Cualquier reversa se informa a la jefatura antes de cerrar." },
-        { status: 400 }
-      );
-    }
-  }
+  // Quién marca la reversa, en qué estado y con qué notas lo revisa actualizarOrdenConVerificacion.
 
   let row: typeof ordenes.$inferSelect;
   try {

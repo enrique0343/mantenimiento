@@ -67,6 +67,18 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .ahora .b1{margin-top:4px}
 .ahora .b2{background:transparent;color:var(--blanco);border-color:var(--azul-tn)}
 .ahora .dos .b2{min-height:60px}
+/* Con otra emergencia debajo, el título de la que va primero ocupa dos líneas como máximo. */
+.ahora h2.recorte.dos{-webkit-line-clamp:2;line-clamp:2}
+/* Otra emergencia que no ocupa «Ahora»: una línea con su acción. El rojo, solo en la marca. */
+.ahora .otra{display:block;position:relative;min-height:44px;padding:11px 0 11px 16px;border-top:1px solid var(--azul);font-size:15px;line-height:1.3;color:#C9CFDB}
+.ahora .otra::before{content:"";position:absolute;left:0;top:17px;width:8px;height:8px;border-radius:999px;background:var(--rojo)}
+.ahora .otra b{font-weight:600;color:var(--blanco);overflow-wrap:anywhere}
+.ahora .otra .accion{font-weight:700;color:var(--azul-tn);white-space:nowrap}
+.ahora .otra+.otra{margin-top:-8px}
+.ahora .otra:active{background:var(--azul)}
+.ahora .otra-mas{font-size:14px}
+/* La sede ya no hace ronda: la frase va donde iba la ronda. */
+.ahora .sin-ronda{padding-bottom:8px;border-bottom:1px solid var(--azul);font-weight:600;color:var(--blanco)}
 .resto{padding:12px 0 8px}
 .resto>.etq{display:block;padding:0 var(--gd) 6px var(--gi)}
 .fila{display:flex;align-items:center;gap:12px;width:100%;min-height:52px;padding:6px var(--gd) 6px var(--gi);border-top:1px solid var(--filete);text-align:left}

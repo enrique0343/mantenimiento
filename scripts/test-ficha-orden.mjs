@@ -2,12 +2,16 @@
 // no ve cada rol en una emergencia (EOP) y en una intervención (MOP), y qué manda la
 // pantalla al guardar, con las rutas reales detrás. Los cruces son reales: el técnico
 // registra por /api/campo/sync y después la jefatura guarda en la ficha que tenía
-// abierta. También el reporte de la orden. Correr después de npm run build.
+// abierta. También los números escritos a mano (la copia de src/lib/numero.ts),
+// lo marcado sin señal o mientras viaja un guardado, y el reporte de la orden.
+// Correr después de npm run build.
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { experimental_AstroContainer } from 'astro/container';
+import * as esbuild from 'esbuild';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 import { fijarReloj } from './test-support/reloj.mjs';
 
@@ -17,13 +21,14 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const beforeMigration = (db, n) => { if (n.startsWith('0049_fase49')) db.exec("INSERT OR IGNORE INTO usuarios(id,nombre,email,password_hash,rol) VALUES(1000,'Administración','siembra@example.invalid','x','admin')"); };
 const f = await setupConjuntos({ beforeMigration, modules: { sync: 'pages/api/campo/sync', liberaciones: 'pages/api/ordenes/[id]/liberaciones', ordenes: 'lib/ordenes' } });
-const { app, sqlite, call, DB } = f;
+const { app, sqlite, call, DB, faults } = f;
 const one = (q, ...a) => sqlite.prepare(q).get(...a);
 const modulo = async (ruta) => (await import(pathToFileURL(path.join(process.cwd(), 'dist/_worker.js/pages', ruta)).href)).page().default;
 const pagina = await modulo('ordenes/_id_.astro.mjs');
 const paginaReporte = await modulo('ordenes/_id_/reporte.astro.mjs');
 let checks = 0;
 const ok = (c, m) => { assert.ok(c, m); checks++; };
+const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 const USUARIO = { admin: 1, jefe: 2, tecnico: 3, visualizador: 4 };
 const AREA = 'infraestructura';
 
@@ -122,6 +127,44 @@ try {
   orden(131, { tipo: 'correctivo', estado: 'abierta', activo_id: 1, asignado_a: 3,
     checklist_ejecucion: JSON.stringify([{ texto: 'Revisar el breaker', estado: 'pendiente', minutos: 10 }, { texto: 'Medir la corriente', estado: 'pendiente', minutos: 5 }]) });
   orden(132, { tipo: 'correctivo', estado: 'abierta', activo_id: 1, asignado_a: 3 });
+
+  // ── Números escritos a mano, guardado sin señal y en vuelo, causa raíz y reversa ──
+  const emergencia = (id, campos = {}) => orden(id, { tipo: 'emergencia', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(0.5), hora_alarma: hace(0.5), causa_raiz_vencimiento: hace(-71.5), checklist_ejecucion: lista(...PASOS), ...campos });
+  // Decisión 4: el paso marcado sin señal sale al volver a abrir la ficha.
+  emergencia(137); emergencia(153); emergencia(154);
+  // El 409 de la guarda de concurrencia: el celular escribe entre la lectura y la escritura.
+  emergencia(138); emergencia(139); emergencia(152);
+  // Un error del servidor al guardar el checklist.
+  emergencia(155);
+  // Guardado en vuelo: 300 ms, 2,5 s y al salir.
+  emergencia(140); emergencia(141); emergencia(142);
+  // Decisión 8 en el paso: la lectura obligatoria y el valor medido.
+  orden(143, { tipo: 'preventivo', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), checklist_ejecucion: JSON.stringify([
+    { texto: 'Medir el CO2 de la sala', estado: 'pendiente', requiereValor: true, unidad: 'ppm', esperadoMax: 1000 },
+    { texto: 'Revisar la presión de la red', estado: 'pendiente', criterio: 'Entre 100 y 130 psi' },
+    { texto: 'Anotar cómo quedó el tablero', estado: 'pendiente', requiereValor: true }]) });
+  // Un valor guardado antes de la regla que se lee de dos formas.
+  orden(151, { tipo: 'preventivo', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), checklist_ejecucion: JSON.stringify([
+    { texto: 'Medir la presión diferencial del filtro', estado: 'ok', requiereValor: true, unidad: 'Pa', esperadoMin: 2.5, esperadoMax: 15, valorMedido: '2.500' }]) });
+  // Decisión 8 en la liberación: CO2 con máximo de 1000 ppm.
+  orden(144, { tipo: 'intervencion', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1) });
+  reqs(144);
+  const libCo2 = Number(sqlite.prepare("INSERT INTO orden_liberaciones(orden_id,etiqueta,unidad,max_aceptable,obligatoria) VALUES(144,'CO2 en el quirófano','ppm',1000,1)").run().lastInsertRowid);
+  // Lo escrito mientras viaja el guardado de las horas y de la reversa.
+  emergencia(145, { iniciada_en: hace(1), hora_alarma: hace(1), checklist_ejecucion: null });
+  orden(146, { tipo: 'intervencion', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(1), plan_reversa: 'Volver al tablero anterior.' });
+  reqs(146); lectura(146);
+  // La causa raíz con la orden enviada y en proceso.
+  orden(147, { tipo: 'emergencia', estado: 'completada', activo_id: 1, asignado_a: 3, iniciada_en: hace(5), completada_en: hace(1), horas_trabajadas: 4,
+    hora_alarma: hace(5), causa_raiz_vencimiento: hace(-67), trabajos_realizados: 'Planta en manual y transferencia operada con dos técnicos.' });
+  enviada(147);
+  emergencia(148, { checklist_ejecucion: null });
+  // La reversa en una intervención cerrada y en una cancelada.
+  orden(149, { tipo: 'intervencion', estado: 'cerrada', activo_id: 1, asignado_a: 3, iniciada_en: hace(30), completada_en: hace(26), horas_trabajadas: 3, verificado_por: 2, verificado_en: hace(25),
+    cerrado_por: 2, cerrado_en: hace(25), plan_reversa: 'Volver al tablero anterior.', trabajos_realizados: 'Cambio del interruptor del tablero de la rama crítica.' });
+  reqs(149); enviada(149);
+  orden(150, { tipo: 'intervencion', estado: 'cancelada', activo_id: 1, asignado_a: 3, plan_reversa: 'Volver al tablero anterior.' });
+  reqs(150);
 
   const container = await experimental_AstroContainer.create();
   const html = async (id, rol, uid = USUARIO[rol], componente = pagina, ruta = `/ordenes/${id}`) => {
@@ -233,19 +276,23 @@ try {
   }
 
   // ── Lo que manda la pantalla, con las rutas reales detrás ──────────────
-  const abrir = async (id, rol) => {
-    const enviados = [], avisos = [], errores = [], red = { caida: false };
+  // almacen: lo que ya hay en el localStorage de este equipo al abrir.
+  // red.demora: cuánto tarda cada envío en llegar al servidor.
+  const abrir = async (id, rol, { almacen = {} } = {}) => {
+    const enviados = [], avisos = [], errores = [], red = { caida: false, demora: 0 };
     const consola = new VirtualConsole();
     consola.on('jsdomError', (e) => { if (!/Not implemented/.test(e.message) && !/getContext|fillStyle/.test(String(e.detail?.stack ?? e.stack ?? e.message))) errores.push(e.detail?.message ?? e.message); });
     const dom = new JSDOM(await html(id, rol), {
       url: `https://local.test/ordenes/${id}?area=${AREA}`, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola,
       beforeParse(w) {
+        for (const [k, v] of Object.entries(almacen)) w.localStorage.setItem(k, v);
         w.alert = (m) => avisos.push(m); w.confirm = () => true; w.prompt = () => null;
         w.fetch = async (url, init = {}) => {
           const u = new URL(url, 'https://local.test');
           const data = init.body ? JSON.parse(init.body) : undefined;
           enviados.push({ metodo: init.method ?? 'GET', ruta: u.pathname, data, keepalive: !!init.keepalive });
           if (red.caida) throw new TypeError('Failed to fetch');
+          if (red.demora) await pausa(red.demora);
           const m = u.pathname.match(/^\/api\/ordenes\/(\d+)(\/liberaciones)?$/);
           const r = m && init.method === 'PATCH' ? await call(m[2] ? app.liberaciones.PATCH : app.order.PATCH, u.pathname, { method: 'PATCH', id: Number(m[1]), data, rol }) : { status: 200, body: {} };
           return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
@@ -253,10 +300,16 @@ try {
       },
     });
     const w = dom.window;
-    const hasta = async (fn, msg) => { for (let i = 0; i < 400; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); } assert.fail(`${msg} · enviados: ${JSON.stringify(enviados)} · avisos: ${avisos.join(' | ')}`); };
+    const hasta = async (fn, msg, ms = 4000) => { for (let i = 0; i < ms / 10; i++) { if (fn()) return; await pausa(10); } assert.fail(`${msg} · enviados: ${JSON.stringify(enviados)} · avisos: ${avisos.join(' | ')}`); };
     const escribir = (sel, valor) => { const el = w.document.querySelector(sel); el.value = valor; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
-    return { w, doc: w.document, enviados, avisos, errores, hasta, escribir, red };
+    const patches = () => enviados.filter((e) => e.metodo === 'PATCH').map((e) => e.data);
+    return { w, doc: w.document, enviados, avisos, errores, hasta, escribir, red, patches };
   };
+  // Lo que guarda el localStorage de una ventana.
+  const almacenDe = (w) => Object.fromEntries(Array.from({ length: w.localStorage.length }, (_, i) => [w.localStorage.key(i), w.localStorage.getItem(w.localStorage.key(i))]));
+  // El estado que la pantalla tiene marcado en cada punto del checklist.
+  const enPantalla = (p, n) => Array.from({ length: n }, (_, i) => [...p.doc.querySelectorAll(`.ck-estado-btn[data-idx="${i}"]`)]
+    .find((b) => /bg-slate-700|bg-brand-600|bg-slate-500|border-amber-500/.test(b.className))?.dataset.estado).join(', ');
 
   { // Lo que guarda el técnico nunca borra la causa raíz de la jefatura.
     const p = await abrir(101, 'tecnico');
@@ -429,6 +482,7 @@ try {
     ok(p.doc.querySelector('#ckConflictoMsg').textContent === 'El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.', `Muestra el mensaje del servidor: ${p.doc.querySelector('#ckConflictoMsg').textContent}`);
     ok(/Volver a cargar la ficha/.test(p.doc.querySelector('#ckRecargar')?.textContent ?? ''), 'Ofrece volver a cargar la ficha');
     ok(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=124').c === otro && p.avisos.length === 0, 'No se pisó nada y no salta ningún aviso');
+    ok(p.w.localStorage.getItem('ot-124-ck') === null, 'Lo que no se puede fusionar no queda en el equipo para mandarlo al volver');
     p.w.close();
   }
 
@@ -508,6 +562,384 @@ try {
     ok(puede(await ver(130, 'tecnico')) === nada, 'MOP de otro técnico: nada');
     ok(puede(await ver(128, 'jefe')) === todo && puede(await ver(130, 'admin')) === todo, 'La jefatura registra en cualquier MOP sin cerrar');
     ok(puede(await ver(129, 'visualizador')) === nada, 'El visualizador solo lee');
+  }
+
+  // ── Decisión 8 · La ficha lee los números con la regla de src/lib/numero.ts ──
+  {
+    const salida = await esbuild.build({ entryPoints: ['src/lib/numero.ts'], bundle: true, format: 'esm', platform: 'neutral', write: false });
+    const original = await import(`data:text/javascript;base64,${Buffer.from(salida.outputFiles[0].text).toString('base64')}`);
+    const p = await abrir(143, 'tecnico');
+    const copia = p.w.otNumero;
+    ok(copia && ['leerNumero', 'numeroAlInicio', 'mensajeAmbiguo', 'valorDe'].every((fn) => typeof copia[fn] === 'function'), 'La ficha trae su copia de la regla de los números');
+    // Los mismos casos de scripts/test-numero.mjs, tal como están escritos ahí.
+    const fuente = await fs.readFile('scripts/test-numero.mjs', 'utf8');
+    const deLaPrueba = [...fuente.matchAll(/\b(?:leerNumero|numeroAlInicio)\(((?:'[^']*'|[^()'])*)\)/g)].map((m) => Function(`return (${m[1]});`)());
+    ok(deLaPrueba.length >= 40, `Se toman los casos de test-numero.mjs: ${deLaPrueba.length}`);
+    const extra = ['1,200 ppm', '0,5', '00,500', '1,2000', '12,345', '123,456', '1234,567', '-0,250', '+1.250', '1,000,000', '1.000.000,5', '1 234 567,8', '1\u00a0234',
+      '1 2', '12 345', '9 999 ppm', '14.5A', ',5', '.5', '5,', '1,,2', '1.2.3', '1e3', '0x10', 'NaN', 'Infinity', '١٢', '１２', '\t3,5\n', '- 5', '−5', '1_000', '1,234.567',
+      true, false, {}, [], ['1,200'], 0, -0, 1e21, -7.25, Number.POSITIVE_INFINITY, undefined, null];
+    // Todas las combinaciones cortas de cifras, separadores, signo y unidad.
+    const letras = ['1', '0', '2', ',', '.', ' ', '\u00a0', '-', 'A'];
+    const cortas = [];
+    for (let largo = 1, nivel = ['']; largo <= 5; largo++) { nivel = nivel.flatMap((s) => letras.map((l) => s + l)); cortas.push(...nivel); }
+    // Números con grupos de miles y decimales, con y sin unidad.
+    const armados = [];
+    for (const signo of ['', '-', '+']) for (const entero of ['0', '1', '12', '123', '1234', '01']) for (const grupos of ['', ',200', '.200', ' 200', ',200,000', '.200.000', ' 200 000', ',20', '.2005'])
+      for (const decimal of ['', ',5', '.5', ',500', '.25']) for (const unidad of ['', ' A', 'ppm', ' 5 A']) armados.push(`${signo}${entero}${grupos}${decimal}${unidad}`);
+    const casos = [...deLaPrueba, ...extra, ...cortas, ...armados];
+    const distintos = [];
+    for (const v of casos) for (const fn of ['leerNumero', 'numeroAlInicio']) {
+      const a = JSON.stringify(copia[fn](v)), b = JSON.stringify(original[fn](v));
+      if (a !== b) distintos.push(`${fn}(${JSON.stringify(v)}): ficha ${a} · numero.ts ${b}`);
+    }
+    ok(distintos.length === 0, `La copia de la ficha lee igual que numero.ts en ${casos.length} casos: ${distintos.slice(0, 5).join(' | ')}`);
+    ok(copia.mensajeAmbiguo('1200', '1,2') === original.mensajeAmbiguo('1200', '1,2') && copia.mensajeAmbiguo('1234567', null) === original.mensajeAmbiguo('1234567', null)
+      && copia.valorDe(copia.leerNumero('14,5')) === 14.5 && copia.valorDe(copia.leerNumero('1,200')) === null, 'La frase y valorDe también son iguales');
+    p.w.close();
+  }
+  { // Decisión 8 · En el paso, «1,200» no se guarda como 1,2: el aviso pide escribirlo sin separador de miles.
+    const p = await abrir(143, 'tecnico');
+    const num = p.doc.querySelector('.ck-num[data-idx="0"]');
+    const aviso = (idx) => p.doc.querySelector(`.ck-aviso[data-idx="${idx}"]`);
+    const AMBIGUO = '¿1200 o 1,2? Escribe el número sin separador de miles.';
+    ok(num.type === 'text' && num.getAttribute('inputmode') === 'decimal', `La lectura obligatoria es texto con teclado numérico, para leer lo escrito: ${num.outerHTML}`);
+    p.escribir('.ck-num[data-idx="0"]', '1,200');
+    ok(!aviso(0).classList.contains('hidden') && aviso(0).textContent === AMBIGUO, `«1,200» muestra su frase junto al campo: ${aviso(0).textContent}`);
+    p.escribir('.ck-valor[data-idx="1"]', '1.200');
+    ok(!aviso(1).classList.contains('hidden') && aviso(1).textContent === AMBIGUO, `En el valor medido, también: ${aviso(1).textContent}`);
+    await pausa(1400);
+    ok(p.patches().length === 0, `Lo que se lee de dos formas no se manda: ${JSON.stringify(p.patches())}`);
+    ok(num.value === '1,200' && p.doc.querySelector('.ck-valor[data-idx="1"]').value === '1.200', 'Lo escrito queda en el campo para corregirlo');
+    p.escribir('.ck-num[data-idx="0"]', 'alto');
+    ok(aviso(0).textContent === 'Anota solo el número que marcó el instrumento (por ejemplo 14,5).', `Con rango, la lectura obligatoria pide solo el número: ${aviso(0).textContent}`);
+    p.escribir('.ck-num[data-idx="2"]', 'sin alarmas');
+    ok(aviso(2).classList.contains('hidden'), 'Sin rango, como en el celular, también vale un texto');
+    p.escribir('.ck-num[data-idx="0"]', '1200');
+    p.escribir('.ck-valor[data-idx="1"]', '125 psi');
+    ok(aviso(0).classList.contains('hidden') && aviso(1).classList.contains('hidden'), 'Escrito sin separador de miles, el aviso se va');
+    const guardado = () => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=143').c);
+    await p.hasta(() => guardado()[0].valorMedido === '1200' && guardado()[1].valorMedido === '125 psi' && guardado()[2].valorMedido === 'sin alarmas', 'guarda la lectura sin separador');
+    const [co2] = guardado();
+    ok(co2.estado === 'desviacion' && /^Lectura fuera de rango: 1200 ppm \(rango normal ≤ 1000 ppm\)/.test(co2.notas ?? '') && !!co2.hora, `1200 ppm se juzga fuera de rango, con su hora: ${JSON.stringify(co2)}`);
+    ok(/FUERA DE RANGO/.test(p.doc.querySelector('.ck-rango[data-idx="0"]').textContent), 'La pantalla la marca fuera de rango');
+    const valores = p.patches().flatMap((e) => JSON.parse(e.checklistEjecucion).map((x) => String(x.valorMedido ?? '')));
+    ok(!valores.some((v) => /^1[.,]200$|^alto$/.test(v)), `Ningún guardado llevó «1,200», «1.200» ni «alto»: ${JSON.stringify(valores)}`);
+    ok(p.errores.length === 0 && p.avisos.length === 0, `Sin errores ni avisos: ${p.errores.join(' | ')} ${p.avisos.join(' | ')}`);
+    p.w.close();
+    const actual = one('SELECT checklist_ejecucion c FROM ordenes WHERE id=143').c;
+    const conMiles = JSON.parse(actual);
+    conMiles[0].valorMedido = '1,200';
+    const srv = await patch(143, 'tecnico', { checklistEjecucion: JSON.stringify(conMiles), checklistBase: actual });
+    ok(srv.status === 400 && srv.body.error === AMBIGUO && one('SELECT checklist_ejecucion c FROM ordenes WHERE id=143').c === actual, `Si llega igual, el servidor también lo rechaza con la misma frase: ${JSON.stringify(srv.body)}`);
+    const viejo = await abrir(151, 'tecnico');
+    const marca = viejo.doc.querySelector('.ck-aviso[data-idx="0"]');
+    ok(!marca.classList.contains('hidden') && marca.textContent === '¿2500 o 2,5? Escribe el número sin separador de miles.', `Un valor guardado que se lee de dos formas se marca al abrir: ${marca.textContent}`);
+    viejo.escribir('.ck-num[data-idx="0"]', '2.500');
+    ok(/Registrado/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent) && !/Dentro del rango/.test(viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent), `«2.500» no se juzga como 2,5 dentro del rango: ${viejo.doc.querySelector('.ck-rango[data-idx="0"]').textContent}`);
+    await pausa(1200);
+    ok(viejo.patches().length === 0, 'Escribirlo otra vez igual no manda nada');
+    viejo.w.close();
+    const lector = await abrir(151, 'visualizador');
+    ok(lector.doc.querySelector('.ck-aviso[data-idx="0"]').classList.contains('hidden'), 'A quien no puede corregirlo no se le pide');
+    lector.w.close();
+  }
+  { // Decisión 8 · En la liberación con máximo, «1,200 ppm» no se manda como 1,2.
+    const p = await abrir(144, 'tecnico');
+    const msg = () => p.doc.querySelector(`.liber-msg[data-id="${libCo2}"]`);
+    const fila = () => one('SELECT valor_medido v, valor_medido_texto t, conforme c FROM orden_liberaciones WHERE id=?', libCo2);
+    const aLiberaciones = () => p.enviados.filter((e) => e.ruta.endsWith('/liberaciones'));
+    p.escribir(`.liber-valor[data-id="${libCo2}"]`, '1,200');
+    ok(!msg().classList.contains('hidden') && msg().textContent === '¿1200 o 1,2? Escribe el número sin separador de miles.', `Al escribir, el aviso dice cómo: ${msg().textContent}`);
+    p.doc.querySelector(`.liber-save[data-id="${libCo2}"]`).click();
+    await pausa(50);
+    ok(aLiberaciones().length === 0 && fila().v === null && fila().t === null && !msg().classList.contains('hidden'), `«1,200» no se manda y el aviso sigue junto al campo: ${JSON.stringify(aLiberaciones())}`);
+    p.escribir(`.liber-valor[data-id="${libCo2}"]`, '1 200 ppm');
+    p.doc.querySelector(`.liber-save[data-id="${libCo2}"]`).click();
+    await pausa(50);
+    ok(aLiberaciones().length === 0 && msg().textContent === 'Escribe el número sin separador de miles: 1200.', `Con espacio de miles y la unidad, tampoco: ${msg().textContent}`);
+    const srv = await call(app.liberaciones.PATCH, '/api/ordenes/144/liberaciones', { method: 'PATCH', id: 144, rol: 'tecnico', data: { itemId: libCo2, valorMedido: null, valorMedidoTexto: '1,200' } });
+    ok(srv.status === 400 && srv.body.error === '¿1200 o 1,2? Escribe el número sin separador de miles.' && fila().t === null, `Si llega igual, el servidor también lo rechaza con la misma frase: ${JSON.stringify(srv.body)}`);
+    p.escribir(`.liber-valor[data-id="${libCo2}"]`, '1200');
+    ok(msg().classList.contains('hidden'), 'Sin separador de miles, el aviso se va');
+    p.doc.querySelector(`.liber-save[data-id="${libCo2}"]`).click();
+    await p.hasta(() => fila().v === 1200, 'guarda 1200');
+    ok(JSON.stringify(aLiberaciones().map((e) => e.data)) === JSON.stringify([{ itemId: libCo2, valorMedido: 1200, valorMedidoTexto: null }]) && fila().c === 0, `Viaja solo 1200 y queda fuera de rango: ${JSON.stringify(aLiberaciones())} → ${JSON.stringify(fila())}`);
+    ok(p.errores.length === 0, `Sin errores de script: ${p.errores.join(' | ')}`);
+    p.w.close();
+  }
+
+  // ── Decisión 4 · Lo marcado sin señal no se pierde ─────────────────────
+  { // Marca sin señal, sale sin señal; al volver a abrir, el paso llega y lo del celular se conserva.
+    const p = await abrir(137, 'tecnico');
+    p.red.caida = true;
+    p.doc.querySelector('.ck-estado-btn[data-idx="0"][data-estado="ok"]').click();
+    await p.hasta(() => /Sin guardar/.test(p.doc.querySelector('#ckAutosave').textContent), 'sin señal no se guarda');
+    const cerrar = new p.w.Event('beforeunload', { cancelable: true });
+    p.w.dispatchEvent(cerrar);
+    ok(cerrar.defaultPrevented, 'Al cerrar la pestaña con el paso sin guardar, el navegador avisa');
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await pausa(50);
+    const almacen = almacenDe(p.w);
+    const local = JSON.parse(almacen['ot-137-ck'] ?? 'null');
+    ok(local?.usuarioId === 3 && JSON.parse(local.checklist)[0].estado === 'ok' && JSON.parse(local.base).every((x) => x.estado === 'pendiente'), `El paso queda en el equipo con su base: ${almacen['ot-137-ck']}`);
+    ok(estados(137) === 'pendiente, pendiente, pendiente', 'El servidor no recibió nada');
+    p.w.close();
+    const [paso] = await celular({ tipo: 'orden.paso', ordenId: 137, idx: 1, estado: 'ok', texto: PASOS[1] });
+    ok(paso.ok && estados(137) === 'pendiente, ok, pendiente', `Mientras tanto, el técnico marca el paso 2 en el celular: ${JSON.stringify(paso)}`);
+    const delCelular = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=137').c)[1];
+    const otra = await abrir(137, 'jefe', { almacen });
+    await pausa(300);
+    ok(otra.patches().length === 0 && !!otra.w.localStorage.getItem('ot-137-ck'), 'Otra cuenta en el mismo equipo no lo manda en su nombre ni lo borra');
+    otra.w.close();
+    const q = await abrir(137, 'tecnico', { almacen });
+    await q.hasta(() => estados(137) === 'ok, ok, pendiente', 'al volver a abrir, el paso llega al servidor');
+    const [envio] = q.patches();
+    ok(JSON.stringify(JSON.parse(envio.checklistBase)[0]) === JSON.stringify(JSON.parse(local.base)[0]) && JSON.parse(envio.checklistEjecucion)[0].estado === 'ok', `Sale con la base con que se marcó: ${JSON.stringify(envio)}`);
+    const guardado = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=137').c);
+    ok(JSON.stringify(guardado[1]) === JSON.stringify(delCelular) && !!guardado[1].hora && !!guardado[1].iniciales, `El paso del celular se conserva con su hora e iniciales: ${JSON.stringify(guardado[1])}`);
+    await q.hasta(() => /Guardado/.test(q.doc.querySelector('#ckAutosave').textContent), 'la ficha lo da por guardado');
+    ok(enPantalla(q, 3) === 'ok, ok, pendiente' && q.w.localStorage.getItem('ot-137-ck') === null, `La ficha muestra los dos pasos y ya no guarda copia: ${enPantalla(q, 3)}`);
+    ok(q.errores.length === 0 && q.avisos.length === 0, `Sin errores ni avisos: ${q.errores.join(' | ')} ${q.avisos.join(' | ')}`);
+    q.w.close();
+  }
+  { // Lo marcado sin señal que ya no se puede aplicar: la ficha lo dice y no lo manda.
+    const marcarSinSenal = async (id) => {
+      const p = await abrir(id, 'tecnico');
+      p.red.caida = true;
+      p.doc.querySelector('.ck-estado-btn[data-idx="0"][data-estado="ok"]').click();
+      await p.hasta(() => /Sin guardar/.test(p.doc.querySelector('#ckAutosave').textContent), 'sin señal no se guarda');
+      const almacen = almacenDe(p.w);
+      p.w.close();
+      return almacen;
+    };
+    const conflicto = (v) => (v.doc.querySelector('#ckConflicto').classList.contains('hidden') ? '' : v.doc.querySelector('#ckConflictoMsg').textContent);
+    const enviadaAntes = await marcarSinSenal(153);
+    sqlite.prepare("UPDATE ordenes SET estado='completada', completada_en=? WHERE id=153").run(hace(0.1));
+    const a = await abrir(153, 'tecnico', { almacen: enviadaAntes });
+    await pausa(300);
+    ok(a.patches().length === 0 && conflicto(a) === 'Lo que marcaste sin señal no se guardó: la orden ya no está en ejecución.', `Enviada mientras tanto: lo dice y no lo manda: ${conflicto(a)}`);
+    ok(a.w.localStorage.getItem('ot-153-ck') === null, 'Y no lo vuelve a intentar');
+    a.w.close();
+    const otraForma = await marcarSinSenal(154);
+    sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=154').run(lista(PASOS[0], PASOS[1]));
+    const b = await abrir(154, 'tecnico', { almacen: otraForma });
+    await pausa(300);
+    ok(b.patches().length === 0 && conflicto(b) === 'Lo que marcaste sin señal no se guardó: el checklist cambió mientras tanto. Márcalo otra vez.' && b.w.localStorage.getItem('ot-154-ck') === null, `El checklist cambió de forma: lo dice y no lo manda: ${conflicto(b)}`);
+    b.w.close();
+  }
+
+  // ── El guardado del checklist en vuelo ─────────────────────────────────
+  { // Con 300 ms de viaje: lo marcado durante el viaje sigue en pantalla y sale después, con la base que respondió el servidor.
+    const p = await abrir(140, 'jefe');
+    p.red.demora = 300;
+    p.doc.querySelector('.ck-estado-btn[data-idx="0"][data-estado="ok"]').click();
+    await p.hasta(() => p.patches().length === 1, 'sale el primer guardado');
+    p.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
+    await p.hasta(() => /Guardado/.test(p.doc.querySelector('#ckAutosave').textContent), 'responde el primer guardado');
+    ok(enPantalla(p, 3) === 'ok, na, pendiente', `Al responder, la pantalla conserva lo marcado durante el viaje: ${enPantalla(p, 3)}`);
+    await p.hasta(() => p.patches().length === 2 && estados(140) === 'ok, na, pendiente', 'sale lo marcado durante el viaje');
+    const [primero, segundo] = p.patches();
+    ok(JSON.parse(primero.checklistEjecucion).map((x) => x.estado).join(', ') === 'ok, pendiente, pendiente', `El primero lleva lo marcado antes de salir: ${primero.checklistEjecucion}`);
+    ok(JSON.parse(segundo.checklistBase).map((x) => x.estado).join(', ') === 'ok, pendiente, pendiente' && JSON.parse(segundo.checklistEjecucion)[1].estado === 'na', `El segundo lleva la base que respondió el servidor: ${segundo.checklistBase}`);
+    await pausa(400);
+    ok(p.patches().length === 2 && enPantalla(p, 3) === 'ok, na, pendiente', `No sale nada más y la pantalla queda igual: ${enPantalla(p, 3)}`);
+    p.w.close();
+  }
+  { // Con 2,5 s de viaje: lo marcado durante el viaje espera la respuesta y sale después.
+    const p = await abrir(141, 'jefe');
+    p.red.demora = 2500;
+    p.doc.querySelector('.ck-estado-btn[data-idx="0"][data-estado="ok"]').click();
+    await p.hasta(() => p.patches().length === 1, 'sale el primer guardado');
+    p.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
+    await pausa(1300);
+    ok(p.patches().length === 1, 'Mientras viaja el primero no sale otro');
+    await p.hasta(() => p.patches().length === 2, 'al responder el primero sale lo marcado durante el viaje', 6000);
+    ok(JSON.parse(p.patches()[1].checklistBase).map((x) => x.estado).join(', ') === 'ok, pendiente, pendiente', `El segundo lleva la base que respondió el servidor: ${p.patches()[1].checklistBase}`);
+    ok(enPantalla(p, 3) === 'ok, na, pendiente', `La pantalla conserva lo marcado durante el viaje: ${enPantalla(p, 3)}`);
+    await p.hasta(() => estados(141) === 'ok, na, pendiente', 'quedan los dos', 6000);
+    p.w.close();
+  }
+  { // Al salir con un guardado en vuelo, se manda otra vez con keepalive y su base.
+    const p = await abrir(142, 'jefe');
+    p.red.demora = 2500;
+    p.doc.querySelector('.ck-estado-btn[data-idx="2"][data-estado="ok"]').click();
+    await p.hasta(() => p.patches().length === 1, 'sale el guardado');
+    p.red.demora = 0;
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await p.hasta(() => p.enviados.some((e) => e.metodo === 'PATCH' && e.keepalive), 'al salir se manda otra vez');
+    const envio = p.enviados.find((e) => e.metodo === 'PATCH' && e.keepalive).data;
+    ok(JSON.parse(envio.checklistEjecucion)[2].estado === 'ok' && JSON.parse(envio.checklistBase).every((x) => x.estado === 'pendiente'), `Sale con keepalive y la base que tenía la ficha: ${JSON.stringify(envio)}`);
+    await p.hasta(() => estados(142) === 'pendiente, pendiente, ok', 'queda guardado');
+    await p.hasta(() => !/Guardando/.test(p.doc.querySelector('#ckAutosave').textContent) && p.patches().length === 2, 'termina el que iba en camino', 4000);
+    await pausa(2600);
+    p.w.close();
+  }
+  { // 409 de la guarda de concurrencia: se reintenta una vez con la misma base y se quita el aviso.
+    const enMedio = (id, veces) => {
+      let quedan = veces;
+      const escribe = async () => {
+        const l = JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=?', id).c);
+        Object.assign(l[0], { estado: 'ok', hora: `10:3${quedan}`, iniciales: 'P.T.' });
+        sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=?').run(JSON.stringify(l), id);
+        faults.beforeBatch = --quedan > 0 ? escribe : null;
+      };
+      faults.beforeBatch = escribe;
+    };
+    const p = await abrir(138, 'jefe');
+    enMedio(138, 1);
+    p.doc.querySelector('.ck-estado-btn[data-idx="2"][data-estado="ok"]').click();
+    await p.hasta(() => /Guardado/.test(p.doc.querySelector('#ckAutosave').textContent), 'reintenta y guarda');
+    const [uno, dos] = p.patches();
+    ok(p.patches().length === 2 && uno.checklistBase === dos.checklistBase && uno.checklistEjecucion === dos.checklistEjecucion, `Reintenta una vez, con la misma base: ${JSON.stringify(p.patches())}`);
+    ok(estados(138) === 'ok, pendiente, ok' && p.doc.querySelector('#ckConflicto').classList.contains('hidden') && p.avisos.length === 0, `Quedan el paso del celular y el de la ficha, sin aviso de conflicto: ${estados(138)}`);
+    ok(enPantalla(p, 3) === 'ok, pendiente, ok', `La ficha pinta el paso del celular: ${enPantalla(p, 3)}`);
+    p.w.close();
+    // Dos veces seguidas: queda pendiente, con el aviso, hasta el guardado siguiente.
+    const dosVeces = async (id) => {
+      const q = await abrir(id, 'jefe');
+      enMedio(id, 2);
+      q.doc.querySelector('.ck-estado-btn[data-idx="2"][data-estado="ok"]').click();
+      await q.hasta(() => /Sin guardar/.test(q.doc.querySelector('#ckAutosave').textContent), 'dos veces seguidas no se guarda');
+      ok(q.patches().length === 2 && estados(id) === 'ok, pendiente, pendiente', `Un solo reintento; el servidor conserva lo del celular: ${estados(id)}`);
+      ok(!q.doc.querySelector('#ckConflicto').classList.contains('hidden') && /^La orden cambió durante la operación/.test(q.doc.querySelector('#ckConflictoMsg').textContent), `Avisa que la orden cambió: ${q.doc.querySelector('#ckConflictoMsg').textContent}`);
+      const cerrar = new q.w.Event('beforeunload', { cancelable: true });
+      q.w.dispatchEvent(cerrar);
+      ok(cerrar.defaultPrevented && !!q.w.localStorage.getItem(`ot-${id}-ck`), 'Queda pendiente: el navegador avisa al cerrar y la copia sigue en el equipo');
+      return q;
+    };
+    const q = await dosVeces(139);
+    q.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
+    await q.hasta(() => estados(139) === 'ok, na, ok', 'el guardado siguiente lleva los dos puntos');
+    await q.hasta(() => q.doc.querySelector('#ckConflicto').classList.contains('hidden'), 'un guardado que sale bien quita el aviso');
+    ok(q.w.localStorage.getItem('ot-139-ck') === null && q.patches().at(-1).checklistBase === q.patches()[0].checklistBase, 'Sale con la misma base y ya no queda copia en el equipo');
+    q.w.close();
+    const s = await dosVeces(152);
+    s.w.dispatchEvent(new s.w.Event('pagehide'));
+    await s.hasta(() => estados(152) === 'ok, pendiente, ok', 'al salir se manda');
+    const alSalir = s.enviados.filter((e) => e.metodo === 'PATCH').at(-1);
+    ok(alSalir.keepalive && alSalir.data.checklistBase === s.patches()[0].checklistBase, `Al salir sale con keepalive y la misma base: ${JSON.stringify(alSalir)}`);
+    await s.hasta(() => s.doc.querySelector('#ckConflicto').classList.contains('hidden'), 'al salir bien también se quita el aviso');
+    ok(s.w.localStorage.getItem('ot-152-ck') === null, 'Guardado al salir, ya no queda copia en el equipo');
+    faults.beforeBatch = null;
+    s.w.close();
+  }
+  { // Un error del servidor no es un rechazo: lo marcado se queda en el equipo y sale al salir.
+    const p = await abrir(155, 'jefe');
+    const registrar = console.error;
+    console.error = () => {};
+    faults.statement = () => true;
+    p.doc.querySelector('.ck-estado-btn[data-idx="1"][data-estado="na"]').click();
+    try { await p.hasta(() => p.avisos.length === 1, 'el servidor falla'); } finally { console.error = registrar; }
+    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem('ot-155-ck'), `No se guardó y la copia sigue en el equipo: ${p.avisos.join(' | ')}`);
+    const cerrar = new p.w.Event('beforeunload', { cancelable: true });
+    p.w.dispatchEvent(cerrar);
+    ok(cerrar.defaultPrevented, 'Queda pendiente: el navegador avisa al cerrar');
+    console.error = () => {};
+    faults.statement = () => true;
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    try { await p.hasta(() => p.enviados.some((e) => e.keepalive), 'al salir se manda'); await pausa(100); } finally { console.error = registrar; }
+    ok(estados(155) === 'pendiente, pendiente, pendiente' && !!p.w.localStorage.getItem('ot-155-ck'), 'Si al salir también falla el servidor, la copia sigue en el equipo');
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await p.hasta(() => estados(155) === 'pendiente, na, pendiente', 'a la siguiente salida se manda');
+    await p.hasta(() => p.w.localStorage.getItem('ot-155-ck') === null, 'guardado, ya no queda copia');
+    faults.statement = null;
+    p.w.close();
+  }
+
+  // ── Lo escrito mientras viaja un guardado de horas o de reversa ────────
+  { // J3: la hora escrita mientras viaja «Guardar horas» queda en pantalla y sale en el siguiente.
+    const p = await abrir(145, 'jefe');
+    p.red.demora = 300;
+    const alarma = one('SELECT hora_alarma h FROM ordenes WHERE id=145').h;
+    const aLocal = (min) => app.ordenes.isoALocalInput(new Date(Date.parse(alarma) + min * 60000).toISOString());
+    p.doc.querySelector('#horaLlegada').value = aLocal(9);
+    p.doc.querySelector('#eopSave').click();
+    await p.hasta(() => p.patches().length === 1, 'sale la llegada');
+    p.doc.querySelector('#horaMitigacion').value = aLocal(30);
+    await p.hasta(() => /Guardado/.test(p.doc.querySelector('#eopMsg').textContent), 'responde el servidor');
+    ok(p.doc.querySelector('#horaMitigacion').value === aLocal(30) && p.doc.querySelector('#horaLlegada').value === aLocal(9), 'La hora escrita durante el viaje sigue en pantalla');
+    ok(p.doc.querySelector('#eopMsg').textContent === 'Guardado. Falta guardar lo último que escribiste.', `Dice que falta guardar lo último: ${p.doc.querySelector('#eopMsg').textContent}`);
+    p.red.demora = 0;
+    p.doc.querySelector('#eopSave').click();
+    await p.hasta(() => p.patches().length === 2 && !!one('SELECT hora_mitigacion h FROM ordenes WHERE id=145').h, 'sale la mitigación');
+    ok(JSON.stringify(p.patches()[1]) === JSON.stringify({ horaMitigacion: `${aLocal(30)}:00-06:00` }), `El segundo guardado lleva solo la hora que faltaba: ${JSON.stringify(p.patches()[1])}`);
+    ok(Date.parse(one('SELECT hora_llegada h FROM ordenes WHERE id=145').h) === Date.parse(`${aLocal(9)}:00-06:00`), 'La llegada quedó como se mandó');
+    p.w.close();
+  }
+  { // J4: las notas escritas mientras viaja «Guardar plan de reversa» se quedan y salen en el siguiente.
+    const p = await abrir(146, 'tecnico');
+    p.red.demora = 300;
+    const plan = 'Volver al tablero anterior y avisar a la jefatura de turno.';
+    const notas = 'Se volvió al tablero anterior; el interruptor nuevo no cerró.';
+    p.doc.querySelector('#planReversa').value = plan;
+    p.doc.querySelector('#reversaSave').click();
+    await p.hasta(() => p.patches().length === 1, 'sale el plan');
+    p.doc.querySelector('#reversaNotas').value = notas;
+    await p.hasta(() => /Guardado/.test(p.doc.querySelector('#reversaMsg').textContent), 'responde el servidor');
+    ok(p.doc.querySelector('#reversaNotas').value === notas && p.doc.querySelector('#planReversa').value === plan, 'Las notas escritas durante el viaje siguen en pantalla');
+    ok(p.doc.querySelector('#reversaMsg').textContent === 'Guardado. Falta guardar lo último que escribiste.', `Dice que falta guardar lo último: ${p.doc.querySelector('#reversaMsg').textContent}`);
+    p.red.demora = 0;
+    p.doc.querySelector('#reversaSave').click();
+    await p.hasta(() => p.patches().length === 2 && one('SELECT reversa_notas n FROM ordenes WHERE id=146').n === notas, 'salen las notas');
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan }, { reversaNotas: notas }]), `Cada guardado lleva solo lo suyo: ${JSON.stringify(p.patches())}`);
+    ok(one('SELECT plan_reversa p FROM ordenes WHERE id=146').p === plan, 'El plan quedó como se mandó');
+    p.w.close();
+  }
+
+  // ── Causa raíz: enviada o cerrada, un texto corto no se manda ──────────
+  {
+    const p = await abrir(147, 'jefe');
+    p.escribir('#causaRaiz', 'Breaker flojo');
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await pausa(1700);
+    ok(p.patches().length === 0 && p.doc.querySelector('#causaMsg').textContent === 'Faltan 7 caracteres para guardar', `Corta no se manda, ni al salir: ${p.doc.querySelector('#causaMsg').textContent} ${JSON.stringify(p.patches())}`);
+    p.escribir('#causaRaiz', 'Breaker flojo en barra');
+    p.escribir('#causaRaiz', 'Breaker flojo en ba');
+    p.doc.querySelector('#causaSave').click();
+    await pausa(50);
+    ok(p.patches().length === 0 && p.doc.querySelector('#causaMsg').textContent === 'Falta 1 carácter para guardar', `Cuenta lo que falta: ${p.doc.querySelector('#causaMsg').textContent}`);
+    p.doc.querySelector('[data-transition="verificada"]').click();
+    await pausa(50);
+    ok(p.doc.querySelector('#verifModal').classList.contains('hidden') && p.patches().length === 0, 'Con la causa corta no se abre la verificación');
+    const causa = 'Breaker flojo en la barra principal del tablero de transferencia.';
+    p.escribir('#causaRaiz', causa);
+    await p.hasta(() => one('SELECT causa_raiz c FROM ordenes WHERE id=147').c === causa, 'con el mínimo se guarda');
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ causaRaiz: causa }]) && /Guardada/.test(p.doc.querySelector('#causaMsg').textContent), `Sale sola y se guarda: ${JSON.stringify(p.patches())}`);
+    p.escribir('#causaRaiz', '');
+    await pausa(1700);
+    ok(p.patches().length === 1 && p.doc.querySelector('#causaMsg').textContent === 'Faltan 20 caracteres para guardar' && one('SELECT causa_raiz c FROM ordenes WHERE id=147').c === causa, 'Tampoco se borra: la causa guardada queda');
+    ok(p.avisos.length === 0 && p.errores.length === 0, `Sin avisos ni errores: ${p.avisos.join(' | ')} ${p.errores.join(' | ')}`);
+    p.w.close();
+    const q = await abrir(148, 'jefe');
+    q.escribir('#causaRaiz', 'Breaker flojo');
+    await q.hasta(() => one('SELECT causa_raiz c FROM ordenes WHERE id=148').c === 'Breaker flojo', 'en proceso guarda el borrador');
+    ok(JSON.stringify(q.patches()) === JSON.stringify([{ causaRaiz: 'Breaker flojo' }]), `En proceso, el borrador corto sí se guarda: ${JSON.stringify(q.patches())}`);
+    q.w.close();
+  }
+
+  // ── La reversa, igual que el servidor ──────────────────────────────────
+  {
+    const campos = (v) => JSON.stringify({ plan: !v.doc.querySelector('#planReversa').disabled, casilla: !v.doc.querySelector('#reversaEjecutada').disabled, notas: !v.doc.querySelector('#reversaNotas').disabled, guardar: v.hay('#reversaSave') });
+    const TODO = JSON.stringify({ plan: true, casilla: true, notas: true, guardar: true });
+    const NADA = JSON.stringify({ plan: false, casilla: false, notas: false, guardar: false });
+    const abierta = await ver(129, 'tecnico');
+    ok(campos(abierta) === JSON.stringify({ plan: true, casilla: false, notas: false, guardar: true }), `Abierta, el técnico asignado escribe solo el plan: ${campos(abierta)}`);
+    ok(/La reversa se marca después de empezar la intervención\./.test(abierta.doc.querySelector('#reversaAntes')?.textContent ?? ''), 'Y la ficha dice por qué');
+    const jefeAbierta = await ver(129, 'jefe');
+    ok(campos(jefeAbierta) === TODO && !jefeAbierta.hay('#reversaAntes'), `La jefatura, con la orden abierta: ${campos(jefeAbierta)}`);
+    ok(campos(await ver(126, 'tecnico')) === NADA, 'Enviada, el técnico ya no la toca');
+    ok(campos(await ver(126, 'jefe')) === TODO, 'Enviada, la registra la jefatura');
+    for (const [id, rol] of [[149, 'jefe'], [149, 'admin'], [149, 'tecnico'], [150, 'jefe'], [150, 'tecnico']]) {
+      ok(campos(await ver(id, rol)) === NADA, `${id === 149 ? 'Cerrada' : 'Cancelada'}, nadie la toca (${rol})`);
+    }
+    const p = await abrir(129, 'tecnico');
+    const plan = 'Volver al tablero anterior y avisar al jefe de turno antes de energizar.';
+    p.doc.querySelector('#planReversa').value = plan;
+    p.doc.querySelector('#reversaSave').click();
+    await p.hasta(() => one('SELECT plan_reversa p FROM ordenes WHERE id=129').p === plan, 'guarda el plan');
+    ok(JSON.stringify(p.patches()) === JSON.stringify([{ planReversa: plan }]), `Del técnico, con la orden abierta, viaja solo el plan: ${JSON.stringify(p.patches())}`);
+    ok(one('SELECT reversa_ejecutada e FROM ordenes WHERE id=129').e === 0 && p.avisos.length === 0, 'La reversa sigue sin marcar');
+    p.w.close();
   }
 
   // ── Reporte de la orden: los tiempos son de la jefatura ────────────────

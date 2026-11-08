@@ -12,7 +12,7 @@ import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit, type DiffEntry } from "@/lib/audit";
-import { FAMILIAS_RONDA, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
+import { FAMILIAS_RONDA, avisoCambioTurnos, fechaCorta, lineaDeTurnos, lineaFija, nombreRecorrido, parsearTurnos, puedeConfigurarRondas, siguienteInicio, siguienteTurno } from "@/lib/ronda-turno";
 import { procedimientos, rondaPuntos, rondaVigencias, rondas, sucursales } from "@/lib/schema";
 
 export const prerender = false;
@@ -49,8 +49,6 @@ async function jefatura(ctx: APIContext): Promise<{ user: Usuario; response: nul
   if (!puedeConfigurarRondas(user.rol)) return { user: null, response: new Response("Sin permisos", { status: 403 }) };
   return { user, response: null };
 }
-
-const fechaCorta = (f: string) => f.split("-").reverse().join("/");
 
 async function nombreDe(db: Db, ronda: { sucursalId: number | null }): Promise<string> {
   if (ronda.sucursalId == null) return nombreRecorrido(ronda);
@@ -353,19 +351,23 @@ async function cambiarTurnos(ctx: APIContext, db: Db, user: Usuario, rondaId: nu
 
   // Lo que regía hasta ahora queda escrito: los turnos que ya empezaron se juzgan con eso.
   const ahora = new Date().toISOString();
-  const [actualizada] = await db.batch([
+  const [actualizada, , vigencias] = await db.batch([
     db.update(rondas).set({ turnos: JSON.stringify(turnos) }).where(eq(rondas.id, ronda.id)).returning(),
     db.insert(rondaVigencias).values({ rondaId: ronda.id, turnosAntes: JSON.stringify(antes), hasta: ahora, usuarioId: user.id }),
+    db.select().from(rondaVigencias).where(eq(rondaVigencias.rondaId, ronda.id)),
   ]);
-  // Entran con el primer turno de la lista nueva: el turno que corre sigue hasta ahí, con su ronda.
+  // Entran con el primer turno de la lista nueva. Hasta ahí siguen los de antes, salvo el que
+  // empezaría menos de 2 h antes: ese no se abre y el turno que corría sigue hasta el nuevo.
   const aplicaDesde = siguienteTurno(turnos, Date.parse(ahora));
+  const aviso = avisoCambioTurnos(lineaDeTurnos(actualizada[0], vigencias), Date.parse(ahora))
+    ?? "Siguen los turnos de ahora: el cambio que estaba pendiente ya no entra.";
   const cambios = { turnos: { antes, despues: turnos } };
   await logAudit(ctx, {
     entidad: "ronda", entidadId: ronda.id, accion: "update",
-    resumen: `Turnos de ${await nombreDe(db, ronda)}: ${turnos.join(", ")}, desde el turno ${aplicaDesde.turno} del ${fechaCorta(aplicaDesde.fecha)}`,
+    resumen: `Turnos de ${await nombreDe(db, ronda)}: ${turnos.join(", ")}. ${aviso}`,
     cambios,
   });
-  return Response.json({ ok: true, ronda: actualizada[0], aplicaDesde, cambios });
+  return Response.json({ ok: true, ronda: actualizada[0], aplicaDesde, aviso, cambios });
 }
 
 /** Copia el modelo a la sede. Desde ahí la sede ya no recibe los cambios del modelo. */

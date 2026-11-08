@@ -4,6 +4,7 @@ import type { getDb } from "./db";
 import { activos, ordenes, ubicaciones, sucursales } from "./schema";
 import { parseArea, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
+import { leerNumero, numeroAlInicio, valorDe } from "./numero";
 
 
 /**
@@ -287,18 +288,18 @@ export function minutosEstimadosChecklist(items: ChecklistItem[]): number {
 }
 
 // Evalúa la lectura de una línea frente a su rango esperado del SCP.
-//   tiene  — hay un número registrado
-//   dentro — true dentro del rango, false fuera, null sin rango que comparar
+//   tiene  — hay un valor registrado
+//   numero — el número, leído con numero.ts: «1,200» no se adivina y queda null
+//   dentro — true dentro del rango, false fuera, null sin rango o sin número que comparar
 export function evaluarValorChecklist(it: ChecklistItem): {
   tiene: boolean;
   numero: number | null;
   dentro: boolean | null;
   rangoTexto: string | null;
 } {
-  const crudo = it.valorMedido;
-  const tiene = crudo !== undefined && crudo !== null && String(crudo).trim() !== "";
-  const n = tiene ? Number(String(crudo).replace(",", ".")) : NaN;
-  const numero = Number.isFinite(n) ? n : null;
+  const leido = leerNumero(it.valorMedido);
+  const tiene = leido.tipo !== "vacio";
+  const numero = valorDe(leido);
   const tieneMin = it.esperadoMin !== undefined && it.esperadoMin !== null;
   const tieneMax = it.esperadoMax !== undefined && it.esperadoMax !== null;
   const u = it.unidad ? ` ${it.unidad}` : "";
@@ -488,8 +489,8 @@ export function liberacionConRango(l: { minAceptable?: number | null; maxAceptab
   return (l.minAceptable !== null && l.minAceptable !== undefined) || (l.maxAceptable !== null && l.maxAceptable !== undefined);
 }
 
-// Con rango, la lectura es el número: «aprox 14 A» o «arrancó bien» no
-// liberan nada y cuentan como no medidas. Sin rango, basta un texto.
+// Con rango, la lectura es el número: «aprox 14 A», «arrancó bien» o «1,200»
+// (¿1200 o 1,2?) no liberan nada y cuentan como no medidas. Sin rango, basta un texto.
 export function liberacionTieneLectura(l: LiberacionLike): boolean {
   if (liberacionConRango(l)) return numeroDeLectura(l.valorMedido, l.valorMedidoTexto) !== null;
   if (l.valorMedido !== null && l.valorMedido !== undefined && Number.isFinite(Number(l.valorMedido))) return true;
@@ -529,12 +530,13 @@ export function rangoLiberacionTexto(
 export type LiberacionConRango = LiberacionLike;
 
 // El número de una lectura: el valor medido o, si se escribió como texto
-// («14,5 A»), el número con que empieza. Una unidad escrita al lado no esconde
-// una lectura fuera de rango.
+// («14,5 A»), el número con que empieza, leído con numero.ts. Una unidad
+// escrita al lado no esconde una lectura fuera de rango, y un separador de
+// miles no se adivina: «1,200 ppm» queda sin número, así que cuenta como no
+// medida y no se juzga.
 export function numeroDeLectura(valorMedido: number | null | undefined, valorMedidoTexto?: string | null): number | null {
   if (valorMedido !== null && valorMedido !== undefined && Number.isFinite(Number(valorMedido))) return Number(valorMedido);
-  const m = String(valorMedidoTexto ?? "").match(/^\s*([-+]?\d+(?:[.,]\d+)?)/);
-  return m ? Number(m[1].replace(",", ".")) : null;
+  return valorDe(numeroAlInicio(valorMedidoTexto));
 }
 
 // Lecturas obligatorias con número fuera del rango aceptable. Se calcula con el
@@ -580,7 +582,9 @@ export function validarLiberacionesParaCierre(
     .map((l) => {
       const nombre = l.unidad ? `${l.etiqueta} (${l.unidad})` : l.etiqueta;
       const texto = String(l.valorMedidoTexto ?? "").trim();
-      return texto ? `${nombre}: «${texto}» no trae número` : nombre;
+      if (!texto) return nombre;
+      const leido = numeroAlInicio(texto);
+      return leido.tipo === "ambiguo" ? `${nombre}: «${texto}». ${leido.mensaje}` : `${nombre}: «${texto}» no trae número`;
     });
   if (faltantes.length === 0) return { ok: true, faltantes: [] };
   return {

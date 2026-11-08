@@ -25,6 +25,12 @@ const one = (q, ...a) => sqlite.prepare(q).get(...a);
 const all = (q, ...a) => sqlite.prepare(q).all(...a);
 const AHORA = Date.now();
 const hace = (min) => new Date(AHORA - min * 60000).toISOString();
+// La ronda solo acepta horas de su turno: sus capturas «hace N minutos» no pasan del inicio del turno que corre
+// (06:00, 14:00 o 22:00). Con el turno recién empezado se aprietan, en el mismo orden. Vale a cualquier hora de RELOJ_PRUEBA.
+const diaSV = (ms) => new Date(ms - 6 * 3600000).toISOString().slice(0, 10);
+const INICIO_TURNO = Math.max(...[AHORA - 86400000, AHORA].flatMap((ms) => ['06:00', '14:00', '22:00'].map((tt) => Date.parse(`${diaSV(ms)}T${tt}:00-06:00`))).filter((ms) => ms <= AHORA));
+const ESCALA_RONDA = Math.min(1, (AHORA - INICIO_TURNO) / (46 * 60000));
+const enRonda = (min) => new Date(AHORA - min * 60000 * ESCALA_RONDA).toISOString();
 let n = 0;
 const op = (tipo, at, extra = {}) => ({ opId: `prueba-${++n}-${tipo}`, tipo, at, ...extra });
 // Como el celular: lo que no cupo en el presupuesto de una solicitud sale en la siguiente.
@@ -61,6 +67,8 @@ try {
     INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,checklist) VALUES(1,2,'Trimestral','trimestral','2026-01-15','${CHECKLIST}');
     INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(20,'Otro Técnico','otro@example.invalid','x','tecnico');
   `);
+  // La migración 0055 fija vigente_desde con la fecha real de SQLite; aquí, con la del turno que corre en el reloj de prueba.
+  sqlite.prepare('UPDATE rondas SET vigente_desde=?').run(diaSV(INICIO_TURNO));
 
   // ── El escaneo sigue apagado ─────────────────────────────────────────────
   igual(app.config.ESCANEO_ACTIVOS_HABILITADO, false);
@@ -196,24 +204,25 @@ try {
   const docsConAcciones = Object.values(p.ronda.docs).filter((d) => d.acciones.length > 0);
   ok(docsConAcciones.length > 0, 'Las acciones del AOP viajan con la ronda');
   const clave = { rondaId: p.ronda.rondaId, sucursalId: 1, fecha: p.ronda.fecha, turno: p.ronda.turno };
-  [r] = await enviar([op('ronda.iniciar', hace(45), clave)]);
+  [r] = await enviar([op('ronda.iniciar', enRonda(45), clave)]);
   ok(r.ok, JSON.stringify(r));
-  igual(one('SELECT iniciada_en i FROM ronda_ejecuciones').i, hace(45));
+  igual(one('SELECT iniciada_en i FROM ronda_ejecuciones').i, enRonda(45));
   const conAop = p.ronda.puntos.find((x) => x.aop && x.critico);
-  [r] = await enviar([op('ronda.lectura', hace(44), { ...clave, puntoId: conAop.id, resultado: 'fuera', nota: 'Alarma en el panel' })]);
+  [r] = await enviar([op('ronda.lectura', enRonda(44), { ...clave, puntoId: conAop.id, resultado: 'fuera', nota: 'Alarma en el panel' })]);
   ok(r.ok && r.datos.eventoId, JSON.stringify(r));
   const evento = one('SELECT * FROM aop_eventos WHERE id=?', r.datos.eventoId);
-  igual(evento.detectado_en, hace(44), 'El reloj del AOP corre desde que se detectó, no desde que hubo señal');
-  [r] = await enviar([op('ronda.cerrar', hace(43), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
+  igual(evento.detectado_en, enRonda(44), 'El reloj del AOP corre desde que se detectó, no desde que hubo señal');
+  [r] = await enviar([op('ronda.cerrar', enRonda(43), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
   ok(!r.ok && /sin anotar/i.test(r.error), JSON.stringify(r));
-  const opsRonda = p.ronda.puntos.filter((x) => x.id !== conAop.id).map((x, i) => op('ronda.lectura', hace(42 - i * 0.1), { ...clave, puntoId: x.id, resultado: 'ok', valor: x.pideValor ? (x.min ?? x.max ?? 1) : null }));
+  const opsRonda = p.ronda.puntos.filter((x) => x.id !== conAop.id).map((x, i) => op('ronda.lectura', enRonda(42 - i * 0.1), { ...clave, puntoId: x.id, resultado: 'ok', valor: x.pideValor ? (x.min ?? x.max ?? 1) : null }));
   for (let i = 0; i < opsRonda.length; i += 10) await enviar(opsRonda.slice(i, i + 10));
-  [r] = await enviar([op('ronda.cerrar', hace(30), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
+  [r] = await enviar([op('ronda.cerrar', enRonda(30), { ...clave, firma: true, notas: 'Queda abierta la alarma.' })]);
   ok(r.ok, JSON.stringify(r));
   const ej = one('SELECT * FROM ronda_ejecuciones');
   igual(ej.estado, 'completada');
-  igual(ej.completada_en, hace(30));
-  igual(ej.minutos_ronda, 15);
+  igual(ej.completada_en, enRonda(30));
+  // De la primera captura a la firma: 15 minutos, o menos si el turno recién empezó.
+  igual(ej.minutos_ronda, Math.round((Date.parse(enRonda(30)) - Date.parse(enRonda(45))) / 60000));
   hoy = await call(app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' });
   igual(hoy.body.ronda.estado, 'completada');
 
@@ -319,15 +328,28 @@ try {
   igual(em.asignado_a, 3);
   ok(em.causa_raiz_vencimiento, 'Arranca el plazo de la causa raíz');
   igual(em.procedimiento_id, eop.id);
+  // El vencimiento se calcula como en la ficha: equipo y prioridad, desde la hora en que se reportó.
+  const masHoras = (iso, h) => new Date(Date.parse(iso) + h * 3600000).toISOString();
+  igual(em.vencimiento, masHoras(hace(15), 4), 'Sin equipo, la emergencia vence en el plazo urgente por defecto (4 h) desde que se reportó');
   [r] = await enviar([op('correctivo.abrir', hace(14), { sucursalId: 1, rubro: 'infraestructura', nota: 'Fuga en lavamanos, consultorio 4' })]);
   ok(r.ok, JSON.stringify(r));
   const co = one('SELECT * FROM ordenes WHERE id=?', r.datos.ordenId);
   igual(co.tipo, 'correctivo');
   igual(co.asignado_a, null, 'Un correctivo lo asigna la jefatura');
   ok(co.titulo.includes('Fuga en lavamanos'));
+  igual(co.vencimiento, masHoras(hace(14), 24), 'Sin equipo, el correctivo vence en el plazo de prioridad alta por defecto (24 h)');
   [r] = await enviar([op('correctivo.abrir', hace(13), { activoId: 2, nota: 'No enfría' })]);
   ok(r.ok, JSON.stringify(r));
   igual(one('SELECT ubicacion_id u FROM ordenes WHERE id=?', r.datos.ordenId).u, 2, 'La ubicación sale del equipo');
+  igual(one('SELECT vencimiento v FROM ordenes WHERE id=?', r.datos.ordenId).v, masHoras(hace(13), 24));
+  // Un equipo con sus propios plazos manda sobre los de por defecto.
+  sqlite.exec("INSERT INTO activos(id,codigo,nombre,tipo,rubro,ubicacion_id,estado,sla_urgente_horas,sla_alta_horas) VALUES(50,'BOM-50','Bomba de la cisterna','general','infraestructura',2,'operativo',2,10)");
+  [r] = await enviar([op('emergencia.abrir', hace(12.5), { activoId: 50, sucursalId: 1, nota: 'La bomba no arranca' })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT vencimiento v FROM ordenes WHERE id=?', r.datos.ordenId).v, masHoras(hace(12.5), 2), 'La emergencia del equipo vence en su plazo urgente');
+  [r] = await enviar([op('correctivo.abrir', hace(12.4), { activoId: 50, nota: 'Ruido en el sello' })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT vencimiento v FROM ordenes WHERE id=?', r.datos.ordenId).v, masHoras(hace(12.4), 10), 'Y el correctivo, en su plazo de prioridad alta');
   const aop = one("SELECT id FROM procedimientos WHERE tipo='aop' AND codigo_corto='AOP-GAS-01'");
   [r] = await enviar([op('aop.abrir', hace(12), { procedimientoId: aop.id, activoId: 1, valor: '31,5', nota: 'Alta' })]);
   ok(r.ok, JSON.stringify(r));
@@ -715,6 +737,64 @@ try {
   igual(one('SELECT asignado_a a FROM ordenes WHERE id=9303').a, 3, 'Una intervención libre la toma quien empieza por sus prerrequisitos');
   igual(one('SELECT cumplido_por p FROM orden_prerrequisitos WHERE id=?', libre.permiso).p, 3);
 
+  // ── La reversa ya marcada (J4-B1): la marca no se toca y lo que escribió el técnico se agrega debajo ──
+  intervencion(9310);
+  const NOTAS_JEFATURA = 'Jefatura: se volvió al tablero B y se avisó a quirófano.';
+  const NOTAS_TECNICO = 'Técnico: el interruptor nuevo no cerró; quedó el anterior.';
+  const juntas = `${NOTAS_JEFATURA}\n\nTécnico (celular): ${NOTAS_TECNICO}`;
+  sqlite.prepare("UPDATE ordenes SET estado='en_proceso', iniciada_en=?, reversa_ejecutada=1, reversa_notas=? WHERE id=9310").run(hace(30), NOTAS_JEFATURA);
+  const reversaTarde = op('mop.reversa', hace(5), { ordenId: 9310, notas: NOTAS_TECNICO });
+  [r] = await enviar([reversaTarde]);
+  ok(r.ok && r.datos?.yaRegistrada === true, `La reversa que la jefatura ya marcó se acepta: ${JSON.stringify(r)}`);
+  e = one('SELECT * FROM ordenes WHERE id=9310');
+  igual(e.reversa_ejecutada, 1, 'La marca no se toca');
+  igual(e.reversa_notas, juntas, 'Quedan las notas de la jefatura y debajo las del técnico');
+  [r] = await enviar([reversaTarde]);
+  ok(r.repetida, 'El reintento no las agrega dos veces');
+  for (const notas of [NOTAS_TECNICO, NOTAS_JEFATURA]) {
+    [r] = await enviar([op('mop.reversa', hace(4), { ordenId: 9310, notas })]);
+    ok(r.ok && r.datos?.yaRegistrada && one('SELECT reversa_notas n FROM ordenes WHERE id=9310').n === juntas, `Lo que ya está escrito no se repite: ${notas}`);
+  }
+  // Ya enviada a verificación, la evidencia no cambia: las notas le llegan a la jefatura y quedan en el registro.
+  sqlite.prepare("UPDATE ordenes SET estado='completada', completada_en=? WHERE id=9310").run(hace(3));
+  [r] = await enviar([op('mop.reversa', hace(2), { ordenId: 9310, notas: 'Técnico: dejé etiquetado el interruptor que falló.' })]);
+  ok(r.ok && r.datos?.yaRegistrada && r.datos?.notasTardias === 'Técnico: dejé etiquetado el interruptor que falló.', JSON.stringify(r));
+  igual(one('SELECT reversa_notas n FROM ordenes WHERE id=9310').n, juntas, 'Enviada a verificación, las notas de la orden no cambian');
+  ok(JSON.parse(one('SELECT detalle d FROM campo_operaciones WHERE op_id=?', r.opId).d).notasTardias, 'Lo escrito queda en el registro de la operación');
+
+  // ── K6: un número escrito a mano se lee con la misma regla en todas partes ──
+  // Coma o punto decimal. El separador de miles no se adivina: «1,200» vuelve con su frase y no se guarda.
+  const AMBIGUO = '¿1200 o 1,2? Escribe el número sin separador de miles.';
+  seed(9501);
+  await enviar([op('orden.iniciar', hace(9), { ordenId: 9501 })]);
+  const pasoMedir = () => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=9501').c)[2];
+  [r] = await enviar([op('orden.paso', hace(8), { ordenId: 9501, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: '1,200' })]);
+  igual(r.error, AMBIGUO, 'El valor de un paso que se puede leer de dos formas se rechaza con su frase');
+  ok(pasoMedir().estado === 'pendiente' && pasoMedir().valorMedido === undefined && !one('SELECT id FROM orden_paso_marcas WHERE orden_id=9501'), 'Y no se guarda nada');
+  [r] = await enviar([op('orden.paso', hace(7), { ordenId: 9501, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: '9,8' })]);
+  ok(r.ok && pasoMedir().valorMedido === 9.8, `Con coma decimal se lee 9,8 y se guarda como número: ${JSON.stringify(pasoMedir())}`);
+  [r] = await enviar([op('orden.paso', hace(6), { ordenId: 9501, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: 1200 })]);
+  ok(r.ok && pasoMedir().valorMedido === 1200, 'Un valor que ya llega como número se acepta tal cual');
+  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9501 ORDER BY id DESC LIMIT 1').v, '1200', 'También en el libro');
+  // 12.345 llega como número: guardado como número, no vuelve a leerse como «12.345», que sería ambiguo.
+  [r] = await enviar([op('orden.paso', hace(5.5), { ordenId: 9501, idx: 2, texto: 'Medir corriente', estado: 'desviacion', valor: 12.345, nota: 'Corriente alta en el compresor' })]);
+  ok(r.ok && pasoMedir().valorMedido === 12.345, `Un número con tres decimales también se acepta: ${JSON.stringify(r)}`);
+  igual(one('SELECT valor v FROM orden_paso_marcas WHERE orden_id=9501 ORDER BY id DESC LIMIT 1').v, '12.345', 'Y queda en el libro con su número');
+  const ronda2 = (await call(app.hoy.GET, '/api/campo/hoy?sede=2', { rol: 'tecnico' })).body.ronda;
+  const temp2 = ronda2.puntos.find((x) => x.pideValor && x.min != null && x.max != null);
+  const clave2 = { rondaId: ronda2.rondaId, sucursalId: 2, fecha: ronda2.fecha, turno: ronda2.turno };
+  [r] = await enviar([op('ronda.lectura', enRonda(5), { ...clave2, puntoId: temp2.id, resultado: 'ok', valor: '1,200' })]);
+  igual(r.error, AMBIGUO, 'En una parada de ronda, también');
+  ok(!one('SELECT id FROM ronda_ejecuciones WHERE sucursal_id=2'), 'Y no abre la ronda');
+  const lecturaSede2 = () => one('SELECT l.valor v, l.resultado r FROM ronda_lecturas l JOIN ronda_ejecuciones x ON x.id = l.ejecucion_id WHERE x.sucursal_id = 2 AND l.punto_id = ?', temp2.id);
+  [r] = await enviar([op('ronda.lectura', enRonda(4), { ...clave2, puntoId: temp2.id, resultado: 'ok', valor: `${temp2.min},5` })]);
+  ok(r.ok && lecturaSede2().v === temp2.min + 0.5 && lecturaSede2().r === 'ok', `Con coma decimal se lee el número: ${JSON.stringify(lecturaSede2())}`);
+  [r] = await enviar([op('ronda.lectura', enRonda(3), { ...clave2, puntoId: temp2.id, resultado: 'ok', valor: temp2.max + 3 })]);
+  ok(r.ok && r.datos.eventoId && lecturaSede2().v === temp2.max + 3 && lecturaSede2().r === 'fuera', 'Un número que ya llega como número se acepta tal cual; fuera de rango abre su AOP');
+  const eventosAntes = one('SELECT count(*) n FROM aop_eventos').n;
+  [r] = await enviar([op('aop.abrir', hace(2), { procedimientoId: aop.id, activoId: 2, valor: '1.200', nota: 'CO₂ alto' })]);
+  ok(r.error === AMBIGUO && one('SELECT count(*) n FROM aop_eventos').n === eventosAntes, `En una desviación, también: ${r.error}`);
+
   // ── El aviso o el correo lleva al técnico al celular, con cualquier tipo de orden ──
   const middleware = await (async () => {
     const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -924,7 +1004,38 @@ try {
   igual(JSON.stringify([k1.fecha, k1.turno, k1.turnos]), JSON.stringify([antesK1.fecha, antesK1.turno, antesK1.turnos]), 'El turno de ahora sigue con los turnos que rigen');
   igual(JSON.stringify(k1.turnosProximos), JSON.stringify({ desde: new Date(entraK1).toISOString(), turnos: ['06:00', '18:00'] }), 'Y los nuevos llegan con la hora en que entran');
 
-  console.log(`PASS test-campo: ${verificaciones} verificaciones; rutas y migraciones reales, sin red.`);
 } finally {
   await close();
 }
+
+// ── K5: el paquete dice desde qué turno la sede ya no hace ronda ──
+// Base nueva y reloj fijo: martes 10/11/2026. A las 13:40 la jefatura marca que la sede no hace ronda; entra a las 14:00.
+{
+  const D = '2026-11-10';
+  const en = (hhmm) => new Date(Date.parse(`${D}T${hhmm}:00-06:00`)).toISOString();
+  fijarReloj(en('13:30'));
+  const g = await setupConjuntos({ beforeMigration, modules: { hoy: 'pages/api/campo/hoy', puntos: 'pages/api/ronda-turno/puntos' } });
+  try {
+    g.sqlite.exec("INSERT INTO sucursales(id,nombre,activa) VALUES(1,'Sede prueba',1)");
+    g.sqlite.exec("UPDATE rondas SET vigente_desde='2020-01-01'");
+    const ronda = async () => (await g.call(g.app.hoy.GET, '/api/campo/hoy?sede=1', { rol: 'tecnico' })).body.ronda;
+    const marcar = async (haceRonda) => (await g.app.puntos.PUT(g.ctx('/api/ronda-turno/puntos', { method: 'PUT', data: { accion: 'hace_ronda', sucursalId: 1, haceRonda }, rol: 'jefe' }))).json();
+    let r = await ronda();
+    igual(JSON.stringify([r.turno, r.noHaceRondaDesde, r.omite]), JSON.stringify(['06:00', null, []]), 'Sin marca pendiente, el paquete no anuncia nada');
+    fijarReloj(en('13:40'));
+    igual((await marcar(false)).aplicaDesde.turno, '14:00', 'La marca entra a las 14:00');
+    fijarReloj(en('13:45'));
+    r = await ronda();
+    igual(JSON.stringify([r.turno, r.noHaceRondaDesde]), JSON.stringify(['06:00', en('14:00')]), 'El paquete de las 13:45 dice que desde las 14:00 la sede no hace ronda');
+    fijarReloj(en('13:50'));
+    await marcar(true);
+    fijarReloj(en('13:52'));
+    igual((await ronda()).noHaceRondaDesde, null, 'Si la jefatura lo deshace antes de las 14:00, ya no hay marca pendiente');
+    fijarReloj(en('13:55'));
+    await marcar(false);
+    fijarReloj(en('14:05'));
+    igual(await ronda(), null, 'Desde las 14:00 el paquete no trae ronda');
+  } finally { await g.close(); }
+}
+
+console.log(`PASS test-campo: ${verificaciones} verificaciones; rutas y migraciones reales, sin red.`);

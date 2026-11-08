@@ -7,6 +7,7 @@ import {
   requiereCausaRaiz, MIN_CAUSA_RAIZ, type EstadoOT,
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
+import { leerNumero } from './numero';
 import type { getDb } from './db';
 
 type DB = ReturnType<typeof getDb>;
@@ -20,8 +21,8 @@ const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 
 const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
 // Las horas del EOP. La de alarma, además, corre el plazo de la causa raíz.
 const HORAS_EOP = ['horaAlarma', 'horaLlegada', 'horaMitigacion', 'horaRestablecimiento'] as const;
-/** La causa raíz como se compara: recortada, y null igual a vacío. */
-const textoCausa = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+/** Un texto como se compara (causa raíz, plan y notas de la reversa): recortado, y null igual a vacío. */
+const textoComparable = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 /** Una hora del EOP al minuto, como la muestra la ficha. Vacía es null. */
 function minutoEop(v: unknown): number | string | null {
   if (v === null || v === undefined || v === '') return null;
@@ -42,33 +43,79 @@ function listaChecklist(raw: unknown): unknown[] | null {
   try { const v = JSON.parse(String(raw)); return Array.isArray(v) ? v : null; } catch { return null; }
 }
 /** Un punto como se compara: sin claves vacías y con el estado viejo {hecho} traducido.
- * La ficha rellena claves al abrir; eso no cuenta como un cambio suyo. */
-function puntoComparable(punto: unknown): string {
-  if (typeof punto !== 'object' || punto === null || Array.isArray(punto)) return JSON.stringify(punto ?? null);
+ * La ficha rellena claves al abrir; eso no cuenta como un cambio suyo. Null si no es un objeto. */
+function puntoNormal(punto: unknown): Record<string, unknown> | null {
+  if (typeof punto !== 'object' || punto === null || Array.isArray(punto)) return null;
   const p: Record<string, unknown> = { ...(punto as Record<string, unknown>) };
   if (!ESTADOS_PUNTO.includes(p.estado as string)) p.estado = p.hecho === true ? 'ok' : 'pendiente';
   delete p.hecho;
   for (const k of ['bloqueante', 'requiereValor']) if (k in p) p[k] = p[k] === true || p[k] === 1;
-  return JSON.stringify(Object.keys(p).sort().filter((k) => p[k] !== null && p[k] !== undefined && p[k] !== '' && p[k] !== false).map((k) => [k, p[k]]));
+  for (const k of Object.keys(p)) if (p[k] === null || p[k] === undefined || p[k] === '' || p[k] === false) delete p[k];
+  return p;
+}
+function puntoComparable(punto: unknown): string {
+  const p = puntoNormal(punto);
+  return p ? JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]])) : JSON.stringify(punto ?? null);
+}
+/** Dos checklists con los mismos puntos, aunque la ficha haya rellenado claves vacías. */
+function mismoChecklist(aRaw: unknown, bRaw: unknown): boolean {
+  const a = listaChecklist(aRaw), b = listaChecklist(bRaw);
+  return !!a && !!b && a.length === b.length && a.every((p, i) => puntoComparable(p) === puntoComparable(b[i]));
 }
 /**
- * La ficha manda el checklist junto con la base que recibió del servidor. En
- * cada punto gana lo que la ficha cambió frente a su base; los demás quedan como
- * están guardados, para no deshacer lo que el técnico marcó en el celular
- * mientras tanto. Devuelve null si la ficha no cambió ningún punto.
+ * Un punto que cambió en la ficha y también en el servidor, los dos frente a la
+ * base: gana cada clave que la ficha cambió; las demás quedan como están
+ * guardadas. Así la jefatura marca N/A sin borrar la lectura del celular.
  */
-function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRaw: unknown): string | null {
+function fusionarPunto(guardado: unknown, nuevo: unknown, base: unknown): unknown {
+  const g = puntoNormal(guardado), n = puntoNormal(nuevo), b = puntoNormal(base);
+  if (!g || !n || !b) return nuevo;
+  const fusion: Record<string, unknown> = { ...(guardado as Record<string, unknown>) };
+  for (const k of new Set([...Object.keys(n), ...Object.keys(b)])) {
+    if (JSON.stringify(n[k] ?? null) === JSON.stringify(b[k] ?? null)) continue;
+    if (k === 'estado') { fusion.estado = n.estado; delete fusion.hecho; continue; }
+    const crudo = (nuevo as Record<string, unknown>)[k];
+    if (crudo === undefined) delete fusion[k]; else fusion[k] = crudo;
+  }
+  return fusion;
+}
+/**
+ * La ficha manda el checklist junto con la base que recibió del servidor. Un
+ * punto que la ficha no cambió frente a su base queda como está guardado, para
+ * no deshacer lo que el técnico marcó en el celular mientras tanto; uno que solo
+ * cambió en la ficha, como lo mandó; uno que cambió en los dos lados, fusionado
+ * por clave.
+ */
+function fusionarChecklist(guardadoRaw: string | null, nuevoRaw: unknown, baseRaw: unknown): string {
   const nuevo = listaChecklist(nuevoRaw), base = listaChecklist(baseRaw);
   if (!nuevo || !base) throw new ErrorVerificacion('Checklist inválido.', 400);
   const guardado = listaChecklist(guardadoRaw) ?? [];
   if (nuevo.length !== base.length || base.length !== guardado.length) throw new ErrorVerificacion('El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.', 409);
-  let cambia = false;
-  const fusion = nuevo.map((punto, i) => {
-    if (puntoComparable(punto) === puntoComparable(base[i])) return guardado[i];
-    cambia = true;
-    return punto;
+  return JSON.stringify(nuevo.map((punto, i) => {
+    const deBase = puntoComparable(base[i]);
+    if (puntoComparable(punto) === deBase) return guardado[i];
+    if (puntoComparable(guardado[i]) === deBase) return punto;
+    return fusionarPunto(guardado[i], punto, base[i]);
+  }));
+}
+/** Un punto ya marcado: con estado y con la hora o las iniciales de quien lo marcó. */
+const puntoMarcado = (p: Record<string, unknown> | null) => !!p && p.estado !== 'pendiente' && (!!p.hora || !!p.iniciales);
+/**
+ * Sin base (una pestaña vieja): un punto guardado ya marcado no se pisa con uno
+ * que llega pendiente y sin hora; los demás puntos, como llegaron. Devuelve el
+ * checklist con lo conservado, o undefined si no hubo que conservar nada.
+ */
+function conservarMarcados(guardadoRaw: string | null, nuevoRaw: unknown): string | undefined {
+  const nuevo = listaChecklist(nuevoRaw), guardado = listaChecklist(guardadoRaw);
+  if (!nuevo || !guardado || nuevo.length !== guardado.length) return undefined;
+  let conserva = false;
+  const lista = nuevo.map((punto, i) => {
+    const llega = puntoNormal(punto);
+    if (!llega || llega.estado !== 'pendiente' || llega.hora || !puntoMarcado(puntoNormal(guardado[i]))) return punto;
+    conserva = true;
+    return guardado[i];
   });
-  return cambia ? JSON.stringify(fusion) : null;
+  return conserva ? JSON.stringify(lista) : undefined;
 }
 
 export function ejecutoresDeOrden(state: any): number[] {
@@ -159,34 +206,80 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   input = { ...input };
   // Lo que llegó igual a lo guardado no es un cambio: se deja fuera sin error.
   let sinCambio = false;
+  const igualAlGuardado = (key: string) => { delete input[key]; sinCambio = true; };
+  const llegaEjecucion = executionFields.some((key) => key !== 'causaRaiz' && input[key] !== undefined);
   const checklistBase = input.checklistBase;
   delete input.checklistBase;
   let checklistFusionado = false;
-  if (checklistBase !== undefined && input.checklistEjecucion !== undefined) {
-    const fusion = fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase);
-    if (fusion === null) { delete input.checklistEjecucion; sinCambio = true; }
-    else { input.checklistEjecucion = fusion; checklistFusionado = true; }
+  if (input.checklistEjecucion !== undefined) {
+    // Con su base, la ficha se fusiona por punto. Sin ella (pestaña vieja), un
+    // punto ya marcado en el celular no vuelve a pendiente.
+    const fusion = checklistBase !== undefined
+      ? fusionarChecklist(order.checklistEjecucion, input.checklistEjecucion, checklistBase)
+      : conservarMarcados(order.checklistEjecucion, input.checklistEjecucion);
+    if (fusion !== undefined) { input.checklistEjecucion = fusion; checklistFusionado = true; }
+    if (mismoChecklist(input.checklistEjecucion, order.checklistEjecucion)) { igualAlGuardado('checklistEjecucion'); checklistFusionado = false; }
   }
-  // La causa raíz y las horas de la emergencia son de la jefatura, en cualquier
-  // estado. Una pestaña vieja que las reenvía iguales al autoguardar no choca.
-  if (!manager(user)) {
-    if (input.causaRaiz !== undefined) {
-      if (textoCausa(input.causaRaiz) !== textoCausa(order.causaRaiz)) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
-      delete input.causaRaiz; sinCambio = true;
+  // La causa raíz es de la jefatura, en cualquier estado. Igual a la guardada no
+  // es un cambio, tampoco de la jefatura: no se escribe ni deja evento.
+  if (input.causaRaiz !== undefined) {
+    const causa = textoComparable(input.causaRaiz);
+    if (causa === textoComparable(order.causaRaiz)) igualAlGuardado('causaRaiz');
+    else if (!manager(user)) {
+      if (!llegaEjecucion) deny('La causa raíz la escribe la jefatura dentro de las 72 h.');
+      // Una pestaña vieja del técnico guarda la causa junto con los trabajos: se
+      // guarda lo demás, y lo que escribió como causa queda en los trabajos, igual
+      // que con un celular viejo.
+      if (causa) {
+        const frase = `Causa probable según el técnico: ${causa}`;
+        const trabajos = textoComparable(input.trabajosRealizados !== undefined ? input.trabajosRealizados : order.trabajosRealizados);
+        if (!trabajos.includes(frase)) input.trabajosRealizados = trabajos ? `${trabajos} ${frase}` : frase;
+      }
+      igualAlGuardado('causaRaiz');
     }
+  }
+  // Las horas de la emergencia las corrige la jefatura, en cualquier estado. Una
+  // pestaña vieja que las reenvía iguales al autoguardar no choca.
+  if (!manager(user)) {
     for (const key of HORAS_EOP) {
       if (input[key] === undefined) continue;
       const guardada = minutoEop((order as any)[key]);
       if (minutoEop(input[key]) === guardada) {
-        delete input[key]; sinCambio = true;
+        igualAlGuardado(key);
         if (key === 'horaAlarma') delete input.causaRaizVencimiento;
         continue;
       }
-      // La alarma corre el plazo de la causa raíz. Las demás las fija el primer
-      // toque del celular mientras se trabaja; una ya fijada, o con la orden ya
-      // enviada, solo la corrige la jefatura.
-      if (key === 'horaAlarma' || guardada !== null || !['abierta', 'en_proceso', 'en_espera'].includes(order.estado)) deny('Las horas de la emergencia las corrige la jefatura.');
+      // La alarma corre el plazo de la causa raíz. Una hora vacía la fija quien
+      // trabaja, y solo con la hora de la operación: la del toque en el celular,
+      // ya validada, o la del servidor en la ficha. Una ya fijada, otra hora o la
+      // orden ya enviada, solo la jefatura.
+      const deAhora = minutoEop(input[key]) === minutoEop(now);
+      if (key === 'horaAlarma' || guardada !== null || !deAhora || !['abierta', 'en_proceso', 'en_espera'].includes(order.estado)) deny('Las horas de la emergencia las corrige la jefatura.');
     }
+  }
+  // El plan de reversa y la reversa del MOP, con la regla de las lecturas y los
+  // prerrequisitos (revisarPermisoMop): cerrada o cancelada, nadie los cambia; el
+  // técnico asignado escribe el plan con la orden en curso y marca la reversa con
+  // la orden empezada; enviada a verificación, la registra la jefatura.
+  for (const key of ['planReversa', 'reversaNotas']) {
+    if (input[key] !== undefined && textoComparable(input[key]) === textoComparable((order as any)[key])) igualAlGuardado(key);
+  }
+  if (input.reversaEjecutada !== undefined && !!input.reversaEjecutada === !!order.reversaEjecutada) igualAlGuardado('reversaEjecutada');
+  const tocaReversa = input.reversaEjecutada !== undefined || input.reversaNotas !== undefined;
+  if (tocaReversa || input.planReversa !== undefined) {
+    if (order.estado === 'cerrada') deny('La orden ya está cerrada: el plan y la reversa quedan como evidencia y no se editan.', 400);
+    if (order.estado === 'cancelada') deny('La orden fue cancelada: el plan y la reversa ya no se editan.', 400);
+    if (!manager(user)) {
+      if (user.rol !== 'tecnico') deny('No tienes permisos para modificar órdenes.');
+      if (order.asignadoA !== user.id) deny('La orden debe estar asignada a ti para registrar ejecución o cambiar su estado.');
+      if (!['abierta', 'en_proceso', 'en_espera'].includes(order.estado)) deny('La orden ya se envió a verificación. La reversa la registra la jefatura en la ficha.', 409);
+      if (tocaReversa && order.estado === 'abierta') deny('La reversa se marca después de empezar la intervención.', 409);
+    }
+    // «Cualquier reversa se informa a la jefatura antes de cerrar»: no queda
+    // ejecutada sin decir qué se revirtió.
+    const ejecutada = input.reversaEjecutada !== undefined ? input.reversaEjecutada === true : !!order.reversaEjecutada;
+    const notas = textoComparable(input.reversaNotas !== undefined ? input.reversaNotas : order.reversaNotas);
+    if (tocaReversa && ejecutada && notas.length < 10) deny('Para marcar la reversa como ejecutada, describe qué se revirtió y cómo quedó el sistema (mínimo 10 caracteres). Cualquier reversa se informa a la jefatura antes de cerrar.', 400);
   }
   const [saved] = await db.select().from(ordenVerificacion).where(eq(ordenVerificacion.ordenId, order.id)).limit(1);
   const initial = {
@@ -225,8 +318,8 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   if (input.vencimiento !== undefined && input.vencimiento !== order.vencimiento && !motivo?.trim()) deny('Registra el motivo de la reprogramación.', 400);
   // Enviada o cerrada, la causa raíz ya es evidencia del cierre: la jefatura la
   // corrige, pero no la deja vacía ni más corta. En proceso guarda un borrador.
-  const causaNueva = input.causaRaiz !== undefined ? textoCausa(input.causaRaiz) : null;
-  if (causaNueva !== null && causaNueva !== textoCausa(order.causaRaiz) && causaNueva.length < MIN_CAUSA_RAIZ && ['completada', 'verificada', 'cerrada'].includes(order.estado)) {
+  const causaNueva = input.causaRaiz !== undefined ? textoComparable(input.causaRaiz) : null;
+  if (causaNueva !== null && causaNueva.length < MIN_CAUSA_RAIZ && ['completada', 'verificada', 'cerrada'].includes(order.estado)) {
     const criticidad = await criticidadDeActivo(db, input.activoId !== undefined ? input.activoId : order.activoId);
     if (requiereCausaRaiz(input.tipo ?? order.tipo, criticidad).requiere) deny(`La causa raíz necesita al menos ${MIN_CAUSA_RAIZ} caracteres: con la orden enviada a verificación o cerrada no puede quedar vacía ni más corta.`, 400);
   }
@@ -254,6 +347,15 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     if (original.length && (next.length !== original.length || original.some((item, i) => item.texto !== next[i]?.texto || !!item.bloqueante !== !!next[i]?.bloqueante || item.criterio !== next[i]?.criterio))) {
       deny('No se pueden eliminar puntos ni cambiar criterios o puntos críticos del checklist durante la ejecución.', 400);
     }
+    // El valor de un paso se lee con numero.ts: «1,200» puede ser 1200 o 1,2 y no
+    // se adivina. Solo se revisa el valor que cambió; uno que llega como número pasa.
+    const previos = listaChecklist(order.checklistEjecucion) ?? [];
+    incoming.forEach((punto: any, i: number) => {
+      const valor = punto?.valorMedido, antes = (previos[i] as any)?.valorMedido;
+      if (valor === antes) return;
+      const leido = leerNumero(valor);
+      if (leido.tipo === 'ambiguo') deny(leido.mensaje, 400);
+    });
   }
   if (isReturn) {
     if (!esRevisorOrden(user, state)) deny('Solo una jefatura o un revisor designado puede devolver o reabrir la orden.');
@@ -307,6 +409,9 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
     stateData.reprogramarPreventivos = reprogramarPreventivos;
   }
   if (editsAssignment) data.asignadoEn = input.asignadoA ? now : null;
+  // Lo que quedó igual a lo guardado no se escribe: una pestaña vieja que vuelve a
+  // enviar a verificación una orden ya enviada no deja un evento vacío.
+  for (const key of Object.keys(data)) if (data[key] === (order as any)[key]) { delete data[key]; sinCambio = true; }
   if (!Object.keys(data).length && !Object.keys(stateData).length) {
     // Todo lo que llegó era igual a lo guardado: no hay nada que escribir ni que rechazar.
     if (sinCambio) return { row: order, estado: order.estado, accion: 'sin_cambios', advancePM: false };

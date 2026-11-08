@@ -13,8 +13,13 @@ export interface Op {
   blob?: Blob;
   /** Lo que el técnico escribió, por su clave de borrador. No viaja: si el servidor rechaza la operación, vuelve al borrador. */
   borrador?: { notas?: Record<string, string>; saltos?: Record<string, number[]> };
-  /** En una foto, la clave de la hoja donde se tomó: si se cancela la hoja antes de que salga, no se envía. */
+  /**
+   * En una foto, la clave de la hoja donde se tomó: si se cancela la hoja antes de que salga, no se
+   * envía. Al enviar la hoja se quita: la foto ya es de lo que se anotó.
+   */
   clave?: string;
+  /** De qué orden es y qué se hizo, con el nombre del momento en que se hizo. No viaja: lo muestra «Ver por qué». */
+  rotulo?: { que: string; accion: string };
   [k: string]: unknown;
 }
 

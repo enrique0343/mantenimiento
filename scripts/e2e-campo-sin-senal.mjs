@@ -1,6 +1,7 @@
 // Recorrido real de la pantalla del técnico (src/campo/app.ts en jsdom) contra las rutas
 // reales y SQLite: la ronda completa sin señal, cambio de turno sin señal, cambio de turno
-// a media ronda con señal y sincronización tardía. No prueba diseño: eso es en un teléfono.
+// a media ronda con señal y sincronización tardía. Una parada con «1,200» pide el número sin
+// separador y no guarda nada; «1200» se guarda. No prueba diseño: eso es en un teléfono.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
@@ -59,7 +60,7 @@ try {
   const paquete = await (await w.fetch('/api/campo/hoy?sede=8')).json();
   const n = paquete.ronda.puntos.length;
   const idDe = (re) => paquete.ronda.puntos.find((p) => re.test(p.texto)).id;
-  const TEMP = idDe(/Quirófanos · temperatura/), PANEL = idDe(/Panel de alarma de gases/), CUARTOS = idDe(/Cuartos técnicos/), PRESION = idDe(/Oxígeno · presión/), AISLA = idDe(/aislamiento/), BITACORA = idDe(/Bitácora/);
+  const TEMP = idDe(/Quirófanos · temperatura/), PANEL = idDe(/Panel de alarma de gases/), CUARTOS = idDe(/Cuartos técnicos/), PRESION = idDe(/Oxígeno · presión/), AISLA = idDe(/aislamiento/), BITACORA = idDe(/Bitácora/), COMBUSTIBLE = idDe(/nivel de combustible/);
 
   // Se va la señal antes de empezar. Nada cambia para el técnico.
   enLinea = false; w.dispatchEvent(new w.Event('offline'));
@@ -103,6 +104,18 @@ try {
       await clic('novedadSeguir');
       ok(/Esto pide una orden/.test(hoja()), hoja().slice(0, 120));
       await clic('correctivoDeParada');
+    } else if (pt.id === COMBUSTIBLE) { // «1,200» no se adivina: ni con «Guardar lectura» ni con «Hay una alarma»
+      const pendientes = doc.querySelector('#senal').textContent;
+      const AMBIGUO = '¿1200 o 1,2? Escribe el número sin separador de miles.';
+      for (const accion of ['lectura', 'noconf']) {
+        doc.querySelector('#lectura').value = '1,200';
+        await clic(accion);
+        igual(doc.querySelector('#lect-estado').textContent, AMBIGUO, `${accion}: pide el número sin separador`);
+        ok(doc.querySelector('.paso-cuerpo h1').textContent === titulo && doc.querySelector('#hoja').hidden, `${accion}: no avanza ni abre la novedad`);
+        igual(doc.querySelector('#senal').textContent, pendientes, `${accion}: no se guarda para enviar`);
+      }
+      doc.querySelector('#lectura').value = '1200'; // 1200 sí es un número: sobre el mínimo, conforme
+      await clic('lectura');
     } else if (pt.id === AISLA) { // no se pudo
       await clic('noverif');
       await clic('noverifSeguir');
@@ -157,6 +170,8 @@ try {
   igual(lTemp.resultado, 'fuera'); igual(lTemp.valor, 25); igual(lTemp.nota, 'Quirófano 2');
   igual(lTemp.registrado_en, new RealDate(tempEn).toISOString(), 'La hora es la de la lectura, no la de la nota');
   igual(one('SELECT resultado r FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, AISLA).r, 'no_verificado');
+  const lComb = one('SELECT resultado, valor FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, COMBUSTIBLE);
+  igual(lComb.valor, 1200, '«1200» se guardó como mil doscientos'); igual(lComb.resultado, 'ok');
   ok(all('SELECT sin_senal s, recibido_en r, ocurrido_en o FROM ronda_marcas WHERE ejecucion_id=?', r6.id).every((m) => m.s === 1 && m.r > m.o), 'Cada lectura dice que se capturó sin señal');
   const ev = one('SELECT * FROM aop_eventos WHERE ronda_punto_id=? AND sucursal_id=8', TEMP);
   igual(ev.detectado_en, lTemp.registrado_en, 'El reloj del AOP corre desde la captura');
@@ -196,6 +211,6 @@ try {
   await clic('salir'); await espera();
   await irAHoy();
   await hasta(() => /Ronda de las 22:00/.test(texto()), 'al salir de la ronda se ofrece la del turno nuevo');
-  console.log(`PASS e2e-campo-sin-senal: ${checks} verificaciones; ${n} paradas sin señal, cambio de turno sin señal y a media ronda, sincronización tardía.`);
+  console.log(`PASS e2e-campo-sin-senal: ${checks} verificaciones; ${n} paradas sin señal, cambio de turno sin señal y a media ronda, sincronización tardía, «1,200» que no se adivina.`);
 } finally { await close(); dom.window.close(); globalThis.Date = RealDate; }
 process.exit(0);

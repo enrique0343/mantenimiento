@@ -17,19 +17,18 @@ import { getDb } from "@/lib/db";
 import { asc, eq, inArray } from "drizzle-orm";
 import {
   FAMILIAS_RONDA,
+  avisoCambioTurnos,
   cambiosDeSede,
   inicioTurno,
   lineaDeTurnos,
   lineaFija,
   nombreRecorrido,
   parsearTurnos,
-  proximoTramo,
   puedeConfigurarRondas,
   rangoNormal,
   recorridoDeSede,
   siguienteInicio,
   turnoEn,
-  turnosEn,
   vigenteAl,
 } from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
@@ -88,20 +87,16 @@ for (const u of [...umbrales.filter(generico), ...umbrales.filter((x) => !generi
   plazosAop[u.procedimientoId] ??= { actuar: u.actuar ?? null, escalar: u.escalar ?? null };
 }
 
-// Los turnos de este recorrido y, si el cambio todavía no entró, cuáles rigen ahora y desde cuándo entran los nuevos.
-// Un cambio de turnos entra cuando empieza el primer turno de la lista nueva; la marca de una sede, en el siguiente turno.
+// Los turnos de este recorrido y, si el cambio todavía no entró, cuándo entran, qué turno llega hasta
+// esa hora y cuál no se abre. Un cambio de turnos entra cuando empieza el primer turno de la lista nueva;
+// la marca de una sede, en el siguiente turno.
 const ahora = Date.now();
 const turnosRonda = ronda ? parsearTurnos(ronda.turnos) : [];
 const fechaTurno = (t: { fecha: string; turno: string }) => `el turno ${t.turno} del ${fmtFechaSoloCompacta(t.fecha)}`;
 function ultimoCambio<T>(lista: { hasta: string; antes: T }[]) {
   return [...lista].sort((a, b) => b.hasta.localeCompare(a.hasta))[0] ?? null;
 }
-let turnosPendientes: { rigen: string[]; desde: string } | null = null;
-if (ronda) {
-  const linea = lineaDeTurnos(ronda, vigencias);
-  const proximo = proximoTramo(linea, ahora);
-  if (proximo?.entra) turnosPendientes = { rigen: turnosEn(linea, ahora), desde: fechaTurno(proximo.entra) };
-}
+const avisoTurnos = ronda ? avisoCambioTurnos(lineaDeTurnos(ronda, vigencias), ahora) : null;
 
 // Cada sede: qué recorrido usa, si hace ronda y, si se acaba de cambiar, desde qué turno entra.
 const filasSede = sedes.map((s) => {
@@ -173,9 +168,7 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
           Hora de inicio de cada turno, HH:MM, separadas por coma.
           {esModelo ? " Cambian para todas las sedes sin recorrido propio." : " Solo para esta sede."}
         </p>
-        <p id="turnos-estado" role="status" class="w-full text-xs text-slate-700">
-          {turnosPendientes && <>El turno de ahora sigue con {turnosPendientes.rigen.join(", ")}. Estos turnos entran desde {turnosPendientes.desde}.</>}
-        </p>
+        <p id="turnos-estado" role="status" class="w-full text-xs text-slate-700">{avisoTurnos}</p>
       </form>
     )}
     <p class="mt-3 text-xs text-slate-600">{CAMBIO}</p>
@@ -606,7 +599,7 @@ const datosParada = (p: (typeof puntos)[number]) => JSON.stringify({
       const quedaron = JSON.parse(r.ronda.turnos || "[]");
       $("r_turnos").value = quedaron.join(", ");
       estado.textContent = r.aplicaDesde
-        ? "Guardado: " + quedaron.join(", ") + ". Entran desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + "; el turno de ahora sigue como estaba."
+        ? "Guardado: " + quedaron.join(", ") + ". " + (r.aviso || "Entran desde el turno " + r.aplicaDesde.turno + " del " + fecha(r.aplicaDesde.fecha) + ".")
         : "Sin cambios: los turnos ya eran " + quedaron.join(", ") + ".";
       window.showToast?.("Turnos guardados.", "success");
     } catch (e) {

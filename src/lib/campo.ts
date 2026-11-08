@@ -25,11 +25,13 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { queSigue } from "@/lib/resolver";
 import {
-  abrirEjecucion, buscarEjecucion, cerrarEjecucion, existeTurno, inicioTurno, ligarOrdenALectura, paradasDeEjecucion, proximoTramo, puntosDeRonda, recorridoConLinea,
-  recorridoDe, registrarLectura, turnoEn, turnosEn, etiquetaTurno, type RondaEjecucion,
+  abrirEjecucion, buscarEjecucion, cerrarEjecucion, existeTurno, inicioTurno, ligarOrdenALectura, omitidosEntre, paradasDeEjecucion, proximoTramo, puntosDeRonda, recorridoConLinea,
+  recorridoDe, registrarLectura, siguienteInicio, turnoEn, turnosEn, etiquetaTurno, type RondaEjecucion,
 } from "@/lib/ronda-turno";
 import { LINEAS_CON_ORDEN } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
+import { leerNumero } from "@/lib/numero";
+import { calcularVencimiento } from "@/lib/sla";
 
 type Db = ReturnType<typeof getDb>;
 type Usuario = { id: number; rol: any; nombre: string; especialidad?: string | null };
@@ -235,6 +237,8 @@ export async function documentosAop(db: Db, ids: number[]) {
   return out;
 }
 
+const HORA_MS = 3_600_000;
+
 async function rondaParaSede(db: Db, sedeId: number) {
   const ahora = Date.now();
   const r = await recorridoConLinea(db, sedeId);
@@ -244,6 +248,9 @@ async function rondaParaSede(db: Db, sedeId: number) {
   const t = turnoEn(linea, ahora);
   if (!r.haceRondaEn(inicioTurno(t.fecha, t.turno))) return null;
   const proximo = proximoTramo(linea, ahora);
+  // La marca «no hace ronda» entra en el turno que todavía no empezó: desde ahí el celular sin señal no abre una ronda nueva.
+  const sig = siguienteInicio(linea, ahora + 1);
+  const sigMs = inicioTurno(sig.fecha, sig.turno);
   const ejec = await buscarEjecucion(db, { sucursalId: sedeId, fecha: t.fecha, turno: t.turno });
   const puntos = ejec ? await paradasDeEjecucion(db, ejec) : await puntosDeRonda(db, ronda.id);
   // Lo que dejó el turno anterior: la línea 1 del SOP empieza por aquí.
@@ -267,7 +274,8 @@ async function rondaParaSede(db: Db, sedeId: number) {
   const ultimas = new Map<number, number>();
   for (const f of previas) if (!ultimas.has(f.punto) && f.valor != null) ultimas.set(f.punto, f.valor);
   return {
-    rondaId: ronda.id,
+    // La ronda ya abierta sigue con el recorrido con que se abrió.
+    rondaId: ejec?.rondaId ?? ronda.id,
     sucursalId: sedeId,
     nombre: ronda.nombre,
     fecha: t.fecha,
@@ -276,6 +284,9 @@ async function rondaParaSede(db: Db, sedeId: number) {
     // Sin señal, el celular calcula el turno con «turnos» y, desde «turnosProximos.desde», con la lista nueva.
     turnos: turnosEn(linea, ahora),
     turnosProximos: proximo ? { desde: new Date(proximo.desde).toISOString(), turnos: proximo.turnos } : null,
+    // Los turnos que no se abren por un cambio de turnos: si el celular calcula uno, sigue el que corría antes.
+    omite: omitidosEntre(linea, ahora - 24 * HORA_MS, ahora + 72 * HORA_MS),
+    noHaceRondaDesde: r.haceRondaEn(sigMs) ? null : new Date(sigMs).toISOString(),
     entregaAnterior: anterior ?? null,
     minutos: ronda.minutosEstimados ?? null,
     estado: ejec ? ejec.estado : "sin_iniciar",
@@ -718,6 +729,18 @@ async function enMop<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) { if (e instanceof RechazoMop) throw new RechazoCampo(e.message, e.status); throw e; }
 }
 
+/**
+ * Un número escrito a mano en un campo de solo número, con la regla de
+ * src/lib/numero.ts: coma o punto decimal; el separador de miles no se adivina.
+ * Uno que se puede leer de dos formas se rechaza con su frase; uno que ya llega
+ * como número se acepta tal cual.
+ */
+function numeroEscrito(raw: unknown) {
+  const r = leerNumero(raw);
+  if (r.tipo === "ambiguo") throw new RechazoCampo(r.mensaje);
+  return r;
+}
+
 type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
 
 const sinPunto = (t: string) => t.trim().replace(/\.+\s*$/, "");
@@ -774,11 +797,14 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
   }
   let ubicacionId = op.ubicacionId ? Number(op.ubicacionId) : null;
   let etiqueta = "";
+  const columnasSla = { slaUrgenteHoras: activos.slaUrgenteHoras, slaAltaHoras: activos.slaAltaHoras, slaMediaHoras: activos.slaMediaHoras, slaBajaHoras: activos.slaBajaHoras };
+  let sla: { slaUrgenteHoras: number; slaAltaHoras: number; slaMediaHoras: number; slaBajaHoras: number } | null = null;
   if (activoId) {
-    const [a] = await db.select({ codigo: activos.codigo, ubicacionId: activos.ubicacionId }).from(activos).where(eq(activos.id, activoId)).limit(1);
+    const [a] = await db.select({ codigo: activos.codigo, ubicacionId: activos.ubicacionId, ...columnasSla }).from(activos).where(eq(activos.id, activoId)).limit(1);
     if (!a) throw new RechazoCampo("Ese equipo ya no existe.", 404);
     ubicacionId = a.ubicacionId ?? ubicacionId;
     etiqueta = a.codigo;
+    sla = a;
   }
   const sucursalId = (await sucursalDeUbicacion(db, ubicacionId)) ?? (op.sucursalId ? Number(op.sucursalId) : null);
   const rubroPedido = typeof op.rubro === "string" ? op.rubro : eop ? SISTEMA_A_AREA[eop.sistema] ?? "infraestructura" : null;
@@ -786,12 +812,15 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
   if ("error" in area) throw new RechazoCampo(area.error);
   const base = eop?.titulo ?? (nota.slice(0, 120) || "Falla reportada desde el celular");
   const titulo = `${emergencia ? "[Emergencia]" : "[Correctivo]"} ${base}${etiqueta ? ` - ${etiqueta}` : ""}`.slice(0, 200);
+  const prioridad = emergencia ? "urgente" : "alta";
   const [orden] = await db.insert(ordenes).values({
     titulo,
     descripcion: nota || null,
     tipo: emergencia ? "emergencia" : "correctivo",
     rubro: area.rubro,
-    prioridad: emergencia ? "urgente" : "alta",
+    prioridad,
+    // Como en la ficha: el plazo sale del equipo y la prioridad, desde la hora en que se reportó.
+    vencimiento: calcularVencimiento(m.iso, sla, prioridad),
     estado: "abierta",
     activoId,
     ubicacionId,
@@ -830,11 +859,18 @@ async function ejecucionDeOp(db: Db, op: OperacionCampo, user: Usuario, m: Momen
   if (!r.activa) throw new RechazoCampo("Esa sede no está activa.");
   const inicio = inicioTurno(clave.fecha, clave.turno);
   const hecho = Date.parse(m.iso);
-  if (!Number.isFinite(inicio) || !existeTurno(r.linea, clave.fecha, clave.turno) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
+  if (!Number.isFinite(inicio) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
     throw new RechazoCampo("La fecha o el turno de esta ronda no cuadran con la hora en que se capturó.");
   }
+  if (!existeTurno(r.linea, clave.fecha, clave.turno)) {
+    throw new RechazoCampo("Ese turno ya no existe: la jefatura cambió los turnos. Lo anotado no entró en la ronda; avisa a tu jefatura.");
+  }
   if (!r.haceRondaEn(inicio)) throw new RechazoCampo("En ese turno esta sede no hacía ronda.");
-  const { ejecucion } = await abrirEjecucion(db, { rondaId: r.ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
+  // Sin señal, la ronda se empezó con el recorrido que traía el celular: el modelo o el propio de la sede.
+  // Si la sede sacó su recorrido propio mientras tanto, la ronda se abre con aquel y lo anotado cuadra.
+  const pedido = Number(op.rondaId);
+  const conQueSeAnoto = r.recorridos.find((x) => x.id === pedido && (x.sucursalId == null || x.sucursalId === clave.sucursalId));
+  const { ejecucion } = await abrirEjecucion(db, { rondaId: conQueSeAnoto?.id ?? r.ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
   return ejecucion;
 }
 
@@ -872,6 +908,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
       exigirEjecutor(user, o);
+      const leido = numeroEscrito(op.valor);
       o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
       let lista: any[];
       try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
@@ -881,8 +918,11 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
       it.estado = estado;
       delete it.hecho;
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : String(op.valor).replace(",", ".");
-      if (valor !== null) it.valorMedido = valor;
+      // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
+      // Lo que no es un número queda escrito tal cual, como antes.
+      const valor = leido.tipo === "numero" ? String(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
+      if (leido.tipo === "numero") it.valorMedido = leido.valor;
+      else if (valor !== null) it.valorMedido = valor;
       if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
       if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
       await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista) }, m.iso);
@@ -959,7 +999,20 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const notas = typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) : "";
       if (notas.length < 10) throw new RechazoCampo("Describe qué se revirtió y cómo quedó el sistema (mínimo 10 letras).");
       exigirEjecutor(user, o);
-      if (o.reversaEjecutada && (o.reversaNotas ?? "").trim() === notas) return { ordenId: o.id, m };
+      if (o.reversaEjecutada) {
+        // Ya está marcada, por la jefatura en la ficha o por un envío anterior: la marca no se toca.
+        // Lo que el técnico escribió se agrega debajo de lo que había, si no estaba ya.
+        const antes = (o.reversaNotas ?? "").trim();
+        if (antes.includes(notas)) return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+        if (!["en_proceso", "en_espera"].includes(o.estado)) {
+          // Ya enviada o cerrada, la evidencia no se cambia; las notas le llegan a la jefatura y quedan en el registro.
+          await avisarJefatura(ctx, db, `Notas de la reversa de ${etiquetaOT(o)} que llegaron después del envío`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
+          return { ordenId: o.id, m, datos: { yaRegistrada: true, notasTardias: notas } };
+        }
+        await cambiarOrden(ctx, user, o.id, { reversaNotas: `${antes ? `${antes}\n\n` : ""}Técnico (celular): ${notas}` }, m.iso);
+        await avisarJefatura(ctx, db, `Notas del técnico en la reversa de ${etiquetaOT(o)}`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
+        return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+      }
       if (!["en_proceso", "en_espera"].includes(o.estado)) {
         throw new RechazoCampo(o.estado === "abierta" ? "La reversa se marca después de empezar la intervención." : `${yaNoEnCurso(o.estado)} La reversa la registra la jefatura en la ficha.`, 409);
       }
@@ -985,12 +1038,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
         if (!a) throw new RechazoCampo("Ese equipo ya no existe.", 404);
         ubicacionId = a.ubicacionId ?? ubicacionId;
       }
+      const leido = numeroEscrito(op.valor);
       const [umbral] = await db.select({ id: aopUmbrales.id }).from(aopUmbrales).where(eq(aopUmbrales.procedimientoId, procedimientoId)).limit(1);
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : Number(String(op.valor).replace(",", "."));
       const r = await abrirEvento(db, {
         procedimientoId, umbralId: umbral?.id ?? null, activoId, ubicacionId,
         sucursalId: op.sucursalId ? Number(op.sucursalId) : null,
-        valorDetectado: valor !== null && Number.isFinite(valor) ? valor : null,
+        valorDetectado: leido.tipo === "numero" ? leido.valor : null,
         unidad: typeof op.unidad === "string" ? op.unidad : null,
         detectadoEn: m.iso, detectadoPor: user.id, origen: "manual",
       });
@@ -1005,14 +1058,14 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
     }
     case "ronda.lectura": {
       const m = momentoCapturado(op.at);
+      const leido = numeroEscrito(op.valor);
       const ejecucion = await ejecucionDeOp(db, op, user, m);
       const puntoId = Number(op.puntoId);
       const punto = recorridoDe(ejecucion)?.find((p) => p.id === puntoId) ?? (await paradasDeEjecucion(db, ejecucion)).find((p) => p.id === puntoId);
       if (!punto) throw new RechazoCampo("Esa parada ya no está en el recorrido.");
       const resultado = String(op.resultado ?? "");
       if (!["ok", "fuera", "no_verificado"].includes(resultado)) throw new RechazoCampo("Resultado inválido.");
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : Number(op.valor);
-      const valido = valor !== null && Number.isFinite(valor) ? valor : null;
+      const valido = leido.tipo === "numero" ? leido.valor : null;
       const nota = typeof op.nota === "string" ? op.nota.trim() || null : null;
       if (resultado === "no_verificado" && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe por qué no se pudo verificar.");
       if (resultado === "ok" && punto.requiereValor && valido === null) throw new RechazoCampo("Falta la lectura de esta parada.");

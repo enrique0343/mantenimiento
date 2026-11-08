@@ -77,13 +77,25 @@ export interface TurnosProximos {
 
 /**
  * El turno que corre con lo que trae el paquete: los turnos de ahora y, desde
- * que entra el cambio, los próximos. Así el celular sin señal sigue en el
+ * que entra el cambio, los próximos. Un turno de «omite» no se abre: corre el
+ * que corría justo antes de su inicio. Así el celular sin señal sigue en el
  * turno que empezó y pasa a la lista nueva cuando le toca.
  */
-export function turnoConProximos(turnos: string[], proximos: TurnosProximos | null | undefined, ref?: Date): TurnoInfo {
-  const ms = ref ? ref.getTime() : Date.now();
+export function turnoConProximos(
+  turnos: string[],
+  proximos: TurnosProximos | null | undefined,
+  ref?: Date,
+  omite: ReadonlyArray<{ fecha: string; turno: string }> = [],
+): TurnoInfo {
   const desde = proximos ? Date.parse(proximos.desde) : NaN;
-  return turnoActual(Number.isFinite(desde) && ms >= desde && proximos!.turnos.length ? proximos!.turnos : turnos, ref);
+  const lista = (ms: number) => (Number.isFinite(desde) && ms >= desde && proximos!.turnos.length ? proximos!.turnos : turnos);
+  let ms = ref ? ref.getTime() : Date.now();
+  let t = turnoActual(lista(ms), new Date(ms));
+  for (let i = 0; i < 8 && omite.some((o) => o.fecha === t.fecha && o.turno === t.turno); i++) {
+    ms = Date.parse(`${t.fecha}T${t.turno}:00-06:00`) - 1;
+    t = turnoActual(lista(ms), new Date(ms));
+  }
+  return t;
 }
 
 /** Lunes de la semana de esa fecha, para la revisión semanal. */

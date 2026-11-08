@@ -15,6 +15,7 @@ import {
   plantillaPrerrequisitos,
 } from "./schema";
 import { evaluarConformeLiberacion, liberacionConRango, liberacionTieneLectura, MENSAJE_LECTURA_SIN_NUMERO, numeroDeLectura, PRERREQ_REFERENCIA_HINT, type PrerrequisitoTipo } from "./ordenes";
+import { leerNumero, numeroAlInicio } from "./numero";
 import { logAudit } from "@/lib/audit";
 
 type Db = ReturnType<typeof getDb>;
@@ -204,7 +205,9 @@ export interface CambioLiberacion {
 
 /**
  * Registra la lectura de liberación y calcula si quedó dentro del rango. `momento` es la hora de la medición.
- * Con mínimo o máximo, la lectura trae un número: «aprox 14 A» no se puede juzgar y se rechaza.
+ * Con mínimo o máximo, la lectura trae un número: «aprox 14 A» no se puede juzgar y se rechaza, y
+ * «1,200» (¿1200 o 1,2?) se rechaza con la frase de numero.ts. Un número que ya llega como número
+ * se acepta tal cual. Sin rango, lo escrito se guarda como texto.
  */
 export async function registrarLiberacion(
   ctx: APIContext, db: Db, orden: OrdenMop, user: Quien, cambio: CambioLiberacion, momento = new Date().toISOString(),
@@ -226,8 +229,13 @@ export async function registrarLiberacion(
   if (tocaValor) {
     const valor = cambio.valorMedido !== undefined ? cambio.valorMedido : actual.valorMedido;
     const texto = cambio.valorMedidoTexto !== undefined ? cambio.valorMedidoTexto?.trim().slice(0, 300) || null : actual.valorMedidoTexto;
-    const hayLectura = (valor != null && Number.isFinite(Number(valor))) || !!texto;
-    if (hayLectura && liberacionConRango(actual) && numeroDeLectura(valor, texto) === null) throw new RechazoMop(MENSAJE_LECTURA_SIN_NUMERO, 400);
+    const esNumero = valor != null && Number.isFinite(Number(valor));
+    const hayLectura = esNumero || !!texto;
+    if (hayLectura && !esNumero && liberacionConRango(actual)) {
+      const leido = numeroAlInicio(texto);
+      if (leido.tipo === "ambiguo") throw new RechazoMop(leido.mensaje, 400);
+      if (leido.tipo !== "numero") throw new RechazoMop(MENSAJE_LECTURA_SIN_NUMERO, 400);
+    }
     data.valorMedido = valor ?? null;
     data.valorMedidoTexto = texto;
     // Sin rango que comparar, «conforme» queda null y lo juzga quien libera. Una
@@ -255,13 +263,15 @@ export async function registrarLiberacion(
   return row;
 }
 
-/** Lo que escribió el técnico: un número (acepta coma decimal) o, si no lo es, un texto. */
+/**
+ * Lo que escribió el técnico, leído con numero.ts: un número (coma o punto decimal) o, si no lo es,
+ * un texto. «1,200» no se adivina y queda como texto: con rango, registrarLiberacion lo rechaza.
+ */
 export function lecturaEscrita(valor: unknown): { valorMedido: number | null; valorMedidoTexto: string | null } {
-  if (typeof valor === "number") return Number.isFinite(valor) ? { valorMedido: valor, valorMedidoTexto: null } : { valorMedido: null, valorMedidoTexto: null };
-  const t = typeof valor === "string" ? valor.trim() : "";
-  if (!t) return { valorMedido: null, valorMedidoTexto: null };
-  if (/^[-+]?\d+(?:[.,]\d+)?$/.test(t)) return { valorMedido: Number(t.replace(",", ".")), valorMedidoTexto: null };
-  return { valorMedido: null, valorMedidoTexto: t.slice(0, 300) };
+  const leido = leerNumero(typeof valor === "number" || typeof valor === "string" ? valor : null);
+  if (leido.tipo === "numero") return { valorMedido: leido.valor, valorMedidoTexto: null };
+  if (leido.tipo === "vacio" || typeof valor !== "string") return { valorMedido: null, valorMedidoTexto: null };
+  return { valorMedido: null, valorMedidoTexto: valor.trim().slice(0, 300) };
 }
 
 /**
