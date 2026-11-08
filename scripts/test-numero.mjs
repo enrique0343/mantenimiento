@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 
 const out = await build({ entryPoints: ['src/lib/numero.ts'], bundle: true, format: 'esm', platform: 'neutral', write: false });
-const { leerNumero, numeroAlInicio, valorDe } = await import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
+const { leerNumero, numeroAlInicio, valorDe, textoDeNumero } = await import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
 
 let n = 0;
 const es = (r, esperado, nota) => { n++; assert.deepEqual(r, esperado, nota); };
@@ -57,6 +57,18 @@ es(numeroAlInicio('≈ 14 A'), { tipo: 'texto' }, 'empieza con símbolo');
 es(numeroAlInicio(''), { tipo: 'vacio' }, 'vacío');
 es(numeroAlInicio(9.8), num(9.8), 'ya es número');
 es(numeroAlInicio('5. A'), num(5), 'punto suelto antes de la unidad');
+// Un número guardado se escribe de forma que se lea igual al volver al campo.
+es(textoDeNumero(12.345), '12.3450', 'tres decimales: un 0 más para que no sea de miles');
+es(textoDeNumero(-1.234), '-1.2340', 'negativo con tres decimales');
+es(textoDeNumero(9.8), '9.8', 'como siempre');
+es(textoDeNumero(1200), '1200', 'entero');
+es(textoDeNumero(0.125), '0.125', 'empieza en cero: ya se lee bien');
+es(textoDeNumero(1000.125), '1000.125', 'cuatro cifras antes del punto');
+es(textoDeNumero(1e-7), '0.0000001', 'sin notación científica');
+es(textoDeNumero(Number.NaN), '', 'no es número');
+for (const x of [12.345, 1.234, -1.234, 999.999, 100.001, 9.8, 1200, 0, -0.5, 0.125, 1000.125, 14.5, 360000, 1e-7, 123456.789]) {
+  es(leerNumero(textoDeNumero(x)), num(x), `${x} se vuelve a leer igual`);
+}
 assert.equal(valorDe(num(3)), 3);
 assert.equal(valorDe(amb('x')), null);
 assert.equal(valorDe({ tipo: 'texto' }), null);

@@ -31,6 +31,9 @@ export function diaAnterior(fecha: string): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/** «las 14:00», pero «la 01:00»: así se dice la hora de un turno en una frase. */
+export const laHora = (hhmm: string): string => (/^0?1:/.test(hhmm) ? `la ${hhmm}` : `las ${hhmm}`);
+
 export const etiquetaTurno = (turno: string): string => {
   const m = aMinutos(turno);
   if (m < 12 * 60) return `Turno ${turno} · mañana`;

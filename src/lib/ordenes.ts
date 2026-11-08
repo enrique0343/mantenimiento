@@ -287,6 +287,13 @@ export function minutosEstimadosChecklist(items: ChecklistItem[]): number {
   return items.reduce((s, i) => s + (i.minutos ?? 0), 0);
 }
 
+/** Un paso con mínimo o máximo se juzga por su número: lo escrito en él es un número. */
+export function pasoConRango(it: { esperadoMin?: number | null; esperadoMax?: number | null }): boolean {
+  return (it.esperadoMin !== undefined && it.esperadoMin !== null) || (it.esperadoMax !== undefined && it.esperadoMax !== null);
+}
+
+export const MENSAJE_PASO_SIN_NUMERO = "Este paso tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).";
+
 // Evalúa la lectura de una línea frente a su rango esperado del SCP.
 //   tiene  — hay un valor registrado
 //   numero — el número, leído con numero.ts: «1,200» no se adivina y queda null

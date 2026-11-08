@@ -93,3 +93,16 @@ export function numeroAlInicio(v: unknown): NumeroEscrito {
 
 /** El valor de un número leído, o null si no lo es. */
 export const valorDe = (r: NumeroEscrito): number | null => (r.tipo === "numero" ? r.valor : null);
+
+/**
+ * Un número guardado, escrito de forma que leerNumero lo lea igual. Sirve para
+ * rellenar un campo o pasar a texto un valor que llegó como número. 12.345 se
+ * escribe «12.3450», porque «12.345» se leería de dos formas; los demás quedan
+ * como siempre: 9.8 → «9.8», 1200 → «1200».
+ */
+export function textoDeNumero(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  let s = String(n);
+  if (/e/i.test(s)) s = n.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
+  return /^-?[1-9]\d{0,2}\.\d{3}$/.test(s) ? `${s}0` : s;
+}
