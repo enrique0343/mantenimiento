@@ -1,6 +1,9 @@
 // Recorrido real de la pantalla del técnico (src/campo/app.ts en jsdom) contra las rutas
 // reales y SQLite: la ronda completa sin señal, cambio de turno sin señal, cambio de turno
-// a media ronda con señal y sincronización tardía. No prueba diseño: eso es en un teléfono.
+// a media ronda con señal y sincronización tardía. Una parada con «1,200» pide el número sin
+// separador y no guarda nada, ni con la unidad al lado («80 %»); «1200» se guarda. Lo guardado
+// vuelve al campo y al cierre escrito para leerse igual («345.1250»). No prueba diseño: eso es en
+// un teléfono.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
@@ -55,17 +58,19 @@ try {
   doc.querySelector('[data-a="elegirSede"][data-id="8"]').click();
   await hasta(() => /Lo primero del turno/.test(texto()), 'la ronda es lo primero');
   ok(/Ronda de las 06:00/.test(texto()));
+  ok(/\d+ paradas/.test(texto()) && !/estimado/.test(texto()), 'La ronda dice cuántas paradas, no cuánto se estima: ' + texto().slice(0, 160));
   const paquete = await (await w.fetch('/api/campo/hoy?sede=8')).json();
   const n = paquete.ronda.puntos.length;
   const idDe = (re) => paquete.ronda.puntos.find((p) => re.test(p.texto)).id;
-  const TEMP = idDe(/Quirófanos · temperatura/), PANEL = idDe(/Panel de alarma de gases/), CUARTOS = idDe(/Cuartos técnicos/), PRESION = idDe(/Oxígeno · presión/), AISLA = idDe(/aislamiento/), BITACORA = idDe(/Bitácora/);
+  const TEMP = idDe(/Quirófanos · temperatura/), PANEL = idDe(/Panel de alarma de gases/), CUARTOS = idDe(/Cuartos técnicos/), PRESION = idDe(/Oxígeno · presión/), AISLA = idDe(/aislamiento/), BITACORA = idDe(/Bitácora/), COMBUSTIBLE = idDe(/nivel de combustible/);
 
   // Se va la señal antes de empezar. Nada cambia para el técnico.
   enLinea = false; w.dispatchEvent(new w.Event('offline'));
   await clic('ronda');
   ok(/Parada 1 de/.test(texto()), texto().slice(0, 100));
+  ok(!doc.querySelector('#reloj') && !/\d{2}:\d{2}:\d{2}|≈/.test(doc.querySelector('.paso-cab').textContent), 'La cabecera de la parada no lleva reloj');
   ok(/llegan cuando vuelva/.test(texto()), 'Sin señal, la línea 1 no afirma que no hay entrega ni desviaciones');
-  let vistas = 0, tempEn = 0;
+  let vistas = 0, tempEn = 0, rellenada = 0;
   while (/Parada \d+ de/.test(texto()) && vistas < 40) {
     vistas++;
     const titulo = doc.querySelector('.paso-cuerpo h1').textContent;
@@ -73,10 +78,11 @@ try {
     ok(pt, 'Parada desconocida: ' + titulo);
     ahora += 90000;
     if (pt.id === TEMP) { // número fuera de rango: primero dónde, luego el AOP con su reloj
-      doc.querySelector('#lectura').value = '25';
+      // Con tres decimales: en la hoja y en el cierre se escribe «25.1250», que no se lee de dos formas.
+      doc.querySelector('#lectura').value = '25,1250';
       tempEn = ahora;
       await clic('lectura');
-      ok(/Lectura 25/.test(hoja()) && /Sala o zona/.test(hoja()), hoja().slice(0, 120));
+      ok(/Lectura 25\.1250 °C · normal 20 a 22 °C/.test(hoja()) && /Sala o zona/.test(hoja()), hoja().slice(0, 120));
       doc.querySelector('#nota-novedad').value = 'Quirófano 2';
       ahora += 5000;
       await clic('novedadSeguir');
@@ -101,12 +107,40 @@ try {
       await clic('novedadSeguir');
       ok(/Esto pide una orden/.test(hoja()), hoja().slice(0, 120));
       await clic('correctivoDeParada');
+    } else if (pt.id === COMBUSTIBLE) { // «1,200» no se adivina: ni con «Guardar lectura» ni con «Hay una alarma»
+      const pendientes = doc.querySelector('#senal').textContent;
+      const AMBIGUO = '¿1200 o 1,2? Escribe el número sin separador de miles.';
+      for (const accion of ['lectura', 'noconf']) {
+        doc.querySelector('#lectura').value = '1,200';
+        await clic(accion);
+        igual(doc.querySelector('#lect-estado').textContent, AMBIGUO, `${accion}: pide el número sin separador`);
+        ok(doc.querySelector('.paso-cuerpo h1').textContent === titulo && doc.querySelector('#hoja').hidden, `${accion}: no avanza ni abre la novedad`);
+        igual(doc.querySelector('#senal').textContent, pendientes, `${accion}: no se guarda para enviar`);
+      }
+      // Una parada es solo número: con la unidad al lado («80 %») no se lee ni se guarda.
+      doc.querySelector('#lectura').value = '80 %';
+      await clic('lectura');
+      ok(doc.querySelector('.paso-cuerpo h1').textContent === titulo && doc.querySelector('#hoja').hidden && doc.querySelector('#senal').textContent === pendientes, 'Con la unidad al lado, la parada no se guarda');
+      doc.querySelector('#lectura').value = '1200'; // 1200 sí es un número: sobre el mínimo, conforme
+      await clic('lectura');
     } else if (pt.id === AISLA) { // no se pudo
       await clic('noverif');
       await clic('noverifSeguir');
       ok(!doc.querySelector('#err-noverif').hidden);
       doc.querySelector('#nota-noverif').value = 'Cuarto ocupado por procedimiento';
       await clic('noverifSeguir');
+    } else if (pt.pideValor && !rellenada && pt.min != null && pt.max != null && Math.ceil(pt.min) + 0.125 <= pt.max) {
+      // K7 · «345,1250» se guarda 345.125. De vuelta en la parada, el campo trae «345.1250», que se lee igual:
+      // se guarda otra vez sin aviso.
+      rellenada = Math.ceil(pt.min);
+      doc.querySelector('#lectura').value = `${rellenada},1250`;
+      await clic('lectura');
+      ok(doc.querySelector('.paso-cuerpo h1').textContent !== titulo, 'Guardada, sigue a la próxima');
+      await clic('anterior');
+      igual(doc.querySelector('#lectura').value, `${rellenada}.1250`, 'El campo trae lo guardado, escrito para leerse igual');
+      ok(!/separador de miles/.test(doc.querySelector('#lect-estado').textContent), 'Sin aviso de número ambiguo: ' + doc.querySelector('#lect-estado').textContent);
+      await clic('lectura');
+      ok(doc.querySelector('.paso-cuerpo h1')?.textContent !== titulo, 'Se guarda otra vez sin aviso');
     } else if (pt.pideValor) {
       doc.querySelector('#lectura').value = String(pt.min ?? pt.max ?? 3);
       await clic('lectura');
@@ -117,7 +151,9 @@ try {
   }
   igual(vistas, n, 'Una parada por pantalla, todas');
   ok(/paradas verificadas/.test(texto()), texto().slice(0, 200));
+  ok(texto().includes(`: ${rellenada}.1250 kPa`) && texto().includes(': 25.1250 °C'), 'El cierre escribe las lecturas para leerse igual: ' + texto().slice(0, 400));
   ok(/Sin verificar/.test(texto()));
+  ok(!/Quién y cuándo/.test(texto()) && !/\b\d{2}:\d{2} a \d{2}:\d{2}\b/.test(texto()), 'El cierre de la ronda no dice cuándo empezó ni cuánto duró: ' + texto().slice(0, 300));
   igual(one('SELECT COUNT(*) n FROM campo_operaciones').n, 0, 'Nada ha llegado al servidor');
   ok(/Quedan abiertas/.test(doc.querySelector('#entrega').value), 'La entrega ya viene escrita');
   doc.querySelector('#entrega').value = '';
@@ -151,9 +187,11 @@ try {
   igual(r6.notas, 'Queda abierta la temperatura del quirófano.');
   igual(all('SELECT id FROM ronda_lecturas WHERE ejecucion_id=?', r6.id).length, n);
   const lTemp = one('SELECT * FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, TEMP);
-  igual(lTemp.resultado, 'fuera'); igual(lTemp.valor, 25); igual(lTemp.nota, 'Quirófano 2');
+  igual(lTemp.resultado, 'fuera'); igual(lTemp.valor, 25.125); igual(lTemp.nota, 'Quirófano 2');
   igual(lTemp.registrado_en, new RealDate(tempEn).toISOString(), 'La hora es la de la lectura, no la de la nota');
   igual(one('SELECT resultado r FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, AISLA).r, 'no_verificado');
+  const lComb = one('SELECT resultado, valor FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, COMBUSTIBLE);
+  igual(lComb.valor, 1200, '«1200» se guardó como mil doscientos'); igual(lComb.resultado, 'ok');
   ok(all('SELECT sin_senal s, recibido_en r, ocurrido_en o FROM ronda_marcas WHERE ejecucion_id=?', r6.id).every((m) => m.s === 1 && m.r > m.o), 'Cada lectura dice que se capturó sin señal');
   const ev = one('SELECT * FROM aop_eventos WHERE ronda_punto_id=? AND sucursal_id=8', TEMP);
   igual(ev.detectado_en, lTemp.registrado_en, 'El reloj del AOP corre desde la captura');
@@ -165,7 +203,9 @@ try {
   ok(one('SELECT orden_id o FROM ronda_lecturas WHERE ejecucion_id=? AND punto_id=?', r6.id, CUARTOS).o, 'El correctivo queda ligado a su parada');
   const r14 = one("SELECT * FROM ronda_ejecuciones WHERE turno='14:00' AND sucursal_id=8");
   igual(r14.estado, 'en_curso'); igual(r14.iniciada_en, new RealDate(enSV('14:20')).toISOString());
-  await hasta(() => /Emergencia abierta/.test(texto()), 'la emergencia pasa delante de la ronda');
+  await hasta(() => /Atender la emergencia/.test(texto()), 'la emergencia pasa delante de la ronda');
+  ok(!doc.querySelector('.ahora a[href^="/ordenes/"]') && !/ficha/i.test(doc.querySelector('.ahora').textContent), 'La emergencia se atiende en el celular, no en la ficha');
+  ok(doc.querySelector('.ahora [data-a="ir"]').dataset.h.startsWith('#orden-'), 'El botón de la emergencia lleva a su pantalla en el celular');
   igual(one("SELECT COUNT(*) n FROM campo_operaciones WHERE resultado='rechazada'").n, 0, 'Sin rechazos');
   // Atendida la emergencia, Hoy vuelve a la ronda de este turno donde quedó.
   sqlite.exec("UPDATE ordenes SET estado='completada' WHERE tipo='emergencia'");
@@ -191,6 +231,6 @@ try {
   await clic('salir'); await espera();
   await irAHoy();
   await hasta(() => /Ronda de las 22:00/.test(texto()), 'al salir de la ronda se ofrece la del turno nuevo');
-  console.log(`PASS e2e-campo-sin-senal: ${checks} verificaciones; ${n} paradas sin señal, cambio de turno sin señal y a media ronda, sincronización tardía.`);
+  console.log(`PASS e2e-campo-sin-senal: ${checks} verificaciones; ${n} paradas sin señal, cambio de turno sin señal y a media ronda, sincronización tardía, «1,200» que no se adivina, un número guardado que vuelve al campo y al cierre sin leerse de dos formas.`);
 } finally { await close(); dom.window.close(); globalThis.Date = RealDate; }
 process.exit(0);

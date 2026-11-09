@@ -25,6 +25,14 @@ const equipoTxt = r.activo ? `${r.activo.codigo} · ${r.activo.nombre}` : o.titu
 const marcaTxt = r.activo ? [r.activo.marca, r.activo.modelo, r.activo.serial ? `S/N ${r.activo.serial}` : null].filter(Boolean).join(" · ") : null;
 const FRECUENCIA: Record<string, string> = { turno: "por turno", diaria: "diaria", semanal: "semanal", quincenal: "quincenal", mensual: "mensual", bimestral: "bimestral", cuatrimestral: "cuatrimestral", trimestral: "trimestral", semestral: "semestral", anual: "anual" };
 const dif = r.tiempos.diferenciaMin;
+// El técnico no ve tiempos de medición: inicio, fin, tiempo de trabajo, pausas,
+// lo estimado ni los minutos de cada paso. Se siguen registrando igual; el
+// historial le muestra solo el día. Las secciones se numeran sin huecos.
+const verTiempos = user.rol !== "tecnico";
+const nTiempos = 1;
+const nPasos = verTiempos ? 2 : 1;
+const nTrabajos = (verTiempos ? 1 : 0) + (r.pasos.length ? 1 : 0) + 1;
+const cuando = (iso: string) => (verTiempos ? fechaHora(iso) : fechaHora(iso).slice(0, 10));
 ---
 
 <Layout title={`Reporte ${r.codigo}`}>
@@ -48,8 +56,8 @@ const dif = r.tiempos.diferenciaMin;
       </table>
     </section>
 
-    <section class="doc-seccion">
-      <h2 class="doc-h"><span>1.</span> Tiempos</h2>
+    {verTiempos && <section class="doc-seccion">
+      <h2 class="doc-h"><span>{nTiempos}.</span> Tiempos</h2>
       <div class="doc-cifras">
         <div><span class="doc-etq">Inicio</span><b>{hora(r.tiempos.inicio)}</b><small>{r.tiempos.inicio ? fechaHora(r.tiempos.inicio).slice(0, 10) : "Sin iniciar"}</small></div>
         <div><span class="doc-etq">Fin</span><b>{hora(r.tiempos.fin)}</b><small>{r.tiempos.fin ? fechaHora(r.tiempos.fin).slice(0, 10) : "Sin terminar"}</small></div>
@@ -58,13 +66,13 @@ const dif = r.tiempos.diferenciaMin;
         <div><span class="doc-etq">Estimado</span><b>{etiquetaMinutos(r.tiempos.estimadoMin)}</b><small>{dif == null ? " " : dif === 0 ? "Igual a lo estimado" : `${dif > 0 ? "+" : "−"}${etiquetaMinutos(Math.abs(dif))} contra lo estimado`}</small></div>
       </div>
       {r.tiempos.marcasSinSenal > 0 && <p class="doc-nota">{r.tiempos.marcasSinSenal} paso{r.tiempos.marcasSinSenal === 1 ? "" : "s"} se capturó sin señal y se envió después; la hora es la del momento en que se hizo.</p>}
-    </section>
+    </section>}
 
     {r.pasos.length > 0 && (
       <section class="doc-seccion">
-        <h2 class="doc-h"><span>2.</span> Pasos</h2>
+        <h2 class="doc-h"><span>{nPasos}.</span> Pasos</h2>
         <table class="doc-tabla">
-          <thead><tr><th class="n">#</th><th>Paso</th><th>Resultado</th><th class="c">Hora</th><th class="n">Min</th><th>Lectura o nota</th></tr></thead>
+          <thead><tr><th class="n">#</th><th>Paso</th><th>Resultado</th><th class="c">Hora</th>{verTiempos && <th class="n">Min</th>}<th>Lectura o nota</th></tr></thead>
           <tbody>
             {r.pasos.map((p) => (
               <tr>
@@ -72,7 +80,7 @@ const dif = r.tiempos.diferenciaMin;
                 <td>{p.texto}{p.critico && <span class="doc-critico"> ● Crítico</span>}</td>
                 <td>{p.estadoLabel}</td>
                 <td class="c">{p.hora ? hora(p.hora) : p.horaTexto ?? "—"}{p.sinSenal && <sup title="Capturado sin señal">*</sup>}</td>
-                <td class="n">{p.minutos != null ? Math.round(p.minutos) : "—"}</td>
+                {verTiempos && <td class="n">{p.minutos != null ? Math.round(p.minutos) : "—"}</td>}
                 <td>
                   {p.valor != null && <span class="doc-valor">{p.valor}{p.unidad ? ` ${p.unidad}` : ""}{p.rango ? ` · normal ${p.rango}` : ""}{p.dentro === false ? " · fuera de rango" : ""}</span>}
                   {p.nota && <span class="doc-nota-celda">{p.nota}</span>}
@@ -86,7 +94,7 @@ const dif = r.tiempos.diferenciaMin;
     )}
 
     <section class="doc-seccion">
-      <h2 class="doc-h"><span>{r.pasos.length ? "3." : "2."}</span> Trabajos realizados</h2>
+      <h2 class="doc-h"><span>{nTrabajos}.</span> Trabajos realizados</h2>
       <p class="doc-texto">{o.trabajosRealizados ?? "Sin registrar."}</p>
       {o.causaRaiz && <><h3 class="doc-h3">Causa raíz</h3><p class="doc-texto">{o.causaRaiz}</p></>}
       {o.solucionAplicada && <><h3 class="doc-h3">Solución aplicada</h3><p class="doc-texto">{o.solucionAplicada}</p></>}
@@ -116,7 +124,7 @@ const dif = r.tiempos.diferenciaMin;
         <h2 class="doc-h">Historial</h2>
         <table class="doc-tabla">
           <thead><tr><th>Cuándo</th><th>Qué</th><th>Quién</th><th>Motivo</th></tr></thead>
-          <tbody>{r.historial.map((h) => <tr><td class="tn">{fechaHora(h.cuando)}</td><td>{h.titulo}</td><td>{h.quien}</td><td>{h.motivo ?? ""}</td></tr>)}</tbody>
+          <tbody>{r.historial.map((h) => <tr><td class="tn">{cuando(h.cuando)}</td><td>{h.titulo}</td><td>{h.quien}</td><td>{h.motivo ?? ""}</td></tr>)}</tbody>
         </table>
       </section>
     )}
