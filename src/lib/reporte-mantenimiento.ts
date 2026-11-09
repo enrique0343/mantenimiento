@@ -18,12 +18,9 @@ export const ESTADO_ORDEN: Record<string, string> = {
   abierta: "Abierta", en_proceso: "En proceso", en_espera: "En espera", completada: "Pendiente de verificación", verificada: "Verificada", cerrada: "Cerrada", cancelada: "Cancelada",
 };
 const ESTADO_PASO: Record<string, string> = { ok: "Realizado", na: "No aplica", desviacion: "Con novedad", pendiente: "Pendiente" };
-// En una emergencia, una acción del EOP se hizo o no se pudo: así la marca el celular.
-const ESTADO_PASO_EMERGENCIA: Record<string, string> = { ...ESTADO_PASO, desviacion: "No se pudo" };
 const ACCION_EVENTO: Record<string, string> = {
   estado: "Cambio de estado", bloqueo: "Pausa", ejecucion_completada: "Enviada a verificación", verificacion_cierre: "Verificada y cerrada",
   devolucion: "Devuelta al técnico", reapertura: "Reabierta", devolucion_solicitante: "Devuelta por quien la pidió", designacion_revisor: "Revisor designado", reprogramacion: "Reprogramada",
-  causa_raiz: "Causa raíz registrada",
 };
 
 /** Minutos entre dos momentos, sin contar lo que estuvo en pausa. */
@@ -66,12 +63,7 @@ export async function reporteDeOrden(db: Db, id: number) {
 
   const marcas = await db.select().from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, id)).orderBy(asc(ordenPasoMarcas.ocurridoEn), asc(ordenPasoMarcas.id));
   const eventos = await db
-    .select({
-      accion: ordenVerificacionEventos.accion, antes: ordenVerificacionEventos.estadoAntes, despues: ordenVerificacionEventos.estadoDespues,
-      actorId: ordenVerificacionEventos.actorId, quien: ordenVerificacionEventos.actorNombre, cuando: ordenVerificacionEventos.ocurridoEn, motivo: ordenVerificacionEventos.motivo,
-      // Cómo quedó la causa raíz: una que quedó vacía se cuenta como borrada.
-      causa: sql<string | null>`case when ${ordenVerificacionEventos.accion} = 'causa_raiz' then json_extract(${ordenVerificacionEventos.evidenciaJson}, '$.despues.causaRaiz') end`,
-    })
+    .select({ accion: ordenVerificacionEventos.accion, antes: ordenVerificacionEventos.estadoAntes, despues: ordenVerificacionEventos.estadoDespues, quien: ordenVerificacionEventos.actorNombre, cuando: ordenVerificacionEventos.ocurridoEn, motivo: ordenVerificacionEventos.motivo })
     .from(ordenVerificacionEventos)
     .where(eq(ordenVerificacionEventos.ordenId, id))
     .orderBy(asc(ordenVerificacionEventos.id));
@@ -88,7 +80,6 @@ export async function reporteDeOrden(db: Db, id: number) {
 
   const inicioMs = o.iniciadaEn ? Date.parse(o.iniciadaEn) : null;
   const items_ = parseChecklist(o.checklistEjecucion);
-  const etiquetaPaso = o.tipo === "emergencia" ? ESTADO_PASO_EMERGENCIA : ESTADO_PASO;
   // Duración de cada paso: desde la marca anterior hasta la suya, una sola vez por paso.
   const primera = new Map<number, (typeof marcas)[number]>();
   const ultima = new Map<number, (typeof marcas)[number]>();
@@ -108,7 +99,7 @@ export async function reporteDeOrden(db: Db, id: number) {
       texto: it.texto,
       critico: !!it.bloqueante,
       estado: it.estado,
-      estadoLabel: etiquetaPaso[it.estado] ?? it.estado,
+      estadoLabel: ESTADO_PASO[it.estado] ?? it.estado,
       hora: marca?.ocurridoEn ?? null,
       horaTexto: it.hora ?? null,
       iniciales: it.iniciales ?? null,
@@ -166,33 +157,16 @@ export async function reporteDeOrden(db: Db, id: number) {
     repuestos,
     fotos: fotos.filter((f) => f.contentType?.startsWith("image/")),
     documentos: fotos.filter((f) => !f.contentType?.startsWith("image/")),
-    historial: historialDe(eventos),
+    historial: eventos
+      .filter((ev) => ev.accion in ACCION_EVENTO)
+      .filter((ev) => ev.accion !== "estado" || ev.despues === "en_proceso")
+      .map((ev) => ({
+        titulo: ev.accion === "estado" ? (ev.antes === "en_espera" ? "Reanudó" : ev.antes === "abierta" ? "Inició" : "Volvió a proceso") : ACCION_EVENTO[ev.accion],
+        cuando: ev.cuando,
+        quien: ev.quien,
+        motivo: ev.motivo,
+      })),
   };
-}
-
-type EventoReporte = { accion: string; antes: string; despues: string; actorId: number | null; quien: string; cuando: string; motivo: string | null; causa: string | null };
-
-/**
- * Lo que pasó con la orden, una fila por hecho. La causa raíz se guarda mientras
- * la jefatura escribe: varios guardados seguidos de la misma persona quedan en una
- * fila, la última.
- */
-function historialDe(eventos: EventoReporte[]) {
-  const filas: Array<{ titulo: string; cuando: string; quien: string; motivo: string | null; causaDe?: number | string }> = [];
-  for (const ev of eventos) {
-    if (!(ev.accion in ACCION_EVENTO) || (ev.accion === "estado" && ev.despues !== "en_proceso")) continue;
-    const fila = {
-      titulo: ev.accion === "estado" ? (ev.antes === "en_espera" ? "Reanudó" : ev.antes === "abierta" ? "Inició" : "Volvió a proceso")
-        : ev.accion === "causa_raiz" && !String(ev.causa ?? "").trim() ? "Causa raíz borrada" : ACCION_EVENTO[ev.accion],
-      cuando: ev.cuando,
-      quien: ev.quien,
-      motivo: ev.motivo,
-    };
-    const causaDe = ev.accion === "causa_raiz" ? ev.actorId ?? ev.quien : undefined;
-    if (causaDe !== undefined && filas[filas.length - 1]?.causaDe === causaDe) filas[filas.length - 1] = { ...fila, causaDe };
-    else filas.push({ ...fila, causaDe });
-  }
-  return filas.map(({ causaDe, ...fila }) => fila);
 }
 
 // ── Consolidado ─────────────────────────────────────────────────────────────

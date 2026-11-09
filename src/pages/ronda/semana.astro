@@ -44,7 +44,6 @@ const LEYENDA = ["completa", "con_novedad", "en_curso", "incompleta", "no_se_hiz
     <section class="card mt-4 overflow-x-auto p-4">
       <h2 class="font-semibold text-slate-800">{sede.nombre}</h2>
       <p class="mt-1 text-xs text-slate-500">{(firma ?? r).esperadas} esperadas · {(firma ?? r).completas} completas · {(firma ?? r).conNovedad} con novedades · {(firma ?? r).incompletas} incompletas · {(firma ?? r).noHechas} no se hicieron{firma ? " · cifras de cuando se firmó" : ""}</p>
-      {!r.haceRonda && <p class="mt-1 text-xs text-slate-500">Hoy esta sede no hace ronda. Cada turno se revisa con lo que regía cuando empezó.</p>}
       <table class="mt-2 text-[11px]">
         <thead><tr><th></th>{dias.map((d) => <th class="px-1 font-normal text-slate-400">{d.slice(8)}</th>)}</tr></thead>
         <tbody>

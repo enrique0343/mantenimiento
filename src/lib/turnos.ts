@@ -31,9 +31,6 @@ export function diaAnterior(fecha: string): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** «las 14:00», pero «la 01:00»: así se dice la hora de un turno en una frase. */
-export const laHora = (hhmm: string): string => (/^0?1:/.test(hhmm) ? `la ${hhmm}` : `las ${hhmm}`);
-
 export const etiquetaTurno = (turno: string): string => {
   const m = aMinutos(turno);
   if (m < 12 * 60) return `Turno ${turno} · mañana`;
@@ -69,36 +66,6 @@ export function turnoActual(turnos: string[], ref?: Date): TurnoInfo {
     fechaTurno = diaAnterior(fecha);
   }
   return { turno: elegido, fecha: fechaTurno, etiqueta: etiquetaTurno(elegido) };
-}
-
-/** Un cambio de turnos que todavía no entró, como lo manda el paquete del celular. */
-export interface TurnosProximos {
-  /** ISO: el inicio del primer turno de la lista nueva. */
-  desde: string;
-  turnos: string[];
-}
-
-/**
- * El turno que corre con lo que trae el paquete: los turnos de ahora y, desde
- * que entra el cambio, los próximos. Un turno de «omite» no se abre: corre el
- * que corría justo antes de su inicio. Así el celular sin señal sigue en el
- * turno que empezó y pasa a la lista nueva cuando le toca.
- */
-export function turnoConProximos(
-  turnos: string[],
-  proximos: TurnosProximos | null | undefined,
-  ref?: Date,
-  omite: ReadonlyArray<{ fecha: string; turno: string }> = [],
-): TurnoInfo {
-  const desde = proximos ? Date.parse(proximos.desde) : NaN;
-  const lista = (ms: number) => (Number.isFinite(desde) && ms >= desde && proximos!.turnos.length ? proximos!.turnos : turnos);
-  let ms = ref ? ref.getTime() : Date.now();
-  let t = turnoActual(lista(ms), new Date(ms));
-  for (let i = 0; i < 8 && omite.some((o) => o.fecha === t.fecha && o.turno === t.turno); i++) {
-    ms = Date.parse(`${t.fecha}T${t.turno}:00-06:00`) - 1;
-    t = turnoActual(lista(ms), new Date(ms));
-  }
-  return t;
 }
 
 /** Lunes de la semana de esa fecha, para la revisión semanal. */

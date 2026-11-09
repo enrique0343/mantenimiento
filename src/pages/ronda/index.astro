@@ -20,10 +20,9 @@ import {
   turnosDeTablero,
   etiquetaTurno,
   ahoraSV,
-  laHora,
+  turnoActual,
   type FilaTablero,
 } from "@/lib/ronda-turno";
-import { textoDeNumero } from "@/lib/numero";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva, RELOJ } from "@/lib/aop";
 import { aopEventos, campoOperaciones, procedimientos, rondaEjecuciones, sucursales, ubicaciones, usuarios } from "@/lib/schema";
 import { fmtFechaSoloCompacta, fmtHora } from "@/lib/datetime";
@@ -36,11 +35,11 @@ const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 
 // Sin filtro, cada sede muestra su turno vigente; con filtro, el turno pedido.
-// El filtro ofrece los turnos de antes, de ahora y los que entran; de entrada, el que corre.
-const { turnos, vigente: t } = await turnosDeTablero(db);
+const turnos = await turnosDeTablero(db);
 const pedidoFecha = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("fecha") ?? "") ? url.searchParams.get("fecha")! : null;
 const pedidoTurno = turnos.includes(url.searchParams.get("turno") ?? "") ? url.searchParams.get("turno")! : null;
 const pedido = pedidoFecha && pedidoTurno ? { fecha: pedidoFecha, turno: pedidoTurno } : undefined;
+const t = turnoActual(turnos);
 const fecha = pedido?.fecha ?? t.fecha;
 const turno = pedido?.turno ?? t.turno;
 
@@ -137,8 +136,6 @@ const rechazos = await db
     <ul class="divide-y divide-slate-100">
       {filasOrdenadas.map((f) => {
         const est = ESTADO_RONDA[f.estado];
-        // Una sede marcada «no hace ronda» lo dice así, no con un «No aplica» que no explica nada.
-        const etiqueta = f.estado === "no_aplica" && !f.haceRonda ? "No hace ronda" : est.label;
         return (
           <li class="flex flex-wrap items-center gap-3 px-5 py-3.5">
             <span class={`h-2.5 w-2.5 shrink-0 rounded-full ${est.punto}`}></span>
@@ -150,13 +147,13 @@ const rechazos = await db
                   <div class="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
                     <div class={`h-full rounded-full ${f.fuera + f.sinVerificar > 0 ? "bg-orange-400" : "bg-emerald-500"}`} style={`width:${f.pct}%`}></div>
                   </div>
-                  <span class="text-[11px] text-slate-400">{f.anotados} de {f.puntosTotal} paradas{f.iniciadaEn ? ` · inició a ${laHora(fmtHora(f.iniciadaEn))}` : ""}{f.firma ? ` · firmó ${f.firma}` : ""}</span>
+                  <span class="text-[11px] text-slate-400">{f.anotados} de {f.puntosTotal} paradas{f.iniciadaEn ? ` · inició ${fmtHora(f.iniciadaEn)}` : ""}{f.firma ? ` · firmó ${f.firma}` : ""}</span>
                 </div>
               )}
             </div>
             {f.fuera > 0 && <span class="badge bg-orange-100 text-orange-700">{f.fuera} fuera de rango</span>}
             {f.sinVerificar > 0 && <span class="badge bg-slate-100 text-slate-600">{f.sinVerificar} sin verificar</span>}
-            <span class={`badge ${est.badge}`}>{etiqueta}</span>
+            <span class={`badge ${est.badge}`}>{est.label}</span>
             {f.ejecucionId
               ? <a class="btn-secondary btn-sm" href={`/ronda/${f.ejecucionId}`}>Ver</a>
               : f.estado === "sin_iniciar" && puedeEjecutarRonda(user.rol) && <a class="btn-primary btn-sm" href="/campo#ronda">Hacerla en Modo técnico</a>}
@@ -194,7 +191,7 @@ const rechazos = await db
                 <div class="flex items-start justify-between gap-2">
                   <a href={`/aop/${d.e.id}`} class="min-w-0 flex-1 hover:underline">
                     <div class="text-sm font-medium text-slate-800">{d.codigo ? <span class="mr-1.5 font-mono text-[10px] text-slate-500">{d.codigo}</span> : null}{d.titulo ?? "Desviación"}</div>
-                    <div class="mt-0.5 truncate text-[11px] text-slate-500">{d.sede ?? "Sin sede"}{d.sala ? ` · ${d.sala}` : ""}{d.e.valorDetectado != null ? ` · leído ${textoDeNumero(d.e.valorDetectado)}${d.e.unidad ? ` ${d.e.unidad}` : ""}` : ""}</div>
+                    <div class="mt-0.5 truncate text-[11px] text-slate-500">{d.sede ?? "Sin sede"}{d.sala ? ` · ${d.sala}` : ""}{d.e.valorDetectado != null ? ` · leído ${d.e.valorDetectado}${d.e.unidad ? ` ${d.e.unidad}` : ""}` : ""}</div>
                   </a>
                   <span class={`badge shrink-0 ${r.badge}`}>{r.label}</span>
                 </div>

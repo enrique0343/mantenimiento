@@ -90,14 +90,15 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
       const [a] = await db.select({ rubro: actividades.rubro }).from(actividades).where(eq(actividades.id, id)).limit(1);
       if (a) ctx.locals.area = rubroDeActividad(a.rubro);
     } else if (recordPath[1] === "ordenes") {
-      const [o] = await db.select({ rubro: ordenes.rubro, estado: ordenes.estado, asignadoA: ordenes.asignadoA }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
+      const [o] = await db.select({ rubro: ordenes.rubro, estado: ordenes.estado, tipo: ordenes.tipo, asignadoA: ordenes.asignadoA }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
       if (o) ctx.locals.area = parseArea(o.rubro);
-      // Un aviso o un correo también lleva al técnico a su pantalla de trabajo,
-      // con cualquier tipo de orden: la emergencia y la intervención también se
-      // trabajan en el celular. ?completa=1 abre la ficha (para verificar).
+      // Un aviso o un correo también lleva al técnico a su pantalla de pasos. Las
+      // intervenciones y emergencias siguen en la ficha completa, y ?completa=1
+      // la abre cuando hace falta.
       if (
         o && user.rol === "tecnico" && /^\/ordenes\/\d+\/?$/.test(path) && !url.searchParams.has("completa")
         && ["abierta", "en_proceso", "en_espera"].includes(o.estado)
+        && !["intervencion", "emergencia"].includes(o.tipo)
         && (o.asignadoA === user.id || !o.asignadoA)
       ) {
         return ctx.redirect(`/campo#orden-${id}`);

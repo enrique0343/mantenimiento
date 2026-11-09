@@ -92,9 +92,8 @@ mark { background: var(--papel); color: var(--tinta); font-weight: 600; padding:
 /* ── Cascarón ─────────────────────────────────────────────────────────────── */
 .sidebar { background: var(--marino); width: 235px !important; min-width: 235px !important; }
 .marca-app { display: flex; align-items: center; gap: 10px; padding: 14px 14px 12px; border-bottom: 1px solid rgba(143, 177, 214, .25); }
-.marca-logo { display: block; width: 100%; }
-/* Logotipo original en su versión reverso, directo sobre el marino. */
-.marca-logo img { display: block; height: 44px; width: auto; max-width: 100%; }
+.marca-chip { display: block; background: #fff; padding: 5px 8px; border-radius: 2px; width: 100%; }
+.marca-chip img { display: block; height: 34px; width: auto; max-width: 100%; }
 .marca-sub { display: block; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--azul-tn); padding: 8px 14px 0; }
 .app-nav { flex: 1; padding: 10px 12px; overflow-y: auto; }
 .app-nav-label { color: var(--azul-tn); font-size: 11px; font-weight: 700; letter-spacing: .12em; margin: 20px 10px 8px; text-transform: uppercase; }
