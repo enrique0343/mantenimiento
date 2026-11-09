@@ -4,6 +4,7 @@ import type { getDb } from "./db";
 import { activos, ordenes, ubicaciones, sucursales } from "./schema";
 import { parseArea, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
+import { leerNumero, numeroAlInicio, textoDeNumero, valorDe } from "./numero";
 
 
 /**
@@ -254,8 +255,11 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
           const n = Number(v);
           return Number.isFinite(n) ? n : undefined;
         };
-        // valorMedido puede ser "0": no se puede usar truthiness.
+        // valorMedido puede ser "0": no se puede usar truthiness. El celular lo
+        // guarda como número: se vuelve texto con textoDeNumero, para que 12.345
+        // no se lea como «12.345» (¿12345 o 12,345?).
         const vm = it?.valorMedido;
+        const vmTexto = typeof vm === "number" ? textoDeNumero(vm) : vm !== null && vm !== undefined ? String(vm) : "";
         const varId = num(it?.variableId);
         return {
           texto,
@@ -265,7 +269,7 @@ export function parseChecklist(json: string | null | undefined): ChecklistItem[]
           bloqueante: it?.bloqueante === true || it?.bloqueante === 1,
           minutos: Number.isFinite(minutos) && minutos > 0 ? minutos : undefined,
           materiales: it?.materiales ? String(it.materiales) : undefined,
-          valorMedido: vm !== null && vm !== undefined && String(vm) !== "" ? String(vm) : undefined,
+          valorMedido: vmTexto !== "" ? vmTexto : undefined,
           requiereValor: it?.requiereValor === true || it?.requiereValor === 1,
           unidad: it?.unidad ? String(it.unidad) : undefined,
           esperadoMin: num(it?.esperadoMin),
@@ -286,32 +290,41 @@ export function minutosEstimadosChecklist(items: ChecklistItem[]): number {
   return items.reduce((s, i) => s + (i.minutos ?? 0), 0);
 }
 
+/** Un paso con mínimo o máximo se juzga por su número: lo escrito en él es un número. */
+export function pasoConRango(it: { esperadoMin?: number | null; esperadoMax?: number | null }): boolean {
+  return (it.esperadoMin !== undefined && it.esperadoMin !== null) || (it.esperadoMax !== undefined && it.esperadoMax !== null);
+}
+
+export const MENSAJE_PASO_SIN_NUMERO = "Este paso tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).";
+
 // Evalúa la lectura de una línea frente a su rango esperado del SCP.
-//   tiene  — hay un número registrado
-//   dentro — true dentro del rango, false fuera, null sin rango que comparar
+//   tiene  — hay un valor registrado
+//   numero — el número, leído con numero.ts: «1,200» no se adivina y queda null
+//   dentro — true dentro del rango, false fuera, null sin rango o sin número que comparar
 export function evaluarValorChecklist(it: ChecklistItem): {
   tiene: boolean;
   numero: number | null;
   dentro: boolean | null;
   rangoTexto: string | null;
 } {
-  const crudo = it.valorMedido;
-  const tiene = crudo !== undefined && crudo !== null && String(crudo).trim() !== "";
-  const n = tiene ? Number(String(crudo).replace(",", ".")) : NaN;
-  const numero = Number.isFinite(n) ? n : null;
+  const leido = leerNumero(it.valorMedido);
+  const tiene = leido.tipo !== "vacio";
+  const numero = valorDe(leido);
   const tieneMin = it.esperadoMin !== undefined && it.esperadoMin !== null;
   const tieneMax = it.esperadoMax !== undefined && it.esperadoMax !== null;
-  const u = it.unidad ? ` ${it.unidad}` : "";
-  const rangoTexto = tieneMin && tieneMax
-    ? `${it.esperadoMin} a ${it.esperadoMax}${u}`
-    : tieneMin ? `≥ ${it.esperadoMin}${u}`
-    : tieneMax ? `≤ ${it.esperadoMax}${u}`
-    : null;
+  const rangoTexto = rangoLiberacionTexto(it.esperadoMin, it.esperadoMax, it.unidad);
   let dentro: boolean | null = null;
   if (numero !== null && (tieneMin || tieneMax)) {
     dentro = (!tieneMin || numero >= (it.esperadoMin as number)) && (!tieneMax || numero <= (it.esperadoMax as number));
   }
   return { tiene, numero, dentro, rangoTexto };
+}
+
+// Una línea que pide valor tiene su lectura: con rango, un número; sin rango,
+// lo que se escribió. «aprox 14» o «1,200» en un paso con rango no es lectura.
+function pasoConLectura(it: ChecklistItem): boolean {
+  const ev = evaluarValorChecklist(it);
+  return pasoConRango(it) ? ev.numero !== null : ev.tiene;
 }
 
 // Líneas que piden número y lo tienen fuera del rango del SCP. No abrimos el
@@ -335,7 +348,7 @@ export function progresoChecklist(items: ChecklistItem[]): { hechos: number; tot
   // Lecturas obligatorias sin número: bloquean el cierre igual que un pendiente.
   // Un paso marcado N/A no se midió a propósito, así que no se le exige lectura.
   const valoresFaltantes = items.filter(
-    (i) => i.requiereValor && i.estado !== "na" && !evaluarValorChecklist(i).tiene
+    (i) => i.requiereValor && i.estado !== "na" && !pasoConLectura(i)
   ).length;
   const fueraDeRango = lecturasFueraDeRango(items).length;
   const pct = total === 0 ? 0 : Math.round((hechos / total) * 100);
@@ -373,10 +386,11 @@ export function validarChecklistParaCierre(items: ChecklistItem[]): { ok: boolea
 // Regla dura y aparte: una línea que pide número no se cierra sin número.
 // Va separada de validarChecklistParaCierre porque esta no la salta nadie —
 // es la evidencia del SOP («registro con fecha, hora, lectura y firma»).
+// Con rango, lo escrito sin número cuenta como sin lectura.
 export function validarLecturasChecklistParaCierre(items: ChecklistItem[]): { ok: boolean; error?: string } {
   const sinLectura = items
     .map((i, idx) => ({ i, idx }))
-    .filter(({ i }) => i.requiereValor && i.estado !== "na" && !evaluarValorChecklist(i).tiene);
+    .filter(({ i }) => i.requiereValor && i.estado !== "na" && !pasoConLectura(i));
   if (sinLectura.length === 0) return { ok: true };
   const nombres = sinLectura.slice(0, 3).map(({ i, idx }) => `«${i.texto || `línea ${idx + 1}`}»`).join(", ");
   const resto = sinLectura.length > 3 ? ` y ${sinLectura.length - 3} más` : "";
@@ -477,9 +491,21 @@ export type LiberacionLike = {
   obligatoria: boolean;
   valorMedido?: number | null;
   valorMedidoTexto?: string | null;
+  minAceptable?: number | null;
+  maxAceptable?: number | null;
 };
 
+export const MENSAJE_LECTURA_SIN_NUMERO = "Esta lectura tiene rango: anota el número que marcó el instrumento (por ejemplo 14,5).";
+
+/** Una liberación con mínimo o máximo se juzga por su número. */
+export function liberacionConRango(l: { minAceptable?: number | null; maxAceptable?: number | null }): boolean {
+  return (l.minAceptable !== null && l.minAceptable !== undefined) || (l.maxAceptable !== null && l.maxAceptable !== undefined);
+}
+
+// Con rango, la lectura es el número: «aprox 14 A», «arrancó bien» o «1,200»
+// (¿1200 o 1,2?) no liberan nada y cuentan como no medidas. Sin rango, basta un texto.
 export function liberacionTieneLectura(l: LiberacionLike): boolean {
+  if (liberacionConRango(l)) return numeroDeLectura(l.valorMedido, l.valorMedidoTexto) !== null;
   if (l.valorMedido !== null && l.valorMedido !== undefined && Number.isFinite(Number(l.valorMedido))) return true;
   return !!(l.valorMedidoTexto && String(l.valorMedidoTexto).trim() !== "");
 }
@@ -499,8 +525,70 @@ export function evaluarConformeLiberacion(
   return (!tieneMin || v >= Number(min)) && (!tieneMax || v <= Number(max));
 }
 
+// Texto del rango normal de una liberación o de un paso: «8 a 12 A», «≥ 8 A»,
+// «≤ 12 A». Cada límite como se vuelve a escribir (textoDeNumero): 12.345 no sale
+// «12.345», que se leería de dos formas.
+export function rangoLiberacionTexto(
+  min: number | null | undefined,
+  max: number | null | undefined,
+  unidad?: string | null
+): string | null {
+  const u = unidad ? ` ${unidad}` : "";
+  const tieneMin = min !== null && min !== undefined;
+  const tieneMax = max !== null && max !== undefined;
+  const limite = (v: unknown) => (Number.isFinite(Number(v)) ? textoDeNumero(Number(v)) : String(v));
+  if (tieneMin && tieneMax) return `${limite(min)} a ${limite(max)}${u}`;
+  if (tieneMin) return `≥ ${limite(min)}${u}`;
+  if (tieneMax) return `≤ ${limite(max)}${u}`;
+  return null;
+}
+
+export type LiberacionConRango = LiberacionLike;
+
+// El número de una lectura: el valor medido o, si se escribió como texto
+// («14,5 A»), el número con que empieza, leído con numero.ts. Una unidad
+// escrita al lado no esconde una lectura fuera de rango, y un separador de
+// miles no se adivina: «1,200 ppm» queda sin número, así que cuenta como no
+// medida y no se juzga.
+export function numeroDeLectura(valorMedido: number | null | undefined, valorMedidoTexto?: string | null): number | null {
+  if (valorMedido !== null && valorMedido !== undefined && Number.isFinite(Number(valorMedido))) return Number(valorMedido);
+  return valorDe(numeroAlInicio(valorMedidoTexto));
+}
+
+// Lecturas obligatorias con número fuera del rango aceptable. Se calcula con el
+// valor y el rango, no con la columna «conforme», para que nadie la esquive.
+export function liberacionesFueraDeRango<T extends LiberacionConRango>(liberaciones: T[]): T[] {
+  return liberaciones.filter(
+    (l) => l.obligatoria && evaluarConformeLiberacion(l.minAceptable, l.maxAceptable, numeroDeLectura(l.valorMedido, l.valorMedidoTexto)) === false
+  );
+}
+
+// Regla dura del MOP: una lectura obligatoria fuera de rango no libera el
+// sistema. Solo la reversa ejecutada (el sistema volvió a como estaba) la salva;
+// quien llama lo revisa antes.
+export function validarLiberacionesEnRango(
+  tipo: string | null | undefined,
+  liberaciones: LiberacionConRango[]
+): { ok: boolean; error?: string; fuera: string[] } {
+  if (tipo !== "intervencion") return { ok: true, fuera: [] };
+  const fuera = liberacionesFueraDeRango(liberaciones).map((l) => {
+    // El número como se vuelve a escribir (textoDeNumero): 12.345 no sale «12.345».
+    const leido = l.valorMedido != null ? `${textoDeNumero(Number(l.valorMedido))}${l.unidad ? ` ${l.unidad}` : ""}` : String(l.valorMedidoTexto ?? "").trim();
+    const rango = rangoLiberacionTexto(l.minAceptable, l.maxAceptable, l.unidad);
+    return `${l.etiqueta}: leído ${leido}${rango ? `, normal ${rango}` : ""}`;
+  });
+  if (fuera.length === 0) return { ok: true, fuera: [] };
+  return {
+    ok: false,
+    fuera,
+    error: `No puedes enviar a verificación: ${fuera.length === 1 ? "una lectura de liberación quedó" : `${fuera.length} lecturas de liberación quedaron`} fuera de rango:\n· ${fuera.join("\n· ")}\nEl sistema no se libera así. Repite la medición o, si revertiste el trabajo, marca la reversa.`,
+  };
+}
+
 // Regla dura del MOP: no se cierra sin la lectura de liberación.
 // El único escape es el cierre sin lectura con motivo escrito (admin o jefe).
+// Con la reversa ejecutada no hay nada que liberar: quien llama lo revisa antes.
+// Una lectura con rango escrita sin número cuenta como no medida.
 export function validarLiberacionesParaCierre(
   tipo: string | null | undefined,
   liberaciones: LiberacionLike[]
@@ -508,12 +596,18 @@ export function validarLiberacionesParaCierre(
   if (tipo !== "intervencion") return { ok: true, faltantes: [] };
   const faltantes = liberaciones
     .filter((l) => l.obligatoria && !liberacionTieneLectura(l))
-    .map((l) => (l.unidad ? `${l.etiqueta} (${l.unidad})` : l.etiqueta));
+    .map((l) => {
+      const nombre = l.unidad ? `${l.etiqueta} (${l.unidad})` : l.etiqueta;
+      const texto = String(l.valorMedidoTexto ?? "").trim();
+      if (!texto) return nombre;
+      const leido = numeroAlInicio(texto);
+      return leido.tipo === "ambiguo" ? `${nombre}: «${texto}». ${leido.mensaje}` : `${nombre}: «${texto}» no trae número`;
+    });
   if (faltantes.length === 0) return { ok: true, faltantes: [] };
   return {
     ok: false,
     faltantes,
-    error: `No puedes cerrar esta intervención (MOP): falta${faltantes.length === 1 ? "" : "n"} ${faltantes.length} lectura${faltantes.length === 1 ? "" : "s"} de liberación obligatoria${faltantes.length === 1 ? "" : "s"}:\n· ${faltantes.join("\n· ")}\nRegistra el valor medido. Si de verdad no se pudo medir, la jefatura debe cerrar con motivo escrito (cierre sin lectura).`,
+    error: `Falta${faltantes.length === 1 ? "" : "n"} ${faltantes.length} lectura${faltantes.length === 1 ? "" : "s"} de liberación obligatoria${faltantes.length === 1 ? "" : "s"}:\n· ${faltantes.join("\n· ")}\nRegistra el valor medido. Si revertiste el trabajo, marca la reversa. Si de verdad no se pudo medir, la jefatura la envía a verificación sin lectura, con el motivo escrito.`,
   };
 }
 
@@ -601,6 +695,8 @@ export function causaRaizVencida(vencimiento: string | null | undefined, causaRa
 //   · toda orden de emergencia (EOP);
 //   · toda OT correctiva sobre un activo de criticidad alta (clase A): «toda OT
 //     correctiva sobre activo clase A genera un análisis breve de causa raíz».
+// La escribe la jefatura dentro de las 72 h, no el técnico: se exige al
+// verificar o cerrar, nunca al enviar a verificación.
 export function requiereCausaRaiz(
   tipo: string | null | undefined,
   criticidadActivo: string | null | undefined
@@ -627,7 +723,7 @@ export function validarCausaRaizParaCierre(
   if (txt.length >= MIN_CAUSA_RAIZ) return { ok: true };
   return {
     ok: false,
-    error: `No puedes cerrar sin análisis de causa raíz. ${r.motivo} Escribe al menos ${MIN_CAUSA_RAIZ} caracteres en el campo «Causa raíz» (plazo: ${HORAS_CAUSA_RAIZ} h desde la hora de alarma).`,
+    error: `Falta la causa raíz para verificar. ${r.motivo} La causa raíz la escribe la jefatura dentro de las ${HORAS_CAUSA_RAIZ} h (mínimo ${MIN_CAUSA_RAIZ} letras).`,
   };
 }
 

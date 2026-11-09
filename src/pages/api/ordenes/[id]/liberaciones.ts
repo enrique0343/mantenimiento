@@ -4,17 +4,21 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenLiberaciones, ordenes, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
-import { evaluarConformeLiberacion } from "@/lib/ordenes";
 import { logAudit } from "@/lib/audit";
+import { RechazoMop, registrarLiberacion } from "@/lib/mop";
 
 export const prerender = false;
 
 // Lecturas de liberación del MOP (cap. 02 y 05): «una sección de cierre con
 // las lecturas de liberación. La orden no cierra sin la lectura de
 // liberación.» Al escribir el valor medido se calcula "conforme" contra el
-// rango min/max tomado del SCP. La regla que impide cerrar vive en el PATCH de
+// rango min/max tomado del SCP; con rango, la lectura lleva número («aprox
+// 14 A» se rechaza con 400, y «1,200», que no se adivina, con la frase de
+// src/lib/numero.ts). La regla que impide cerrar vive en el PATCH de
 // /api/ordenes/[id]; el único escape es el cierre sin lectura con motivo
-// escrito, que solo puede usar admin o jefe.
+// escrito, que solo puede usar admin o jefe. Medir es parte de la ejecución:
+// solo el técnico asignado o la jefatura, con la misma regla que usa el
+// celular (registrarLiberacion en src/lib/mop.ts).
 
 async function cargar(ctx: Parameters<APIRoute>[0], ordenId: number) {
   const db = getDb(ctx);
@@ -116,69 +120,16 @@ export const PATCH: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
-  const [orden] = await db.select({ estado: ordenes.estado }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
+  const [orden] = await db.select({ id: ordenes.id, estado: ordenes.estado, asignadoA: ordenes.asignadoA }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
   if (!orden) return Response.json({ error: "La orden no existe" }, { status: 404 });
-  if (orden.estado === "cerrada" || orden.estado === "cancelada") {
-    return Response.json({ error: "La orden ya está cerrada: las lecturas de liberación quedan como evidencia y no se editan" }, { status: 400 });
+
+  try {
+    const row = await registrarLiberacion(ctx, db, orden, user, parsed.data);
+    return Response.json({ liberacion: row });
+  } catch (e) {
+    if (e instanceof RechazoMop) return Response.json({ error: e.message }, { status: e.status });
+    throw e;
   }
-
-  const [actual] = await db
-    .select()
-    .from(ordenLiberaciones)
-    .where(and(eq(ordenLiberaciones.id, parsed.data.itemId), eq(ordenLiberaciones.ordenId, ordenId)))
-    .limit(1);
-  if (!actual) return Response.json({ error: "Lectura no encontrada en esta orden" }, { status: 404 });
-
-  if (parsed.data.obligatoria !== undefined && user.rol !== "admin" && user.rol !== "jefe") {
-    return Response.json({ error: "Solo la jefatura puede cambiar si una lectura de liberación es obligatoria" }, { status: 403 });
-  }
-
-  const data: Record<string, unknown> = {};
-  if (parsed.data.obligatoria !== undefined) data.obligatoria = parsed.data.obligatoria;
-
-  const tocaValor = parsed.data.valorMedido !== undefined || parsed.data.valorMedidoTexto !== undefined;
-  if (tocaValor) {
-    const valor = parsed.data.valorMedido !== undefined ? parsed.data.valorMedido : actual.valorMedido;
-    const texto =
-      parsed.data.valorMedidoTexto !== undefined
-        ? parsed.data.valorMedidoTexto?.trim() || null
-        : actual.valorMedidoTexto;
-    data.valorMedido = valor ?? null;
-    data.valorMedidoTexto = texto;
-    // "conforme" se calcula del valor medido contra el rango; sin rango que
-    // comparar queda null y lo juzga quien libera.
-    data.conforme = evaluarConformeLiberacion(actual.minAceptable, actual.maxAceptable, valor ?? null);
-    const hayLectura = (valor != null && Number.isFinite(Number(valor))) || !!texto;
-    data.medidoPor = hayLectura ? user.id : null;
-    data.medidoEn = hayLectura ? new Date().toISOString() : null;
-  }
-
-  if (Object.keys(data).length === 0) return Response.json({ error: "Nada que actualizar" }, { status: 400 });
-
-  const [row] = await db
-    .update(ordenLiberaciones)
-    .set(data)
-    .where(eq(ordenLiberaciones.id, parsed.data.itemId))
-    .returning();
-
-  if (tocaValor) {
-    const leido = row.valorMedido != null ? `${row.valorMedido}${row.unidad ? ` ${row.unidad}` : ""}` : row.valorMedidoTexto ?? "—";
-    await logAudit(ctx, {
-      entidad: "orden",
-      entidadId: ordenId,
-      accion: "update",
-      resumen: `Liberación «${row.etiqueta}»: ${leido}${row.conforme === false ? " — FUERA DE RANGO" : row.conforme === true ? " — conforme" : ""}`,
-      cambios: {
-        [`liberacion:${row.etiqueta}`]: {
-          antes: actual.valorMedido ?? actual.valorMedidoTexto,
-          despues: row.valorMedido ?? row.valorMedidoTexto,
-        },
-        conforme: { antes: actual.conforme, despues: row.conforme },
-      },
-    });
-  }
-
-  return Response.json({ liberacion: row });
 };
 
 const deleteSchema = z.object({ itemId: z.number().int().positive() });

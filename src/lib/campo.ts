@@ -5,28 +5,34 @@
 // capturó: si se corta la señal, se guarda en el teléfono y llega cuando vuelva,
 // con su hora verdadera y sin aplicarse dos veces.
 //
-// Nada de esto relaja las reglas: cada operación sobre una orden pasa por
-// aplicarCambioOrden, el mismo camino de la ficha completa.
+// Nada de esto relaja las reglas: cada operación sobre una orden pasa por el
+// mismo camino de la ficha completa: aplicarCambioOrden para la orden y
+// src/lib/mop.ts para los prerrequisitos y las lecturas de liberación.
 import type { APIContext } from "astro";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   activos, aopAcciones, aopEventos, aopUmbrales, campoOperaciones, checklistPlantillaItems, checklistPlantillas,
-  eopFicha, ordenPasoMarcas, ordenVerificacion, ordenVerificacionEventos, ordenes, planesMantenimiento, procedimientos, rondaEjecuciones,
+  eopFicha, ordenLiberaciones, ordenPasoMarcas, ordenPrerrequisitos, ordenVerificacion, ordenVerificacionEventos, ordenes, planesMantenimiento, procedimientos, rondaEjecuciones,
   rondaLecturas, sucursales, tickets, ubicaciones, usuarios,
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
-import { MIN_CAUSA_RAIZ, minutosEstimadosChecklist, parseChecklist, requiereCausaRaiz, validarAreaTrabajo, vencimientoCausaRaiz } from "@/lib/ordenes";
+import { MENSAJE_PASO_SIN_NUMERO, minutosEstimadosChecklist, parseChecklist, pasoConRango, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
+import { accionesDelCelular, checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
+import { cambiarPrerrequisito, lecturaEscrita, liberacionParaCampo, mopDeOrdenes, prerrequisitoParaCampo, RechazoMop, registrarLiberacion } from "@/lib/mop";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { queSigue } from "@/lib/resolver";
 import {
-  abrirEjecucion, buscarEjecucion, cerrarEjecucion, ligarOrdenALectura, paradasDeEjecucion, parsearTurnos, puntosDeRonda, recorridoDe, registrarLectura,
-  rondaDeSede, turnoActual, etiquetaTurno, type RondaEjecucion,
+  abrirEjecucion, buscarEjecucion, cerrarEjecucion, existeTurno, inicioTurno, ligarOrdenALectura, omitidosEntre, paradasDeEjecucion, proximoTramo, puntosDeRonda, recorridoConLinea,
+  recorridoDe, registrarLectura, siguienteInicio, turnoEn, turnosEn, etiquetaTurno, type RondaEjecucion,
 } from "@/lib/ronda-turno";
-import { LINEAS_CON_ORDEN } from "@/lib/turnos";
+import { LINEAS_CON_ORDEN, laHora } from "@/lib/turnos";
 import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
+import { leerNumero, textoDeNumero } from "@/lib/numero";
+import { calcularVencimiento } from "@/lib/sla";
+import { pasoCambioEnLaFicha, PASO_DE_LA_FRASE, envioConPasosCambiados } from "@/lib/frases-campo";
 
 type Db = ReturnType<typeof getDb>;
 type Usuario = { id: number; rol: any; nombre: string; especialidad?: string | null };
@@ -77,16 +83,41 @@ type FilaOrden = {
 };
 type MapaUbicaciones = Map<number, { nombre: string; sucursalId: number }>;
 
-/** Lo que tiene riesgo propio se trabaja en la ficha completa: permisos, liberaciones y tiempos del EOP. */
-const tipoEnFicha = (tipo: string) => tipo === "intervencion" || tipo === "emergencia";
+/**
+ * Todo se trabaja en el celular, una cosa por pantalla: los pasos de un
+ * preventivo o correctivo, la emergencia (EOP) con sus tres toques y la
+ * intervención (MOP) con prerrequisitos, liberaciones y reversa. La ficha
+ * completa queda para la jefatura.
+ */
+export const modoDeOrden = (tipo: string): "pasos" | "emergencia" | "intervencion" =>
+  tipo === "emergencia" ? "emergencia" : tipo === "intervencion" ? "intervencion" : "pasos";
 
-function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<number, string>, extra: { devuelta?: string | null; motivoPausa?: string | null; ultimas?: Record<string, string> } = {}) {
-  const { o, a } = fila;
-  const ubId = a?.ubicacionId ?? o.ubicacionId ?? null;
+type ExtraOrden = {
+  devuelta?: string | null;
+  motivoPausa?: string | null;
+  ultimas?: Record<string, string>;
+  eop?: EopDeOrden;
+  prerrequisitos?: Array<typeof ordenPrerrequisitos.$inferSelect>;
+  liberaciones?: Array<typeof ordenLiberaciones.$inferSelect>;
+};
+
+/** La sede de la orden: la de la ubicación de su equipo, la de su ubicación o la suya. */
+function lugarDeFila(fila: FilaOrden, ubis: MapaUbicaciones) {
+  const ubId = fila.a?.ubicacionId ?? fila.o.ubicacionId ?? null;
   const ub = ubId ? ubis.get(ubId) : undefined;
-  const sedeId = ub?.sucursalId ?? o.sucursalId ?? null;
-  const pasos = parseChecklist(o.checklistEjecucion);
-  return {
+  return { ubId, ub, sedeId: ub?.sucursalId ?? fila.o.sucursalId ?? null };
+}
+
+function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<number, string>, extra: ExtraOrden = {}) {
+  const { o, a } = fila;
+  const { ubId, ub, sedeId } = lugarDeFila(fila, ubis);
+  const modo = modoDeOrden(o.tipo);
+  // Una emergencia sin pasos propios trabaja con las acciones de su EOP. Se
+  // guardan en la orden con el primer toque (orden.iniciar u orden.paso).
+  const pasos: ChecklistItem[] = modo === "emergencia" && checklistVacio(o.checklistEjecucion)
+    ? pasosDeAcciones(extra.eop?.acciones ?? [])
+    : parseChecklist(o.checklistEjecucion);
+  const base = {
     id: o.id,
     rubro: o.rubro,
     codigo: o.codigo ?? null,
@@ -103,10 +134,8 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
     planId: o.planId ?? null,
     descripcion: o.descripcion ?? null,
     trabajos: o.trabajosRealizados ?? null,
-    causaRaiz: o.causaRaiz ?? null,
-    pideCausaRaiz: requiereCausaRaiz(o.tipo, a?.criticidad).requiere,
-    minCausaRaiz: MIN_CAUSA_RAIZ,
-    modo: tipoEnFicha(o.tipo) ? "ficha" : "pasos",
+    // La causa raíz la escribe la jefatura dentro de las 72 h: el celular ni la pide ni la muestra.
+    modo,
     devuelta: extra.devuelta ?? null,
     motivoPausa: extra.motivoPausa ?? null,
     activo: a ? { id: a.id, codigo: a.codigo, nombre: a.nombre, marca: a.marca, modelo: a.modelo } : null,
@@ -134,6 +163,38 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
       ultima: extra.ultimas?.[p.texto] ?? null,
     })),
   };
+  // Las horas de la emergencia se registran pero no viajan: el celular solo sabe qué toques ya se dieron.
+  if (modo === "emergencia") {
+    const eop = extra.eop ?? SIN_EOP;
+    return {
+      ...base,
+      eop: { codigo: eop.codigo, titulo: eop.titulo, etiquetaMitigacion: eop.etiquetaMitigacion },
+      hitos: { llegada: !!o.horaLlegada, mitigacion: !!o.horaMitigacion, restablecimiento: !!o.horaRestablecimiento },
+    };
+  }
+  if (modo === "intervencion") {
+    return {
+      ...base,
+      prerrequisitos: (extra.prerrequisitos ?? []).map(prerrequisitoParaCampo),
+      liberaciones: (extra.liberaciones ?? []).map(liberacionParaCampo),
+      reversa: { plan: o.planReversa ?? null, ejecutada: !!o.reversaEjecutada },
+    };
+  }
+  return base;
+}
+
+/**
+ * Lo que una emergencia o una intervención trae además de sus pasos, para
+ * varias órdenes a la vez. Cada emergencia llega con su EOP y sus acciones,
+ * sean cuantas sean: el EOP se busca para todas juntas, en pocas consultas.
+ */
+async function extrasDeCampo(db: Db, filas: FilaOrden[], ubis: MapaUbicaciones, opciones: { conocidas?: Map<number, FichaEop> } = {}) {
+  const emergencias = filas.filter((f) => f.o.tipo === "emergencia");
+  const eops = emergencias.length
+    ? await eopsDeOrdenes(db, emergencias.map((f) => ({ id: f.o.id, procedimientoId: f.o.procedimientoId ?? null, activoId: f.o.activoId ?? null, sedeId: lugarDeFila(f, ubis).sedeId })), opciones)
+    : new Map<number, EopDeOrden>();
+  const mop = await mopDeOrdenes(db, filas.filter((f) => f.o.tipo === "intervencion").map((f) => f.o.id));
+  return (id: number): ExtraOrden => ({ eop: eops.get(id), prerrequisitos: mop.prerrequisitos.get(id) ?? [], liberaciones: mop.liberaciones.get(id) ?? [] });
 }
 
 /** Lo último que se leyó en cada línea del plan, para tener contra qué comparar. */
@@ -177,10 +238,20 @@ export async function documentosAop(db: Db, ids: number[]) {
   return out;
 }
 
+const HORA_MS = 3_600_000;
+
 async function rondaParaSede(db: Db, sedeId: number) {
-  const ronda = await rondaDeSede(db, sedeId);
-  if (!ronda) return null;
-  const t = turnoActual(parsearTurnos(ronda.turnos));
+  const ahora = Date.now();
+  const r = await recorridoConLinea(db, sedeId);
+  if (!r) return null;
+  const { ronda, linea } = r;
+  // El turno que corre según la línea de tiempo: un cambio de turnos entra con el primer turno de su lista.
+  const t = turnoEn(linea, ahora);
+  if (!r.haceRondaEn(inicioTurno(t.fecha, t.turno))) return null;
+  const proximo = proximoTramo(linea, ahora);
+  // La marca «no hace ronda» entra en el turno que todavía no empezó: desde ahí el celular sin señal no abre una ronda nueva.
+  const sig = siguienteInicio(linea, ahora + 1);
+  const sigMs = inicioTurno(sig.fecha, sig.turno);
   const ejec = await buscarEjecucion(db, { sucursalId: sedeId, fecha: t.fecha, turno: t.turno });
   const puntos = ejec ? await paradasDeEjecucion(db, ejec) : await puntosDeRonda(db, ronda.id);
   // Lo que dejó el turno anterior: la línea 1 del SOP empieza por aquí.
@@ -204,13 +275,19 @@ async function rondaParaSede(db: Db, sedeId: number) {
   const ultimas = new Map<number, number>();
   for (const f of previas) if (!ultimas.has(f.punto) && f.valor != null) ultimas.set(f.punto, f.valor);
   return {
-    rondaId: ronda.id,
+    // La ronda ya abierta sigue con el recorrido con que se abrió.
+    rondaId: ejec?.rondaId ?? ronda.id,
     sucursalId: sedeId,
     nombre: ronda.nombre,
     fecha: t.fecha,
     turno: t.turno,
     etiqueta: etiquetaTurno(t.turno),
-    turnos: parsearTurnos(ronda.turnos),
+    // Sin señal, el celular calcula el turno con «turnos» y, desde «turnosProximos.desde», con la lista nueva.
+    turnos: turnosEn(linea, ahora),
+    turnosProximos: proximo ? { desde: new Date(proximo.desde).toISOString(), turnos: proximo.turnos } : null,
+    // Los turnos que no se abren por un cambio de turnos: si el celular calcula uno, sigue el que corría antes.
+    omite: omitidosEntre(linea, ahora - 24 * HORA_MS, ahora + 72 * HORA_MS),
+    noHaceRondaDesde: r.haceRondaEn(sigMs) ? null : new Date(sigMs).toISOString(),
     entregaAnterior: anterior ?? null,
     minutos: ronda.minutosEstimados ?? null,
     estado: ejec ? ejec.estado : "sin_iniciar",
@@ -233,7 +310,8 @@ async function rondaParaSede(db: Db, sedeId: number) {
       pideOrden: LINEAS_CON_ORDEN.includes(p.lineaSop ?? 0),
       actuarMin: p.minutosActuar ?? null,
       escalarMin: p.minutosEscalar ?? null,
-      ultima: ultimas.has(p.id) ? String(ultimas.get(p.id)) : null,
+      // Como texto que se vuelve a leer igual: 12.345 viaja «12.3450», no «12.345».
+      ultima: ultimas.has(p.id) ? textoDeNumero(ultimas.get(p.id)!) : null,
     })),
     lecturas: Object.fromEntries(lecturas.map((l) => [l.puntoId, { resultado: l.resultado, valor: l.valor, nota: l.nota }])),
     docs,
@@ -311,14 +389,25 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     for (const p of parseChecklist(fila.checklist)) if (p.requiereValor && p.valorMedido) valores[p.texto] = p.valorMedido;
     ultimasPorPlan.set(fila.planId, valores);
   }
-  const armar = async (f: FilaOrden) => {
+  // Los EOP viajan con el paquete: una emergencia no espera a que vuelva la señal.
+  const eops = await db
+    .select({
+      id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema, tipo: procedimientos.tipo,
+      a1: eopFicha.accion1, a2: eopFicha.accion2, a3: eopFicha.accion3, etiqueta: eopFicha.etiquetaHoraMitigacion,
+    })
+    .from(procedimientos)
+    .innerJoin(eopFicha, eq(eopFicha.procedimientoId, procedimientos.id))
+    .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
+    .orderBy(asc(procedimientos.codigoCorto));
+  const fichas = eops.map(fichaEop);
+  // Prerrequisitos y liberaciones de las intervenciones, y el EOP de cada emergencia, sin una consulta por orden.
+  const extras = await extrasDeCampo(db, [...mias, ...libres], ubis, { conocidas: new Map(fichas.map((e) => [e.id, e])) });
+  const armar = (f: FilaOrden) => {
     const ultimas = (f.o.planId && ultimasPorPlan.get(f.o.planId)) || {};
-    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas });
+    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas, ...extras(f.o.id) });
   };
-  const ordenesVista = [];
-  for (const f of mias) ordenesVista.push(await armar(f));
-  const libresVista = [];
-  for (const f of libres) libresVista.push(await armar(f));
+  const ordenesVista = mias.map(armar);
+  const libresVista = libres.map(armar);
 
   const misTickets = await db
     .select({ id: tickets.id, asunto: tickets.asunto, estado: tickets.estado, prioridad: tickets.prioridad, solicitante: tickets.solicitanteNombre, sede: sucursales.nombre })
@@ -359,14 +448,6 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     .orderBy(desc(ordenes.completadaEn))
     .limit(30);
 
-  // Los EOP viajan con el paquete: una emergencia no espera a que vuelva la señal.
-  const eops = await db
-    .select({ id: procedimientos.id, codigo: procedimientos.codigoCorto, titulo: procedimientos.titulo, sistema: procedimientos.sistema, a1: eopFicha.accion1, a2: eopFicha.accion2, a3: eopFicha.accion3 })
-    .from(procedimientos)
-    .innerJoin(eopFicha, eq(eopFicha.procedimientoId, procedimientos.id))
-    .where(and(eq(procedimientos.tipo, "eop"), eq(procedimientos.activo, true)))
-    .orderBy(asc(procedimientos.codigoCorto));
-
   return {
     generadoEn: new Date().toISOString(),
     usuario: { id: user.id, nombre: user.nombre, rol: user.rol, sucursalId: yo?.sucursalId ?? null },
@@ -380,7 +461,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
     desviaciones,
     porVerificar,
     hechasHoy,
-    emergencias: eops.map((e) => ({ id: e.id, codigo: e.codigo, titulo: e.titulo, sistema: e.sistema, acciones: [e.a1, e.a2, e.a3].filter(Boolean) })),
+    emergencias: eops.map((e, i) => ({ id: e.id, codigo: e.codigo, titulo: e.titulo, sistema: e.sistema, acciones: fichas[i].acciones, etiquetaMitigacion: fichas[i].etiquetaMitigacion })),
   };
 }
 
@@ -506,8 +587,9 @@ const vencimientoDePlan = (p: typeof planesMantenimiento.$inferSelect) => {
   return v.toISOString();
 };
 
+/** Un rechazo por regla. `motivo` es el de la respuesta de la orden («otra-escritura», por ejemplo), si lo trae. */
 export class RechazoCampo extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public motivo?: string) { super(message); }
 }
 
 /** Mantenimiento fuera de la lista de trabajo: del plan del equipo o no programado. */
@@ -579,7 +661,9 @@ export async function ordenCampoPorId(db: Db, id: number, user: Usuario) {
   if (!f) return null;
   if (user.rol === "tecnico" && f.o.asignadoA && f.o.asignadoA !== user.id) return null;
   const ultimas = f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
-  return ordenParaCampo(f, new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }])), new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas });
+  const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
+  const extras = await extrasDeCampo(db, [f], ubis);
+  return ordenParaCampo(f, ubis, new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas, ...extras(f.o.id) });
 }
 
 // ── Las operaciones ─────────────────────────────────────────────────────────
@@ -603,7 +687,7 @@ async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: 
   if (res.status >= 500) throw new Error(typeof j.error === "string" ? j.error : "Error del servidor");
   if (!res.ok) {
     const msg = typeof j.error === "string" ? j.error : "No se pudo guardar.";
-    throw new RechazoCampo(msg, res.status);
+    throw new RechazoCampo(msg, res.status, typeof j.motivo === "string" ? j.motivo : undefined);
   }
   return j;
 }
@@ -616,12 +700,158 @@ async function ordenDeOp(db: Db, op: OperacionCampo) {
   return o;
 }
 
-/** Trabajos realizados, escritos a partir de lo que el técnico ya marcó. */
-export function textoDeTrabajos(checklist: string | null | undefined, titulo: string, nota?: string | null) {
+const esJefatura = (user: Usuario) => user.rol === "admin" || user.rol === "jefe";
+const EN_CURSO = ["abierta", "en_proceso", "en_espera"];
+const yaNoEnCurso = (estado: string) =>
+  estado === "cancelada" ? "La orden fue cancelada." : estado === "cerrada" ? "La orden ya está cerrada." : "La orden ya se envió a verificación.";
+
+/**
+ * Las reglas de la ficha, revisadas antes de tocar nada: solo el técnico
+ * asignado o la jefatura. Una orden libre y abierta la toma quien empieza a
+ * trabajarla; devuelve true cuando hay que tomarla.
+ */
+function exigirEjecutor(user: Usuario, o: typeof ordenes.$inferSelect, { tomarLibre = false } = {}): boolean {
+  if (esJefatura(user) || o.asignadoA === user.id) return false;
+  if (tomarLibre && user.rol === "tecnico" && !o.asignadoA && o.estado === "abierta") return true;
+  throw new RechazoCampo(o.asignadoA ? "Esta orden está asignada a otra persona." : "Empieza la orden antes de registrar en ella: así queda a tu nombre.", 403);
+}
+
+/**
+ * Las acciones del EOP que el celular mostró, si las manda. Solo cuentan en una
+ * emergencia que todavía no tiene pasos; en cualquier otra orden se ignoran.
+ */
+function accionesDeOp(o: typeof ordenes.$inferSelect, op: OperacionCampo): string[] | undefined {
+  if (o.tipo !== "emergencia" || !checklistVacio(o.checklistEjecucion) || !EN_CURSO.includes(o.estado)) return undefined;
+  const r = accionesDelCelular(op.acciones);
+  if (r.error) throw new RechazoCampo(r.error);
+  return r.acciones;
+}
+
+/** Los rechazos del MOP son rechazos del celular: se guardan y se le muestran al técnico. */
+async function enMop<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) { if (e instanceof RechazoMop) throw new RechazoCampo(e.message, e.status); throw e; }
+}
+
+/**
+ * Un número escrito a mano en un campo de solo número, con la regla de
+ * src/lib/numero.ts: coma o punto decimal; el separador de miles no se adivina.
+ * Uno que se puede leer de dos formas se rechaza con su frase; uno que ya llega
+ * como número se acepta tal cual.
+ */
+function numeroEscrito(raw: unknown) {
+  const r = leerNumero(raw);
+  if (r.tipo === "ambiguo") throw new RechazoCampo(r.mensaje);
+  return r;
+}
+
+/** Lo escrito en el valor de un paso tal como está guardado, recortado; null si no es un texto. */
+function textoGuardadoDePaso(checklist: string | null | undefined, idx: number): string | null {
+  try {
+    const it = JSON.parse(checklist ?? "[]")?.[idx];
+    return typeof it?.valorMedido === "string" ? it.valorMedido.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** El mínimo o el máximo de un paso como lo lee parseChecklist: vacío o ilegible es sin límite. */
+const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/**
+ * K17 · La base de una marca: el checklist guardado con el estado, la lectura y la nota del paso como el
+ * celular lo mostraba justo antes de marcarlo («antes»); las demás claves y los demás pasos, como están
+ * guardados. Con ella la marca se fusiona como la ficha y no pisa lo que la jefatura cambió mientras
+ * tanto. Sin «antes» (un registro de un celular con la versión anterior), null: como siempre.
+ */
+function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): string | null {
+  if (!conAntes(antes)) return null;
+  const { estado, valor, nota } = antes;
+  const lista = JSON.parse(checklist ?? "[]");
+  const paso: Record<string, unknown> = { ...lista[idx], estado };
+  for (const [clave, v] of [["valorMedido", valor], ["notas", nota]] as const) {
+    if (v === null || v === undefined || v === "") delete paso[clave];
+    else paso[clave] = v;
+  }
+  lista[idx] = paso;
+  return JSON.stringify(lista);
+}
+/** La marca trae el paso como lo mostraba el celular («antes»). */
+const conAntes = (antes: unknown): antes is Record<string, unknown> => typeof antes === "object" && antes !== null && !Array.isArray(antes);
+// Las frases de K17 y K19 salen de src/lib/frases-campo.ts: el celular las reconoce y las repite.
+export { pasoCambioEnLaFicha, envioConPasosCambiados };
+
+/** El estado de un paso como se compara: el viejo {hecho} cuenta como ok; sin uno válido, pendiente. */
+const estadoComparable = (p: any) => (["pendiente", "ok", "na", "desviacion"].includes(p?.estado) ? p.estado : p?.hecho === true ? "ok" : "pendiente");
+/** Una lectura como se compara: por su número si se lee como uno (leerNumero); si no, el texto recortado. Vacía es null. */
+const lecturaComparable = (v: unknown) => { const l = leerNumero(v); return JSON.stringify(l.tipo === "numero" ? l.valor : l.tipo === "vacio" ? null : String(v).trim()); };
+/**
+ * K17b · La ficha cambió el estado o la lectura del paso desde como lo mostraba el celular («antes») y la marca no
+ * deja lo mismo que dejó la ficha: otro estado u otra lectura (la que manda la marca o, si no manda ninguna, la de
+ * «antes»). Si la ficha solo cambió la nota, no: la marca se fusiona como siempre (K11).
+ */
+function marcaSobreCambioDeLaFicha(guardado: any, antes: Record<string, unknown>, estado: string, valor: unknown): boolean {
+  const cambio = estadoComparable(guardado) !== estadoComparable(antes) || lecturaComparable(guardado.valorMedido) !== lecturaComparable(antes.valor);
+  if (!cambio) return false;
+  const lectura = leerNumero(valor).tipo === "vacio" ? antes.valor : valor;
+  return estado !== estadoComparable(guardado) || lecturaComparable(lectura) !== lecturaComparable(guardado.valorMedido);
+}
+
+/** Un registro procesado después que otro: por recibido_en y, a la misma hora, el que se guardó después. */
+type Procesado = { recibidoEn: string; fila: number | null };
+const procesadoDespues = (a: Procesado, b: Procesado) => a.recibidoEn > b.recibidoEn || (a.recibidoEn === b.recibidoEn && a.fila != null && b.fila != null && a.fila > b.fila);
+/**
+ * K19 · Los pasos de la orden que este usuario marcó en el celular, que el servidor rechazó con la frase de K17 (el
+ * paso cambió en la ficha mientras tanto) y que no tienen una marca aceptada después del rechazo. Un paso que ya no
+ * existe en el checklist no cuenta. Sus índices, ordenados.
+ */
+async function pasosCambiadosSinMarcar(db: Db, user: Usuario, o: typeof ordenes.$inferSelect): Promise<number[]> {
+  const rechazos = await db
+    .select({ detalle: campoOperaciones.detalle, recibidoEn: campoOperaciones.recibidoEn, fila: sql<number>`rowid` })
+    .from(campoOperaciones)
+    .where(and(eq(campoOperaciones.usuarioId, user.id), eq(campoOperaciones.ordenId, o.id), eq(campoOperaciones.tipo, "orden.paso"), eq(campoOperaciones.resultado, "rechazada")));
+  const pasos = parseChecklist(o.checklistEjecucion).length;
+  const ultimo = new Map<number, Procesado>();
+  for (const r of rechazos) {
+    const n = PASO_DE_LA_FRASE.exec(r.detalle ?? "");
+    const idx = n ? Number(n[1]) - 1 : -1;
+    if (idx < 0 || idx >= pasos) continue;
+    const previo = ultimo.get(idx);
+    if (!previo || procesadoDespues(r, previo)) ultimo.set(idx, r);
+  }
+  if (!ultimo.size) return [];
+  const marcas = await db
+    .select({ idx: ordenPasoMarcas.pasoIdx, recibidoEn: ordenPasoMarcas.recibidoEn, fila: sql<number | null>`(SELECT c.rowid FROM campo_operaciones c WHERE c.op_id = orden_paso_marcas.op_id)` })
+    .from(ordenPasoMarcas)
+    .where(and(eq(ordenPasoMarcas.ordenId, o.id), inArray(ordenPasoMarcas.pasoIdx, [...ultimo.keys()])));
+  return [...ultimo].filter(([idx, r]) => !marcas.some((x) => x.idx === idx && procesadoDespues(x, r))).map(([idx]) => idx).sort((a, b) => a - b);
+}
+
+type LecturaLiberacion = { etiqueta: string; unidad: string | null; valorMedido: number | null; valorMedidoTexto: string | null };
+
+const sinPunto = (t: string) => t.trim().replace(/\.+\s*$/, "");
+
+/**
+ * Trabajos realizados, escritos a partir de lo que el técnico ya marcó. En una
+ * emergencia, una acción que no se pudo hacer se cuenta aparte, con su motivo.
+ */
+export function textoDeTrabajos(
+  checklist: string | null | undefined, titulo: string, nota?: string | null,
+  extra: { liberaciones?: LecturaLiberacion[]; reversa?: string | null; causaTecnico?: string | null; emergencia?: boolean } = {},
+) {
   const pasos = parseChecklist(checklist);
   const limpio = titulo.replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+\S+$/, "").trim() || "Mantenimiento";
   const partes: string[] = [];
-  if (pasos.length) {
+  if (pasos.length && extra.emergencia) {
+    // En el celular, una acción del EOP se hizo o no se pudo («No se pudo: …»).
+    const hechas = pasos.filter((p) => p.estado === "ok").length;
+    const na = pasos.filter((p) => p.estado === "na").length;
+    const noPudo = pasos.filter((p) => p.estado === "desviacion");
+    const motivo = (p: ChecklistItem) => sinPunto((p.notas ?? "").replace(/^\s*no se pudo\s*:?\s*/i, ""));
+    const cuales = noPudo.map((p) => `«${sinPunto(p.texto)}»${motivo(p) ? `: ${motivo(p)}` : ""}`).join("; ");
+    partes.push(`${limpio}: ${hechas} de ${pasos.length} acciones hechas${na ? `, ${na} no aplica` : ""}${noPudo.length ? `; ${noPudo.length} ${noPudo.length === 1 ? "no se pudo" : "no se pudieron"}: ${cuales}` : ""}.`);
+    const lect = pasos.filter((p) => p.valorMedido).map((p) => `${p.texto}: ${p.valorMedido}${p.unidad ? ` ${p.unidad}` : ""}`);
+    if (lect.length) partes.push(`Lecturas: ${lect.join("; ")}.`);
+  } else if (pasos.length) {
     const ok = pasos.filter((p) => p.estado === "ok").length;
     const na = pasos.filter((p) => p.estado === "na").length;
     const nov = pasos.filter((p) => p.estado === "desviacion");
@@ -630,7 +860,13 @@ export function textoDeTrabajos(checklist: string | null | undefined, titulo: st
     if (lect.length) partes.push(`Lecturas: ${lect.join("; ")}.`);
     for (const n of nov) if (n.notas) partes.push(`Novedad en «${n.texto}»: ${n.notas.replace(/\.+\s*$/, "")}.`);
   }
+  const liberadas = (extra.liberaciones ?? [])
+    .filter((l) => l.valorMedido != null || l.valorMedidoTexto?.trim())
+    .map((l) => `${l.etiqueta}: ${l.valorMedido != null ? `${textoDeNumero(l.valorMedido)}${l.unidad ? ` ${l.unidad}` : ""}` : l.valorMedidoTexto!.trim()}`);
+  if (liberadas.length) partes.push(`Lecturas de liberación: ${liberadas.join("; ")}.`);
+  if (extra.reversa?.trim()) partes.push(`Reversa ejecutada: ${extra.reversa.trim().replace(/\.+\s*$/, "")}.`);
   if (nota?.trim()) partes.push(nota.trim());
+  if (extra.causaTecnico?.trim()) partes.push(`Causa probable según el técnico: ${extra.causaTecnico.trim()}`);
   return partes.join(" ");
 }
 
@@ -646,11 +882,14 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
   }
   let ubicacionId = op.ubicacionId ? Number(op.ubicacionId) : null;
   let etiqueta = "";
+  const columnasSla = { slaUrgenteHoras: activos.slaUrgenteHoras, slaAltaHoras: activos.slaAltaHoras, slaMediaHoras: activos.slaMediaHoras, slaBajaHoras: activos.slaBajaHoras };
+  let sla: { slaUrgenteHoras: number; slaAltaHoras: number; slaMediaHoras: number; slaBajaHoras: number } | null = null;
   if (activoId) {
-    const [a] = await db.select({ codigo: activos.codigo, ubicacionId: activos.ubicacionId }).from(activos).where(eq(activos.id, activoId)).limit(1);
+    const [a] = await db.select({ codigo: activos.codigo, ubicacionId: activos.ubicacionId, ...columnasSla }).from(activos).where(eq(activos.id, activoId)).limit(1);
     if (!a) throw new RechazoCampo("Ese equipo ya no existe.", 404);
     ubicacionId = a.ubicacionId ?? ubicacionId;
     etiqueta = a.codigo;
+    sla = a;
   }
   const sucursalId = (await sucursalDeUbicacion(db, ubicacionId)) ?? (op.sucursalId ? Number(op.sucursalId) : null);
   const rubroPedido = typeof op.rubro === "string" ? op.rubro : eop ? SISTEMA_A_AREA[eop.sistema] ?? "infraestructura" : null;
@@ -658,12 +897,15 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
   if ("error" in area) throw new RechazoCampo(area.error);
   const base = eop?.titulo ?? (nota.slice(0, 120) || "Falla reportada desde el celular");
   const titulo = `${emergencia ? "[Emergencia]" : "[Correctivo]"} ${base}${etiqueta ? ` - ${etiqueta}` : ""}`.slice(0, 200);
+  const prioridad = emergencia ? "urgente" : "alta";
   const [orden] = await db.insert(ordenes).values({
     titulo,
     descripcion: nota || null,
     tipo: emergencia ? "emergencia" : "correctivo",
     rubro: area.rubro,
-    prioridad: emergencia ? "urgente" : "alta",
+    prioridad,
+    // Como en la ficha: el plazo sale del equipo y la prioridad, desde la hora en que se reportó.
+    vencimiento: calcularVencimiento(m.iso, sla, prioridad),
     estado: "abierta",
     activoId,
     ubicacionId,
@@ -687,22 +929,84 @@ const claveRonda = (op: OperacionCampo) => {
   return { sucursalId, fecha, turno };
 };
 
-/** La ronda del turno que trae la operación. Sin señal no hay id: se reconoce por sede, fecha y turno. */
+/**
+ * La ronda del turno que trae la operación. Sin señal no hay id: se reconoce
+ * por sede, fecha y turno. El turno se juzga con lo que regía cuando empezó:
+ * con la línea de tiempo de los turnos y con la marca de la sede de entonces,
+ * aunque la jefatura haya cambiado algo antes de que volviera la señal.
+ */
 async function ejecucionDeOp(db: Db, op: OperacionCampo, user: Usuario, m: Momento): Promise<RondaEjecucion> {
   const clave = claveRonda(op);
   const existente = await buscarEjecucion(db, clave);
   if (existente) return existente;
-  const ronda = await rondaDeSede(db, clave.sucursalId);
-  if (!ronda) throw new RechazoCampo("Esta sede no tiene ronda configurada.");
-  const [sede] = await db.select({ activa: sucursales.activa }).from(sucursales).where(eq(sucursales.id, clave.sucursalId)).limit(1);
-  if (!sede?.activa) throw new RechazoCampo("Esa sede no está activa.");
-  const inicio = Date.parse(`${clave.fecha}T${clave.turno}:00-06:00`);
+  const r = await recorridoConLinea(db, clave.sucursalId);
+  if (!r) throw new RechazoCampo("Esta sede no tiene ronda configurada.");
+  if (!r.activa) throw new RechazoCampo("Esa sede no está activa.");
+  const inicio = inicioTurno(clave.fecha, clave.turno);
   const hecho = Date.parse(m.iso);
-  if (!parsearTurnos(ronda.turnos).includes(clave.turno) || !Number.isFinite(inicio) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
+  if (!Number.isFinite(inicio) || inicio > hecho + 30 * 60_000 || hecho - inicio > 24 * 3_600_000) {
     throw new RechazoCampo("La fecha o el turno de esta ronda no cuadran con la hora en que se capturó.");
   }
-  const { ejecucion } = await abrirEjecucion(db, { rondaId: ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
+  if (!existeTurno(r.linea, clave.fecha, clave.turno)) {
+    throw new RechazoCampo("Ese turno ya no existe: la jefatura cambió los turnos. Lo anotado no entró en la ronda; avisa a tu jefatura.");
+  }
+  if (!r.haceRondaEn(inicio)) throw new RechazoCampo("En ese turno esta sede no hacía ronda.");
+  // Sin señal, la ronda se empezó con el recorrido que traía el celular: el modelo o el propio de la sede.
+  // Si la sede sacó su recorrido propio mientras tanto, la ronda se abre con aquel y lo anotado cuadra.
+  const pedido = Number(op.rondaId);
+  const conQueSeAnoto = r.recorridos.find((x) => x.id === pedido && (x.sucursalId == null || x.sucursalId === clave.sucursalId));
+  const { ejecucion } = await abrirEjecucion(db, { rondaId: conQueSeAnoto?.id ?? r.ronda.id, ...clave, usuarioId: user.id, momento: m.iso });
   return ejecucion;
+}
+
+/**
+ * La marca de un paso sobre la orden como está guardada. Si el paso cambió en la ficha mientras tanto (K17, K17b),
+ * se rechaza con su frase y no se escribe nada, tampoco en el libro de marcas.
+ */
+async function aplicarMarcaDePaso(ctx: APIContext, db: Db, user: Usuario, orden: typeof ordenes.$inferSelect, op: OperacionCampo, idx: number, estado: string, m: Momento) {
+  let o = orden;
+  exigirEjecutor(user, o);
+  // Un número que se puede leer de dos formas («1,200») se rechaza con su frase. El mismo texto que ya
+  // estaba guardado en el paso, comparado recortado, no es un cambio: no se rechaza y queda como estaba.
+  const escrito = leerNumero(op.valor);
+  const mismoTexto = typeof op.valor === "string" && op.valor.trim() === textoGuardadoDePaso(o.checklistEjecucion, idx);
+  if (escrito.tipo === "ambiguo" && !mismoTexto) throw new RechazoCampo(escrito.mensaje);
+  const leido = escrito.tipo === "ambiguo" ? ({ tipo: "texto" } as const) : escrito;
+  o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
+  let lista: any[];
+  try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
+  if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
+  const it = lista[idx];
+  if (typeof it !== "object" || it === null) throw new RechazoCampo("Ese paso tiene un formato antiguo. Ábrelo en la ficha completa.");
+  if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
+  // Un paso con rango se juzga por su número: lo escrito en él es el número que marcó el instrumento.
+  // Un texto que no es número se rechaza sin guardar nada; el mismo texto que ya estaba guardado no es un cambio.
+  const guardado = typeof it.valorMedido === "string" ? it.valorMedido.trim() : null;
+  if (leido.tipo === "texto" && String(op.valor).trim() !== guardado && pasoConRango({ esperadoMin: limiteDePaso(it.esperadoMin), esperadoMax: limiteDePaso(it.esperadoMax) })) {
+    throw new RechazoCampo(MENSAJE_PASO_SIN_NUMERO);
+  }
+  const base = baseDeLaMarca(o.checklistEjecucion, idx, op.antes);
+  const cambioEnLaFicha = pasoCambioEnLaFicha(o.tipo === "emergencia", idx);
+  // K17b · Volver a guardar lo que mostraba el celular sobre un estado o una lectura que la ficha cambió no se aplica.
+  if (conAntes(op.antes) && marcaSobreCambioDeLaFicha(it, op.antes, estado, op.valor)) throw new RechazoCampo(cambioEnLaFicha, 409);
+  it.estado = estado;
+  delete it.hecho;
+  // El número se guarda como número: «14,5» queda 14.5 y 12.345 no vuelve a leerse como «12.345», que sería ambiguo.
+  // Lo que no es un número queda escrito tal cual, como antes. En el libro, el número va con textoDeNumero.
+  const valor = leido.tipo === "numero" ? textoDeNumero(leido.valor) : leido.tipo === "texto" ? String(op.valor).trim() : null;
+  if (leido.tipo === "numero") it.valorMedido = leido.valor;
+  else if (valor !== null) it.valorMedido = valor;
+  if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
+  if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
+  // Si alguien cambió ese paso en la ficha mientras tanto (K11), queda como está guardado y la marca se
+  // rechaza: no se escribe nada, tampoco en el libro de marcas.
+  const r = await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista), ...(base !== null ? { checklistBase: base } : {}) }, m.iso);
+  if (base !== null && Array.isArray(r?.pasosSinAplicar) && r.pasosSinAplicar.includes(idx)) throw new RechazoCampo(cambioEnLaFicha, 409);
+  await db.insert(ordenPasoMarcas).values({
+    ordenId: o.id, pasoIdx: idx, pasoTexto: String(it.texto ?? "").slice(0, 500), estado, valor,
+    nota: typeof op.nota === "string" ? op.nota.trim() || null : null,
+    ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
+  });
 }
 
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
@@ -710,7 +1014,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
     case "orden.iniciar": {
       const o = await ordenDeOp(db, op);
       const m = momentoCapturado(op.at);
-      if (o.estado !== "en_proceso") await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
+      if (o.estado !== "en_proceso") {
+        exigirEjecutor(user, o, { tomarLibre: true });
+        // Una emergencia sin pasos guarda primero las acciones de su EOP: las que ya vio el técnico.
+        await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
+        await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
+      }
       return { ordenId: o.id, m };
     }
     case "orden.pausar": {
@@ -728,29 +1037,25 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "orden.paso": {
-      const o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const idx = Number(op.idx);
       const estado = String(op.estado ?? "");
       if (!["ok", "na", "desviacion", "pendiente"].includes(estado)) throw new RechazoCampo("Estado de paso inválido.");
-      let lista: any[];
-      try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
-      if (!Array.isArray(lista) || !Number.isInteger(idx) || !lista[idx]) throw new RechazoCampo("Ese paso ya no existe en la orden.");
-      const it = lista[idx];
-      if (typeof it !== "object" || it === null) throw new RechazoCampo("Ese paso tiene un formato antiguo. Ábrelo en la ficha completa.");
-      if (typeof op.texto === "string" && op.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
-      it.estado = estado;
-      delete it.hecho;
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : String(op.valor).replace(",", ".");
-      if (valor !== null) it.valorMedido = valor;
-      if (typeof op.nota === "string") it.notas = op.nota.trim() || undefined;
-      if (estado !== "pendiente") { it.hora = horaSV(m.iso); it.iniciales = iniciales(user.nombre); }
-      await cambiarOrden(ctx, user, o.id, { checklistEjecucion: JSON.stringify(lista) }, m.iso);
-      await db.insert(ordenPasoMarcas).values({
-        ordenId: o.id, pasoIdx: idx, pasoTexto: String(it.texto ?? "").slice(0, 500), estado, valor,
-        nota: typeof op.nota === "string" ? op.nota.trim() || null : null,
-        ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
-      });
+      try {
+        await aplicarMarcaDePaso(ctx, db, user, o, op, idx, estado, m);
+      } catch (e) {
+        // K17c · Con «antes», otra escritura del checklist entre la lectura y el guardado: se lee la orden otra vez y
+        // se arma de nuevo la marca con su base, una sola vez. Si vuelve a pasar, el paso cambió mientras tanto.
+        if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conAntes(op.antes)) throw e;
+        o = await ordenDeOp(db, op);
+        try {
+          await aplicarMarcaDePaso(ctx, db, user, o, op, idx, estado, m);
+        } catch (e2) {
+          if (e2 instanceof RechazoCampo && e2.motivo === "otra-escritura") throw new RechazoCampo(pasoCambioEnLaFicha(o.tipo === "emergencia", idx), 409);
+          throw e2;
+        }
+      }
       return { ordenId: o.id, m };
     }
     case "orden.terminar": {
@@ -758,11 +1063,91 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       const [ultima] = await db.select({ en: ordenPasoMarcas.ocurridoEn }).from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, o.id)).orderBy(desc(ordenPasoMarcas.ocurridoEn)).limit(1);
       const m = momentoCapturado(op.at, ultima?.en ?? o.iniciadaEn);
       if (!["completada", "verificada", "cerrada"].includes(o.estado)) {
+        // K19 · Un paso cuya marca se rechazó porque cambió en la ficha no se envía como lo dejó la ficha: primero el
+        // técnico lo revisa y lo marca otra vez. No se escribe nada.
+        const porRevisar = await pasosCambiadosSinMarcar(db, user, o);
+        if (porRevisar.length) throw new RechazoCampo(envioConPasosCambiados(o.tipo === "emergencia", porRevisar), 409);
         const nota = typeof op.nota === "string" ? op.nota : null;
-        const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota) || o.trabajosRealizados || "";
+        // La causa raíz la escribe la jefatura. Si un celular viejo la manda, lo que el técnico vio queda en los trabajos.
         const causa = typeof op.causaRaiz === "string" ? op.causaRaiz.trim() : "";
-        await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa ? { causaRaiz: causa } : {}) }, m.iso);
+        const liberaciones = o.tipo === "intervencion"
+          ? await db.select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
+              .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, o.id)).orderBy(asc(ordenLiberaciones.orden), asc(ordenLiberaciones.id))
+          : [];
+        const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota, {
+          liberaciones, reversa: o.reversaEjecutada ? o.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa, emergencia: o.tipo === "emergencia",
+        }) || o.trabajosRealizados || "";
+        await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}) }, m.iso);
       }
+      return { ordenId: o.id, m };
+    }
+    case "emergencia.hito": {
+      const o = await ordenDeOp(db, op);
+      if (o.tipo !== "emergencia") throw new RechazoCampo("Esta orden no es una emergencia.");
+      if (!esHitoEop(op.hito)) throw new RechazoCampo("Ese registro de la emergencia no existe.");
+      const campo = HITOS_EOP[op.hito];
+      const m = momentoCapturado(op.at, minimoDeHito(o, op.hito));
+      const tomar = exigirEjecutor(user, o, { tomarLibre: true });
+      // El primer toque manda: una hora ya registrada no se mueve. La jefatura la corrige en la ficha.
+      if (o[campo]) return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+      if (!EN_CURSO.includes(o.estado)) throw new RechazoCampo(`${yaNoEnCurso(o.estado)} Esa hora la registra la jefatura en la ficha.`, 409);
+      // «Llegué» no inicia la orden: el celular manda también orden.iniciar.
+      await cambiarOrden(ctx, user, o.id, { [campo]: m.iso, ...(tomar ? { asignadoA: user.id } : {}) }, m.iso);
+      return { ordenId: o.id, m };
+    }
+    case "mop.prerrequisito": {
+      let o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at);
+      const itemId = Number(op.prerrequisitoId);
+      if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Prerrequisito inválido.");
+      const referencia = typeof op.referencia === "string" ? op.referencia.trim() : "";
+      if (referencia.length < 2) throw new RechazoCampo("Escribe la referencia antes de marcarlo cumplido (n.º de permiso, clase de la ICRA, id del candado, hora del aviso…).");
+      if (exigirEjecutor(user, o, { tomarLibre: true })) {
+        // Una intervención libre la toma quien empieza por sus prerrequisitos.
+        const [existe] = await db.select({ id: ordenPrerrequisitos.id }).from(ordenPrerrequisitos).where(and(eq(ordenPrerrequisitos.id, itemId), eq(ordenPrerrequisitos.ordenId, o.id))).limit(1);
+        if (!existe) throw new RechazoCampo("Prerrequisito no encontrado en esta orden.", 404);
+        await cambiarOrden(ctx, user, o.id, { asignadoA: user.id }, m.iso);
+        o = { ...o, asignadoA: user.id };
+      }
+      await enMop(() => cambiarPrerrequisito(ctx, db, o, user, { itemId, cumplido: true, referencia }, m.iso));
+      return { ordenId: o.id, m };
+    }
+    case "mop.liberacion": {
+      const o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at, o.iniciadaEn);
+      const itemId = Number(op.liberacionId);
+      if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Lectura inválida.");
+      const lectura = lecturaEscrita(op.valor);
+      if (lectura.valorMedido === null && lectura.valorMedidoTexto === null) throw new RechazoCampo("Escribe la lectura que mediste.");
+      const row = await enMop(() => registrarLiberacion(ctx, db, o, user, { itemId, ...lectura }, m.iso));
+      return { ordenId: o.id, m, datos: { conforme: row.conforme ?? null } };
+    }
+    case "mop.reversa": {
+      const o = await ordenDeOp(db, op);
+      const m = momentoCapturado(op.at, o.iniciadaEn);
+      const notas = typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) : "";
+      if (notas.length < 10) throw new RechazoCampo("Describe qué se revirtió y cómo quedó el sistema (mínimo 10 letras).");
+      exigirEjecutor(user, o);
+      if (o.reversaEjecutada) {
+        // Ya está marcada, por la jefatura en la ficha o por un envío anterior: la marca no se toca.
+        // Lo que el técnico escribió se agrega debajo de lo que había, si no estaba ya.
+        const antes = (o.reversaNotas ?? "").trim();
+        if (antes.includes(notas)) return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+        if (!["en_proceso", "en_espera"].includes(o.estado)) {
+          // Ya enviada o cerrada, la evidencia no se cambia; las notas le llegan a la jefatura y quedan en el registro.
+          await avisarJefatura(ctx, db, `Notas de la reversa de ${etiquetaOT(o)} que llegaron después del envío`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
+          return { ordenId: o.id, m, datos: { yaRegistrada: true, notasTardias: notas } };
+        }
+        await cambiarOrden(ctx, user, o.id, { reversaNotas: `${antes ? `${antes}\n\n` : ""}Técnico (celular): ${notas}` }, m.iso);
+        await avisarJefatura(ctx, db, `Notas del técnico en la reversa de ${etiquetaOT(o)}`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
+        return { ordenId: o.id, m, datos: { yaRegistrada: true } };
+      }
+      if (!["en_proceso", "en_espera"].includes(o.estado)) {
+        throw new RechazoCampo(o.estado === "abierta" ? "La reversa se marca después de empezar la intervención." : `${yaNoEnCurso(o.estado)} La reversa la registra la jefatura en la ficha.`, 409);
+      }
+      await cambiarOrden(ctx, user, o.id, { reversaEjecutada: true, reversaNotas: notas }, m.iso);
+      // «Cualquier reversa se informa a la jefatura antes de cerrar».
+      await avisarJefatura(ctx, db, `Reversa ejecutada en ${etiquetaOT(o)}`, `${user.nombre}: ${notas.slice(0, 160)}`, `/ordenes/${o.id}`);
       return { ordenId: o.id, m };
     }
     case "emergencia.abrir":
@@ -782,12 +1167,12 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
         if (!a) throw new RechazoCampo("Ese equipo ya no existe.", 404);
         ubicacionId = a.ubicacionId ?? ubicacionId;
       }
+      const leido = numeroEscrito(op.valor);
       const [umbral] = await db.select({ id: aopUmbrales.id }).from(aopUmbrales).where(eq(aopUmbrales.procedimientoId, procedimientoId)).limit(1);
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : Number(String(op.valor).replace(",", "."));
       const r = await abrirEvento(db, {
         procedimientoId, umbralId: umbral?.id ?? null, activoId, ubicacionId,
         sucursalId: op.sucursalId ? Number(op.sucursalId) : null,
-        valorDetectado: valor !== null && Number.isFinite(valor) ? valor : null,
+        valorDetectado: leido.tipo === "numero" ? leido.valor : null,
         unidad: typeof op.unidad === "string" ? op.unidad : null,
         detectadoEn: m.iso, detectadoPor: user.id, origen: "manual",
       });
@@ -802,20 +1187,20 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
     }
     case "ronda.lectura": {
       const m = momentoCapturado(op.at);
+      const leido = numeroEscrito(op.valor);
       const ejecucion = await ejecucionDeOp(db, op, user, m);
       const puntoId = Number(op.puntoId);
       const punto = recorridoDe(ejecucion)?.find((p) => p.id === puntoId) ?? (await paradasDeEjecucion(db, ejecucion)).find((p) => p.id === puntoId);
       if (!punto) throw new RechazoCampo("Esa parada ya no está en el recorrido.");
       const resultado = String(op.resultado ?? "");
       if (!["ok", "fuera", "no_verificado"].includes(resultado)) throw new RechazoCampo("Resultado inválido.");
-      const valor = op.valor === null || op.valor === undefined || op.valor === "" ? null : Number(op.valor);
-      const valido = valor !== null && Number.isFinite(valor) ? valor : null;
+      const valido = leido.tipo === "numero" ? leido.valor : null;
       const nota = typeof op.nota === "string" ? op.nota.trim() || null : null;
       if (resultado === "no_verificado" && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe por qué no se pudo verificar.");
       if (resultado === "ok" && punto.requiereValor && valido === null) throw new RechazoCampo("Falta la lectura de esta parada.");
       if (resultado === "fuera" && valido === null && (nota?.length ?? 0) < 3) throw new RechazoCampo("Escribe qué viste.");
       const r = await registrarLectura(db, ejecucion, punto, { resultado: resultado as any, valor: valido, nota, usuarioId: user.id, momento: m, opId: op.opId });
-      if (r.eventoId && r.eventoNuevo) await avisarJefatura(ctx, db, `Desviación en ronda: ${punto.etiqueta}`, `${user.nombre}${valido !== null ? ` · leído ${valido}${punto.unidad ? ` ${punto.unidad}` : ""}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/aop/${r.eventoId}`);
+      if (r.eventoId && r.eventoNuevo) await avisarJefatura(ctx, db, `Desviación en ronda: ${punto.etiqueta}`, `${user.nombre}${valido !== null ? ` · leído ${textoDeNumero(valido)}${punto.unidad ? ` ${punto.unidad}` : ""}` : ""}${nota ? ` · ${nota.slice(0, 120)}` : ""}`, `/aop/${r.eventoId}`);
       else if (resultado === "no_verificado" && punto.critico) await avisarJefatura(ctx, db, `Parada crítica sin verificar: ${punto.etiqueta}`, `${user.nombre} · ${nota}`, `/ronda/${ejecucion.id}`);
       return { datos: { ejecucionId: ejecucion.id, eventoId: r.eventoId, ...(r.tardia ? { tardia: true } : {}) }, m };
     }
@@ -833,7 +1218,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       if (op.firma !== true) throw new RechazoCampo("La ronda no se cierra sin firma.");
       const r = await cerrarEjecucion(db, ejecucion, user, typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) || null : null, m);
       if (!r.ok) throw new RechazoCampo(r.error ?? "No se pudo cerrar la ronda.");
-      if (r.fuera || r.sinVerificar) await avisarJefatura(ctx, db, `Ronda de las ${clave.turno} cerrada con novedades`, `${user.nombre} · ${r.fuera ?? 0} fuera de rango · ${r.sinVerificar ?? 0} sin verificar`, `/ronda/${ejecucion.id}`);
+      if (r.fuera || r.sinVerificar) await avisarJefatura(ctx, db, `Ronda de ${laHora(clave.turno)} cerrada con novedades`, `${user.nombre} · ${r.fuera ?? 0} fuera de rango · ${r.sinVerificar ?? 0} sin verificar`, `/ronda/${ejecucion.id}`);
       return { datos: { ejecucionId: ejecucion.id }, m };
     }
     default:
