@@ -6,7 +6,6 @@ import { ordenPrerrequisitos, ordenes, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { PRERREQ_TIPOS } from "@/lib/ordenes";
 import { logAudit } from "@/lib/audit";
-import { cambiarPrerrequisito, RechazoMop } from "@/lib/mop";
 
 export const prerender = false;
 
@@ -14,9 +13,7 @@ export const prerender = false;
 // permiso de trabajo, ICRA, notificación a servicios, bloqueo y etiquetado,
 // espacio confinado, ventana pactada, instrumento calibrado. Cada uno se marca
 // cumplido CON su referencia verificable. La regla que impide iniciar la OT
-// vive en el PATCH de /api/ordenes/[id]. Marcar uno es parte de la ejecución:
-// solo el técnico asignado o la jefatura, con la misma regla que usa el
-// celular (cambiarPrerrequisito en src/lib/mop.ts).
+// vive en el PATCH de /api/ordenes/[id].
 
 async function cargar(ctx: Parameters<APIRoute>[0], ordenId: number) {
   const db = getDb(ctx);
@@ -112,16 +109,74 @@ export const PATCH: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
-  const [orden] = await db.select({ id: ordenes.id, estado: ordenes.estado, asignadoA: ordenes.asignadoA }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
+  const [orden] = await db.select({ id: ordenes.id, estado: ordenes.estado }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
   if (!orden) return Response.json({ error: "La orden no existe" }, { status: 404 });
-
-  try {
-    const row = await cambiarPrerrequisito(ctx, db, orden, user, parsed.data);
-    return Response.json({ prerrequisito: row });
-  } catch (e) {
-    if (e instanceof RechazoMop) return Response.json({ error: e.message }, { status: e.status });
-    throw e;
+  if (orden.estado === "cerrada" || orden.estado === "cancelada") {
+    return Response.json({ error: "La orden ya está cerrada: los prerrequisitos quedan como evidencia y no se editan" }, { status: 400 });
   }
+
+  const [actual] = await db
+    .select()
+    .from(ordenPrerrequisitos)
+    .where(and(eq(ordenPrerrequisitos.id, parsed.data.itemId), eq(ordenPrerrequisitos.ordenId, ordenId)))
+    .limit(1);
+  if (!actual) return Response.json({ error: "Prerrequisito no encontrado en esta orden" }, { status: 404 });
+
+  // Solo admin o jefe cambian si un prerrequisito es obligatorio.
+  if (parsed.data.obligatorio !== undefined && user.rol !== "admin" && user.rol !== "jefe") {
+    return Response.json({ error: "Solo la jefatura puede cambiar si un prerrequisito es obligatorio" }, { status: 403 });
+  }
+
+  const data: Record<string, unknown> = {};
+  if (parsed.data.referencia !== undefined) data.referencia = parsed.data.referencia?.trim() || null;
+  if (parsed.data.obligatorio !== undefined) data.obligatorio = parsed.data.obligatorio;
+
+  if (parsed.data.cumplido !== undefined) {
+    data.cumplido = parsed.data.cumplido;
+    if (parsed.data.cumplido) {
+      // La referencia es lo que vuelve verificable el prerrequisito: el n.º de
+      // permiso, la clase de la ICRA, el id del candado. Sin ella no hay
+      // evidencia, así que no dejamos marcarlo cumplido "a secas".
+      const ref = (parsed.data.referencia ?? actual.referencia ?? "").trim();
+      if (ref.length < 2) {
+        return Response.json(
+          { error: "Escribe la referencia antes de marcarlo cumplido (n.º de permiso, clase de la ICRA, id del candado, hora del aviso…)." },
+          { status: 400 }
+        );
+      }
+      data.referencia = ref;
+      data.cumplidoPor = user.id;
+      data.cumplidoEn = new Date().toISOString();
+    } else {
+      data.cumplidoPor = null;
+      data.cumplidoEn = null;
+    }
+  }
+
+  if (Object.keys(data).length === 0) return Response.json({ error: "Nada que actualizar" }, { status: 400 });
+
+  const [row] = await db
+    .update(ordenPrerrequisitos)
+    .set(data)
+    .where(eq(ordenPrerrequisitos.id, parsed.data.itemId))
+    .returning();
+
+  if (parsed.data.cumplido !== undefined && parsed.data.cumplido !== actual.cumplido) {
+    await logAudit(ctx, {
+      entidad: "orden",
+      entidadId: ordenId,
+      accion: "update",
+      resumen: parsed.data.cumplido
+        ? `Prerrequisito cumplido: ${actual.texto} (ref. ${row.referencia ?? "—"})`
+        : `Prerrequisito revertido a pendiente: ${actual.texto}`,
+      cambios: {
+        cumplido: { antes: actual.cumplido, despues: parsed.data.cumplido },
+        referencia: { antes: actual.referencia, despues: row.referencia },
+      },
+    });
+  }
+
+  return Response.json({ prerrequisito: row });
 };
 
 const deleteSchema = z.object({ itemId: z.number().int().positive() });

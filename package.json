@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs && node scripts/test-numero.mjs && node scripts/test-campo.mjs && node scripts/test-codigo-ot.mjs && node scripts/test-ronda.mjs && node scripts/e2e-campo-sin-senal.mjs && node scripts/e2e-campo-emergencia.mjs && npm run test:sgo && node scripts/test-orden-verificacion.mjs && npm run test:inline-script-vars",
+    "test": "node tests/run-activos-areas.mjs && node scripts/test-work-areas.mjs && node scripts/test-planning-areas.mjs && node scripts/test-search-measurements.mjs && node scripts/test-cron-areas.mjs && node scripts/test-conjuntos.mjs && node scripts/test-registro-flexible.mjs && node scripts/test-catalogo-aires.mjs && node scripts/test-campo.mjs && node scripts/test-codigo-ot.mjs && node scripts/test-ronda.mjs && node scripts/e2e-campo-sin-senal.mjs && npm run test:sgo && node scripts/test-orden-verificacion.mjs && npm run test:inline-script-vars",
     "preview": "wrangler pages dev ./dist --d1=DB --r2=R2 --compatibility-date=2025-01-01",
     "deploy": "npm run build && wrangler pages deploy ./dist --project-name=mantenimiento --branch=main --commit-dirty=true --commit-message=deploy",
     "db:generate": "drizzle-kit generate",
@@ -17,7 +17,7 @@
     "typecheck": "astro check",
     "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs",
     "test:inline-script-vars": "node scripts/test-inline-script-vars.mjs",
-    "test:panorama:ssr": "node scripts/test-panorama-render.mjs && node scripts/test-ronda-paginas.mjs && node scripts/test-ficha-orden.mjs"
+    "test:panorama:ssr": "node scripts/test-panorama-render.mjs && node scripts/test-ronda-paginas.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.2.1",

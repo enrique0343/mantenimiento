@@ -26,8 +26,6 @@ export const sucursales = sqliteTable("sucursales", {
   telefono: text("telefono"),
   activa: integer("activa", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  // Fase 58: si la sede hace la ronda de turno. Se marca sin copiar el modelo.
-  haceRonda: integer("hace_ronda", { mode: "boolean" }).notNull().default(true),
 });
 
 // ─── Ubicaciones (árbol: sucursal > edificio > piso > área) ──────────────────
@@ -1694,19 +1692,6 @@ export const rondaRevisiones = sqliteTable("ronda_revisiones", {
   revisadaPor: integer("revisada_por").notNull().references(() => usuarios.id),
   revisadaNombre: text("revisada_nombre").notNull(),
   revisadaEn: text("revisada_en").notNull(),
-});
-
-// Lo que regía antes de cada cambio de turnos o de «esta sede no hace ronda» (Fase 58).
-// Un cambio entra en la ronda del turno que todavía no empezó: cada turno se juzga con
-// lo que regía cuando empezó. Una fila por cambio; no se edita ni se borra.
-export const rondaVigencias = sqliteTable("ronda_vigencias", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  rondaId: integer("ronda_id").references(() => rondas.id),
-  sucursalId: integer("sucursal_id").references(() => sucursales.id),
-  turnosAntes: text("turnos_antes"),
-  haceRondaAntes: integer("hace_ronda_antes", { mode: "boolean" }),
-  hasta: text("hasta").notNull(),
-  usuarioId: integer("usuario_id").references(() => usuarios.id),
 });
 
 // ─── Modo técnico (Fase 54) ──────────────────────────────────────────────────

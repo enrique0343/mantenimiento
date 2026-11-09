@@ -11,7 +11,6 @@
 import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { getDb } from "./db";
 import { limitesPeriodo } from "./metricas";
-import { textoDeNumero } from "./numero";
 import {
   aopEventoAcciones,
   aopEventos,
@@ -236,17 +235,12 @@ export const BANDA: Record<Banda, { label: string; badge: string }> = {
   critico: { label: "Umbral crítico", badge: "bg-red-100 text-red-700" },
 };
 
-/**
- * "fuera de 35–60 %" para mostrar el rango que se violó. Cada límite como se
- * vuelve a escribir (textoDeNumero): 12.345 no sale «12.345», que se leería de
- * dos formas.
- */
+/** "fuera de 35–60 %" para mostrar el rango que se violó. */
 export function fmtRango(min: number | null, max: number | null, unidad?: string | null): string {
   const u = unidad ? ` ${unidad}` : "";
-  const limite = (v: unknown) => (Number.isFinite(Number(v)) ? textoDeNumero(Number(v)) : String(v));
-  if (min != null && max != null) return `${limite(min)}–${limite(max)}${u}`;
-  if (min != null) return `≥ ${limite(min)}${u}`;
-  if (max != null) return `≤ ${limite(max)}${u}`;
+  if (min != null && max != null) return `${min}–${max}${u}`;
+  if (min != null) return `≥ ${min}${u}`;
+  if (max != null) return `≤ ${max}${u}`;
   return "sin rango definido";
 }
 
