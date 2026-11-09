@@ -1,5 +1,5 @@
 ---
-import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { fmtFechaCompacta, fmtFechaSoloCompacta } from "@/lib/datetime";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
@@ -10,15 +10,20 @@ import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
   TIPOS_OT, CLASES_PRIORIDAD, CLASE_PRIORIDAD_COLOR, CLASE_PRIORIDAD_LABEL,
   CLASE_PRIORIDAD_PLAZO, NIVEL_RIESGO_COLOR,
-  transicionesPermitidas, puedeAsignarse, puedeEditarEjecucion,
+  transicionesPermitidas, puedeEditarEjecucion,
   parseChecklist, progresoChecklist, evaluarValorChecklist,
   PRERREQ_TIPOS, PRERREQ_LABEL, PRERREQ_ICONO, PRERREQ_REFERENCIA_HINT,
   validarPrerrequisitosParaIniciar, validarLiberacionesParaCierre,
-  liberacionTieneLectura, requiereCausaRaiz, causaRaizVencida,
+  liberacionTieneLectura, liberacionesFueraDeRango, liberacionConRango, requiereCausaRaiz, causaRaizVencida,
   tiemposEmergencia, fmtDuracionHoras, etiquetaMitigacion, isoALocalInput,
-  puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ,
+  puedeCerrarSinLectura, HORAS_CAUSA_RAIZ, MIN_CAUSA_RAIZ, MENSAJE_PASO_SIN_NUMERO, pasoConRango,
   type EstadoOT, type TipoOT, type ClasePrioridad, type PrerrequisitoTipo,
 } from "@/lib/ordenes";
+// La hora de un turno en una frase: «Ronda de las 14:00», «Ronda de la 01:00».
+import { laHora } from "@/lib/turnos";
+// Un número guardado vuelve a su campo escrito con textoDeNumero: 12.345 como
+// «12.3450», porque «12.345» se leería de dos formas.
+import { textoDeNumero } from "@/lib/numero";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { leerVerificacionOrden, leerOrigenesRondaOrden, puedeVerificarOrden, esRevisorOrden } from "@/lib/orden-verificacion";
 import { fmtCantidad } from "@/lib/inventario";
@@ -71,6 +76,14 @@ if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) re
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
 const estadoActual = o.estado as EstadoOT;
 const esAsignado = o.asignadoA === user.id;
+const esTecnico = user.rol === "tecnico";
+const esJefatura = user.rol === "admin" || user.rol === "jefe";
+// El técnico no ve tiempos de medición: cuándo inició, cuánto lleva o tardó,
+// horas trabajadas, minutos estimados ni las duraciones del EOP. Se siguen
+// registrando igual. Los plazos operativos (vence, clase P1) sí los ve.
+const verTiempos = !esTecnico;
+// Equipo y asignación solo cambian antes de enviar la orden a verificación.
+const ordenSinEnviar = estadoActual === "abierta" || estadoActual === "en_proceso" || estadoActual === "en_espera";
 const conjuntoOrigen = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
   ? await getConjuntoDeOrden(Astro, id) : null;
 
@@ -136,8 +149,10 @@ const itemsActivos = await db
 
 const itemsRepJson = JSON.stringify(itemsActivos);
 
-// Selectores en cascada: sucursal → ubicación → equipo
-const puedeAsignarActivo = ["admin", "jefe", "tecnico"].includes(user.rol) && !conjuntoOrigen;
+// Selectores en cascada: sucursal → ubicación → equipo. Se ofrecen solo cuando
+// el servidor acepta el cambio: jefatura, orden sin enviar, fuera de un PM y
+// sin conjunto trazado. Al técnico se lo rechaza siempre.
+const puedeAsignarActivo = esJefatura && ordenSinEnviar && !o.planId && !conjuntoOrigen;
 const activosLista = puedeAsignarActivo
   ? await db
       .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, ubicacionId: activos.ubicacionId })
@@ -179,6 +194,7 @@ let liberaciones: any[] = [];
 let procedimientoRef: { id: number; codigoCorto: string; titulo: string; version: string | null; tipo: string; estado: string } | null = null;
 let accionesVinculadas: string[] = [];
 let etiquetaMit = etiquetaMitigacion(null);
+let etiquetaMitFicha: string | null = null;
 let fase47Error: string | null = null;
 try {
   const pr = await db
@@ -216,7 +232,8 @@ try {
       .from(eopFicha)
       .where(eq(eopFicha.procedimientoId, o.procedimientoId))
       .limit(1);
-    etiquetaMit = etiquetaMitigacion(fi?.etiqueta ?? null);
+    etiquetaMitFicha = fi?.etiqueta?.trim() || null;
+    etiquetaMit = etiquetaMitigacion(etiquetaMitFicha);
     // Las tres primeras acciones del EOP ya vinculado, para no obligar a nadie
     // a abrir otra pantalla cuando la orden es una emergencia.
     if (fi) accionesVinculadas = [fi.accion1, fi.accion2, fi.accion3].filter(Boolean) as string[];
@@ -260,28 +277,64 @@ const tipoDocRige = (docRige?.tipo ?? "eop") as TipoProc;
 const accionesRige = docEsVinculado
   ? (procedimientoRef!.tipo === "eop" ? accionesVinculadas : [])
   : rige?.documento?.tipo === "eop" ? rige.primerasAcciones : [];
+// Sin EOP vinculado, la hora intermedia se nombra como la nombra el EOP que
+// resolvió el sistema: es el mismo rótulo que ve el técnico en el celular.
+if (esEop && !docEsVinculado && rige?.documento?.tipo === "eop") {
+  try {
+    const [fi] = await db
+      .select({ etiqueta: eopFicha.etiquetaHoraMitigacion })
+      .from(eopFicha)
+      .where(eq(eopFicha.procedimientoId, rige.documento.id))
+      .limit(1);
+    etiquetaMitFicha = fi?.etiqueta?.trim() || null;
+    etiquetaMit = etiquetaMitigacion(etiquetaMitFicha);
+  } catch {}
+}
 
 const criticidadActivo = (row.activo as any)?.criticidadOperacional ?? null;
 const reqCausa = requiereCausaRaiz(o.tipo, criticidadActivo);
 const tiempos = tiemposEmergencia(o);
 const causaVencida = causaRaizVencida(o.causaRaizVencimiento, o.causaRaiz);
+// Causa raíz: la escribe la jefatura dentro de las 72 h, también con la orden
+// enviada, verificada o cerrada. Es obligatoria para verificar y cerrar cuando
+// el tipo la exige. El técnico escribe qué encontró y qué hizo, no la causa.
+const muestraSolucion = o.tipo === "correctivo" || esEop || esMop || reqCausa.requiere;
+const muestraCausa = muestraSolucion || !!o.causaRaiz?.trim();
+const puedeEscribirCausa = esJefatura && ["en_proceso", "en_espera", "completada", "verificada", "cerrada"].includes(estadoActual);
+const faltaCausa = reqCausa.requiere && (o.causaRaiz ?? "").trim().length < MIN_CAUSA_RAIZ;
+// Lo que el técnico ve de una emergencia: qué pasos quedaron registrados, sin
+// horas. El celular las fija al primer toque y la jefatura las corrige aquí.
+const hitosEop = [
+  { etiqueta: "Llegada al sitio", hecho: !!o.horaLlegada },
+  { etiqueta: etiquetaMitFicha ?? "Situación controlada", hecho: !!o.horaMitigacion },
+  { etiqueta: "Restablecimiento", hecho: !!o.horaRestablecimiento },
+];
 const bloqueoInicio = validarPrerrequisitosParaIniciar(o.tipo, prerrequisitos);
 const bloqueoCierre = validarLiberacionesParaCierre(o.tipo, liberaciones);
 const prerreqCumplidos = prerrequisitos.filter((p) => p.cumplido).length;
 const liberacionesConLectura = liberaciones.filter((l) => liberacionTieneLectura(l)).length;
 const liberacionesNoConformes = liberaciones.filter((l) => l.conforme === false).length;
-// Quién puede tocar las tarjetas del MOP/EOP: la jefatura siempre; el técnico
-// asignado mientras la OT no esté cerrada (en una emergencia actúa primero y
-// registra después, así que no exigimos que ya esté "en proceso").
+// Quién puede tocar las tarjetas del MOP/EOP: la jefatura mientras la OT no
+// esté cerrada; el técnico asignado mientras no la envíe a verificación (en una
+// emergencia actúa primero y registra después, así que no exigimos que ya esté
+// "en proceso"). Enviada, la corrige la jefatura o la devuelve.
 const otAbiertaParaRegistro = estadoActual !== "cerrada" && estadoActual !== "cancelada";
 const puedeRegistrarMop =
   otAbiertaParaRegistro &&
-  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && (esAsignado || estadoActual === "abierta")));
+  (esJefatura || (esTecnico && esAsignado && ordenSinEnviar));
 const puedeConfigurarMop = otAbiertaParaRegistro && (user.rol === "admin" || user.rol === "jefe");
 // Los tres tiempos del EOP se corrigen hacia atrás incluso con la orden ya
 // cerrada: de ellos salen los indicadores 5 y 7, y una hora mal escrita hay
 // que poder arreglarla. Queda en el audit log de la OT.
-const puedeEditarTiempos = user.rol === "admin" || user.rol === "jefe" || puedeRegistrarMop;
+// Al técnico no se le muestran: el celular las registra al primer toque.
+const puedeEditarTiempos = esJefatura;
+// El plan de reversa se guarda en la orden: del técnico, el servidor solo lo
+// acepta si la tiene asignada. Como en el servidor: con la orden abierta el
+// técnico escribe solo el plan, porque la reversa se marca después de empezar;
+// enviada, la registra la jefatura; cerrada o cancelada, nadie.
+const puedeGuardarReversa = puedeRegistrarMop;
+const reversaAntesDeEmpezar = esTecnico && estadoActual === "abierta";
+const puedeMarcarReversa = puedeGuardarReversa && !reversaAntesDeEmpezar;
 const muestraMop = esMop || prerrequisitos.length > 0 || liberaciones.length > 0 || !!o.planReversa;
 const muestraEop = esEop || !!o.horaAlarma || !!o.horaLlegada || !!o.horaMitigacion || !!o.horaRestablecimiento;
 
@@ -299,7 +352,12 @@ const roundsOrigins = await leerOrigenesRondaOrden(db, id);
 const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
 const esRevisor = esRevisorOrden(user, seguimiento.control);
 const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
-const proximas = transicionesPermitidas(estadoActual, user.rol, esAsignado)
+// El técnico solo mueve una orden suya mientras no la envía a verificación, o
+// toma una abierta sin asignar. Devolver o reabrir es de la jefatura o del
+// revisor designado (lo recibe por su propia línea, abajo): el servidor se lo
+// rechaza al técnico asignado, así que no se le ofrece.
+const tecnicoMueve = !esTecnico || (esAsignado && ordenSinEnviar) || (estadoActual === "abierta" && !o.asignadoA);
+const proximas = (tecnicoMueve ? transicionesPermitidas(estadoActual, user.rol, esAsignado) : [])
   .filter((s) => !["verificada", "cerrada"].includes(s));
 if (["completada", "verificada"].includes(estadoActual) && puedeVerificar) proximas.push("verificada");
 if (["completada", "verificada", "cerrada"].includes(estadoActual) && esRevisor && !proximas.includes("en_proceso")) proximas.push("en_proceso");
@@ -312,16 +370,51 @@ const puedeEditar = puedeEditarEjecucion(user.rol, esAsignado, estadoActual);
 // → Iniciar → trabajar → foto después. Bloqueadas solo en cerrada/cancelada.
 const puedeSubirAntes =
   estadoActual !== "cerrada" && estadoActual !== "cancelada" &&
-  (user.rol === "admin" || user.rol === "jefe" || (user.rol === "tecnico" && esAsignado));
-const puedeAsignar = puedeAsignarse(user.rol);
+  (esJefatura || (esTecnico && (esAsignado || esRevisor))) &&
+  // Enviada a verificación, solo quien revisa agrega evidencia.
+  (ordenSinEnviar || esRevisor);
+// Retirar una foto: jefatura o técnico asignado, antes de enviar la orden.
+const puedeBorrarAntes = ordenSinEnviar && (esJefatura || (esTecnico && esAsignado));
+// La asignación la cambia la jefatura antes de enviar la orden. El técnico solo
+// puede tomar una orden abierta sin asignar.
+const puedeCambiarAsignacion = esJefatura && ordenSinEnviar;
+const puedeTomarOrden = esTecnico && estadoActual === "abierta" && !o.asignadoA;
+// Revertir un consumo devuelve stock: el servidor solo se lo deja a la jefatura.
+const puedeRevertirRepuesto = puedeEditar && esJefatura;
+// Lo que el servidor exige al MOP para enviarlo y verificarlo: las lecturas de
+// liberación obligatorias, medidas y dentro de rango. Con la reversa ejecutada
+// el sistema volvió a como estaba y no hay nada que liberar.
+const reversaHecha = !!o.reversaEjecutada;
+const faltanLecturas = esMop && !reversaHecha && bloqueoCierre.faltantes.length > 0;
+// Fuera de rango se juzga como el servidor: por el número de la lectura, también
+// cuando quedó escrita como texto («14,5 A»).
+const lecturasFuera = esMop && !reversaHecha ? liberacionesFueraDeRango(liberaciones) : [];
+const envioBloqueado = faltanLecturas || lecturasFuera.length > 0;
+// Sin lectura (no fuera de rango), la jefatura lo envía a verificación con
+// motivo escrito. No lo cierra: queda pendiente de verificación.
+const puedeEnviarSinLectura = faltanLecturas && lecturasFuera.length === 0 && puedeCerrarSinLectura(user.rol) && estadoActual === "en_proceso";
+// Al verificar, el motivo ya registrado no se vuelve a pedir.
+const verifSinLectura: "registrado" | "pedir" | "bloqueada" | "fuera" | null =
+  lecturasFuera.length > 0 ? "fuera"
+  : !faltanLecturas ? null
+  : o.cierreSinLecturaMotivo?.trim() ? "registrado"
+  : puedeCerrarSinLectura(user.rol) ? "pedir" : "bloqueada";
+// Quien revisa sin ser jefatura no puede escribir la causa raíz que falta.
+const verifSinCausa = faltaCausa && !esJefatura;
 
 const ESTADO_PROGRESO: Record<EstadoOT, number> = {
   abierta: 1, en_proceso: 2, en_espera: 2, completada: 3, verificada: 4, cerrada: 5, cancelada: 0,
 };
 const stepActual = ESTADO_PROGRESO[estadoActual];
 
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
+// Fechas DD/MM/AAAA en hora de El Salvador.
+const fmt = (s: string | null) => (s ? fmtFechaCompacta(s) : "-");
+const fmtDia = (s: string | null) =>
+  s ? new Date(s).toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/El_Salvador" }) : "-";
+// Un vencimiento guardado solo con fecha (AAAA-MM-DD) no pasa por Date: lo leería
+// como medianoche UTC y mostraría el día anterior.
+const fmtVence = (s: string | null) =>
+  !s ? "-" : /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? fmtFechaSoloCompacta(s) : fmtFechaCompacta(s);
 
 const adjsAntes = adjs.filter((a) => a.categoria === "antes");
 const adjsDespues = adjs.filter((a) => a.categoria === "despues");
@@ -343,10 +436,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     <h2 class="font-semibold">Origen y trazabilidad de la orden</h2>
     {scheduledPM && <div class="mt-3 rounded bg-slate-50 p-3">
       <a class="font-medium text-brand-700 underline" href={areaHref(`/activos/${scheduledPM.activoId}#plan-${scheduledPM.id}`, area)}>PM programado #{scheduledPM.id} · {scheduledPM.titulo}</a>
-      <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {scheduledPM.proximaFecha}</p>
+      <p class="mt-1 text-slate-600">Frecuencia: {scheduledPM.frecuencia} · Próxima fecha del plan: {fmtFechaSoloCompacta(scheduledPM.proximaFecha)}</p>
     </div>}
     {roundsOrigins.map(origin => <div class="mt-3 rounded bg-teal-50 p-3">
-      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de las {origin.turno} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
+      <a class="font-medium text-brand-700 underline" href={origin.href}>Ronda de {laHora(origin.turno)} · {origin.sede} · {fmtFechaSoloCompacta(origin.fecha)}</a>
       <p class="mt-1">{origin.etiqueta}{origin.valor != null ? ` · leído ${origin.valor}` : ""}</p>
       {origin.nota && <p class="mt-1 whitespace-pre-wrap">{origin.nota}</p>}
       <p class="mt-1 text-xs text-slate-500">{origin.registradoPor} · la ronda conserva su propio registro.</p>
@@ -372,7 +465,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <span class={`badge ${ESTADO_COLOR[estadoActual]}`}>{ESTADO_LABEL[estadoActual]}</span>
       </div>
       <p class="mt-1 text-sm text-slate-500">
-        {etiquetaOT(o)} - creada {fmt(o.createdAt)}
+        {etiquetaOT(o)} - creada {verTiempos ? fmt(o.createdAt) : fmtDia(o.createdAt)}
         {procedimientoRef && (
           <span> · procedimiento <strong class="font-mono">{procedimientoRef.codigoCorto}</strong> v{procedimientoRef.version} — {procedimientoRef.titulo}</span>
         )}
@@ -520,7 +613,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   )}
   {estadoActual === "abierta" && (
     <div class="card mt-4 border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-800">
-      <strong>OT no iniciada.</strong> Verifica el lugar y los datos del equipo. Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.
+      <strong>OT no iniciada.</strong> Verifica el lugar y los datos del equipo.
+      {verTiempos
+        ? <Fragment> Cuando estés en sitio listo para trabajar, pulsa <strong>"Iniciar"</strong> para activar el cronómetro y desbloquear los campos de ejecución.</Fragment>
+        : proximas.includes("en_proceso")
+          ? <Fragment> Cuando estés en sitio listo para trabajar, pulsa <strong>«Iniciar»</strong> para desbloquear los campos de ejecución.</Fragment>
+          : row.asignado ? <Fragment> Está asignada a {row.asignado.nombre}.</Fragment> : null}
     </div>
   )}
   {estadoActual === "en_espera" && (
@@ -547,7 +645,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       <button id="guardarRevisor" type="button" class="btn-secondary">Guardar revisores</button>
     </div>}
     {seguimiento.eventos.length > 0 && <details class="mt-3"><summary class="cursor-pointer text-sm font-medium">Historial de ejecución, revisión y devoluciones ({seguimiento.eventos.length})</summary>
-      <ol class="mt-2 space-y-2 text-sm">{seguimiento.eventos.map(e => <li class="rounded border border-slate-200 p-2"><strong>{e.accion.replaceAll("_", " ")}</strong> · {e.actorNombre} · {fmt(e.ocurridoEn)}<p>{ESTADO_LABEL[e.estadoAntes as EstadoOT]} → {ESTADO_LABEL[e.estadoDespues as EstadoOT]} · Ciclo {e.ciclo}</p>{e.motivo && <p class="whitespace-pre-wrap">{e.motivo}</p>}</li>)}</ol>
+      <ol class="mt-2 space-y-2 text-sm">{seguimiento.eventos.map(e => <li class="rounded border border-slate-200 p-2"><strong>{e.accion.replaceAll("_", " ")}</strong> · {e.actorNombre} · {verTiempos ? fmt(e.ocurridoEn) : fmtDia(e.ocurridoEn)}<p>{ESTADO_LABEL[e.estadoAntes as EstadoOT]} → {ESTADO_LABEL[e.estadoDespues as EstadoOT]} · Ciclo {e.ciclo}</p>{e.motivo && <p class="whitespace-pre-wrap">{e.motivo}</p>}</li>)}</ol>
     </details>}
   </section>
 
@@ -571,18 +669,20 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {proximas.length > 0 && (
         <div class="mt-4 flex flex-wrap gap-2">
           {proximas.map((s) => {
-            // El MOP no deja empezar sin el permiso firmado: si quedan
-            // prerrequisitos obligatorios pendientes, "Iniciar" va bloqueado
-            // (la API lo rechaza igual, pero aquí se ve por qué).
-            const inicioBloqueado = s === "en_proceso" && esMop && bloqueoInicio.faltantes.length > 0;
+            // El MOP no deja empezar sin el permiso firmado ni enviarse sin sus
+            // lecturas de liberación: el botón va bloqueado (la API lo rechaza
+            // igual, pero aquí se ve por qué).
+            const inicioBloqueado = s === "en_proceso" && ["abierta", "en_espera"].includes(estadoActual) && esMop && bloqueoInicio.faltantes.length > 0;
+            const cierreBloqueado = s === "completada" && envioBloqueado;
+            const bloqueado = inicioBloqueado || cierreBloqueado;
             return (
             <button
               data-transition={s}
-              disabled={inicioBloqueado}
-              title={inicioBloqueado ? `Faltan prerrequisitos obligatorios: ${bloqueoInicio.faltantes.join(" · ")}` : undefined}
+              disabled={bloqueado}
+              title={inicioBloqueado ? `Faltan prerrequisitos obligatorios: ${bloqueoInicio.faltantes.join(" · ")}` : cierreBloqueado ? "Faltan lecturas de liberación o alguna quedó fuera de rango" : undefined}
               class:list={[
                 "rounded-md px-3 py-1.5 text-sm font-medium",
-                inicioBloqueado ? "cursor-not-allowed bg-slate-200 text-slate-500" :
+                bloqueado ? "cursor-not-allowed bg-slate-200 text-slate-500" :
                 s === "cancelada" ? "bg-red-50 text-red-700 hover:bg-red-100" :
                 s === "cerrada" ? "bg-slate-700 text-white hover:bg-slate-800" :
                 s === "verificada" ? "bg-brand-600 text-white hover:bg-brand-800" :
@@ -597,11 +697,16 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                s === "verificada" ? "✓✓ Verificar y cerrar" :
                s === "cerrada" ? "Cerrar definitivamente" :
                s === "cancelada" ? "✕ Cancelar" : s}
-              {inicioBloqueado && <span class="ml-1"></span>}
             </button>
             );
           })}
         </div>
+      )}
+      {proximas.includes("en_proceso") && ["abierta", "en_espera"].includes(estadoActual) && esMop && bloqueoInicio.faltantes.length > 0 && (
+        <p class="mt-2 text-xs text-slate-600">Para iniciar faltan prerrequisitos obligatorios: márcalos en «Prerrequisitos de la intervención».</p>
+      )}
+      {proximas.includes("completada") && envioBloqueado && (
+        <p class="mt-2 text-xs text-slate-600">Para enviar a verificación faltan lecturas de liberación o alguna quedó fuera de rango: revisa «Lecturas de liberación».</p>
       )}
     </div>
   )}
@@ -665,12 +770,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   aquí solo se dice que existen, no se repiten. */}
               {esMop && (
                 <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                  Por ser una intervención, no inicia sin sus <strong>{prerrequisitos.length} prerrequisito{prerrequisitos.length === 1 ? "" : "s"}</strong> ({prerreqCumplidos} cumplido{prerreqCumplidos === 1 ? "" : "s"}) ni cierra sin sus <strong>{liberaciones.length} lectura{liberaciones.length === 1 ? "" : "s"} de liberación</strong> ({liberacionesConLectura} medida{liberacionesConLectura === 1 ? "" : "s"}). Se registran más abajo, en esta misma ficha.
+                  Por ser una intervención, no inicia sin sus <strong>{prerrequisitos.length} prerrequisito{prerrequisitos.length === 1 ? "" : "s"}</strong> ({prerreqCumplidos} cumplido{prerreqCumplidos === 1 ? "" : "s"}) ni se envía a verificación sin sus <strong>{liberaciones.length} lectura{liberaciones.length === 1 ? "" : "s"} de liberación</strong> ({liberacionesConLectura} medida{liberacionesConLectura === 1 ? "" : "s"}). Se registran más abajo, en esta misma ficha.
                 </p>
               )}
               {esEop && (
                 <p class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                  Por ser una emergencia, los <strong>tres tiempos</strong> y la <strong>causa raíz</strong> se registran más abajo: de ahí salen los indicadores 5 y 7.
+                  {verTiempos
+                    ? <Fragment>Por ser una emergencia, los <strong>tres tiempos</strong> y la <strong>causa raíz</strong> se registran más abajo: de ahí salen los indicadores 5 y 7.</Fragment>
+                    : <Fragment>Por ser una emergencia, cada paso se registra desde tu celular, en «Hoy».</Fragment>}
                 </p>
               )}
 
@@ -718,7 +825,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <span id="clasifMsg" class="text-xs text-slate-400"></span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
-            El tipo decide qué exige la orden: una <strong>intervención (MOP)</strong> no inicia sin prerrequisitos ni cierra sin lecturas de liberación; una <strong>emergencia (EOP)</strong> no cierra sin causa raíz. La clase fija el compromiso de respuesta del plan maestro de 52 semanas.
+            El tipo decide qué exige la orden: una <strong>intervención (MOP)</strong> no inicia sin prerrequisitos ni se envía a verificación sin lecturas de liberación; una <strong>emergencia (EOP)</strong> no se verifica ni se cierra sin causa raíz. La clase fija el compromiso de respuesta del plan maestro de 52 semanas.
           </p>
           <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
@@ -758,9 +865,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       {muestraEop && (
         <div class="card p-5 border-l-4 border-red-500">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h2 class="font-semibold text-slate-900">Emergencia · los tres tiempos</h2>
+            <h2 class="font-semibold text-slate-900">{verTiempos ? "Emergencia · los tres tiempos" : "Emergencia · pasos registrados"}</h2>
             <span id="eopMsg" class="text-xs text-slate-400"></span>
           </div>
+          {verTiempos ? (
+          <Fragment>
           <p class="mt-1 text-xs text-slate-600">
             En una emergencia nadie abre una pantalla: se toma el EOP de la pared y se actúa. <strong>Estas horas se registran después y se pueden corregir hacia atrás</strong> — escribe la hora real, no la hora en que llenas el formulario.
           </p>
@@ -795,29 +904,45 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Tiempo de respuesta</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.respuestaHoras)}</div>
+              <div id="eopRespuesta" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.respuestaHoras)}</div>
               <div class="text-[11px] text-slate-500">llegada − alarma (indicador 5)</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Hasta la mitigación</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.mitigacionHoras)}</div>
+              <div id="eopMitigacion" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.mitigacionHoras)}</div>
               <div class="text-[11px] text-slate-500">{etiquetaMit.toLowerCase()} − alarma</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="text-xs uppercase text-slate-500">Tiempo de reparación</div>
-              <div class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.reparacionHoras)}</div>
+              <div id="eopReparacion" class="mt-0.5 text-lg font-semibold text-slate-900">{fmtDuracionHoras(tiempos.reparacionHoras)}</div>
               <div class="text-[11px] text-slate-500">restablecimiento − alarma (indicador 7)</div>
             </div>
           </div>
-          {(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && (
-            <p class="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
+          <p id="eopOrdenAviso" class:list={["mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800", !(tiempos.respuestaHoras !== null && tiempos.respuestaHoras < 0) && "hidden"]}>La hora de llegada es anterior a la de alarma. Revisa las dos horas: alguna quedó mal escrita.</p>
+          </Fragment>
+          ) : (
+            <Fragment>
+              {/* El técnico ve qué pasos quedaron registrados, no sus horas. */}
+              <ul class="mt-3 space-y-2 text-sm" aria-label="Pasos de la emergencia">
+                {hitosEop.map((h) => (
+                  <li class:list={["flex items-center justify-between gap-3 rounded-lg border p-3", h.hecho ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"]}>
+                    <span class="font-medium text-slate-900">{h.etiqueta}</span>
+                    <span class:list={["shrink-0 text-xs font-semibold", h.hecho ? "text-emerald-700" : "text-slate-500"]}>{h.hecho ? "Registrado" : "Pendiente"}</span>
+                  </li>
+                ))}
+              </ul>
+              {otAbiertaParaRegistro && (esAsignado || !o.asignadoA) && (
+                <p class="mt-3 text-xs text-slate-600">Cada paso se registra desde tu celular, en <a href="/campo" class="font-medium text-brand-700 underline">Hoy</a>, al tocarlo. Si alguno quedó mal, avisa a tu jefatura: ella lo corrige aquí.</p>
+              )}
+            </Fragment>
           )}
-          {o.causaRaizVencimiento && (
+          {!esTecnico && o.causaRaizVencimiento && (
             <p class:list={["mt-3 rounded px-3 py-2 text-xs", causaVencida ? "bg-red-50 text-red-700 font-medium" : "bg-blue-50 text-blue-700"]}>
               Análisis de causa raíz: plazo de {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}.
               {causaVencida
                 ? " VENCIDO y sin causa raíz escrita. Documéntalo hoy e informa al Comité de Seguridad."
-                : o.causaRaiz ? " Ya hay causa raíz registrada." : " Escríbelo en «Ejecución del trabajo» antes del plazo."}
+                : o.causaRaiz ? " Ya hay causa raíz registrada."
+                : esJefatura ? " Escríbela en «Causa raíz», más abajo, antes del plazo." : " La escribe la jefatura antes del plazo."}
             </p>
           )}
         </div>
@@ -941,22 +1066,25 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-3 space-y-3 text-sm">
             <div>
               <label class="label text-xs" for="planReversa">Plan de reversa</label>
-              <textarea id="planReversa" class="input" rows="3" disabled={!puedeRegistrarMop}
+              <textarea id="planReversa" class="input" rows="3" disabled={!puedeGuardarReversa}
                         placeholder="Ej. Si la planta arranca pero la transferencia no retorna a normal: operar la retransferencia en manual según el SCP-ELE-01 con dos técnicos, mantener la planta hasta confirmar red estable y abrir orden correctiva.">{o.planReversa ?? ""}</textarea>
             </div>
             <label class:list={["flex items-start gap-2 rounded-lg p-2", o.reversaEjecutada ? "bg-amber-50" : ""]}>
-              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeRegistrarMop} />
+              <input id="reversaEjecutada" type="checkbox" class="mt-0.5" checked={o.reversaEjecutada} disabled={!puedeMarcarReversa} />
               <span>
                 <span class="text-sm font-medium text-slate-900">Se ejecutó la reversa</span>
-                <span class="block text-xs text-slate-500">El sistema no volvió solo: hubo que revertir. Describe abajo qué se revirtió y cómo quedó.</span>
+                <span class="block text-xs text-slate-500">El sistema no volvió solo: hubo que revertir. Describe abajo qué se revirtió y cómo quedó. Con la reversa marcada no se exigen las lecturas de liberación: el sistema quedó como estaba.</span>
               </span>
             </label>
+            {puedeGuardarReversa && reversaAntesDeEmpezar && (
+              <p id="reversaAntes" class="text-xs text-slate-600">La reversa se marca después de empezar la intervención.</p>
+            )}
             <div>
               <label class="label text-xs" for="reversaNotas">Qué se revirtió y cómo quedó el sistema</label>
-              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeRegistrarMop}
+              <textarea id="reversaNotas" class="input" rows="2" disabled={!puedeMarcarReversa}
                         placeholder="Mínimo 10 caracteres. Ej. Retransferencia en manual con dos técnicos; planta sostenida hasta confirmar red estable; se abrió la orden correctiva OT-MG...">{o.reversaNotas ?? ""}</textarea>
             </div>
-            {puedeRegistrarMop && (
+            {puedeGuardarReversa && (
               <div class="flex justify-end">
                 <button id="reversaSave" type="button" class="btn-secondary text-xs">Guardar plan de reversa</button>
               </div>
@@ -1037,14 +1165,18 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
       )}
 
-      {!row.activo && puedeAsignarActivo && (
+      {/* Sin equipo, la tarjeta dice dónde es el trabajo. El botón solo sale a
+          quien el servidor le acepta el cambio. */}
+      {!row.activo && (puedeAsignarActivo || ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
         <div class="card p-5 border-l-4 border-slate-300">
           <div class="flex items-center justify-between">
             <div>
               <h2 class="font-semibold text-slate-900">Lugar a intervenir (sin equipo)</h2>
               <p class="text-xs text-slate-400 italic mt-0.5">Trabajo general — no asociado a un equipo registrado</p>
             </div>
-            <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+            {puedeAsignarActivo && (
+              <button id="editActivoBtn" type="button" class="btn-secondary text-sm">Asignar equipo</button>
+            )}
           </div>
           {(ordenSucursal || ordenUbicacion || (o as any).ubicacionDetalle) && (
             <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
@@ -1067,6 +1199,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               )}
             </div>
           )}
+          {puedeAsignarActivo && (
           <div id="activoEditor" class="hidden mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div>
               <label class="label text-xs">1. Sucursal</label>
@@ -1093,6 +1226,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <button id="activoSave" type="button" class="btn-primary text-sm">Guardar</button>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1110,7 +1244,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {adjsAntes.map((a) => (
               <div class="relative group rounded bg-slate-50 p-2 text-xs">
-                {puedeSubirAntes && (
+                {puedeBorrarAntes && (
                   <button class="adj-del-btn absolute top-1 right-1 z-10 rounded-full bg-white text-red-600 border border-red-600 w-6 h-6 flex items-center justify-center shadow sm:opacity-0 sm:group-hover:opacity-100 transition" data-id={a.id} title="Eliminar">×</button>
                 )}
                 {a.contentType.startsWith("image/") && (
@@ -1136,28 +1270,32 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         )}
       </div>
 
-      <!-- Línea de tiempo de la OT -->
+      <!-- Línea de tiempo de la OT. Al técnico solo a quién está asignada y el plazo. -->
       <div class="card p-5">
-        <h2 class="font-semibold text-slate-900">Tiempos</h2>
+        <h2 class="font-semibold text-slate-900">{verTiempos ? "Tiempos" : "Asignación y plazo"}</h2>
         <div class="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div>
             <div class="text-xs uppercase text-slate-500">Asignado</div>
             <div class="mt-0.5">{row.asignado?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</div>
           </div>
           <div>
-            <div class="text-xs uppercase text-slate-500">Vencimiento</div>
-            <div class="mt-0.5">{fmtDate(o.vencimiento)}</div>
+            <div class="text-xs uppercase text-slate-500">Vence</div>
+            <div class="mt-0.5">{fmtVence(o.vencimiento)}</div>
           </div>
-          <div>
-            <div class="text-xs uppercase text-slate-500">Iniciada</div>
-            <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
-          </div>
-          <div>
-            <div class="text-xs uppercase text-slate-500">Completada</div>
-            <div class="mt-0.5">{fmt(o.completadaEn)}</div>
-          </div>
+          {verTiempos && (
+            <Fragment>
+              <div>
+                <div class="text-xs uppercase text-slate-500">Iniciada</div>
+                <div class="mt-0.5">{fmt(o.iniciadaEn)}</div>
+              </div>
+              <div>
+                <div class="text-xs uppercase text-slate-500">Completada</div>
+                <div class="mt-0.5">{fmt(o.completadaEn)}</div>
+              </div>
+            </Fragment>
+          )}
         </div>
-        {o.iniciadaEn && (
+        {verTiempos && o.iniciadaEn && (
           <div class:list={["mt-3 rounded px-3 py-2 text-xs", estadoActual === "en_espera" ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700"]}>
             {o.completadaEn ? (
               <>
@@ -1202,6 +1340,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="mt-2 h-2 overflow-hidden rounded bg-slate-100">
             <div class="h-full bg-emerald-500" style={`width: ${progreso.pct}%`}></div>
           </div>
+          {/* Si el checklist cambió de forma en el servidor, lo de aquí no se puede fusionar. */}
+          <div id="ckConflicto" class="mt-3 hidden border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900" role="alert">
+            <p id="ckConflictoMsg"></p>
+            <button id="ckRecargar" type="button" class="btn-secondary mt-2 text-xs">Volver a cargar la ficha</button>
+          </div>
           <p class="mt-3 text-xs text-slate-500">El técnico debe marcar cada punto. Las líneas marcadas <strong>lectura obligatoria</strong> piden un número: <strong>la orden no se completa sin él</strong> (márcala N/A si de verdad no se midió). Donde haya criterio de aceptación, registra el <strong>valor medido</strong>. Si encuentra algo fuera de norma, marca <strong>Desviación</strong> y describe qué pasó (mínimo 10 caracteres). <strong>No se puede cerrar la OT</strong> si hay puntos pendientes, desviaciones sin describir, o un <strong>punto crítico en desviación</strong> (el equipo no vuelve a servicio: resuélvelo o escala a correctivo).</p>
           <ul id="checklistList" class="mt-4 space-y-2">
             {checklistItems.map((it, idx) => {
@@ -1213,39 +1356,48 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               return (
                 <li class:list={["ck-row rounded-lg p-3 transition", filaColor]} data-idx={idx}>
                   <div class="text-sm font-medium text-slate-900">
+                    {/* El número que nombran los avisos («El paso 2 cambió…») y el celular («Paso 2 de 5»). */}
+                    <span class="ck-paso mr-1.5 align-middle text-xs font-normal tabular-nums text-slate-500">Paso {idx + 1}</span>
                     {it.bloqueante && <span class="mr-1 align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">CRÍTICO</span>}
                     {it.texto}
                   </div>
-                  {(it.criterio || it.minutos || it.materiales) && (
+                  {(it.criterio || (verTiempos && it.minutos) || it.materiales) && (
                     <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                       {it.criterio && <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">Criterio: {it.criterio}</span>}
-                      {it.minutos && <span class="text-slate-500">{it.minutos} min</span>}
+                      {verTiempos && it.minutos && <span class="text-slate-500">{it.minutos} min</span>}
                       {it.materiales && <span class="text-slate-500">{it.materiales}</span>}
                     </div>
                   )}
                   {it.requiereValor ? (() => {
                     const ev = evaluarValorChecklist(it);
+                    // Con rango, lo escrito sin número («ok», «1,200» de antes) no es
+                    // lectura: el progreso lo cuenta sin lectura y la fila lo dice igual.
+                    // Un paso N/A no se midió a propósito: como en el progreso, no se le
+                    // exige lectura y no bloquea.
+                    const sinLectura = !ev.tiene || (pasoConRango(it) && ev.numero === null);
+                    const na = it.estado === "na";
                     return (
-                      <div class:list={["mt-2 rounded-lg p-2", ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" : ev.dentro === true ? "bg-emerald-50" : !ev.tiene ? "bg-amber-50" : "bg-slate-50"]}>
+                      <div class:list={["mt-2 rounded-lg p-2", ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" : ev.dentro === true ? "bg-emerald-50" : sinLectura && !na ? "bg-amber-50" : "bg-slate-50"]}>
                         <div class="flex flex-wrap items-end gap-2">
                           <div>
                             <label class="mb-1 block text-xs font-medium text-slate-700">
                               Lectura obligatoria{it.unidad ? ` (${it.unidad})` : ""}
                             </label>
-                            <input class="ck-num input text-sm w-28" type="number" step="any" data-idx={idx}
+                            <input class="ck-num input text-sm w-28" type="text" inputmode="decimal" autocomplete="off" data-idx={idx}
                                    data-min={it.esperadoMin ?? ""} data-max={it.esperadoMax ?? ""} data-unidad={it.unidad ?? ""}
-                                   value={it.valorMedido ?? ""} disabled={!puedeEditar} />
+                                   value={it.valorMedido ?? ""} placeholder="Ej. 14,5" disabled={!puedeEditar} />
                           </div>
                           {ev.rangoTexto && (
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">Rango normal: {ev.rangoTexto}</span>
                           )}
                           <span class="ck-rango text-xs font-medium" data-idx={idx}>
-                            {!ev.tiene ? <span class="text-amber-700">Sin lectura — bloquea el cierre</span>
+                            {sinLectura ? (na ? <span class="text-slate-500">N/A: no se exige lectura</span> : <span class="text-amber-700">Sin lectura — bloquea el cierre</span>)
                               : ev.dentro === true ? <span class="text-emerald-700">✓ Dentro del rango</span>
                               : ev.dentro === false ? <span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>
                               : <span class="text-slate-500">Registrado</span>}
                           </span>
                         </div>
+                        <p class="ck-aviso mt-2 hidden text-xs font-medium text-red-700" data-idx={idx} role="alert"></p>
                         <div class="mt-2 flex flex-wrap items-end gap-2">
                           <div>
                             <label class="mb-1 block text-[11px] text-slate-500">Hora</label>
@@ -1262,7 +1414,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                   })() : it.criterio && (
                     <div class="mt-2">
                       <label class="mb-1 block text-xs text-slate-600">Valor medido / resultado</label>
-                      <input class="ck-valor input text-sm w-full max-w-xs" data-idx={idx} value={it.valorMedido ?? ""} placeholder="Ej: 125 psi" disabled={!puedeEditar} />
+                      <input class="ck-valor input text-sm w-full max-w-xs" data-idx={idx} data-min={it.esperadoMin ?? ""} data-max={it.esperadoMax ?? ""}
+                             value={it.valorMedido ?? ""} placeholder="Ej: 125 psi" disabled={!puedeEditar} />
+                      <p class="ck-aviso mt-1 hidden text-xs font-medium text-red-700" data-idx={idx} role="alert"></p>
                     </div>
                   )}
                   {puedeEditar ? (
@@ -1314,27 +1468,37 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <span class="text-xs text-slate-500">
               {liberacionesConLectura} / {liberaciones.length} medidas
               {liberacionesNoConformes > 0 && <span class="ml-2 rounded bg-white text-red-600 border border-red-600 px-1.5 py-0.5 font-medium ">{liberacionesNoConformes} fuera de rango</span>}
-              {bloqueoCierre.faltantes.length > 0 && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">{bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el cierre</span>}
+              {faltanLecturas && <span class="ml-2 rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">{bloqueoCierre.faltantes.length} bloquea{bloqueoCierre.faltantes.length === 1 ? "" : "n"} el envío</span>}
               <span id="liberMsg" class="ml-2 text-slate-400"></span>
             </span>
           </div>
           <p class="mt-1 text-xs text-slate-500">
-            Es la sección de cierre del MOP: <strong>la orden no cierra sin la lectura de liberación</strong>. Al escribir el valor medido se calcula si quedó conforme contra el rango del SCP. Una lectura fuera de rango no libera el sistema: no se devuelve a servicio.
+            Es la sección de cierre del MOP: <strong>la orden no se envía a verificación sin la lectura de liberación</strong>. Al escribir el valor medido se calcula si quedó conforme contra el rango del SCP. Una lectura fuera de rango no libera el sistema: no se devuelve a servicio.
           </p>
-          {esMop && bloqueoCierre.faltantes.length > 0 && (
-            <div class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>Esta orden no se puede cerrar todavía.</strong> Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
-              <ul class="mt-1 list-disc pl-5">
-                {bloqueoCierre.faltantes.map((f) => <li>{f}</li>)}
-              </ul>
-              {puedeCerrarSinLectura(user.rol)
-                ? <p class="mt-2 text-xs">Si de verdad no se pudo medir, la jefatura puede cerrar con motivo escrito usando <strong>«Cerrar sin lectura»</strong>. Queda registrado con tu nombre.</p>
-                : <p class="mt-2 text-xs">Si no se pudo medir, pide a tu jefatura que la cierre con motivo escrito: tú no puedes saltarte la lectura.</p>}
+          {envioBloqueado && ordenSinEnviar && (
+            <div id="liberBloqueo" class="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              <strong>Esta orden no se puede enviar a verificación todavía.</strong>
+              {faltanLecturas && (
+                <Fragment>
+                  {" "}Falta{bloqueoCierre.faltantes.length === 1 ? "" : "n"} medir:
+                  <ul class="mt-1 list-disc pl-5">
+                    {bloqueoCierre.faltantes.map((f) => <li>{f}</li>)}
+                  </ul>
+                </Fragment>
+              )}
+              {lecturasFuera.length > 0 ? (
+                <Fragment>
+                  <p class="mt-1">Fuera de rango: {lecturasFuera.map((l) => l.etiqueta).join(" · ")}.</p>
+                  <p class="mt-2 text-xs">Una lectura fuera de rango no libera el sistema: repite la medición o, si revertiste el trabajo, marca la reversa.</p>
+                </Fragment>
+              ) : puedeCerrarSinLectura(user.rol)
+                ? <p class="mt-2 text-xs">Si de verdad no se pudo medir, la jefatura puede enviarla a verificación sin la lectura, con motivo escrito, usando <strong>«Enviar a verificación sin lectura»</strong>. La orden no se cierra: queda pendiente de verificación y el motivo queda registrado con tu nombre.</p>
+                : <p class="mt-2 text-xs">Si no se pudo medir, pide a tu jefatura que la envíe a verificación sin lectura, con motivo escrito: tú no puedes saltarte la lectura. Si revertiste el trabajo, marca la reversa.</p>}
             </div>
           )}
           {o.cierreSinLecturaMotivo && (
             <div class="mt-3 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900">
-              <strong>Cerrada sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}
+              <strong>Enviada a verificación sin lectura de liberación.</strong> {fmt(o.cierreSinLecturaEn)}{(estadoActual === "completada" || estadoActual === "verificada") && " · Pendiente de verificación."}
               <p class="mt-1 whitespace-pre-wrap">{o.cierreSinLecturaMotivo}</p>
             </div>
           )}
@@ -1344,6 +1508,10 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <ul class="mt-3 space-y-2">
               {liberaciones.map((lib) => {
                 const medida = liberacionTieneLectura(lib);
+                // Con mínimo o máximo se anota el número del instrumento (el
+                // servidor rechaza una lectura sin número); sin rango, también
+                // puede ir en texto.
+                const conRango = liberacionConRango(lib);
                 return (
                   <li class:list={["rounded-lg border p-3",
                     lib.conforme === false ? "border-red-300 bg-red-50" :
@@ -1364,7 +1532,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                           {lib.valorEsperado && <span class="mr-2">Esperado: {lib.valorEsperado}</span>}
                           {(lib.minAceptable != null || lib.maxAceptable != null) && (
                             <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
-                              Rango: {lib.minAceptable != null ? lib.minAceptable : "—"} a {lib.maxAceptable != null ? lib.maxAceptable : "—"}{lib.unidad ? ` ${lib.unidad}` : ""}
+                              Rango: {lib.minAceptable != null ? textoDeNumero(lib.minAceptable) : "—"} a {lib.maxAceptable != null ? textoDeNumero(lib.maxAceptable) : "—"}{lib.unidad ? ` ${lib.unidad}` : ""}
                             </span>
                           )}
                         </div>
@@ -1377,21 +1545,35 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                       )}
                     </div>
                     <div class="mt-2 flex flex-wrap items-end gap-2">
-                      <div>
-                        <label class="mb-1 block text-xs text-slate-600">Valor medido{lib.unidad ? ` (${lib.unidad})` : ""}</label>
-                        <input class="liber-valor input w-32 text-sm" type="number" step="any" data-id={lib.id}
-                               data-min={lib.minAceptable ?? ""} data-max={lib.maxAceptable ?? ""}
-                               value={lib.valorMedido ?? ""} disabled={!puedeRegistrarMop} />
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <label class="mb-1 block text-xs text-slate-600">O anótalo en texto (cuando no es un número)</label>
-                        <input class="liber-texto input w-full text-sm" data-id={lib.id} value={lib.valorMedidoTexto ?? ""}
-                               placeholder="Ej. sin alarmas · selectores en automático" disabled={!puedeRegistrarMop} />
-                      </div>
+                      {conRango ? (
+                        <div>
+                          <label class="mb-1 block text-xs text-slate-600" for={`liberValor${lib.id}`}>Número que marcó el instrumento</label>
+                          <span class="flex items-center gap-2">
+                            <input id={`liberValor${lib.id}`} class="liber-valor input w-32 text-sm" type="text" inputmode="decimal" autocomplete="off"
+                                   data-id={lib.id} data-rango="1" data-min={lib.minAceptable ?? ""} data-max={lib.maxAceptable ?? ""}
+                                   value={lib.valorMedido != null ? textoDeNumero(lib.valorMedido) : lib.valorMedidoTexto ?? ""} placeholder="Ej. 14,5" disabled={!puedeRegistrarMop} />
+                            {lib.unidad && <span class="liber-unidad text-sm font-medium text-slate-700">{lib.unidad}</span>}
+                          </span>
+                        </div>
+                      ) : (
+                        <Fragment>
+                          <div>
+                            <label class="mb-1 block text-xs text-slate-600">Valor medido{lib.unidad ? ` (${lib.unidad})` : ""}</label>
+                            <input class="liber-valor input w-32 text-sm" type="number" step="any" data-id={lib.id}
+                                   value={lib.valorMedido != null ? textoDeNumero(lib.valorMedido) : ""} disabled={!puedeRegistrarMop} />
+                          </div>
+                          <div class="min-w-0 flex-1">
+                            <label class="mb-1 block text-xs text-slate-600">O anótalo en texto (cuando no es un número)</label>
+                            <input class="liber-texto input w-full text-sm" data-id={lib.id} value={lib.valorMedidoTexto ?? ""}
+                                   placeholder="Ej. sin alarmas · selectores en automático" disabled={!puedeRegistrarMop} />
+                          </div>
+                        </Fragment>
+                      )}
                       {puedeRegistrarMop && (
                         <button type="button" class="liber-save btn-primary text-xs" data-id={lib.id}>Registrar lectura</button>
                       )}
                     </div>
+                    <p class="liber-msg mt-2 hidden text-xs font-medium text-red-700" data-id={lib.id} role="alert"></p>
                   </li>
                 );
               })}
@@ -1430,15 +1612,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               </div>
             </div>
           )}
-          {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && bloqueoCierre.faltantes.length > 0 && (
+          {puedeEnviarSinLectura && (
             <div class="mt-3 flex justify-end">
-              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">Cerrar sin lectura (requiere motivo)</button>
+              <button id="sinLecturaBtn" type="button" class="btn-secondary text-xs border-amber-300 text-amber-700 hover:bg-amber-50">Enviar a verificación sin lectura (requiere motivo)</button>
             </div>
           )}
         </div>
       )}
 
-      <!-- Trabajos realizados / causa raiz / solucion -->
+      <!-- Ejecución: qué se encontró y qué se hizo. La causa raíz va aparte: la escribe la jefatura. -->
       <div class="card p-5">
         <div class="flex items-center justify-between gap-2">
           <h2 class="font-semibold text-slate-900">Ejecución del trabajo</h2>
@@ -1446,35 +1628,25 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         </div>
         <div class="mt-3 space-y-3 text-sm">
           <div>
-            <label class="label">Trabajos realizados</label>
-            <textarea id="trabajosRealizados" class="input" rows="3" placeholder="Describe qué se hizo..." disabled={!puedeEditar}>{o.trabajosRealizados ?? ""}</textarea>
+            <label class="label" for="trabajosRealizados">Trabajos realizados</label>
+            <textarea id="trabajosRealizados" class="input" rows="3" placeholder="Qué encontraste y qué hiciste." disabled={!puedeEditar}>{o.trabajosRealizados ?? ""}</textarea>
           </div>
-          {(o.tipo === "correctivo" || esEop || esMop || reqCausa.requiere) && (
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label class="label">
-                  Causa raíz
-                  {reqCausa.requiere && <span class="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">OBLIGATORIA PARA CERRAR</span>}
-                </label>
-                <textarea id="causaRaiz" class:list={["input", reqCausa.requiere && !(o.causaRaiz ?? "").trim() && "border-red-300"]} rows={reqCausa.requiere ? 4 : 2} disabled={!puedeEditar}>{o.causaRaiz ?? ""}</textarea>
-                {reqCausa.requiere && (
-                  <p class:list={["mt-1 text-xs", causaVencida ? "text-red-700 font-medium" : "text-slate-500"]}>
-                    {reqCausa.motivo} Mínimo {MIN_CAUSA_RAIZ} caracteres.
-                    {o.causaRaizVencimiento && <> Plazo: {HORAS_CAUSA_RAIZ} h desde la alarma — vence {fmt(o.causaRaizVencimiento)}{causaVencida ? " (VENCIDO)" : ""}.</>}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label class="label">Solución aplicada</label>
-                <textarea id="solucionAplicada" class="input" rows="2" disabled={!puedeEditar}>{o.solucionAplicada ?? ""}</textarea>
-              </div>
+          {muestraSolucion && (
+            <div>
+              <label class="label" for="solucionAplicada">Solución aplicada</label>
+              <textarea id="solucionAplicada" class="input" rows="2" disabled={!puedeEditar}>{o.solucionAplicada ?? ""}</textarea>
             </div>
           )}
-          <div>
-            <label class="label">Horas trabajadas</label>
-            <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
-            <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
-          </div>
+          {esTecnico && muestraCausa && (
+            <p class="rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">La causa raíz la escribe tu jefatura.</p>
+          )}
+          {verTiempos && (
+            <div>
+              <label class="label" for="horasTrabajadas">Horas trabajadas</label>
+              <input id="horasTrabajadas" type="number" min="0" step="0.25" class="input w-32 bg-slate-100 cursor-not-allowed" value={o.horasTrabajadas ?? ""} readonly disabled />
+              <p class="mt-1 text-xs text-slate-500">Se calcula automáticamente del cronómetro: <strong>inicio → cierre</strong>, descontando el tiempo en estado "en espera". No es editable para garantizar trazabilidad real del tiempo.</p>
+            </div>
+          )}
           {puedeEditar && (
             <div class="flex items-center gap-2 flex-wrap">
               <p class="text-xs text-emerald-700 mr-auto">✓ Tus cambios se guardan automáticamente al escribir.</p>
@@ -1484,6 +1656,34 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <p id="ejecMsg" class="hidden text-xs"></p>
         </div>
       </div>
+
+      <!-- ══ Causa raíz · la escribe la jefatura, dentro de las 72 h ══ -->
+      {muestraCausa && !esTecnico && (
+        <div id="causaCard" class:list={["card p-5", reqCausa.requiere && "border-l-4", causaVencida ? "border-red-500" : "border-brand-500"]}>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="font-semibold text-slate-900"><label for="causaRaiz">Causa raíz · la escribe la jefatura</label></h2>
+            <span id="causaMsg" class="text-xs text-slate-400"></span>
+          </div>
+          <p class:list={["mt-1 text-xs", causaVencida ? "font-medium text-red-700" : "text-slate-600"]}>
+            {reqCausa.requiere
+              ? <Fragment><strong>Obligatoria para verificar y cerrar.</strong> {reqCausa.motivo}</Fragment>
+              : <Fragment>Opcional en esta orden.</Fragment>}
+            {o.causaRaizVencimiento
+              ? <Fragment> Plazo: {HORAS_CAUSA_RAIZ} h desde la alarma, vence {fmt(o.causaRaizVencimiento)}{causaVencida ? ". Vencido" : ""}.</Fragment>
+              : <Fragment> Se escribe dentro de las {HORAS_CAUSA_RAIZ} h.</Fragment>}
+          </p>
+          <textarea id="causaRaiz" class:list={["input mt-3", faltaCausa && "border-red-300"]} rows={reqCausa.requiere ? 4 : 2}
+                    disabled={!puedeEscribirCausa} placeholder="Por qué falló, no qué se hizo.">{o.causaRaiz ?? ""}</textarea>
+          {puedeEscribirCausa ? (
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <p class="mr-auto text-xs text-slate-500">Mínimo {MIN_CAUSA_RAIZ} caracteres. Se guarda sola al escribir{ordenSinEnviar ? "" : ", aunque la orden ya esté enviada o cerrada"}.</p>
+              <button id="causaSave" type="button" class="btn-secondary text-xs">Guardar causa raíz</button>
+            </div>
+          ) : esJefatura && (
+            <p class="mt-2 text-xs text-slate-500">{estadoActual === "abierta" ? "Se escribe una vez iniciada la orden." : "La orden está cancelada."}</p>
+          )}
+        </div>
+      )}
 
       <!-- Repuestos consumidos -->
       {(itemsActivos.length > 0 || repuestosRows.length > 0) && (
@@ -1505,7 +1705,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                     <th class="px-3 py-1.5 text-right">Cant.</th>
                     <th class="px-3 py-1.5 text-right">P. unit.</th>
                     <th class="px-3 py-1.5 text-right">Subtotal</th>
-                    {puedeEditar && <th class="px-3 py-1.5"></th>}
+                    {puedeRevertirRepuesto && <th class="px-3 py-1.5"></th>}
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
@@ -1519,7 +1719,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                         <td class="px-3 py-1.5 text-right font-mono">{fmtCantidad(r.rep.cantidad, r.it?.unidad)}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{r.rep.precioUnitario != null ? `$${r.rep.precioUnitario.toFixed(2)}` : "—"}</td>
                         <td class="px-3 py-1.5 text-right font-mono">{sub > 0 ? `$${sub.toFixed(2)}` : "—"}</td>
-                        {puedeEditar && (
+                        {puedeRevertirRepuesto && (
                           <td class="px-3 py-1.5 text-right">
                             <button class="rep-del-btn text-xs text-red-500 hover:underline" data-id={r.rep.id}>Revertir</button>
                           </td>
@@ -1657,7 +1857,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     <!-- Sidebar: Asignacion + Comentarios -->
     <div class="space-y-4">
-      {puedeAsignar && estadoActual !== "cerrada" && estadoActual !== "cancelada" && (
+      {puedeTomarOrden && (
+        <div class="card p-5">
+          <h2 class="font-semibold text-slate-900">Asignación</h2>
+          <p class="mt-2 text-sm text-slate-600">Esta orden no tiene técnico asignado.</p>
+          <button id="tomarOrdenBtn" type="button" class="btn-primary mt-3 w-full justify-center">Tomar esta orden</button>
+        </div>
+      )}
+      {puedeCambiarAsignacion && (
         <div class="card p-5">
           <h2 class="font-semibold text-slate-900">Asignación</h2>
           <div class="mt-3 space-y-2 text-sm">
@@ -1805,7 +2012,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
       <h2 class="font-semibold text-slate-900">Firmas digitales</h2>
-      <a href={`/ordenes/${o.id}/reporte`} class="btn-primary text-sm">Reporte de mantenimiento</a>
+      {/* El reporte trae los tiempos de medición: es de la jefatura. */}
+      {verTiempos && <a href={`/ordenes/${o.id}/reporte`} class="btn-primary text-sm">Reporte de mantenimiento</a>}
     </div>
     <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
       {(["tecnico", "jefe", "solicitante"] as const).map((rol) => {
@@ -1813,6 +2021,8 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const nombre = rol === "tecnico" ? o.firmaTecnicoNombre : rol === "jefe" ? o.firmaJefeNombre : o.firmaSolicitanteNombre;
         const fecha = rol === "tecnico" ? o.firmaTecnicoFecha : rol === "jefe" ? o.firmaJefeFecha : o.firmaSolicitanteFecha;
         const labels = { tecnico: "Técnico", jefe: "Jefe / Supervisor", solicitante: "Solicitante / Usuario" };
+        // La firma de la jefatura solo la pone la jefatura: el servidor se la rechaza a los demás.
+        const puedeFirmar = rol !== "jefe" || esJefatura;
         return (
           <div class="rounded-lg border border-slate-200 p-3">
             <div class="text-xs font-medium uppercase text-slate-500">{labels[rol]}</div>
@@ -1820,13 +2030,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
               <div class="mt-2">
                 <img src={`/api/firmas/${o.id}/${rol}`} alt={`Firma ${rol}`} class="h-20 w-full rounded bg-white object-contain" />
                 <div class="mt-1 text-xs text-slate-600"><strong>{nombre}</strong></div>
-                <div class="text-[10px] text-slate-400">{fecha ? new Date(fecha).toLocaleString("es", { timeZone: "America/El_Salvador" }) : ""}</div>
-                <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>
+                <div class="text-[10px] text-slate-400">{fecha ? fmt(fecha) : ""}</div>
+                {puedeFirmar && <button class="firma-clear-btn mt-1 text-[10px] text-red-500 hover:underline" data-rol={rol}>Volver a firmar</button>}
               </div>
-            ) : (
+            ) : puedeFirmar ? (
               <button class="firma-add-btn mt-2 w-full rounded border border-dashed border-slate-300 py-3 text-xs text-slate-500 hover:border-brand-500 hover:text-brand-700" data-rol={rol}>
                 + Agregar firma
               </button>
+            ) : (
+              <p class="mt-2 text-xs text-slate-400">Sin firma. La pone la jefatura.</p>
             )}
           </div>
         );
@@ -1850,18 +2062,122 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     </div>
   </div>
 
-  <!-- Modal verificacion (capturar notas) -->
+  <!-- Modal verificacion (capturar notas): solo para quien puede verificar -->
+  {proximas.includes("verificada") && (
   <div id="verifModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog">
     <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
       <h3 class="font-semibold text-slate-900">Verificar y cerrar orden</h3>
       <p class="mt-1 text-xs text-slate-500">Confirmas que el trabajo está conforme. La OT pasará a <strong>cerrada</strong> y se enviará la encuesta de satisfacción al solicitante. Debes registrar qué evidencia comprobaste y el resultado. No puedes verificar tu propia ejecución.</p>
+      {verifSinLectura === "registrado" && (
+        <div id="verifSinLecturaRegistrado" class="mt-3 rounded border-l-4 border-amber-500 bg-amber-50 p-3 text-xs text-amber-900">
+          <strong>Enviada a verificación sin lectura de liberación.</strong> El motivo ya quedó registrado; no hace falta escribirlo otra vez.
+          <p class="mt-1 whitespace-pre-wrap">{o.cierreSinLecturaMotivo}</p>
+        </div>
+      )}
+      {verifSinLectura === "pedir" && (
+        <div class="mt-3">
+          <label class="label text-xs" for="verifSinLecturaMotivo">Faltan lecturas de liberación. Motivo para cerrar sin ellas (mínimo 20 caracteres)</label>
+          <textarea id="verifSinLecturaMotivo" class="input" rows="3"></textarea>
+        </div>
+      )}
+      {verifSinLectura === "bloqueada" && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Faltan lecturas de liberación obligatorias y solo la jefatura puede cerrar sin ellas. Devuelve la orden para que se midan.</p>
+      )}
+      {verifSinLectura === "fuera" && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Una lectura de liberación quedó fuera de rango: el sistema no se libera. Devuelve la orden para repetir la medición.</p>
+      )}
+      {verifSinCausa && (
+        <p class="mt-3 rounded bg-red-50 p-3 text-xs text-red-800">Falta la causa raíz. La escribe la jefatura: hasta entonces no se puede verificar.</p>
+      )}
       <textarea id="verifNotas" class="input mt-3" rows="3" minlength="10" required placeholder="Evidencia revisada, pruebas realizadas y resultado (obligatorio)"></textarea>
       <div class="mt-3 flex justify-end gap-2">
         <button id="verifCancel" class="btn-secondary">Cancelar</button>
-        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700">Verificar y cerrar</button>
+        <button id="verifConfirm" class="btn-primary bg-teal-600 hover:bg-teal-700" disabled={verifSinLectura === "bloqueada" || verifSinLectura === "fuera" || verifSinCausa}>Verificar y cerrar</button>
       </div>
     </div>
   </div>
+  )}
+
+  <!-- Cómo se lee un número escrito a mano: la regla de src/lib/numero.ts, copiada
+       porque un script en línea no puede importarla. scripts/test-ficha-orden.mjs
+       compara las dos con los mismos casos. -->
+  <script is:inline>
+    window.otNumero = (() => {
+      // Coma o punto decimal. El separador de miles no se adivina: «1,200» vuelve
+      // como «ambiguo», con la frase que pide escribirlo sin separador.
+      function mensajeAmbiguo(entero, decimal) {
+        return decimal
+          ? `¿${entero} o ${decimal}? Escribe el número sin separador de miles.`
+          : `Escribe el número sin separador de miles: ${entero}.`;
+      }
+      const SIMPLE = /^([-+]?)(\d+)$/;
+      const DECIMAL = /^([-+]?)(\d+)[.,](\d+)$/;
+      // Dos o más grupos de tres cifras con el mismo separador: 1,234,567 · 1.234.567 · 1 234 567.
+      const AGRUPADO = /^([-+]?)(\d{1,3})((?:([.,\u0020\u00a0])\d{3})(?:\4\d{3})+)$/;
+      // Un grupo de miles con espacio: 1 200.
+      const ESPACIO = /^([-+]?)(\d{1,3})[\u0020\u00a0](\d{3})$/;
+      // Miles con un separador y decimales con el otro: 1,234.5 · 1.234,5 · 1 234,5.
+      const MIXTO = /^([-+]?)(\d{1,3}(?:([.,\u0020\u00a0])\d{3})+)([.,])(\d+)$/;
+      function clasificar(t) {
+        let m = SIMPLE.exec(t);
+        if (m) return { tipo: "numero", valor: Number(m[1] + m[2]) };
+        m = DECIMAL.exec(t);
+        if (m) {
+          const [, signo, ent, dec] = m;
+          // «1,200» o «360.000»: tres cifras después de un entero de una a tres cifras que no empieza en 0.
+          if (dec.length === 3 && /^[1-9]\d{0,2}$/.test(ent)) {
+            const sinCeros = dec.replace(/0+$/, "");
+            return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${signo}${ent}${dec}`, sinCeros ? `${signo}${ent},${sinCeros}` : `${signo}${ent}`) };
+          }
+          return { tipo: "numero", valor: Number(`${signo}${ent}.${dec}`) };
+        }
+        m = ESPACIO.exec(t);
+        if (m) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${m[2]}${m[3]}`, null) };
+        m = AGRUPADO.exec(t);
+        if (m) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${(m[2] + m[3]).replace(/[^\d]/g, "")}`, null) };
+        m = MIXTO.exec(t);
+        if (m && m[3] !== m[4]) return { tipo: "ambiguo", mensaje: mensajeAmbiguo(`${m[1]}${m[2].replace(/[^\d]/g, "")},${m[5]}`, null) };
+        return { tipo: "texto" };
+      }
+      // Lo escrito completo es un número: la lectura obligatoria o el valor de un paso.
+      function leerNumero(v) {
+        if (typeof v === "number") return Number.isFinite(v) ? { tipo: "numero", valor: v } : { tipo: "texto" };
+        const t = typeof v === "string" ? v.trim() : v === null || v === undefined ? "" : String(v).trim();
+        if (!t) return { tipo: "vacio" };
+        return clasificar(t);
+      }
+      // El número con que empieza lo escrito, con la unidad al lado: «14,5 A».
+      // Un espacio cuenta como separador de miles solo si lo siguen tres cifras.
+      const AL_INICIO = /^([-+]?\d+(?:[.,\u0020\u00a0]\d+)*)/;
+      function numeroAlInicio(v) {
+        if (typeof v === "number") return Number.isFinite(v) ? { tipo: "numero", valor: v } : { tipo: "texto" };
+        const t = typeof v === "string" ? v.trim() : v === null || v === undefined ? "" : String(v).trim();
+        if (!t) return { tipo: "vacio" };
+        const m = AL_INICIO.exec(t);
+        if (!m) return { tipo: "texto" };
+        let token = m[1];
+        // Un espacio que no separa miles termina el número: «12 5 A» se lee 12.
+        const partes = token.split(/[\u0020\u00a0]/);
+        if (partes.length > 1) {
+          let i = 1;
+          while (i < partes.length && /^\d{3}(?:[.,]\d+)?$/.test(partes[i])) i++;
+          token = partes.slice(0, i).join(" ");
+        }
+        const r = clasificar(token);
+        return r.tipo === "texto" ? { tipo: "texto" } : r;
+      }
+      const valorDe = (r) => (r.tipo === "numero" ? r.valor : null);
+      // Un número guardado, escrito de forma que leerNumero lo lea igual: 12.345
+      // se escribe «12.3450», porque «12.345» se leería de dos formas.
+      function textoDeNumero(n) {
+        if (!Number.isFinite(n)) return "";
+        let s = String(n);
+        if (/e/i.test(s)) s = n.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
+        return /^-?[1-9]\d{0,2}\.\d{3}$/.test(s) ? `${s}0` : s;
+      }
+      return { mensajeAmbiguo, leerNumero, numeroAlInicio, valorDe, textoDeNumero };
+    })();
+  </script>
 
   <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({
     id,
@@ -1874,15 +2190,28 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     sucursalActualId: row.sucursal?.id ?? null,
     ubicacionActualId: row.ubicacion?.id ?? null,
     activoActualId: row.activo?.id ?? null,
+    usuarioId: user.id,
+    causaObligatoria: reqCausa.requiere,
+    minCausa: MIN_CAUSA_RAIZ,
+    mensajePasoSinNumero: MENSAJE_PASO_SIN_NUMERO,
   }) }}>
-    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+    const { id, area, estadoActual, checklistJson, itemsRepJson, ubicacionesData, activosData, sucursalActualId, ubicacionActualId, activoActualId, usuarioId, causaObligatoria, minCausa, mensajePasoSinNumero } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
-    // Blindaje: si checklistEjecucion quedara con datos no-JSON, no debe romper
-    // toda la página (botones incluidos). Ante error, se trata como vacío.
-    let checklist = [];
-    try { checklist = checklistJson ? JSON.parse(checklistJson) : []; } catch { checklist = []; }
+    // Cómo se lee un número escrito a mano (copia de src/lib/numero.ts).
+    const otNumero = window.otNumero;
+    // El checklist como lo mandó el servidor por última vez (la base con que el
+    // servidor fusiona lo que se guarda aquí) y la copia que se edita en
+    // pantalla. Blindaje: si checklistEjecucion quedara con datos no-JSON, no
+    // debe romper toda la página (botones incluidos). Ante error, va vacío.
+    function ckLeer(texto) {
+      try { const a = texto ? JSON.parse(texto) : []; return Array.isArray(a) ? a : []; } catch { return []; }
+    }
+    let ckBaseTexto = checklistJson ?? null;
+    let ckBase = ckLeer(ckBaseTexto);
+    let checklist = ckLeer(ckBaseTexto);
 
-    async function patchOrden(payload) {
+    // alRechazo(status, j): quien llama atiende el rechazo; si responde true, no sale la ventana.
+    async function patchOrden(payload, alRechazo) {
       const res = await fetch(`/api/ordenes/${id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -1890,7 +2219,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        alert(typeof j.error === "string" ? j.error : "Error");
+        if (alRechazo?.(res.status, j)) return null;
+        // El rechazo del valor de un paso que viajó en este envío va junto a su
+        // campo; lo demás marcado sale en el guardado siguiente.
+        if (payload.checklistEjecucion && ckRechazoDeValor(res.status, j, payload)) { if (ckCambiado()) programarGuardadoChecklist(); }
+        else alert(typeof j.error === "string" ? j.error : "Error");
         return null;
       }
       return await res.json();
@@ -1981,11 +2314,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       }
     });
 
+    // Sin señal, una transición o la verificación no salen: se dice, sin cambiar nada en pantalla.
+    const SIN_SENAL = "Sin señal: no se guardó. Vuelve a intentarlo cuando haya señal.";
     // Transiciones
     document.querySelectorAll("[data-transition]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const estado = btn.dataset.transition;
+        // La causa raíz pendiente sale antes que cualquier cambio de estado.
+        const causaAlDia = await guardarCausa();
         if (estado === "verificada") {
+          if (!causaAlDia) { $("causaCard")?.scrollIntoView?.({ behavior: "smooth", block: "center" }); return; }
+          if (!causaLista()) return;
           $("verifModal").classList.remove("hidden");
           $("verifModal").classList.add("flex");
           return;
@@ -1994,18 +2333,29 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         if (estado === "cerrada" && !confirm("¿Cerrar definitivamente la orden? Ya no se podrá modificar.")) return;
         // Submit notes and checklist with completion in one atomic request.
         let evidencia = {};
-        if (estado === "completada") {
-          if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
-          if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
-          evidencia = { ...leerEjecPayload(), checklistEjecucion: JSON.stringify(checklist ?? []) };
-        }
+        if (estado === "completada") evidencia = evidenciaPendiente();
         let motivo;
         if (estado === "en_espera" || (estado === "en_proceso" && ["completada", "verificada", "cerrada"].includes(estadoActual))) {
           motivo = prompt(estado === "en_espera" ? "Motivo del bloqueo o espera:" : "Motivo de devolución o reapertura (mínimo 10 caracteres):");
           if (!motivo?.trim()) return;
         }
-        const r = await patchOrden({ estado, ...evidencia, ...(motivo ? { motivo } : {}) });
-        if (r) location.reload();
+        // Un paso que cambió mientras tanto se avisa junto al checklist, no en una ventana.
+        let rechazo = null;
+        let r = null;
+        let sinSenal = false;
+        try {
+          r = await patchOrden({ estado, ...evidencia, ...(motivo ? { motivo } : {}) },
+            (status, j) => { rechazo = { status, j }; return estado === "completada" && ckEsPasoCambio(status, j); });
+        } catch { sinSenal = true; }
+        if (r) {
+          // Un paso que el servidor no tomó se queda a la vista, sin volver a cargar.
+          if (estado === "completada" && evidenciaGuardada(r.orden, r.pasosSinAplicar)) return;
+          location.reload();
+        } else if (estado === "completada") {
+          evidenciaFallida(rechazo?.status, rechazo?.j);
+          // Sin señal el envío no responde: se dice aquí, como sus otros errores.
+          if (sinSenal) alert("Sin señal: la orden no se envió. Lo que marcaste y escribiste queda en este equipo; vuelve a enviarla cuando haya señal.");
+        } else if (sinSenal) alert(SIN_SENAL);
       });
     });
 
@@ -2017,7 +2367,17 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     $("verifConfirm")?.addEventListener("click", async () => {
       const notas = $("verifNotas").value.trim();
       if (notas.length < 10) { alert("Describe la evidencia revisada y el resultado (mínimo 10 caracteres)."); return; }
-      const r = await patchOrden({ estado: "verificada", verificacionNotas: notas });
+      // Un MOP enviado sin lectura ya trae su motivo: no se vuelve a pedir ni a
+      // mandar. Solo se escribe cuando faltan lecturas y nadie lo registró.
+      let sinLectura = null;
+      const pedido = $("verifSinLecturaMotivo");
+      if (pedido) {
+        sinLectura = pedido.value.trim();
+        if (sinLectura.length < 20) { alert("Explica por qué no se pudo medir y con qué evidencia se libera el sistema (mínimo 20 caracteres)."); pedido.focus(); return; }
+      }
+      let r = null;
+      try { r = await patchOrden({ estado: "verificada", verificacionNotas: notas, ...(sinLectura ? { cierreSinLecturaMotivo: sinLectura } : {}) }); }
+      catch { alert(SIN_SENAL); return; }
       if (r) location.reload();
     });
 
@@ -2037,56 +2397,76 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (r) location.reload();
     });
 
-    // Checklist con 3 estados (ok / na / desviacion / pendiente).
-    // Normalizar items por si vienen del formato viejo {hecho:bool}.
-    checklist = (Array.isArray(checklist) ? checklist : []).map((it) => {
-      let estado = it.estado;
-      if (!["pendiente","ok","na","desviacion"].includes(estado)) {
-        estado = typeof it.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
-      }
-      // Preservar la metadata del procedimiento estándar (no perderla al guardar).
-      return {
-        texto: it.texto, estado, notas: it.notas ?? "",
-        criterio: it.criterio ?? null,
-        bloqueante: it.bloqueante === true || it.bloqueante === 1,
-        minutos: it.minutos ?? null,
-        materiales: it.materiales ?? null,
-        valorMedido: it.valorMedido ?? "",
-        // SOP con lectura obligatoria (Fase 47). Si se pierden aquí, el
-        // servidor deja de exigir el valor medido: hay que conservarlos.
-        requiereValor: it.requiereValor === true || it.requiereValor === 1,
-        unidad: it.unidad ?? null,
-        esperadoMin: it.esperadoMin ?? null,
-        esperadoMax: it.esperadoMax ?? null,
-        variableId: it.variableId ?? null,
-        hora: it.hora ?? "",
-        iniciales: it.iniciales ?? "",
-      };
+    // El técnico toma una orden abierta sin asignar.
+    $("tomarOrdenBtn")?.addEventListener("click", async () => {
+      const r = await patchOrden({ asignadoA: usuarioId });
+      if (r) location.reload();
     });
 
+    // ── Checklist ──────────────────────────────────────────────────────────
+    // Cada punto queda tal como vino del servidor y solo se toca lo que se marca
+    // o escribe aquí. Al guardar viaja también la base (lo último que mandó el
+    // servidor): el servidor toma de esta pantalla solo los puntos que cambiaron
+    // en ella y conserva los demás, así no se deshace un paso que el técnico
+    // marcó en el celular mientras la ficha estaba abierta.
+    // La pantalla numera los puntos como parseChecklist, sin los que no tienen
+    // texto: ckPos traduce ese número a la posición real en el arreglo.
+    let ckPos = [];
+    function ckPosiciones() {
+      ckPos = [];
+      checklist.forEach((it, i) => { if (String(it?.texto ?? "").length > 0) ckPos.push(i); });
+    }
+    ckPosiciones();
+    function ckItem(idx) {
+      const it = checklist[ckPos[idx]];
+      return it && typeof it === "object" ? it : null;
+    }
+    // Formato viejo {hecho: bool}: se lee igual que en el servidor.
+    function estadoDe(it) {
+      if (["pendiente", "ok", "na", "desviacion"].includes(it?.estado)) return it.estado;
+      return typeof it?.hecho === "boolean" ? (it.hecho ? "ok" : "pendiente") : "pendiente";
+    }
+    const mismoPunto = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const ckCambiado = () => checklist.length !== ckBase.length || checklist.some((it, i) => !mismoPunto(it, ckBase[i]));
+    // Un punto como lo compara el servidor (puntoNormal y puntoComparable de
+    // src/lib/orden-verificacion.ts): sin claves vacías, null ni false, con el
+    // estado viejo {hecho} traducido y bloqueante y requiereValor como booleanos.
+    // Una pestaña de antes rellena claves vacías al guardar; eso no es un cambio.
+    function puntoNormal(punto) {
+      if (typeof punto !== "object" || punto === null || Array.isArray(punto)) return null;
+      const p = { ...punto };
+      if (!["pendiente", "ok", "na", "desviacion"].includes(p.estado)) p.estado = p.hecho === true ? "ok" : "pendiente";
+      delete p.hecho;
+      for (const k of ["bloqueante", "requiereValor"]) if (k in p) p[k] = p[k] === true || p[k] === 1;
+      for (const k of Object.keys(p)) if (p[k] === null || p[k] === undefined || p[k] === "" || p[k] === false) delete p[k];
+      return p;
+    }
+    function puntoComparable(punto) {
+      const p = puntoNormal(punto);
+      return p ? JSON.stringify(Object.keys(p).sort().map((k) => [k, p[k]])) : JSON.stringify(punto ?? null);
+    }
+
+    const COLOR_FILA = {
+      ok: "bg-emerald-50 border border-emerald-200",
+      na: "bg-slate-100 border border-slate-200",
+      desviacion: "bg-amber-50 border border-amber-300",
+      pendiente: "bg-white border border-slate-200",
+    };
     function actualizarColorFila(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const row = document.querySelector(`.ck-row[data-idx="${idx}"]`);
       if (!row || !it) return;
-      // Limpiar clases anteriores
-      row.className = row.className
-        .replace(/bg-(emerald|slate|amber|white)-(50|100|200|300)/g, "")
-        .replace(/border-(emerald|slate|amber)-(200|300)/g, "");
-      const colorMap = {
-        ok: "bg-emerald-50 border border-emerald-200",
-        na: "bg-slate-100 border border-slate-200",
-        desviacion: "bg-amber-50 border border-amber-300",
-        pendiente: "bg-white border border-slate-200",
-      };
-      row.classList.add(...colorMap[it.estado].split(" "));
+      for (const clases of Object.values(COLOR_FILA)) row.classList.remove(...clases.split(" "));
+      row.classList.add(...COLOR_FILA[estadoDe(it)].split(" "));
     }
 
     function actualizarBotonesEstado(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       if (!it) return;
+      const actual = estadoDe(it);
       document.querySelectorAll(`.ck-estado-btn[data-idx="${idx}"]`).forEach((btn) => {
         const e = btn.dataset.estado;
-        const isActive = it.estado === e;
+        const isActive = actual === e;
         const colors = {
           pendiente: isActive ? "bg-slate-700 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50",
           ok: isActive ? "bg-brand-600 text-white" : "bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50",
@@ -2098,54 +2478,412 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     }
 
     function actualizarNotaVisible(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const wrap = document.querySelector(`.ck-nota-wrap[data-idx="${idx}"]`);
       if (!wrap || !it) return;
-      wrap.classList.toggle("hidden", it.estado !== "desviacion");
+      wrap.classList.toggle("hidden", estadoDe(it) !== "desviacion");
     }
 
-    let ckSaveTimer = null;
-    function programarGuardadoChecklist() {
+    // Vuelve a pintar cada punto con lo que hay en la copia de la pantalla. Un
+    // campo solo se reescribe si cambió, para no mover el cursor de quien escribe.
+    function repintarChecklist() {
+      document.querySelectorAll(".ck-row").forEach((row) => {
+        const idx = Number(row.dataset.idx);
+        const it = ckItem(idx);
+        if (!it) return;
+        actualizarColorFila(idx);
+        actualizarBotonesEstado(idx);
+        actualizarNotaVisible(idx);
+        const poner = (clase, v) => {
+          const el = document.querySelector(`.${clase}[data-idx="${idx}"]`);
+          // Un número escrito que no se guardó («1,200») queda para corregirlo.
+          if (!el || el.dataset.sinGuardar === "1") return;
+          // Un número guardado se escribe con textoDeNumero: 12.345 vuelve como «12.3450».
+          const t = v === null || v === undefined ? "" : typeof v === "number" ? otNumero.textoDeNumero(v) : String(v);
+          if (el.value !== t) el.value = t;
+        };
+        poner("ck-nota", it.notas);
+        poner("ck-valor", it.valorMedido);
+        poner("ck-num", it.valorMedido);
+        poner("ck-hora", it.hora);
+        poner("ck-iniciales", it.iniciales);
+        const campo = document.querySelector(`.ck-num[data-idx="${idx}"]`) ?? document.querySelector(`.ck-valor[data-idx="${idx}"]`);
+        if (campo && !campo.disabled && campo.dataset.sinGuardar !== "1") avisoValor(idx, campo.value.trim() ? problemaDeValor(campo) : "");
+        if (document.querySelector(`.ck-num[data-idx="${idx}"]`)) mostrarLectura(idx);
+      });
+    }
+
+    function ckIndicador(texto, color) {
       const ind = $("ckAutosave");
-      if (ind) { ind.textContent = "Guardando…"; ind.className = "text-amber-600"; }
-      if (ckSaveTimer) clearTimeout(ckSaveTimer);
-      ckSaveTimer = setTimeout(async () => {
-        const r = await patchOrden({ checklistEjecucion: JSON.stringify(checklist) });
-        if (ind) {
-          ind.textContent = r ? "✓ Guardado" : "Sin guardar";
-          ind.className = r ? "text-emerald-600" : "text-red-600";
-          setTimeout(() => { ind.textContent = ""; }, 2000);
+      if (ind) { ind.textContent = texto; ind.className = color; }
+    }
+    // La caja avisa dos cosas: un aviso suelto (la orden o el checklist cambió) y
+    // los números de los pasos que cambiaron mientras tanto. Un guardado bueno
+    // quita el aviso suelto; el de un paso sigue hasta que la persona vuelve a
+    // marcar ese paso o recarga la ficha.
+    let ckAvisoTexto = "";
+    let ckAvisoPasos = [];
+    let ckAvisoAlEnviar = false;
+    function ckPintarAviso() {
+      const texto = [ckAvisoTexto, ckAvisoPasos.length ? fraseCambiaron(ckAvisoPasos, ckAvisoAlEnviar) : ""].filter(Boolean).join(" ");
+      const caja = $("ckConflicto");
+      if (!caja) { if (texto) alert(texto); return; }
+      $("ckConflictoMsg").textContent = texto;
+      caja.classList.toggle("hidden", !texto);
+    }
+    function ckConflicto(msg) {
+      ckAvisoTexto = typeof msg === "string" && msg.trim() ? msg : "El checklist cambió mientras lo editabas. Vuelve a cargar la ficha.";
+      ckPintarAviso();
+    }
+    $("ckRecargar")?.addEventListener("click", () => location.reload());
+    // Un guardado que salió bien quita el aviso suelto, no el de los pasos.
+    function ckSinConflicto() { ckAvisoTexto = ""; ckPintarAviso(); }
+    // La persona volvió a marcar o a escribir en ese paso: ya lo revisó.
+    function ckPasoRevisado(idx) {
+      if (!ckAvisoPasos.includes(idx + 1)) return;
+      ckAvisoPasos = ckAvisoPasos.filter((n) => n !== idx + 1);
+      ckPintarAviso();
+    }
+    // «El paso 2 cambió mientras tanto: revísalo y márcalo otra vez.» Con el
+    // envío a verificación, «…revísalo y vuelve a enviar.»
+    function fraseCambiaron(numeros, alEnviar) {
+      const uno = numeros.length === 1;
+      const despues = alEnviar ? "vuelve a enviar" : uno ? "márcalo otra vez" : "márcalos otra vez";
+      return uno
+        ? `El paso ${numeros[0]} cambió mientras tanto: revísalo y ${despues}.`
+        : `Los pasos ${numeros.slice(0, -1).join(", ")} y ${numeros.at(-1)} cambiaron mientras tanto: revísalos y ${despues}.`;
+    }
+    // Avisa los pasos que cambiaron en el servidor mientras tanto (posiciones en
+    // el arreglo), con el número que ve la persona, junto con los que la caja ya
+    // avisa. Responde si avisó alguno.
+    function ckAvisarPasos(posiciones, alEnviar) {
+      const nuevos = posiciones.filter((i) => ckPos.includes(i)).map((i) => ckPos.indexOf(i) + 1);
+      if (!nuevos.length) return false;
+      ckAvisoPasos = [...new Set([...ckAvisoPasos, ...nuevos])].sort((a, b) => a - b);
+      ckAvisoAlEnviar = alEnviar;
+      ckPintarAviso();
+      return true;
+    }
+    // Los pasos que el servidor no tomó porque cambiaron allá, en la misma clave,
+    // mientras tanto: él conserva su punto entero.
+    const ckSinAplicar = (j) => (Array.isArray(j?.pasosSinAplicar) ? j.pasosSinAplicar.filter((i) => Number.isInteger(i) && i >= 0 && i < checklist.length) : []);
+    // Un punto que se toma del servidor se pinta entero como lo tiene él, también
+    // el número escrito que no se guardó.
+    function ckSoltarCampos(posiciones) {
+      for (const i of posiciones) {
+        const idx = ckPos.indexOf(i);
+        if (idx < 0) continue;
+        document.querySelectorAll(`.ck-num[data-idx="${idx}"], .ck-valor[data-idx="${idx}"]`).forEach((el) => { el.dataset.sinGuardar = ""; });
+        avisoValor(idx, "");
+      }
+    }
+
+    // Lo que respondió el servidor, ya fusionado, pasa a ser la base y se pinta.
+    // Un punto que se cambió aquí mientras viajaba el guardado conserva ese
+    // cambio: sale en el guardado siguiente. Uno que el servidor no tomó
+    // (sinAplicar) queda como lo tiene él, aunque se haya tocado en el viaje.
+    function tomarChecklist(orden, enviado, sinAplicar = []) {
+      if (!orden || !("checklistEjecucion" in orden)) return;
+      const texto = orden.checklistEjecucion ?? null;
+      const fusion = ckLeer(texto);
+      if (fusion.length !== checklist.length) {
+        ckBaseTexto = texto; ckBase = fusion; checklist = ckLeer(texto); ckPosiciones();
+        // Con otra forma, los números de paso del aviso ya no dicen nada.
+        ckAvisoPasos = [];
+        ckConflicto();
+        return;
+      }
+      checklist = fusion.map((p, i) => (enviado && !sinAplicar.includes(i) && !mismoPunto(checklist[i], enviado[i]) ? checklist[i] : JSON.parse(JSON.stringify(p))));
+      ckBaseTexto = texto;
+      ckBase = fusion;
+      ckPosiciones();
+      ckSoltarCampos(sinAplicar);
+      repintarChecklist();
+    }
+    // El 409 del envío a verificación con un paso que cambió en el servidor
+    // mientras tanto: el servidor no aplicó nada.
+    const ckEsPasoCambio = (status, j) => status === 409 && j?.motivo === "paso-cambio";
+    // Ese paso se pinta como lo tiene el servidor y sale de la copia del equipo;
+    // lo demás sigue marcado aquí, con su base, y se guarda solo. El aviso va
+    // junto al checklist. Responde si era eso.
+    function ckPasoCambio(status, j) {
+      if (!ckEsPasoCambio(status, j)) return false;
+      const pasos = (Array.isArray(j?.pasos) ? j.pasos : []).filter((i) => Number.isInteger(i) && i >= 0 && i < checklist.length);
+      const servidor = j?.orden && "checklistEjecucion" in j.orden ? ckLeer(j.orden.checklistEjecucion) : [];
+      if (servidor.length === checklist.length) {
+        for (const i of pasos) {
+          checklist[i] = JSON.parse(JSON.stringify(servidor[i]));
+          ckBase[i] = JSON.parse(JSON.stringify(servidor[i]));
         }
-      }, 1000);
+        ckBaseTexto = JSON.stringify(ckBase);
+        ckSoltarCampos(pasos);
+        repintarChecklist();
+        ckGuardarLocal(pasos);
+        // Sin nada más marcado aquí, no queda nada que reintentar al salir.
+        if (!ckCambiado()) { ckReintentar = false; ckIndicador("", "text-slate-400"); }
+      }
+      if (!ckAvisarPasos(pasos, true)) ckConflicto(j?.error);
+      $("ckConflicto")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      return true;
+    }
+
+    // Lo que viaja: el checklist de esta pantalla y la base con que se armó.
+    const ckEnvio = () => ({ checklistEjecucion: JSON.stringify(checklist), checklistBase: ckBaseTexto ?? "[]" });
+
+    // Lo marcado queda también en este equipo hasta que el servidor lo tiene,
+    // punto por punto y cada uno con la base con que se marcó: sin señal no se
+    // pierde al salir ni al recargar. Dos pestañas de la misma orden comparten la
+    // copia: cada una fusiona lo suyo con lo que ya hay y quita solo lo suyo o lo
+    // que el servidor ya tiene. La copia es de la cuenta: otra cuenta en el
+    // mismo navegador tiene la suya y no la toca.
+    const CK_KEY = `ot-${id}-ck-${usuarioId}`;
+    // Lo que esta pestaña dejó en la copia, por punto.
+    let ckEscrito = {};
+    const mismoValor = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    // Una lectura vale por su número: «10,5» es la misma que 10.5.
+    function mismaLectura(a, b) {
+      const x = otNumero.leerNumero(a), y = otNumero.leerNumero(b);
+      return x.tipo === "numero" && y.tipo === "numero" ? x.valor === y.valor : mismoValor(a, b);
+    }
+    // La hora que selló esta ficha al anotar la lectura, por posición. Quien
+    // guarda en el servidor pone la suya, así que no dice si una marca ya llegó;
+    // la copia del equipo la lleva marcada (selladas). Una hora escrita a mano
+    // y las iniciales sí lo dicen.
+    const ckHoraSellada = {};
+    const selladaDe = (i, p) => (ckHoraSellada[i] !== undefined && p && typeof p === "object" && p.hora === ckHoraSellada[i] ? ckHoraSellada[i] : undefined);
+    // Una marca ya llegó si el servidor tiene, en cada clave que la marca
+    // cambió, el valor marcado. Se compara como el servidor. Solo la hora que
+    // selló la propia ficha (sellada) no cuenta.
+    function yaGuardado(marca, base, servidor, sellada) {
+      const m = puntoNormal(marca), b = puntoNormal(base), s = puntoNormal(servidor);
+      if (!m || !b || !s) return puntoComparable(marca) === puntoComparable(servidor);
+      const igual = (k, x, y) => (k === "valorMedido" ? mismaLectura(x, y) : mismoValor(x, y));
+      return [...new Set([...Object.keys(m), ...Object.keys(b)])]
+        .filter((k) => !igual(k, m[k], b[k]) && !(k === "hora" && sellada !== undefined && m.hora === sellada))
+        .every((k) => igual(k, s[k], m[k]));
+    }
+    function ckLeerCopia() {
+      try {
+        const l = JSON.parse(localStorage.getItem(CK_KEY) || "null");
+        const selladas = l?.selladas && typeof l.selladas === "object" ? l.selladas : {};
+        return l && typeof l.checklist === "string" ? { usuarioId: l.usuarioId, marcado: ckLeer(l.checklist), base: ckLeer(l.base), selladas } : null;
+      } catch { return null; }
+    }
+    // La copia es de esta cuenta y de este mismo checklist.
+    const copiaPropia = (c) => !!c && c.usuarioId === usuarioId && c.marcado.length === ckBase.length && c.base.length === ckBase.length;
+    const esperaEn = (c, i) => !mismoPunto(c.marcado[i], c.base[i]);
+    // pares[i]: [marca, base, hora sellada] de un punto que espera, o null. Sin ninguno, la copia se borra.
+    function ckEscribirCopia(pares) {
+      try {
+        if (!pares.some(Boolean)) { localStorage.removeItem(CK_KEY); return; }
+        const marcado = pares.map((par, i) => (par ? par[0] : ckBase[i]));
+        const base = pares.map((par, i) => (par ? par[1] : ckBase[i]));
+        const selladas = Object.fromEntries(pares.flatMap((par, i) => (par && par[2] !== undefined ? [[i, par[2]]] : [])));
+        localStorage.setItem(CK_KEY, JSON.stringify({ usuarioId, checklist: JSON.stringify(marcado), base: JSON.stringify(base), selladas, savedAt: Date.now() }));
+      } catch {}
+    }
+    // quitar: los puntos que el servidor no tomó porque cambiaron allá. Salen de
+    // la copia aunque los haya dejado otra pestaña, salvo uno marcado ya sobre lo
+    // que tiene el servidor.
+    function ckGuardarLocal(quitar = []) {
+      const copia = ckLeerCopia();
+      const propia = copiaPropia(copia) ? copia : null;
+      // Una copia de otro checklist no se mezcla: sin nada marcado aquí, queda como está.
+      if (copia && !propia && !ckCambiado()) return;
+      const mio = {};
+      const pares = checklist.map((p, i) => {
+        if (!mismoPunto(p, ckBase[i])) { mio[i] = JSON.stringify([p, ckBase[i]]); return [p, ckBase[i], selladaDe(i, p)]; }
+        if (!propia || !esperaEn(propia, i)) return null;
+        const par = [propia.marcado[i], propia.base[i], propia.selladas[i]];
+        if (quitar.includes(i) && puntoComparable(par[1]) !== puntoComparable(ckBase[i])) return null;
+        // Lo que dejó esta pestaña y ya no espera, o lo que el servidor ya tiene, sale.
+        return ckEscrito[i] === JSON.stringify([par[0], par[1]]) || yaGuardado(par[0], par[1], ckBase[i], par[2]) ? null : par;
+      });
+      ckEscrito = mio;
+      ckEscribirCopia(pares);
+    }
+    // Un rechazo: lo de esta pestaña sale de la copia; lo de otras pestañas se queda.
+    function ckOlvidarLocal() {
+      const copia = ckLeerCopia();
+      const escrito = ckEscrito;
+      ckEscrito = {};
+      if (!copia || copia.usuarioId !== usuarioId) return;
+      if (!copiaPropia(copia)) { ckEscribirCopia([]); return; }
+      ckEscribirCopia(copia.marcado.map((p, i) => (esperaEn(copia, i) && escrito[i] !== JSON.stringify([p, copia.base[i]]) ? [p, copia.base[i], copia.selladas[i]] : null)));
+    }
+    // El 409 de la guarda de concurrencia: otra escritura entró entre la lectura
+    // y la escritura del servidor. No es el de un checklist que cambió de forma.
+    // Se reconoce por su motivo y, si no viene, por la frase.
+    const ckOtraEscritura = (status, j) => status === 409 && (typeof j?.motivo === "string"
+      ? j.motivo === "otra-escritura"
+      : /^La orden cambió durante la operación/.test(typeof j?.error === "string" ? j.error : ""));
+
+    let ckSaveTimer = null;
+    let ckEnVuelo = false;
+    let ckOtraVez = false;
+    // El último guardado no llegó (sin señal u otra escritura en medio): se
+    // reintenta al salir.
+    let ckReintentar = false;
+    // El guardado siguiente no quita el aviso: lo que se guarda solo después del
+    // aviso de un paso que cambió.
+    let ckAvisoFijo = false;
+    // La frase de la ventana que ya abrió el envío que no salió: el guardado que
+    // se programa después no abre otra igual.
+    let ckVentanaVista = null;
+    function programarGuardadoChecklist() {
+      ckIndicador("Guardando…", "text-amber-600");
+      ckGuardarLocal();
+      if (ckSaveTimer) clearTimeout(ckSaveTimer);
+      ckSaveTimer = setTimeout(guardarChecklist, 1000);
+    }
+    async function ckMandar(payload) {
+      const res = await fetch(`/api/ordenes/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return { res, j: await res.json().catch(() => ({})) };
+    }
+    // conservarAviso: el guardado de lo recuperado al abrir no quita el aviso de
+    // los pasos que cambiaron mientras tanto.
+    async function guardarChecklist(opciones) {
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      if (ckEnVuelo) { ckOtraVez = true; return; }
+      const conservarAviso = opciones?.conservarAviso === true || ckAvisoFijo;
+      ckAvisoFijo = false;
+      const vista = ckVentanaVista;
+      ckVentanaVista = null;
+      if (!ckCambiado()) { ckIndicador("", "text-slate-400"); return; }
+      ckEnVuelo = true;
+      let payload = ckEnvio();
+      let enviado = JSON.parse(payload.checklistEjecucion);
+      let bien = false;
+      try {
+        let { res, j } = await ckMandar(payload);
+        // Con otra escritura en medio se reintenta una vez con la misma base: la
+        // fusión del servidor conserva lo que llegó del celular.
+        if (ckOtraEscritura(res.status, j)) {
+          payload = ckEnvio();
+          enviado = JSON.parse(payload.checklistEjecucion);
+          ({ res, j } = await ckMandar(payload));
+        }
+        ckReintentar = false;
+        if (res.ok) {
+          bien = true;
+          if (!conservarAviso) ckSinConflicto();
+          // Lo demás quedó guardado; un paso que cambió allá mientras tanto se pinta como lo tiene el servidor y se avisa.
+          const sinAplicar = ckSinAplicar(j);
+          tomarChecklist(j.orden, enviado, sinAplicar);
+          ckGuardarLocal(sinAplicar);
+          ckAvisarPasos(sinAplicar, false);
+        }
+        else if (ckOtraEscritura(res.status, j)) { ckReintentar = true; ckConflicto(j.error); }
+        else {
+          // Rechazado: no se puede aplicar, así que tampoco se manda al volver.
+          // Un error del servidor no es un rechazo: se reintenta al salir.
+          if (res.status >= 500) ckReintentar = true;
+          else ckOlvidarLocal();
+          if (res.status === 409) ckConflicto(j.error);
+          // El valor rechazado vuelve al de la base y lo demás sale enseguida.
+          else if (ckRechazoDeValor(res.status, j, payload)) ckOtraVez = ckCambiado();
+          else if (typeof j.error !== "string" || j.error !== vista) alert(typeof j.error === "string" ? j.error : "Error");
+        }
+      } catch { ckReintentar = true; }
+      ckEnVuelo = false;
+      ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
+      if (bien) setTimeout(() => { if (!ckSaveTimer && !ckEnVuelo && $("ckAutosave")?.textContent === "✓ Guardado") ckIndicador("", "text-slate-400"); }, 2000);
+      if (ckOtraVez) { ckOtraVez = false; guardarChecklist(); }
     }
 
     document.querySelectorAll(".ck-estado-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.dataset.idx);
-        const nuevoEstado = btn.dataset.estado;
-        if (!checklist[idx]) return;
-        checklist[idx].estado = nuevoEstado;
+        const it = ckItem(idx);
+        if (!it) return;
+        it.estado = btn.dataset.estado;
+        delete it.hecho;
         actualizarColorFila(idx);
         actualizarBotonesEstado(idx);
         actualizarNotaVisible(idx);
+        // Con N/A la lectura no se exige: la etiqueta cambia al marcar.
+        if (document.querySelector(`.ck-num[data-idx="${idx}"]`)) mostrarLectura(idx);
+        ckPasoRevisado(idx);
         programarGuardadoChecklist();
       });
     });
 
     document.querySelectorAll(".ck-nota").forEach((ta) => {
       ta.addEventListener("input", () => {
-        const idx = Number(ta.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].notas = ta.value;
+        const it = ckItem(Number(ta.dataset.idx));
+        if (!it) return;
+        it.notas = ta.value;
+        ckPasoRevisado(Number(ta.dataset.idx));
         programarGuardadoChecklist();
       });
     });
 
+    // El valor de un paso se lee con la regla de numero.ts, como en el celular y
+    // en el servidor: en un paso con rango (mínimo o máximo), lo escrito es el
+    // número del instrumento; sin rango también vale un texto. Un número que se
+    // lee de dos formas («1,200») o un texto en un paso con rango no se guarda:
+    // el punto conserva lo que tiene el servidor y el aviso dice cómo escribirlo.
+    function problemaDeValor(campo) {
+      const leido = otNumero.leerNumero(campo.value);
+      if (leido.tipo === "ambiguo") return leido.mensaje;
+      const conRango = (campo.dataset.min ?? "") !== "" || (campo.dataset.max ?? "") !== "";
+      return leido.tipo === "texto" && conRango ? mensajePasoSinNumero : "";
+    }
+    function avisoValor(idx, texto) {
+      const el = document.querySelector(`.ck-aviso[data-idx="${idx}"]`);
+      if (!el) return;
+      el.textContent = texto;
+      el.classList.toggle("hidden", !texto);
+    }
+    // El servidor rechazó el valor de un paso (un texto en un paso con rango o un
+    // número que se lee de dos formas): el aviso va junto a ese campo, como antes
+    // de mandar. El servidor solo revisa el valor que cambió, así que es el de un
+    // punto que viajó con otro valor que su base. Ese valor vuelve al de la base;
+    // lo demás sigue en la copia del equipo. Responde si era eso.
+    function ckRechazoDeValor(status, j, payload) {
+      const error = typeof j?.error === "string" ? j.error : "";
+      if (status !== 400 || !(error === mensajePasoSinNumero || /Escribe el número sin separador de miles/.test(error))) return false;
+      const enviado = ckLeer(payload?.checklistEjecucion), base = ckLeer(payload?.checklistBase);
+      const cambiados = enviado.flatMap((p, i) => (ckPos.includes(i) && !mismoValor(p?.valorMedido, base[i]?.valorMedido) ? [i] : []));
+      const culpables = Number.isInteger(j?.paso) && cambiados.includes(j.paso) ? [j.paso] : cambiados;
+      if (!culpables.length) return false;
+      for (const i of culpables) {
+        const idx = ckPos.indexOf(i);
+        const campo = document.querySelector(`.ck-num[data-idx="${idx}"], .ck-valor[data-idx="${idx}"]`);
+        avisoValor(idx, error);
+        if (campo) campo.dataset.sinGuardar = "1";
+        const it = checklist[i], deBase = ckBase[i];
+        if (!it || typeof it !== "object" || !mismoValor(it.valorMedido, enviado[i]?.valorMedido)) continue;
+        if (deBase && typeof deBase === "object" && "valorMedido" in deBase) it.valorMedido = deBase.valorMedido;
+        else delete it.valorMedido;
+        if (document.querySelector(`.ck-num[data-idx="${idx}"]`)) mostrarLectura(idx);
+      }
+      ckGuardarLocal();
+      return true;
+    }
+    // Pasa lo escrito al punto si se puede guardar. Responde si lo tomó.
+    function tomarValor(campo, it, idx) {
+      const problema = problemaDeValor(campo);
+      avisoValor(idx, problema);
+      campo.dataset.sinGuardar = problema ? "1" : "";
+      if (!problema) { it.valorMedido = campo.value; return true; }
+      const base = ckBase[ckPos[idx]];
+      if (base && typeof base === "object" && "valorMedido" in base) it.valorMedido = base.valorMedido;
+      else delete it.valorMedido;
+      return false;
+    }
+
     document.querySelectorAll(".ck-valor").forEach((inp) => {
       inp.addEventListener("input", () => {
         const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].valorMedido = inp.value;
+        const it = ckItem(idx);
+        if (!it) return;
+        tomarValor(inp, it, idx);
+        ckPasoRevisado(idx);
         programarGuardadoChecklist();
       });
     });
@@ -2155,34 +2893,42 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // ponemos la línea en Desviación y dejamos la constancia escrita en sus
     // notas. NO abrimos el evento AOP desde aquí: eso lo hace el módulo de
     // condición anormal; aquí solo queda el dato listo.
+    // El mínimo o el máximo de un paso, como lo leen el servidor y parseChecklist:
+    // vacío o ilegible («abc») es sin límite.
+    const limiteDePaso = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
     function evaluarLectura(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       if (!it) return { tiene: false, dentro: null };
-      const crudo = it.valorMedido;
-      const tiene = crudo !== null && crudo !== undefined && String(crudo).trim() !== "";
-      const n = tiene ? Number(String(crudo).replace(",", ".")) : NaN;
-      const num = Number.isFinite(n) ? n : null;
-      const min = it.esperadoMin === null || it.esperadoMin === undefined ? null : Number(it.esperadoMin);
-      const max = it.esperadoMax === null || it.esperadoMax === undefined ? null : Number(it.esperadoMax);
+      // Como el servidor: «1,200» no se adivina y queda sin número.
+      const leido = otNumero.leerNumero(it.valorMedido);
+      const tiene = leido.tipo !== "vacio";
+      const num = otNumero.valorDe(leido);
+      const min = limiteDePaso(it.esperadoMin);
+      const max = limiteDePaso(it.esperadoMax);
       let dentro = null;
       if (num !== null && (min !== null || max !== null)) {
         dentro = (min === null || num >= min) && (max === null || num <= max);
       }
-      return { tiene, num, dentro, min, max };
+      // Con rango, lo escrito sin número («ok», «1,200» de antes) no es lectura, como en el servidor.
+      const sinLectura = !tiene || ((min !== null || max !== null) && num === null);
+      // Un paso N/A no se midió a propósito: no se le exige lectura, como en el progreso.
+      return { tiene, num, dentro, min, max, sinLectura, na: estadoDe(it) === "na" };
     }
 
+    // Los límites se escriben con textoDeNumero, como en el servidor: 12.345 como «12.3450».
     function rangoTexto(idx) {
-      const it = checklist[idx];
+      const it = ckItem(idx);
       const u = it.unidad ? ` ${it.unidad}` : "";
-      const min = it.esperadoMin ?? null, max = it.esperadoMax ?? null;
-      if (min !== null && max !== null) return `${min} a ${max}${u}`;
-      if (min !== null) return `≥ ${min}${u}`;
-      if (max !== null) return `≤ ${max}${u}`;
+      const { min, max } = evaluarLectura(idx);
+      const n = otNumero.textoDeNumero;
+      if (min !== null && max !== null) return `${n(min)} a ${n(max)}${u}`;
+      if (min !== null) return `≥ ${n(min)}${u}`;
+      if (max !== null) return `≤ ${n(max)}${u}`;
       return null;
     }
 
-    function pintarLectura(idx) {
-      const it = checklist[idx];
+    // Solo pinta la caja y la etiqueta de la lectura.
+    function mostrarLectura(idx) {
       const ev = evaluarLectura(idx);
       const caja = document.querySelector(`.ck-num[data-idx="${idx}"]`)?.closest("div.mt-2");
       const etiqueta = document.querySelector(`.ck-rango[data-idx="${idx}"]`);
@@ -2190,16 +2936,23 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         caja.className = "mt-2 rounded-lg p-2 " + (
           ev.dentro === false ? "bg-red-50 ring-1 ring-red-300" :
           ev.dentro === true ? "bg-emerald-50" :
-          !ev.tiene ? "bg-amber-50" : "bg-slate-50"
+          ev.sinLectura && !ev.na ? "bg-amber-50" : "bg-slate-50"
         );
       }
       if (etiqueta) {
         etiqueta.innerHTML =
-          !ev.tiene ? '<span class="text-amber-700">Sin lectura — bloquea el cierre</span>' :
+          ev.sinLectura ? (ev.na ? '<span class="text-slate-500">N/A: no se exige lectura</span>' : '<span class="text-amber-700">Sin lectura — bloquea el cierre</span>') :
           ev.dentro === true ? '<span class="text-emerald-700">✓ Dentro del rango</span>' :
           ev.dentro === false ? '<span class="text-red-700">FUERA DE RANGO — no libera el sistema</span>' :
           '<span class="text-slate-500">Registrado</span>';
       }
+    }
+
+    function pintarLectura(idx) {
+      const it = ckItem(idx);
+      if (!it) return;
+      const ev = evaluarLectura(idx);
+      mostrarLectura(idx);
       // Constancia escrita en las notas de la línea. Se regenera en cada
       // tecleo, así que corregir un dedazo también limpia la constancia; el
       // texto que escribió el técnico se conserva siempre.
@@ -2208,64 +2961,130 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       if (ev.dentro === false) {
         const u = it.unidad ? ` ${it.unidad}` : "";
         const rt = rangoTexto(idx);
-        const constancia = `Lectura fuera de rango: ${it.valorMedido}${u}${rt ? ` (rango normal ${rt})` : ""}${it.hora ? ` a las ${it.hora}` : ""}.`;
+        const constancia = `Lectura fuera de rango: ${it.valorMedido}${u}${rt ? ` (rango normal ${rt})` : ""}${it.hora ? ` a ${laHora(String(it.hora))}` : ""}.`;
         it.notas = humanas ? `${constancia}\n${humanas}` : constancia;
-        if (it.estado !== "desviacion") {
+        if (estadoDe(it) !== "desviacion") {
           it.estado = "desviacion";
+          delete it.hecho;
           actualizarColorFila(idx);
           actualizarBotonesEstado(idx);
         }
-      } else if (it.notas !== humanas) {
+      } else if ((it.notas ?? "") !== humanas) {
         it.notas = humanas;
       }
       actualizarNotaVisible(idx);
       const ta = document.querySelector(`.ck-nota[data-idx="${idx}"]`);
-      if (ta && ta.value !== it.notas) ta.value = it.notas;
+      if (ta && ta.value !== (it.notas ?? "")) ta.value = it.notas ?? "";
     }
 
     function horaAhora() {
       return new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/El_Salvador" });
     }
+    // «las 14:00», pero «la 01:00»: la regla de laHora (src/lib/turnos.ts), copiada
+    // porque un script en línea no puede importarla.
+    const laHora = (hhmm) => (/^0?1:/.test(hhmm) ? `la ${hhmm}` : `las ${hhmm}`);
 
     document.querySelectorAll(".ck-num").forEach((inp) => {
       inp.addEventListener("input", () => {
         const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].valorMedido = inp.value;
+        const it = ckItem(idx);
+        if (!it) return;
+        const tomado = tomarValor(inp, it, idx);
         // La hora de la lectura se sella sola la primera vez: en el formato
         // impreso del MOP esa columna se llena durante la ejecución.
-        if (inp.value !== "" && !String(checklist[idx].hora || "").trim()) {
-          checklist[idx].hora = horaAhora();
+        if (tomado && inp.value.trim() !== "" && !String(it.hora || "").trim()) {
+          it.hora = horaAhora();
+          ckHoraSellada[ckPos[idx]] = it.hora;
           const h = document.querySelector(`.ck-hora[data-idx="${idx}"]`);
-          if (h) h.value = checklist[idx].hora;
+          if (h) h.value = it.hora;
         }
         pintarLectura(idx);
+        ckPasoRevisado(idx);
         programarGuardadoChecklist();
       });
     });
 
     document.querySelectorAll(".ck-hora").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].hora = inp.value;
+        const it = ckItem(Number(inp.dataset.idx));
+        if (!it) return;
+        it.hora = inp.value;
+        // Escrita a mano, la hora es de la persona.
+        delete ckHoraSellada[ckPos[Number(inp.dataset.idx)]];
+        ckPasoRevisado(Number(inp.dataset.idx));
         programarGuardadoChecklist();
       });
     });
 
     document.querySelectorAll(".ck-iniciales").forEach((inp) => {
       inp.addEventListener("input", () => {
-        const idx = Number(inp.dataset.idx);
-        if (!checklist[idx]) return;
-        checklist[idx].iniciales = inp.value;
+        const it = ckItem(Number(inp.dataset.idx));
+        if (!it) return;
+        it.iniciales = inp.value;
+        ckPasoRevisado(Number(inp.dataset.idx));
         programarGuardadoChecklist();
       });
     });
 
+    // Un valor guardado que no se lee como número («1,200») se marca al abrir.
+    document.querySelectorAll(".ck-num, .ck-valor").forEach((campo) => {
+      if (!campo.disabled && campo.value.trim()) avisoValor(Number(campo.dataset.idx), problemaDeValor(campo));
+    });
+
+    // Al abrir: lo que se marcó en este equipo y no llegó al servidor (sin
+    // señal, pestaña cerrada) se manda si el servidor todavía tiene ese punto como
+    // estaba al marcarlo; los demás puntos van como están ahora en el servidor.
+    // Un punto que ya llegó no se manda ni se avisa. Uno que cambió mientras tanto
+    // (el celular, otra cuenta) no se pisa: la ficha dice cuál revisar. Solo lo
+    // manda quien lo marcó, si todavía puede marcar; si no, la ficha lo dice.
+    (function ckRecuperar() {
+      const copia = ckLeerCopia();
+      if (!copia || copia.usuarioId !== usuarioId) return;
+      // Sin checklist en pantalla (vacío o ilegible) no hay dónde aplicarlo ni decirlo.
+      if (!checklist.length) { ckEscribirCopia([]); return; }
+      const editable = !!document.querySelector(".ck-estado-btn");
+      const SIN_PERMISO = "Lo que marcaste sin señal no se guardó: ya no puedes marcar pasos en esta orden.";
+      if (!copiaPropia(copia)) {
+        ckEscribirCopia([]);
+        ckConflicto(editable ? "Lo que marcaste sin señal no se guardó: el checklist cambió mientras tanto. Márcalo otra vez." : SIN_PERMISO);
+        return;
+      }
+      const { marcado, base, selladas } = copia;
+      const espera = marcado.map((p, i) => esperaEn(copia, i) && !yaGuardado(p, base[i], checklist[i], selladas[i]));
+      // El servidor tiene el punto como estaba al marcarlo, comparado como él lo compara.
+      const manda = espera.map((e, i) => e && editable && puntoComparable(checklist[i]) === puntoComparable(base[i]));
+      const cambiaron = espera.flatMap((e, i) => (e && editable && !manda[i] ? [i] : []));
+      // Cada punto de la copia queda resuelto aquí; lo que se manda vuelve a ella como de esta pestaña.
+      ckEscribirCopia([]);
+      if (!editable) { if (espera.some(Boolean)) ckConflicto(SIN_PERMISO); return; }
+      const avisa = ckAvisarPasos(cambiaron, false);
+      if (!manda.some(Boolean)) return;
+      checklist = checklist.map((p, i) => (manda[i] ? marcado[i] : p));
+      manda.forEach((m, i) => { if (m && selladas[i] !== undefined) ckHoraSellada[i] = selladas[i]; });
+      ckPosiciones();
+      repintarChecklist();
+      ckGuardarLocal();
+      ckIndicador("Guardando…", "text-amber-600");
+      guardarChecklist({ conservarAviso: avisa });
+    })();
+
     // ── Ejecución: auto-guardado con debounce + backup en localStorage ────
-    const STORAGE_KEY = `ot-${id}-draft`;
-    const ejecFields = ["trabajosRealizados", "causaRaiz", "solucionAplicada"];
+    // El borrador es de la cuenta. El de antes de esta versión no la lleva en la
+    // clave: sus textos se ofrecen una sola vez al abrir, cuando no hay uno de
+    // esta cuenta que ofrecer, y se borran; si es más viejo que el de la cuenta,
+    // se descartan sin ofrecerse. Su causa raíz la ofrece el bloque de la causa.
+    const STORAGE_KEY = `ot-${id}-draft-${usuarioId}`;
+    const STORAGE_KEY_VIEJA = `ot-${id}-draft`;
+    // La causa raíz no va aquí: la escribe la jefatura y se guarda aparte, para
+    // que lo que guarda el técnico nunca la borre.
+    const ejecFields = ["trabajosRealizados", "solucionAplicada"];
+    const NOMBRE_CAMPO = { trabajosRealizados: "Trabajos realizados", solucionAplicada: "Solución aplicada" };
     const ejecIndicador = $("autosaveIndicador");
+    // Lo escrito como lo tiene el servidor, hasta donde sabe esta página: lo que
+    // pintó al abrir y lo que guardó después. El borrador lo lleva como base: al
+    // volver, la ficha sabe si alguien guardó otro texto mientras tanto.
+    const ejecGuardado = {};
+    for (const campo of ejecFields) if ($(campo)) ejecGuardado[campo] = $(campo).value.trim();
 
     function setIndicador(estado, texto) {
       if (!ejecIndicador) return;
@@ -2283,44 +3102,110 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
 
     function leerEjecPayload() {
       // horasTrabajadas se calcula en el servidor automaticamente al cerrar.
-      // No se envia desde el cliente.
-      return {
-        trabajosRealizados: $("trabajosRealizados")?.value.trim() || null,
-        causaRaiz: $("causaRaiz")?.value?.trim() || null,
-        solucionAplicada: $("solucionAplicada")?.value?.trim() || null,
-      };
+      // No se envia desde el cliente. Solo viajan los campos que hay en pantalla
+      // y se pueden escribir: un campo ausente no se manda vacío.
+      const payload = {};
+      for (const campo of ejecFields) {
+        const el = $(campo);
+        if (el && !el.disabled) payload[campo] = el.value.trim() || null;
+      }
+      return payload;
+    }
+    // Solo viaja y queda en el borrador lo escrito que difiere de lo guardado
+    // (K20): un campo que la persona no tocó no se manda, así una pestaña abierta
+    // antes no borra lo que otra cuenta guardó después en ese campo.
+    function ejecCambios() {
+      const cambios = {};
+      for (const [campo, valor] of Object.entries(leerEjecPayload())) if ((valor ?? "") !== (ejecGuardado[campo] ?? "")) cambios[campo] = valor;
+      return cambios;
     }
 
-    function guardarLocal(payload) {
+    // El borrador lleva cada campo que cambió aquí, con lo que tenía el servidor
+    // cuando se escribió. Dos pestañas de la misma cuenta lo comparten: cada una
+    // deja lo suyo y quita solo lo suyo que ya no espera o lo que el servidor ya
+    // tiene; el texto que dejó la otra se queda para ofrecerse al volver.
+    let ejecEscrito = {};
+    function guardarLocal() {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, savedAt: Date.now() }));
+        let previo = null;
+        try { previo = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch {}
+        if (!previo || !previo.payload || typeof previo.payload !== "object") previo = null;
+        const cambios = ejecCambios();
+        const payload = {}, base = {}, mio = {};
+        for (const c of ejecFields) {
+          if (c in cambios) {
+            payload[c] = cambios[c];
+            base[c] = ejecGuardado[c] ?? "";
+            mio[c] = JSON.stringify([payload[c], base[c]]);
+          } else if (previo && previo.payload[c] !== undefined) {
+            const v = previo.payload[c], b = previo.base?.[c];
+            if (ejecEscrito[c] === JSON.stringify([v, b]) || (c in ejecGuardado && (v ?? "") === ejecGuardado[c])) continue;
+            payload[c] = v;
+            if (b !== undefined) base[c] = b;
+          }
+        }
+        ejecEscrito = mio;
+        if (!Object.keys(payload).length) { localStorage.removeItem(STORAGE_KEY); return; }
+        const savedAt = Object.keys(mio).length || !previo ? Date.now() : previo.savedAt;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ payload, base, savedAt }));
       } catch {}
     }
-    function limpiarLocal() {
-      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    // Lo escrito llegó al servidor y pasa a ser lo guardado. Lo que se siguió
+    // escribiendo mientras viajaba queda en el borrador, con esa base.
+    function textosGuardados(enviado) {
+      for (const c of Object.keys(enviado)) ejecGuardado[c] = enviado[c] ?? "";
+      guardarLocal();
     }
 
     let debounceTimer = null;
     let inFlight = false;
     let pending = false;
+    // El último guardado de lo escrito no llegó (sin señal, error del servidor u
+    // otra escritura en medio): se reintenta al salir y el navegador avisa al cerrar.
+    let textoReintentar = false;
+    // La frase de la ventana que ya abrió el envío que no salió: el guardado que
+    // se programa después no abre otra igual.
+    let textoVentanaVista = null;
 
-    async function ejecutarGuardado() {
+    // reintento: el que sigue a otra escritura en medio (el guardado del
+    // checklist que salió a la vez). Es pasajera, como en el checklist: sin
+    // ventana, se reintenta una vez al rato y, si vuelve a pasar, espera la salida.
+    async function ejecutarGuardado(reintento = false) {
       if (inFlight) { pending = true; return; }
+      const payload = ejecCambios();
+      // Backup local antes de mandar al servidor
+      guardarLocal();
+      // Sin nada distinto de lo guardado no se llama al servidor.
+      if (!Object.keys(payload).length) { textoReintentar = false; setIndicador("idle", ""); return; }
       inFlight = true;
       setIndicador("guardando", "Guardando…");
-      const payload = leerEjecPayload();
-      // Backup local antes de mandar al servidor
-      guardarLocal(payload);
+      const vista = textoVentanaVista;
+      textoVentanaVista = null;
+      let rechazo = 0;
+      let otraEscritura = false;
       try {
-        const r = await patchOrden(payload);
+        const r = await patchOrden(payload, (status, j) => {
+          rechazo = status;
+          otraEscritura = ckOtraEscritura(status, j);
+          return otraEscritura || (vista !== null && j?.error === vista);
+        });
         if (r) {
-          limpiarLocal();
+          textoReintentar = false;
+          textosGuardados(payload);
           setIndicador("guardado", "✓ Guardado");
           setTimeout(() => { if (ejecIndicador?.dataset.status === "guardado") setIndicador("idle", ""); }, 2000);
+        } else if (otraEscritura && !reintento) {
+          textoReintentar = true;
+          if (!debounceTimer) debounceTimer = setTimeout(() => { debounceTimer = null; ejecutarGuardado(true); }, 1500);
         } else {
-          setIndicador("offline", "Sin conexión — guardado localmente");
+          // Rechazado: queda en el equipo. Un error del servidor o la otra
+          // escritura que se repitió se reintentan al salir.
+          textoReintentar = rechazo >= 500 || otraEscritura;
+          if (rechazo >= 500) setIndicador("offline", "Sin conexión — guardado localmente");
+          else setIndicador("error", "Sin guardar");
         }
       } catch {
+        textoReintentar = true;
         setIndicador("offline", "Sin conexión — guardado localmente");
       } finally {
         inFlight = false;
@@ -2332,10 +3217,11 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       // Mostrar inmediatamente que hay cambios pendientes
       setIndicador("guardando", "Editando…");
       // Backup local instantáneo
-      guardarLocal(leerEjecPayload());
-      // Debounce 1.5s
+      guardarLocal();
+      // Debounce 1.5s. Al dispararse ya no espera: si el guardado no llega, lo
+      // dice textoReintentar.
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(ejecutarGuardado, 1500);
+      debounceTimer = setTimeout(() => { debounceTimer = null; ejecutarGuardado(); }, 1500);
     }
 
     // Conectar listeners a cada campo de ejecución
@@ -2352,45 +3238,354 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       await ejecutarGuardado();
     });
 
-    // Al cargar la página: si hay un draft local más reciente que el servidor,
-    // ofrecer restaurarlo
+    // Al cargar la página: si hay un borrador en este equipo distinto de lo que
+    // tiene el servidor, se ofrece. Si después de escribirlo se guardó otro texto
+    // en ese campo (otra cuenta en este navegador, la misma en otro equipo), la
+    // pregunta lo dice: aceptar lo reemplaza y lo guarda; cancelar deja lo
+    // guardado y descarta el borrador.
     (function checkDraftLocal() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return;
-        const { payload, savedAt } = JSON.parse(raw);
-        if (!payload) return;
-        // Comparar con valores actuales del DOM (que vienen del servidor)
-        const actualTrab = ($("trabajosRealizados")?.value || "").trim();
-        const actualCausa = ($("causaRaiz")?.value || "").trim();
-        const actualSol = ($("solucionAplicada")?.value || "").trim();
-        const cambios = (
-          (payload.trabajosRealizados ?? "") !== actualTrab ||
-          (payload.causaRaiz ?? "") !== actualCausa ||
-          (payload.solucionAplicada ?? "") !== actualSol
-        );
-        if (!cambios) { limpiarLocal(); return; }
-        const fechaSave = new Date(savedAt).toLocaleString("es", { timeZone: "America/El_Salvador" });
-        const mensaje = `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
-        if (confirm(mensaje)) {
-          if ($("trabajosRealizados") && payload.trabajosRealizados != null) $("trabajosRealizados").value = payload.trabajosRealizados;
-          if ($("causaRaiz") && payload.causaRaiz != null) $("causaRaiz").value = payload.causaRaiz;
-          if ($("solucionAplicada") && payload.solucionAplicada != null) $("solucionAplicada").value = payload.solucionAplicada;
-          // Disparar guardado inmediato al servidor
+      const quitar = (clave) => { try { localStorage.removeItem(clave); } catch {} };
+      const leer = (clave) => {
+        try { const b = JSON.parse(localStorage.getItem(clave) || "null"); return b && b.payload && typeof b.payload === "object" ? b : null; } catch { return null; }
+      };
+      // Responde "nada" si no había qué ofrecer, "ofrecido" si preguntó y
+      // "espera" si hoy no se puede escribir ninguno de sus campos. soltar()
+      // saca los textos del equipo antes de restaurar: si el guardado no llega,
+      // el borrador vuelve a quedar solo con lo restaurado.
+      function ofrecer(borrador, soltar) {
+        const { payload, base, savedAt } = borrador;
+        const textos = ejecFields.filter((c) => payload[c] !== undefined);
+        if (!textos.length) return "nada";
+        // Comparar con valores actuales del DOM (que vienen del servidor). Solo
+        // cuentan los campos que hoy se pueden escribir en pantalla.
+        const campos = textos.filter((c) => $(c) && !$(c).disabled);
+        if (!campos.length) return "espera";
+        const enServidor = (c) => ($(c).value || "").trim();
+        const conBase = !!base && typeof base === "object";
+        // Un campo igual a su base no se tocó: ni se ofrece ni se restaura.
+        const cambios = campos.filter((c) => (payload[c] ?? "") !== enServidor(c) && !(conBase && typeof base[c] === "string" && (payload[c] ?? "") === base[c]));
+        if (!cambios.length) { soltar(); return "nada"; }
+        // Los campos en que se guardó otro texto después de escribir el borrador.
+        // El de antes de esta versión llega con base vacía (abajo).
+        const otros = conBase ? cambios.filter((c) => typeof base[c] === "string" && base[c] !== enServidor(c)) : [];
+        const fechaSave = new Date(savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
+        const uno = otros.length === 1;
+        const mensaje = otros.length
+          ? `Tienes cambios sin guardar de ${fechaSave} en esta OT. Después de que los escribiste en este equipo ${uno ? "se guardó otro texto" : "se guardaron otros textos"} en ${otros.map((c) => NOMBRE_CAMPO[c]).join(" y ")}. ¿${uno ? "Reemplazarlo" : "Reemplazarlos"} con lo que escribiste aquí? (Cancelar = dejar lo guardado)`
+          : `Tienes cambios sin guardar de ${fechaSave} en esta OT. ¿Restaurarlos? (Cancelar = descartar)`;
+        const restaurar = confirm(mensaje);
+        soltar();
+        if (restaurar) {
+          for (const c of cambios) if (payload[c] != null) $(c).value = payload[c];
+          // Disparar guardado inmediato al servidor: si no llega, el borrador
+          // vuelve a quedar en el equipo, sobre lo que se vio al abrir.
           ejecutarGuardado();
-        } else {
-          limpiarLocal();
         }
+        return "ofrecido";
+      }
+      try {
+        const cuenta = leer(STORAGE_KEY);
+        const vieja = leer(STORAGE_KEY_VIEJA);
+        const deCuenta = cuenta ? ofrecer(cuenta, () => quitar(STORAGE_KEY)) : "nada";
+        if (!vieja || !ejecFields.some((c) => vieja.payload[c] !== undefined)) return;
+        // De la clave vieja salen los textos; su causa raíz se queda hasta que la
+        // ofrezca el bloque de la causa a quien puede escribirla.
+        const soltarVieja = () => {
+          const causa = vieja.payload.causaRaiz;
+          if (typeof causa !== "string" || !causa.trim()) { quitar(STORAGE_KEY_VIEJA); return; }
+          try { localStorage.setItem(STORAGE_KEY_VIEJA, JSON.stringify({ payload: { causaRaiz: causa }, savedAt: vieja.savedAt })); } catch {}
+        };
+        // Más viejo que el de la cuenta, se descarta sin ofrecerse: no pisa lo más nuevo.
+        if (cuenta && Number(vieja.savedAt) < Number(cuenta.savedAt)) soltarVieja();
+        // Si no, espera mientras haya uno de esta cuenta que ofrecer: no se
+        // borra sin haberlo ofrecido.
+        // La clave de antes guardaba los campos como estaban en pantalla, también
+        // los que nadie tocó: se ofrece con base vacía. Un campo vacío no se
+        // restaura y, si el servidor tiene otro texto en ese campo, la pregunta lo
+        // dice (Cancelar = dejar lo guardado).
+        else if (deCuenta === "nada") ofrecer({ ...vieja, base: Object.fromEntries(ejecFields.map((c) => [c, ""])) }, soltarVieja);
       } catch {}
     })();
 
     // Avisar al usuario si intenta cerrar la pestaña con cambios pendientes
     window.addEventListener("beforeunload", (e) => {
-      if (debounceTimer || inFlight) {
+      if (debounceTimer || inFlight || textoReintentar || causaTimer || ckSaveTimer || ckEnVuelo || (ckReintentar && ckCambiado())) {
         e.preventDefault();
         e.returnValue = "";
       }
     });
+
+    // Lo escrito y marcado que todavía no salió al servidor, para mandarlo
+    // junto con el envío a verificación (también el envío sin lectura).
+    // El checklist solo viaja si algo cambió aquí, y con su base: lo que el
+    // técnico marcó en el celular no se pisa.
+    let ckEvidencia = null;
+    // Lo escrito que viajó con el envío, y si esperaba su autoguardado (o un
+    // reintento porque el último no llegó) cuando salió.
+    let textoEvidencia = null;
+    let textoEnEspera = false;
+    function evidenciaPendiente() {
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      textoEnEspera = !!debounceTimer || textoReintentar;
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      const pasos = ckCambiado() ? ckEnvio() : null;
+      ckEvidencia = pasos ? JSON.parse(pasos.checklistEjecucion) : null;
+      // Lo escrito viaja solo si difiere de lo guardado (K20).
+      textoEvidencia = ejecCambios();
+      return { ...textoEvidencia, ...(pasos ?? {}) };
+    }
+    // El envío con la evidencia salió bien: lo escrito y lo marcado que viajaron
+    // en él ya están en el servidor y dejan de esperar en el equipo. Un paso que el
+    // servidor no tomó se pinta como lo tiene él y se avisa. Responde si quedó
+    // alguno así: entonces la ficha no se vuelve a cargar.
+    function evidenciaGuardada(orden, pasosSinAplicar) {
+      const enviado = ckEvidencia;
+      ckEvidencia = null;
+      textoEnEspera = false;
+      if (textoEvidencia) { textoReintentar = false; textosGuardados(textoEvidencia); textoEvidencia = null; }
+      if (!enviado) return false;
+      ckReintentar = false;
+      const sinAplicar = ckSinAplicar({ pasosSinAplicar });
+      tomarChecklist(orden, enviado, sinAplicar);
+      ckGuardarLocal(sinAplicar);
+      return ckAvisarPasos(sinAplicar, true);
+    }
+    // El envío no salió, por la causa que sea: lo que esperaba su autoguardado
+    // se vuelve a programar. Si un paso cambió en el servidor mientras tanto, se
+    // pinta como lo tiene él y se avisa junto al checklist, y lo demás se guarda
+    // sin quitar el aviso. Responde si fue eso.
+    function evidenciaFallida(status, j) {
+      ckEvidencia = null;
+      textoEvidencia = null;
+      const pasoCambio = ckPasoCambio(status, j);
+      // La ventana que ya abrió este rechazo (la orden pasó a otro técnico, por
+      // ejemplo) no se repite cuando el guardado que sigue recibe el mismo.
+      const vista = !pasoCambio && typeof j?.error === "string" ? j.error : null;
+      if (textoEnEspera) { textoVentanaVista = vista; programarGuardado(); }
+      textoEnEspera = false;
+      if (ckCambiado()) { ckAvisoFijo = pasoCambio; ckVentanaVista = vista; programarGuardadoChecklist(); }
+      return pasoCambio;
+    }
+    window.otEvidenciaPendiente = evidenciaPendiente;
+    window.otEvidenciaGuardada = evidenciaGuardada;
+    window.otEvidenciaFallida = evidenciaFallida;
+
+    // ── Causa raíz: la escribe la jefatura, también con la orden enviada ──
+    // Viaja sola, nunca junto con lo que escribe el técnico, y con soloCambios:
+    // es lo que la persona cambió aquí, también si vuelve a una causa anterior
+    // que escribió otra cuenta (K16).
+    const causaEl = $("causaRaiz");
+    const causaEditable = !!causaEl && !causaEl.disabled;
+    // El borrador de la causa es de la cuenta, como el de lo escrito, y lleva la
+    // causa guardada sobre la que se escribió: al volver, la ficha sabe si alguien
+    // guardó otra mientras tanto.
+    const CAUSA_KEY = `ot-${id}-causa-${usuarioId}`;
+    let causaTimer = null;
+    let causaGuardada = causaEl ? causaEl.value.trim() : "";
+    function guardarBorradorCausa(savedAt = Date.now()) {
+      try { localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: causaEl.value, base: causaGuardada, savedAt })); } catch {}
+    }
+    // La causa llegó al servidor: lo que se siguió escribiendo espera con esa base.
+    // El borrador sale solo si trae esa misma causa: el que dejó otra pestaña con
+    // otro texto se queda para ofrecerse al volver.
+    function causaLlego(valor) {
+      causaGuardada = valor;
+      if (causaEl.value.trim() !== valor) { guardarBorradorCausa(); return; }
+      let borrador = null;
+      try { borrador = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null"); } catch {}
+      try { if (typeof borrador?.valor !== "string" || borrador.valor.trim() === valor) localStorage.removeItem(CAUSA_KEY); } catch {}
+    }
+
+    function avisoCausa(texto, color) {
+      const m = $("causaMsg");
+      if (m) { m.textContent = texto; m.className = "text-xs " + color; }
+    }
+
+    // Enviada o cerrada, la causa raíz ya es evidencia del cierre: el servidor
+    // no la acepta vacía ni más corta que el mínimo, así que un texto corto no
+    // se manda. En proceso se guarda como borrador.
+    const causaFirme = causaObligatoria && ["completada", "verificada", "cerrada"].includes(estadoActual);
+    function faltanCaracteres(valor) {
+      const n = causaFirme ? minCausa - valor.length : 0;
+      return n <= 0 ? "" : n === 1 ? "Falta 1 carácter para guardar" : `Faltan ${n} caracteres para guardar`;
+    }
+
+    async function guardarCausa() {
+      if (causaTimer) { clearTimeout(causaTimer); causaTimer = null; }
+      if (!causaEditable) return true;
+      const valor = causaEl.value.trim();
+      if (valor === causaGuardada) return true;
+      const falta = faltanCaracteres(valor);
+      if (falta) { avisoCausa(falta, "text-amber-700"); return false; }
+      avisoCausa("Guardando…", "text-amber-600");
+      try {
+        const mandar = async () => {
+          const res = await fetch(`/api/ordenes/${id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ causaRaiz: valor || null, soloCambios: true }),
+          });
+          return { res, j: await res.json().catch(() => ({})) };
+        };
+        let { res, j } = await mandar();
+        // Otra escritura en medio (lo escrito o el checklist que salieron a la
+        // vez, como al recuperar lo de antes al abrir) es pasajera: se reintenta una vez.
+        if (ckOtraEscritura(res.status, j)) ({ res, j } = await mandar());
+        if (!res.ok) {
+          avisoCausa(typeof j.error === "string" ? `Sin guardar: ${j.error}` : "Sin guardar", "text-red-600");
+          return false;
+        }
+        causaLlego(valor);
+        avisoCausa("Guardada", "text-emerald-600");
+        return true;
+      } catch {
+        avisoCausa("Sin conexión: queda guardada en este equipo", "text-amber-700");
+        return false;
+      }
+    }
+
+    // Verificar y cerrar exige la causa raíz cuando el tipo la pide.
+    function causaLista() {
+      if (!causaObligatoria || !causaEl) return true;
+      if (causaEl.value.trim().length >= minCausa) return true;
+      avisoCausa(`Falta la causa raíz: mínimo ${minCausa} caracteres.`, "text-red-600");
+      $("causaCard")?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      if (causaEditable) causaEl.focus();
+      return false;
+    }
+
+    if (causaEditable) {
+      causaEl.addEventListener("input", () => {
+        guardarBorradorCausa();
+        avisoCausa("Editando…", "text-amber-600");
+        if (causaTimer) clearTimeout(causaTimer);
+        causaTimer = setTimeout(guardarCausa, 1500);
+      });
+      $("causaSave")?.addEventListener("click", () => { guardarCausa(); });
+      // La causa que la pestaña de antes de esta versión guardaba junto con los
+      // textos (la clave sin la cuenta) pasa a ser el borrador de esta cuenta y se
+      // ofrece ahora, salvo que la cuenta ya tenga uno más nuevo. Esa clave guardaba
+      // la causa como estaba en pantalla, aunque nadie la escribiera: va con base
+      // vacía, así, si el servidor tiene una causa, la pregunta dice que se guardó
+      // otro texto (Cancelar = dejar lo guardado).
+      // Después sale de esa clave. A quien no puede escribir la causa no se le
+      // ofrece y queda allí.
+      try {
+        const vieja = JSON.parse(localStorage.getItem(STORAGE_KEY_VIEJA) || "null");
+        const deAntes = typeof vieja?.payload?.causaRaiz === "string" ? vieja.payload.causaRaiz : "";
+        if (deAntes.trim()) {
+          let propio = null;
+          try { propio = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null"); } catch {}
+          const masNuevo = typeof propio?.valor === "string" && Number(propio.savedAt) > Number(vieja.savedAt);
+          if (!masNuevo && deAntes.trim() !== causaGuardada) localStorage.setItem(CAUSA_KEY, JSON.stringify({ valor: deAntes, base: "", savedAt: Number(vieja.savedAt) || Date.now() }));
+          const textos = { ...vieja.payload };
+          delete textos.causaRaiz;
+          if (ejecFields.some((c) => textos[c] !== undefined)) localStorage.setItem(STORAGE_KEY_VIEJA, JSON.stringify({ ...vieja, payload: textos }));
+          else localStorage.removeItem(STORAGE_KEY_VIEJA);
+        }
+      } catch {}
+      // Lo que quedó sin guardar (sin señal, pestaña cerrada) se ofrece al volver.
+      // Si después se guardó otra causa (otra cuenta en este navegador, la misma
+      // en otro equipo), la pregunta lo dice: aceptar la reemplaza y la guarda;
+      // cancelar deja la guardada y descarta el borrador.
+      try {
+        const borrador = JSON.parse(localStorage.getItem(CAUSA_KEY) || "null");
+        if (borrador && typeof borrador.valor === "string") {
+          if (borrador.valor.trim() === causaGuardada) localStorage.removeItem(CAUSA_KEY);
+          else {
+            const cuando = new Date(borrador.savedAt).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" });
+            const otra = typeof borrador.base === "string" && borrador.base.trim() !== causaGuardada;
+            const pregunta = otra
+              ? `Tienes una causa raíz sin guardar del ${cuando}. Después de que la escribiste en este equipo se guardó otro texto en Causa raíz. ¿Reemplazarlo con lo que escribiste aquí? (Cancelar = dejar lo guardado)`
+              : `Tienes una causa raíz sin guardar del ${cuando}. ¿Recuperarla? (Cancelar = descartar)`;
+            if (confirm(pregunta)) {
+              causaEl.value = borrador.valor;
+              // Si no sale, espera sobre la causa que se vio al decidir.
+              guardarBorradorCausa(borrador.savedAt);
+              guardarCausa();
+            } else localStorage.removeItem(CAUSA_KEY);
+          }
+        }
+      } catch {}
+    }
+
+    // Lo que quedó escrito sin guardar sale al servidor aunque se cierre la
+    // pestaña o se cambie de página; el respaldo local queda por si no llega.
+    // Responde true si el servidor lo aceptó, false si lo rechazó, null sin señal.
+    function enviarAlSalir(payload, alTerminar) {
+      try {
+        fetch(`/api/ordenes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).then(async (res) => alTerminar(res.ok, await res.json().catch(() => ({})), res.status), () => alTerminar(null));
+      } catch { alTerminar(null); }
+    }
+    function guardarAlSalir() {
+      const payload = {};
+      // Lo escrito que esperaba su autoguardado, que va en camino (puede cortarse
+      // al salir, como el del checklist) o cuyo último guardado no llegó. Viaja
+      // solo lo que difiere de lo guardado (K20) y queda también en el borrador,
+      // por si no llega.
+      const conTexto = !!debounceTimer || textoReintentar || inFlight;
+      // Un guardado del checklist que estaba por salir, en camino o sin señal se
+      // manda otra vez con keepalive: el que va en camino puede cortarse al salir.
+      const conPasos = (!!ckSaveTimer || ckEnVuelo || ckReintentar) && ckCambiado();
+      if (ckSaveTimer) { clearTimeout(ckSaveTimer); ckSaveTimer = null; }
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      const cambios = conTexto ? ejecCambios() : {};
+      const textos = Object.keys(cambios).length ? cambios : null;
+      if (textos) { Object.assign(payload, textos); guardarLocal(); }
+      if (conPasos) Object.assign(payload, ckEnvio());
+      const enviado = conPasos ? JSON.parse(payload.checklistEjecucion) : null;
+      if (Object.keys(payload).length) enviarAlSalir(payload, (bien, j, status) => {
+        if (textos) {
+          // Sin señal o con un error del servidor queda en el equipo; la otra
+          // escritura en medio también se reintenta en la salida siguiente.
+          const pasajero = bien === null || status >= 500;
+          textoReintentar = !bien && (pasajero || ckOtraEscritura(status, j));
+          if (bien) { textosGuardados(textos); setIndicador("guardado", "✓ Guardado"); }
+          else setIndicador(pasajero ? "offline" : "error", pasajero ? "Sin conexión — guardado localmente" : "Sin guardar");
+        }
+        if (conPasos) {
+          const sinRechazo = bien === null || ckOtraEscritura(status, j) || status >= 500;
+          ckReintentar = !bien && sinRechazo;
+          if (bien) {
+            ckSinConflicto();
+            const sinAplicar = ckSinAplicar(j);
+            tomarChecklist(j?.orden, enviado, sinAplicar);
+            ckGuardarLocal(sinAplicar);
+            ckAvisarPasos(sinAplicar, false);
+          }
+          else {
+            if (!sinRechazo) {
+              ckOlvidarLocal();
+              // Sin el valor rechazado, lo demás se manda en la salida siguiente.
+              if (ckRechazoDeValor(status, j, payload)) ckReintentar = ckCambiado();
+            }
+            if (status === 409) ckConflicto(j?.error);
+          }
+          ckIndicador(bien ? "✓ Guardado" : "Sin guardar", bien ? "text-emerald-600" : "text-red-600");
+        }
+      });
+      // La causa sin guardar queda también en el borrador, como lo escrito: otra
+      // pestaña de la misma cuenta pudo cambiarlo mientras tanto.
+      if (causaEditable && causaEl.value.trim() !== causaGuardada) guardarBorradorCausa();
+      if (causaTimer) {
+        clearTimeout(causaTimer); causaTimer = null;
+        const valor = causaEl.value.trim();
+        if (valor !== causaGuardada && faltanCaracteres(valor)) avisoCausa(faltanCaracteres(valor), "text-amber-700");
+        else if (valor !== causaGuardada) enviarAlSalir({ causaRaiz: valor || null, soloCambios: true }, (bien) => {
+          if (bien) {
+            causaLlego(valor);
+            avisoCausa("Guardada", "text-emerald-600");
+          } else avisoCausa(bien === false ? "Sin guardar" : "Sin conexión: queda guardada en este equipo", bien === false ? "text-red-600" : "text-amber-700");
+        });
+      }
+    }
+    window.addEventListener("pagehide", guardarAlSalir);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") guardarAlSalir(); });
 
     // Comentarios
     $("comForm")?.addEventListener("submit", async (e) => {
@@ -2566,13 +3761,13 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     clearCanvas();
   </script>
 
-  <!-- Modal: cerrar un MOP sin la lectura de liberación (escape con motivo) -->
-  {esMop && puedeCerrarSinLectura(user.rol) && otAbiertaParaRegistro && (
+  <!-- Modal: enviar un MOP a verificación sin la lectura de liberación (escape con motivo) -->
+  {puedeEnviarSinLectura && (
     <div id="sinLecturaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card w-full max-w-lg p-5">
-        <h3 class="text-lg font-semibold text-slate-900">Cerrar sin lectura de liberación</h3>
+        <h3 class="text-lg font-semibold text-slate-900">Enviar a verificación sin lectura de liberación</h3>
         <p class="mt-1 text-sm text-slate-600">
-          El MOP exige medir antes de devolver el sistema a servicio. Este es el <strong>único escape</strong>, y queda registrado con tu nombre y la hora. Explica por qué no se pudo medir y con qué evidencia se libera el sistema.
+          El MOP exige medir antes de devolver el sistema a servicio. Este es el <strong>único escape</strong>, y queda registrado con tu nombre y la hora. <strong>La orden no se cierra:</strong> queda pendiente de verificación, y quien verifica ve este motivo. Explica por qué no se pudo medir y con qué evidencia se libera el sistema.
         </p>
         <div class="mt-3">
           <label class="label text-xs" for="sinLecturaMotivo">Motivo escrito (mínimo 20 caracteres)</label>
@@ -2581,15 +3776,15 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         <p id="sinLecturaMsg" class="hidden mt-2 text-sm"></p>
         <div class="mt-5 flex justify-end gap-2">
           <button id="sinLecturaCancel" type="button" class="btn-secondary">Cancelar</button>
-          <button id="sinLecturaConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Cerrar la OT sin lectura</button>
+          <button id="sinLecturaConfirm" type="button" class="btn-primary bg-amber-600 hover:bg-amber-700">Enviar a verificación sin lectura</button>
         </div>
       </div>
     </div>
   )}
 
   <!-- ══ MOP y EOP: prerrequisitos, liberaciones, horas y plan de reversa ══ -->
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id }) }}>
-    const { otId } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id, motivoPrevio: o.cierreSinLecturaMotivo ?? "", venceCausa: o.causaRaizVencimiento ?? null, reversaInicial: !!o.reversaEjecutada }) }}>
+    const { otId, motivoPrevio, venceCausa, reversaInicial } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const g = (x) => document.getElementById(x);
 
     function aviso(el, texto, ok) {
@@ -2597,6 +3792,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
       el.textContent = texto;
       el.className = "text-xs " + (ok ? "text-emerald-600" : "text-red-600");
       if (ok) setTimeout(() => { el.textContent = ""; }, 2500);
+    }
+    // Lo que se escribió mientras viajaba un guardado sale en el siguiente.
+    function avisoPendiente(el) {
+      if (!el) return;
+      el.textContent = "Guardado. Falta guardar lo último que escribiste.";
+      el.className = "text-xs text-amber-700";
     }
 
     async function llamar(ruta, metodo, payload) {
@@ -2609,13 +3810,14 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
           const msg = typeof j.error === "string" ? j.error : "No se pudo guardar. Revisa los datos.";
-          window.showToast?.(msg, "error");
-          return { ok: false, error: msg, data: j };
+          // Un paso que cambió mientras tanto se avisa junto al checklist.
+          if (j?.motivo !== "paso-cambio") window.showToast?.(msg, "error");
+          return { ok: false, error: msg, data: j, status: res.status };
         }
-        return { ok: true, data: j };
+        return { ok: true, data: j, status: res.status };
       } catch (e) {
         window.showToast?.("Sin conexión: no se pudo guardar.", "error");
-        return { ok: false, error: String(e) };
+        return { ok: false, error: "Sin conexión: no se pudo guardar." };
       }
     }
 
@@ -2639,7 +3841,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         window.showToast?.("Procedimiento vinculado a la orden.", "success");
         location.reload();
       } else {
-        aviso(g("rigeMsg"), "No se vinculó", false);
+        aviso(g("rigeMsg"), r.error ?? "No se vinculó", false);
       }
     });
 
@@ -2657,44 +3859,138 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         window.showToast?.("Clasificación guardada.", "success");
         location.reload();
       } else {
-        aviso(g("clasifMsg"), "No se guardó", false);
+        aviso(g("clasifMsg"), r.error ?? "No se guardó", false);
       }
     });
 
+    // ISO → datetime-local en hora de El Salvador, igual que isoALocalInput.
+    function isoALocal(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "";
+      return new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "America/El_Salvador", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      }).format(d).replace(" ", "T").slice(0, 16);
+    }
+
+    // Duración entre dos horas, como fmtDuracionHoras: «2 h 15 min».
+    function duracion(desde, hasta) {
+      const a = desde ? Date.parse(desde) : NaN, b = hasta ? Date.parse(hasta) : NaN;
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return "—";
+      const h = Math.round(((b - a) / 3_600_000) * 100) / 100;
+      const min = Math.round(Math.abs(h) * 60), hh = Math.floor(min / 60), mm = min % 60;
+      const txt = hh > 0 ? `${hh} h${mm > 0 ? ` ${mm} min` : ""}` : `${mm} min`;
+      return h < 0 ? `−${txt}` : txt;
+    }
+
     // ── EOP · los tres tiempos (editables hacia atrás) ──────────────────────
+    // Se guarda el valor con que se pintó cada hora y solo viaja la que la
+    // jefatura cambió: la que el técnico registró desde el celular mientras la
+    // ficha estaba abierta no se borra. Después se pinta lo que respondió el
+    // servidor, con la hora del técnico incluida, en cada hora que sigue como
+    // se mandó o se pintó: la que se escribió mientras viajaba el guardado queda
+    // en pantalla y sale en el siguiente. Responde si quedó alguna así.
+    const HORAS_EOP = ["horaAlarma", "horaLlegada", "horaMitigacion", "horaRestablecimiento"];
+    const horasPintadas = {};
+    for (const c of HORAS_EOP) if (g(c)) horasPintadas[c] = g(c).value;
+
+    function pintarHorasEop(orden, enviadas = {}) {
+      for (const c of HORAS_EOP) {
+        const el = g(c);
+        if (!el) continue;
+        const delServidor = isoALocal(orden[c]);
+        if (el.value === (c in enviadas ? enviadas[c] : horasPintadas[c])) el.value = delServidor;
+        horasPintadas[c] = delServidor;
+      }
+      const poner = (idEl, txt) => { const el = g(idEl); if (el) el.textContent = txt; };
+      poner("eopRespuesta", duracion(orden.horaAlarma, orden.horaLlegada));
+      poner("eopMitigacion", duracion(orden.horaAlarma, orden.horaMitigacion));
+      poner("eopReparacion", duracion(orden.horaAlarma, orden.horaRestablecimiento));
+      const alReves = !!orden.horaAlarma && !!orden.horaLlegada && Date.parse(orden.horaLlegada) < Date.parse(orden.horaAlarma);
+      g("eopOrdenAviso")?.classList.toggle("hidden", !alReves);
+      return HORAS_EOP.some((c) => g(c) && g(c).value !== horasPintadas[c]);
+    }
+
     g("eopSave")?.addEventListener("click", async () => {
+      const cambios = {};
+      for (const c of HORAS_EOP) {
+        const el = g(c);
+        if (el && el.value !== horasPintadas[c]) cambios[c] = localAIso(el.value);
+      }
+      if (!Object.keys(cambios).length) { aviso(g("eopMsg"), "Sin cambios", true); return; }
+      // Cada hora que viaja, tal como estaba escrita.
+      const enviadas = Object.fromEntries(Object.keys(cambios).map((c) => [c, g(c).value]));
       const btn = g("eopSave");
       btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
-        horaAlarma: localAIso(g("horaAlarma").value),
-        horaLlegada: localAIso(g("horaLlegada").value),
-        horaMitigacion: localAIso(g("horaMitigacion").value),
-        horaRestablecimiento: localAIso(g("horaRestablecimiento").value),
-      });
+      // soloCambios: lo que viaja es lo que se cambió aquí, también una hora
+      // borrada junto con las otras; no es la pestaña de antes que manda las cuatro.
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", { ...cambios, soloCambios: true });
       btn.disabled = false;
-      if (r.ok) {
+      if (r.ok && r.data?.orden) {
+        const pendientes = pintarHorasEop(r.data.orden, enviadas);
+        if (pendientes) avisoPendiente(g("eopMsg"));
+        else aviso(g("eopMsg"), "✓ Guardado", true);
         window.showToast?.("Horas registradas. El plazo de la causa raíz corre desde la alarma.", "success");
-        location.reload();
+        // Con la alarma se mueve el plazo de la causa raíz, que se dibuja en
+        // varias tarjetas: se vuelve a cargar la ficha, cuando no queda nada
+        // escrito sin guardar.
+        if (!pendientes && (r.data.orden.causaRaizVencimiento ?? null) !== venceCausa) location.reload();
       } else {
-        aviso(g("eopMsg"), "No se guardó", false);
+        aviso(g("eopMsg"), r.error ?? "No se guardó", false);
       }
     });
 
     // ── MOP · plan de reversa ───────────────────────────────────────────────
-    g("reversaSave")?.addEventListener("click", async () => {
-      const btn = g("reversaSave");
-      btn.disabled = true;
-      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
+    // Igual que las horas: solo viaja lo que cambió respecto de lo pintado. La
+    // reversa que el técnico marcó desde el celular no se desmarca ni se borran
+    // sus notas, y lo que se escribió mientras viajaba el guardado se queda.
+    function leerReversa() {
+      return {
         planReversa: g("planReversa").value.trim() || null,
         reversaEjecutada: g("reversaEjecutada").checked,
         reversaNotas: g("reversaNotas").value.trim() || null,
-      });
+      };
+    }
+    let reversaPintada = g("reversaSave") ? leerReversa() : null;
+    const textoReversa = (v) => String(v ?? "").replace(/\r\n?/g, "\n").trim() || null;
+
+    // Pinta lo que respondió el servidor en cada campo que sigue como se mandó o
+    // se pintó. Responde si quedó algo escrito sin guardar.
+    function pintarReversa(orden, enviados = {}) {
+      const leido = leerReversa();
+      const esperado = { ...reversaPintada, ...enviados };
+      if (leido.planReversa === esperado.planReversa) g("planReversa").value = orden.planReversa ?? "";
+      if (leido.reversaEjecutada === esperado.reversaEjecutada) g("reversaEjecutada").checked = !!orden.reversaEjecutada;
+      if (leido.reversaNotas === esperado.reversaNotas) g("reversaNotas").value = orden.reversaNotas ?? "";
+      g("reversaEjecutada").closest("label")?.classList.toggle("bg-amber-50", !!orden.reversaEjecutada);
+      reversaPintada = { planReversa: textoReversa(orden.planReversa), reversaEjecutada: !!orden.reversaEjecutada, reversaNotas: textoReversa(orden.reversaNotas) };
+      const ahora = leerReversa();
+      return Object.keys(ahora).some((k) => ahora[k] !== reversaPintada[k]);
+    }
+
+    g("reversaSave")?.addEventListener("click", async () => {
+      const ahora = leerReversa();
+      const cambios = {};
+      for (const k of Object.keys(ahora)) if (ahora[k] !== reversaPintada[k]) cambios[k] = ahora[k];
+      if (!Object.keys(cambios).length) { aviso(g("reversaMsg"), "Sin cambios", true); return; }
+      const btn = g("reversaSave");
+      btn.disabled = true;
+      // soloCambios: la casilla desmarcada y las notas borradas son de esta
+      // persona, no de la pestaña de antes que manda los tres campos juntos.
+      const r = await llamar(`/api/ordenes/${otId}`, "PATCH", { ...cambios, soloCambios: true });
       btn.disabled = false;
-      if (r.ok) {
-        aviso(g("reversaMsg"), "✓ Guardado", true);
+      if (r.ok && r.data?.orden) {
+        const pendientes = pintarReversa(r.data.orden, cambios);
+        if (pendientes) avisoPendiente(g("reversaMsg"));
+        else aviso(g("reversaMsg"), "✓ Guardado", true);
         window.showToast?.("Plan de reversa guardado.", "success");
+        // Con la reversa marcada o desmarcada cambia lo que se exige para
+        // enviar la intervención: se vuelve a cargar la ficha, cuando no queda
+        // nada escrito sin guardar.
+        if (!pendientes && !!r.data.orden.reversaEjecutada !== reversaInicial) location.reload();
       } else {
-        aviso(g("reversaMsg"), "No se guardó", false);
+        aviso(g("reversaMsg"), r.error ?? "No se guardó", false);
       }
     });
 
@@ -2766,25 +4062,59 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     });
 
     // ── MOP · lecturas de liberación ────────────────────────────────────────
+    // Con mínimo o máximo, la lectura es el número del instrumento (acepta coma
+    // o punto decimal) y no hay texto libre. Un número que se lee de dos formas
+    // («1,200») no se manda: el aviso junto al campo dice cómo escribirlo. Si lo
+    // escrito no es un número, el servidor dice qué falta y se muestra tal cual.
+    const otNumero = window.otNumero;
+    function avisoLectura(msg, texto) {
+      if (!msg) return;
+      msg.textContent = texto;
+      msg.classList.toggle("hidden", !texto);
+    }
+    document.querySelectorAll('.liber-valor[data-rango="1"]').forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const leido = otNumero.numeroAlInicio(inp.value);
+        avisoLectura(document.querySelector(`.liber-msg[data-id="${inp.dataset.id}"]`), leido.tipo === "ambiguo" ? leido.mensaje : "");
+      });
+    });
     document.querySelectorAll(".liber-save").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const itemId = Number(btn.dataset.id);
         const num = document.querySelector(`.liber-valor[data-id="${itemId}"]`);
         const txt = document.querySelector(`.liber-texto[data-id="${itemId}"]`);
+        const msg = document.querySelector(`.liber-msg[data-id="${itemId}"]`);
+        const conRango = num?.dataset.rango === "1";
         const crudo = num ? num.value.trim() : "";
         const texto = txt ? txt.value.trim() : "";
+        if (msg) { msg.textContent = ""; msg.classList.add("hidden"); }
         if (crudo === "" && texto === "") {
-          window.showToast?.("Escribe el valor medido (número) o anótalo en texto.", "error");
+          window.showToast?.(conRango ? "Escribe el número que marcó el instrumento." : "Escribe el valor medido (número) o anótalo en texto.", "error");
           num?.focus();
           return;
         }
+        // Con rango puede venir con la unidad al lado («14,5 A»); sin rango, el
+        // campo es solo número.
+        const leido = conRango ? otNumero.numeroAlInicio(crudo) : otNumero.leerNumero(crudo);
+        if (leido.tipo === "ambiguo") {
+          avisoLectura(msg, leido.mensaje);
+          num?.focus();
+          return;
+        }
+        const solo = otNumero.leerNumero(crudo);
+        const lectura = !conRango
+          ? { valorMedido: otNumero.valorDe(solo), valorMedidoTexto: texto || null }
+          : solo.tipo === "numero"
+            ? { valorMedido: solo.valor, valorMedidoTexto: null }
+            : { valorMedido: null, valorMedidoTexto: crudo };
         btn.disabled = true;
-        const r = await llamar(`/api/ordenes/${otId}/liberaciones`, "PATCH", {
-          itemId,
-          valorMedido: crudo === "" ? null : Number(crudo),
-          valorMedidoTexto: texto || null,
-        });
+        const r = await llamar(`/api/ordenes/${otId}/liberaciones`, "PATCH", { itemId, ...lectura });
         btn.disabled = false;
+        if (!r.ok && msg) {
+          msg.textContent = r.error;
+          msg.classList.remove("hidden");
+          num?.focus();
+        }
         if (r.ok) {
           const conforme = r.data?.liberacion?.conforme;
           if (conforme === false) {
@@ -2838,7 +4168,9 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         sinLecturaModal.classList.remove("flex");
       };
       sinLecturaBtn.addEventListener("click", () => {
-        g("sinLecturaMotivo").value = "";
+        // Si ya se envió una vez sin lectura y volvió, se parte del mismo motivo.
+        // Lo escrito en esta pantalla y no enviado (un paso cambió mientras tanto) se queda.
+        if (!g("sinLecturaMotivo").value.trim()) g("sinLecturaMotivo").value = motivoPrevio;
         g("sinLecturaMsg").classList.add("hidden");
         sinLecturaModal.classList.remove("hidden");
         sinLecturaModal.classList.add("flex");
@@ -2857,17 +4189,24 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
         }
         const btn = g("sinLecturaConfirm");
         btn.disabled = true;
+        // Lo escrito y marcado que aún no salió va en el mismo envío.
         const r = await llamar(`/api/ordenes/${otId}`, "PATCH", {
+          ...(window.otEvidenciaPendiente?.() ?? {}),
           estado: "completada",
           cierreSinLecturaMotivo: motivo,
         });
         btn.disabled = false;
         if (r.ok) {
-          window.showToast?.("OT cerrada sin lectura de liberación. Queda registrado con tu nombre.", "success");
+          // Un paso que el servidor no tomó se queda a la vista, sin volver a cargar.
+          if (window.otEvidenciaGuardada?.(r.data?.orden, r.data?.pasosSinAplicar)) { cerrarModal(); return; }
+          window.showToast?.("Enviada a verificación sin lectura de liberación. Queda pendiente de verificación y registrada con tu nombre.", "success");
           location.reload();
           return;
         }
-        msg.textContent = r.error || "No se pudo cerrar.";
+        // No salió: lo marcado y escrito vuelve a guardarse solo. Si un paso
+        // cambió mientras tanto, el aviso está junto al checklist.
+        if (window.otEvidenciaFallida?.(r.status, r.data)) { cerrarModal(); return; }
+        msg.textContent = r.error || "No se pudo enviar a verificación.";
         msg.className = "mt-2 text-sm text-red-600";
         msg.classList.remove("hidden");
       });

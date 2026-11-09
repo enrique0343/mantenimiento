@@ -44,6 +44,12 @@ const updateSchema = z.object({
   solucionAplicada: z.string().nullable().optional(),
   horasTrabajadas: z.number().nullable().optional(),
   checklistEjecucion: z.string().nullable().optional(),
+  // El checklist tal como la ficha lo recibió: con él, el servidor fusiona por
+  // punto y no deshace lo que el celular marcó mientras tanto.
+  checklistBase: z.string().nullable().optional(),
+  // La ficha nueva manda solo lo que cambió y lo dice: sin las reglas de la
+  // pestaña de antes (K9a, K9b y K9c). No se guarda.
+  soloCambios: z.boolean().optional(),
   // Verificacion (solo se setea via accion explicita; aqui aceptamos notas)
   verificacionNotas: z.string().nullable().optional(),
   // Motivo opcional al reasignar (solo se usa para el email al técnico nuevo)
@@ -55,13 +61,14 @@ const updateSchema = z.object({
   procedimientoId: z.number().int().positive().nullable().optional(),
   nivelRiesgo: z.enum(["bajo", "medio", "alto"]).nullable().optional(),
   clasePrioridad: z.enum(["P1", "P2", "P3", "P4"]).nullable().optional(),
-  // Los tres tiempos del EOP. Editables HACIA ATRÁS a propósito: en una
-  // emergencia el técnico actúa primero y registra después (cap. 02, 2.5).
+  // Los tiempos del EOP. El primer toque del celular fija cada hora vacía; una
+  // hora ya fijada y la de alarma las corrige la jefatura, también hacia atrás.
   horaAlarma: z.string().nullable().optional(),
   horaLlegada: z.string().nullable().optional(),
   horaMitigacion: z.string().nullable().optional(),
   horaRestablecimiento: z.string().nullable().optional(),
-  // Plan de reversa del MOP: se escribe antes de empezar.
+  // Plan de reversa del MOP: se escribe antes de empezar. La reversa se marca
+  // con la orden empezada; enviada a verificación, la registra la jefatura.
   planReversa: z.string().nullable().optional(),
   reversaEjecutada: z.boolean().optional(),
   reversaNotas: z.string().nullable().optional(),
@@ -116,25 +123,20 @@ export async function aplicarCambioOrden(
   if (parsed.data.tipo === "emergencia" && parsed.data.clasePrioridad === undefined && !actual.clasePrioridad) {
     entrada.clasePrioridad = "P1";
   }
-  // «Cualquier reversa se informa a la jefatura antes de cerrar»: no se marca
-  // ejecutada sin decir qué se revirtió.
-  if (parsed.data.reversaEjecutada === true) {
-    const notas = (parsed.data.reversaNotas ?? actual.reversaNotas ?? "").trim();
-    if (notas.length < 10) {
-      return Response.json(
-        { error: "Para marcar la reversa como ejecutada, describe qué se revirtió y cómo quedó el sistema (mínimo 10 caracteres). Cualquier reversa se informa a la jefatura antes de cerrar." },
-        { status: 400 }
-      );
-    }
-  }
+  // Quién marca la reversa, en qué estado y con qué notas lo revisa actualizarOrdenConVerificacion.
 
   let row: typeof ordenes.$inferSelect;
+  // Los pasos del checklist que chocaron y quedaron como estaban guardados (K11).
+  let pasosSinAplicar: number[] = [];
   try {
     const result = await actualizarOrdenConVerificacion(db, actual, user, entrada, now);
     row = result.row;
+    pasosSinAplicar = result.pasosSinAplicar;
     if (result.estado !== actual.estado) parsed.data.estado = result.estado as EstadoOT;
   } catch (error) {
-    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message }, { status: error.status });
+    // El motivo y los campos del rechazo viajan en el cuerpo: la ficha reconoce la
+    // guarda de concurrencia o el paso que cambió por el motivo, no por la frase.
+    if (error instanceof ErrorVerificacion) return Response.json({ error: error.message, ...(error.motivo ? { motivo: error.motivo } : {}), ...(error.campos ?? {}) }, { status: error.status });
     if (parsed.data.activoId !== undefined && parsed.data.activoId !== actual.activoId
       && await ordenesTienenConjunto(ctx, [id])) {
       return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
@@ -187,7 +189,8 @@ export async function aplicarCambioOrden(
       cambios: { asignadoA: { antes: actual.asignadoA, despues: parsed.data.asignadoA } },
     });
   }
-  // Audit: otros cambios (campos de ejecución, prioridad, etc.)
+  // Audit: otros cambios (campos de ejecución, prioridad, etc.). Se compara con
+  // lo que quedó guardado: lo que llegó igual y se dejó fuera no es un cambio.
   const camposEditables = [
     "titulo", "descripcion", "prioridad", "tipo", "vencimiento",
     "trabajosRealizados", "causaRaiz", "solucionAplicada", "horasTrabajadas",
@@ -198,8 +201,8 @@ export async function aplicarCambioOrden(
   ];
   const otrosCambios: any = {};
   for (const c of camposEditables) {
-    if ((parsed.data as any)[c] !== undefined && (parsed.data as any)[c] !== (actual as any)[c]) {
-      otrosCambios[c] = { antes: (actual as any)[c], despues: (parsed.data as any)[c] };
+    if ((parsed.data as any)[c] !== undefined && (row as any)[c] !== (actual as any)[c]) {
+      otrosCambios[c] = { antes: (actual as any)[c], despues: (row as any)[c] };
     }
   }
   if (Object.keys(otrosCambios).length > 0) {
@@ -243,8 +246,9 @@ export async function aplicarCambioOrden(
     } catch {}
   }
 
-  // Notifica al tecnico cuando se le asigna o reasigna una OT
-  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
+  // Notifica al tecnico cuando se le asigna o reasigna una OT. Quien toma una
+  // orden libre desde el celular no necesita un correo que se lo cuente.
+  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA && parsed.data.asignadoA !== user.id) {
     try {
       const [u] = await db.select({ email: usuarios.email, nombre: usuarios.nombre, telegramChatId: usuarios.telegramChatId })
         .from(usuarios).where(eq(usuarios.id, parsed.data.asignadoA)).limit(1);
@@ -388,5 +392,5 @@ export async function aplicarCambioOrden(
     } catch {}
   }
 
-  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}) });
+  return Response.json({ orden: row, ...(sembradoMop ? { mop: sembradoMop } : {}), ...(pasosSinAplicar.length ? { pasosSinAplicar } : {}) });
 }

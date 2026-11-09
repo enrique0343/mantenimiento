@@ -23,6 +23,11 @@ a{color:inherit;text-decoration:none;touch-action:manipulation}
 h1,h2,h3,p,ol{margin:0}
 :focus-visible{outline:2px solid var(--azul-cl);outline-offset:2px}
 .etq{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--azul)}
+/* Emergencia: el rojo va solo en la marca pequeña. */
+.etq.urgente::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:999px;background:var(--rojo);vertical-align:1px}
+.cod{font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--azul)}
+.tag{display:inline-flex;align-items:center;min-height:22px;padding:0 9px;border:1px solid var(--filete);border-radius:999px;background:var(--blanco);font-size:12px;font-weight:600;color:var(--tinta2)}
+.tag.obl{border-color:var(--azul);color:var(--azul)}
 .oculto{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
 svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 
@@ -62,6 +67,19 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .ahora .b1{margin-top:4px}
 .ahora .b2{background:transparent;color:var(--blanco);border-color:var(--azul-tn)}
 .ahora .dos .b2{min-height:60px}
+/* Con otra emergencia debajo, el título de la que va primero ocupa dos líneas como máximo; lo que va con
+   «Te la devolvieron», también. */
+.ahora .recorte.dos{-webkit-line-clamp:2;line-clamp:2}
+/* Otra emergencia que no ocupa «Ahora»: una línea con su acción. El rojo, solo en la marca. */
+.ahora .otra{display:block;position:relative;min-height:44px;padding:11px 0 11px 16px;border-top:1px solid var(--azul);font-size:15px;line-height:1.3;color:#C9CFDB}
+.ahora .otra::before{content:"";position:absolute;left:0;top:17px;width:8px;height:8px;border-radius:999px;background:var(--rojo)}
+.ahora .otra b{font-weight:600;color:var(--blanco);overflow-wrap:anywhere}
+.ahora .otra .accion{font-weight:700;color:var(--azul-tn);white-space:nowrap}
+.ahora .otra+.otra{margin-top:-8px}
+.ahora .otra:active{background:var(--azul)}
+.ahora .otra-mas{font-size:14px}
+/* La sede ya no hace ronda: la frase va donde iba la ronda. */
+.ahora .sin-ronda{padding-bottom:8px;border-bottom:1px solid var(--azul);font-weight:600;color:var(--blanco)}
 .resto{padding:12px 0 8px}
 .resto>.etq{display:block;padding:0 var(--gd) 6px var(--gi)}
 .fila{display:flex;align-items:center;gap:12px;width:100%;min-height:52px;padding:6px var(--gd) 6px var(--gi);border-top:1px solid var(--filete);text-align:left}
@@ -87,8 +105,6 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .paso-tit{flex:1;min-width:0;line-height:1.2;padding-left:4px}
 .paso-tit strong{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .paso-tit span{display:block;font-size:13px;color:var(--tinta2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.paso-der{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-.reloj{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
 .segs{display:flex;gap:3px;padding:0 var(--gd) 8px var(--gi);background:var(--blanco);border-bottom:1px solid var(--filete)}
 .segs i{flex:1;height:5px;background:var(--papel)}
 .segs i.h{background:var(--azul)}
@@ -97,7 +113,6 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .paso-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
 .critico{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--rojo)}
 .critico::before{content:"";width:8px;height:8px;background:var(--rojo);border-radius:999px}
-.min{font-size:14px;color:var(--tinta2)}
 .paso-cuerpo h1{font-size:28px;line-height:1.14;font-weight:600;letter-spacing:-.015em;text-wrap:balance;overflow-wrap:anywhere}
 .paso-cuerpo h1.largo{font-size:21px;line-height:1.22;letter-spacing:0}
 .ayuda{font-size:16px;color:var(--tinta2)}
@@ -105,12 +120,19 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .lect-caja input{flex:1;min-width:0;width:100%;min-height:72px;padding:0 14px;border:0;background:none;font-size:44px;font-weight:600;font-variant-numeric:tabular-nums;outline:none;border-radius:0}
 .lect-caja span{font-size:20px;font-weight:600;color:var(--tinta2)}
 .lect-caja.mini input{min-height:52px;font-size:24px}
+/* Una lectura de liberación sin rango se escribe: «Sin fugas con espuma». */
+.lect-caja.texto input{min-height:60px;font-size:22px}
 .lect-info{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font-size:15px;color:var(--tinta2)}
 .lect-info b{font-weight:600;color:var(--tinta)}
 .lect-estado{min-height:24px;font-weight:600}
 .lect-estado.bien{color:var(--verde)}
 .lect-estado.mal{color:var(--rojo)}
+/* Falta el número del instrumento: el aviso en tinta, el rojo solo en la marca. */
+.lect-estado.falta{font-size:14px;line-height:1.3;color:var(--tinta)}
+.lect-estado.falta::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:999px;background:var(--rojo);vertical-align:1px}
 .paso-pie{display:grid;gap:8px;padding:10px var(--gd) calc(12px + var(--gb)) var(--gi);background:var(--blanco);border-top:1px solid var(--filete)}
+/* Con el menú abajo, el menú ya deja el margen del borde del teléfono. */
+#movil.con-tabs .paso-pie{padding-bottom:12px}
 
 /* Fin y pantallas simples */
 .final{flex:1 1 auto;display:flex;flex-direction:column;gap:10px;padding:14px var(--gd) calc(14px + var(--gb)) var(--gi)}
@@ -124,10 +146,28 @@ input.campo,select.campo{min-height:48px}
 .foto-res{display:none;gap:10px;align-items:center;font-size:14px;background:var(--blanco);padding:8px;border:1px solid var(--filete);border-radius:2px}
 .foto-res.si{display:flex}
 .foto-res img{width:52px;height:52px;object-fit:cover;flex:none}
+/* Inicio, pausa y cierre de una orden: el cuerpo se desplaza dentro de su caja y el botón
+   principal queda fijo abajo. Ningún texto largo lo empuja fuera de la pantalla. */
+.marco{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.marco-cuerpo{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:12px}
+.marco>.paso-pie{flex:none}
+.recorte,.dato b.recorte,.perm strong.recorte,.fila small.recorte{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.dato b.recorte.entero,.paso-cuerpo .marcado.entero{display:block;-webkit-line-clamp:none;line-clamp:none;overflow:visible}
 .simple{display:grid;gap:12px;padding:16px var(--gd) 12px var(--gi)}
 .simple h1{font-size:26px;line-height:1.14;font-weight:600;letter-spacing:-.01em;text-wrap:balance;overflow-wrap:anywhere}
 .simple p{color:var(--tinta2)}
 .bloque-cierre{margin-top:auto;padding:12px var(--gd) calc(12px + var(--gb)) var(--gi);display:grid;gap:8px;background:var(--papel)}
+/* Los permisos de una intervención, antes de empezar */
+.permisos{display:grid}
+.permisos>.etq{padding-bottom:4px}
+.permisos .avance{font-weight:600;padding-bottom:4px}
+.segs.linea{padding:2px 0 6px;background:none;border:0}
+.segs.linea i:not(.h):not(.a){background:var(--blanco)}
+.perm{display:flex;align-items:center;gap:10px;width:100%;min-height:50px;padding:6px 0;border-top:1px solid var(--filete);text-align:left}
+.perm:active{background:var(--panel)}
+.perm .txt{flex:1;min-width:0}
+.perm strong{display:block;font-weight:600;overflow-wrap:anywhere}
+.perm small{display:block;font-size:13px;color:var(--tinta2);overflow-wrap:anywhere}
 
 /* Hoja inferior */
 #hoja{position:absolute;inset:0;z-index:20;display:flex;align-items:flex-end;background:rgba(30,33,66,.6)}
@@ -141,6 +181,16 @@ ol.acc{display:grid;gap:8px;padding:0;list-style:none;counter-reset:n}
 ol.acc li{display:grid;grid-template-columns:24px 1fr;gap:6px;font-size:15px;line-height:1.32;counter-increment:n}
 ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
 .err{font-size:14px;font-weight:600;color:var(--rojo)}
+/* Una lista larga dentro de una hoja se desplaza en su caja; el botón de abajo queda a la vista. */
+.hoja-caja .lista.desplaza{max-height:calc(var(--alto,100dvh) * .45);overflow-y:auto;overscroll-behavior:contain}
+.hoja-caja .lista.desplaza .fila{padding-inline:0}
+.hoja-caja .lista.desplaza .link{min-height:36px}
+/* La hoja de un documento (la desviación): lo que dice el documento se desplaza en su caja; los relojes,
+   el campo y los botones quedan a la vista, también con un aviso debajo del campo. */
+.hoja-caja.con-pie{display:flex;flex-direction:column}
+.hoja-caja.con-pie>*{flex:none}
+.hoja-caja.con-pie>.hoja-doc{flex:0 1 auto;min-height:44px;overflow-y:auto;overscroll-behavior:contain;display:grid;gap:8px;align-content:start}
+.hoja-campos,.hoja-pie{display:grid;gap:8px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{min-height:44px;padding:6px 12px;background:var(--blanco);border:1px solid var(--filete);border-radius:2px;font-size:15px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--azul);color:var(--blanco);border-color:var(--azul)}
@@ -157,5 +207,29 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .final{gap:6px}
   .final h1{font-size:24px}
   .dato{padding:5px 0}
+  .perm{min-height:44px}
+  .lect-caja.texto input{min-height:52px}
+  /* La hoja de la desviación cabe en 360×640 también con el aviso debajo del campo. */
+  .hoja-caja.con-pie{gap:8px;padding-top:12px}
+  .hoja-caja.con-pie .relojes{padding:6px 0}
+  .hoja-caja.con-pie .relojes b{font-size:20px}
+  .hoja-caja.con-pie .hoja-campos{gap:6px}
+  .hoja-caja.con-pie textarea{min-height:60px}
+  /* «Ahora» lleno (la emergencia que se atiende, dos líneas, «y N más» y la ronda) cabe en 360×640 sin desplazar:
+     menos aire, la misma letra. Cada línea conserva su alto para el pulgar. */
+  .hoy-cab{padding-top:8px;padding-bottom:6px}
+  .ahora{gap:6px;padding-top:12px;padding-bottom:12px}
+  .ahora .otra{padding-top:8px;padding-bottom:8px}
+  .ahora .otra::before{top:14px}
+  .ahora .otra+.otra{margin-top:-6px}
+  /* También con el aviso de registros sin aceptar arriba, o con «Te la devolvieron» y un lugar de dos líneas: el aviso
+     en una franja del alto del pulgar, los botones en 52 y 44 px y, con el aviso, sin el saludo. La misma letra. */
+  .avisito{padding-top:0;padding-bottom:0;min-height:44px}
+  .ahora.lleno{gap:4px;padding-top:10px;padding-bottom:10px}
+  .ahora.lleno .b1{min-height:52px;margin-top:2px}
+  .ahora.lleno .b2{min-height:44px}
+  .ahora.lleno .otra+.otra{margin-top:-4px}
+  .hoy-cab.compacta h1{display:none}
+  .hoy-cab.compacta .etq{display:block}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}
