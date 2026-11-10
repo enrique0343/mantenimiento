@@ -101,6 +101,9 @@ let demoraSync = 0; // Con señal lenta, la respuesta del envío llega después 
 let frenoHoy = null;
 const frenarHoy = () => { let suelta; frenoHoy = new Promise((r) => { suelta = r; }); return () => { frenoHoy = null; suelta(); }; };
 const sinEop = new Set(); // Emergencias que el paquete del día trae sin su documento.
+// Mientras dure, a la foto le contesta algo que no es el servidor de fotos: un filtro de la red, un límite de solicitudes.
+let fotoAjena = false, fotosAjenas = 0;
+let servidorDeAntes = false; // El sistema volvió a una versión anterior: ese servidor no conoce «orden.enviar».
 async function rutaReal(url, init = {}) {
   enVuelo++;
   try { return await atender(url, init); } finally { enVuelo--; }
@@ -122,6 +125,8 @@ async function atender(url, init) {
     const data = JSON.parse(init.body);
     enviados.push(...data.ops);
     if (demoraSync) await espera(demoraSync);
+    // Al servidor de la prueba se le cambia el nombre del registro para que, como el de antes, no lo conozca.
+    if (servidorDeAntes) data.ops = data.ops.map((op) => (op.tipo === 'orden.enviar' ? { ...op, tipo: 'orden.enviar·v2' } : op));
     return app.sync.POST(ctx(u.pathname, { method: 'POST', data, rol: 'tecnico' }));
   }
   if (u.pathname === '/api/campo/ordenes') {
@@ -135,6 +140,7 @@ async function atender(url, init) {
   const equipo = /^\/api\/campo\/equipo\/(\d+)$/.exec(u.pathname);
   if (equipo) return app.equipo.GET(ctx(u.pathname, { id: equipo[1], rol: 'tecnico' }));
   if (u.pathname === '/api/campo/foto') {
+    if (fotoAjena) { fotosAjenas++; return new Response('<!doctype html><html><body><h1>429 Too Many Requests</h1></body></html>', { status: 429, headers: { 'content-type': 'text/html' } }); }
     const c = ctx(u.pathname, { method: 'POST', rol: 'tecnico' });
     c.request = new Request(c.url, { method: 'POST', headers: { cookie: c.request.headers.get('cookie') }, body: init.body });
     c.locals.runtime.env.R2 = { async put(key) { r2.push(key); }, async delete() {} };
@@ -832,7 +838,7 @@ try {
   sqlite.prepare('UPDATE ordenes SET checklist_ejecucion=? WHERE id=603').run(JSON.stringify([eop.a1, eop.a2, eop.a3, 'Avisar a la supervisión de Enfermería'].map((t) => ({ texto: t.trim(), estado: 'pendiente' }))));
   ahora = enSV('12:00');
   enLinea = true; w.dispatchEvent(new w.Event('online'));
-  await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=603 AND tipo='orden.terminar' AND resultado='rechazada'").n === 1, 'el servidor no acepta el envío');
+  await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=603 AND tipo='orden.enviar' AND resultado='rechazada'").n === 1, 'el servidor no acepta el envío');
   await clic('ir', '[data-h="#hoy"]');
   await hasta(() => /1 registro sin aceptar/.test(texto()) && doc.querySelector('.ahora [data-h="#orden-603"]'), 'Hoy avisa y la orden vuelve');
   await clic('verRechazos');
@@ -1205,8 +1211,8 @@ try {
   ok(await enviar(), 'Segundo toque: foto y enviar: ' + errorCierre());
   ok(/Enviado a verificación/.test(texto()), 'Con señal, queda enviada: ' + texto().slice(0, 160));
   await hasta(() => one('SELECT estado FROM ordenes WHERE id=540').estado === 'completada', 'la 540 entra');
-  igual(salieron(540), 'orden.iniciar orden.terminar', 'Dos toques, dos registros: empezar y enviar');
-  igual(JSON.stringify(enviados.find((op) => op.tipo === 'orden.terminar' && op.ordenId === 540).conforme), JSON.stringify([
+  igual(salieron(540), 'orden.iniciar orden.enviar', 'Dos toques, dos registros: empezar y enviar');
+  igual(JSON.stringify(enviados.find((op) => op.tipo === 'orden.enviar' && op.ordenId === 540).conforme), JSON.stringify([
     { idx: 0, texto: 'Revisar el nivel de aceite', antes: SIN_TOCAR },
     { idx: 1, texto: 'Limpiar el filtro de aire', antes: SIN_TOCAR },
   ]), 'El envío lleva los dos pasos como conformes, tal como se veían');
@@ -1236,8 +1242,8 @@ try {
   ok(await enviar(), 'Revisado, se envía: ' + errorCierre());
   await hasta(() => one('SELECT estado FROM ordenes WHERE id=541').estado === 'completada', 'la 541 entra');
   igual(pasosDe(541).map((p) => `${p.estado}:${p.valorMedido ?? ''}`).join('|'), 'ok:|na:|ok:10', 'El paso de la oficina queda como la oficina lo dejó; los otros, hechos');
-  igual(JSON.stringify(enviados.find((op) => op.tipo === 'orden.terminar' && op.ordenId === 541).conforme), JSON.stringify([{ idx: 0, texto: 'Apagar y bloquear', antes: SIN_TOCAR }]), 'Como conforme viaja solo el paso que seguía sin tocar');
-  igual(salieron(541), 'orden.iniciar orden.paso orden.terminar', 'La lectura escrita en el cierre sale como la marca de su paso');
+  igual(JSON.stringify(enviados.find((op) => op.tipo === 'orden.enviar' && op.ordenId === 541).conforme), JSON.stringify([{ idx: 0, texto: 'Apagar y bloquear', antes: SIN_TOCAR }]), 'Como conforme viaja solo el paso que seguía sin tocar');
+  igual(salieron(541), 'orden.iniciar orden.paso orden.enviar', 'La lectura escrita en el cierre sale como la marca de su paso');
   igual(one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=541 AND resultado='rechazada'").n, 0, 'Sin rechazos');
 
   // ══ La emergencia también cierra en dos toques: «Ya estoy en el sitio» y «Foto y enviar». Enviarla dice que ya está
@@ -1252,14 +1258,72 @@ try {
   const envio613 = ahora = enSV('12:26');
   ok(await enviar(), 'Segundo toque: foto y enviar: ' + errorCierre());
   await hasta(() => one('SELECT estado FROM ordenes WHERE id=613').estado === 'completada', 'la 613 entra');
-  igual(salieron(613), 'emergencia.hito:llegada orden.iniciar emergencia.hito:mitigacion emergencia.hito:restablecimiento orden.terminar', 'Con el envío salen los dos toques que no se dieron');
+  igual(salieron(613), 'emergencia.hito:llegada orden.iniciar orden.enviar', 'El envío es un solo registro: los dos toques que no se dieron no salen aparte');
   const e613 = one('SELECT * FROM ordenes WHERE id=613');
   igual(e613.hora_llegada, iso(llegue613), 'La llegada, con la hora de su toque');
-  igual(e613.hora_mitigacion, iso(envio613), 'Controlado, con la hora del envío');
+  igual(e613.hora_mitigacion, iso(envio613), 'Controlado, con la hora del envío: la pone el servidor en la misma escritura');
   igual(e613.hora_restablecimiento, iso(envio613), 'Restablecido, con la hora del envío');
   igual(e613.completada_en, iso(envio613));
   igual(JSON.parse(e613.checklist_ejecucion).map((p) => p.estado).join('|'), 'ok|ok|ok', 'Las tres acciones, hechas con el envío');
   igual(one('SELECT COUNT(*) n FROM adjuntos WHERE orden_id=613').n, 1, 'Con su foto');
+
+  // ══ Una foto solo se da por rechazada si lo dijo el servidor de fotos. Si en el camino contesta otra cosa (un filtro
+  // de la red, un límite de solicitudes), la foto se queda en la cola con el envío detrás, y las dos entran en el reintento ══
+  const UN_PASO = JSON.stringify([{ texto: 'Revisar el nivel de refrigerante', estado: 'pendiente' }]);
+  orden(542, 'preventivo', '[Preventivo] Quincenal - PE-01', 81, 'infraestructura', UN_PASO);
+  await abrir('https://test.invalid/campo#orden-542');
+  await hasta(() => /1 paso/.test(texto()), 'el 542');
+  await clic('empezar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=542').estado === 'en_proceso' && !enVuelo && !/por enviar|Enviando/.test(pill()), 'la 542 empieza en el servidor');
+  fotoAjena = true;
+  ok(await enviar(), 'Foto y enviar: ' + errorCierre());
+  await hasta(() => fotosAjenas >= 1 && !enVuelo && !/Enviando/.test(pill()), 'a la foto le contesta algo que no es el servidor de fotos');
+  igual((await enCola()).map((op) => op.tipo).join(' '), 'foto orden.enviar', 'La foto sigue en la cola, con el envío detrás');
+  igual(one('SELECT estado FROM ordenes WHERE id=542').estado, 'en_proceso', 'La orden no sale sin su foto');
+  igual(one('SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=542 AND resultado=\'rechazada\'').n, 0, 'Nada se da por rechazado');
+  igual(one('SELECT COUNT(*) n FROM adjuntos WHERE orden_id=542').n, 0);
+  // El reintento llega solo, a los pocos segundos. Aquí lo adelanta la señal que vuelve.
+  fotoAjena = false;
+  w.dispatchEvent(new w.Event('online'));
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=542').estado === 'completada', 'en el reintento entran la foto y el envío');
+  await hasta(() => !enVuelo && !/por enviar|Enviando/.test(pill()), 'la cola se vacía');
+  igual(one('SELECT COUNT(*) n FROM adjuntos WHERE orden_id=542').n, 1, 'La foto entra una sola vez');
+  igual((await enCola()).length, 0, 'Y no queda nada por enviar');
+  await clic('ir', '[data-h="#hoy"]');
+  ok(!/sin aceptar/.test(texto()), 'Sin avisos de rechazo: ' + texto().slice(0, 200));
+
+  // ══ Si el sistema vuelve a una versión anterior, ese servidor no conoce el envío del cierre en dos pasos: lo rechaza,
+  // sin dar la orden por enviada ni sus pasos por hechos. El celular dice qué hacer y la orden vuelve a Hoy con lo escrito ══
+  const OTRA_VERSION = 'Esta versión de la app ya no coincide con el sistema. Cierra la app, ábrela otra vez con señal y vuelve a enviar.';
+  orden(543, 'preventivo', '[Preventivo] Quincenal - PE-01', 81, 'infraestructura', UN_PASO);
+  await abrir('https://test.invalid/campo#orden-543');
+  await hasta(() => /1 paso/.test(texto()), 'el 543');
+  await clic('empezar');
+  await clic('verNota');
+  const nota543 = 'Nivel correcto y sin fugas a la vista.';
+  escribir('#nota-fin', nota543);
+  servidorDeAntes = true;
+  ok(await enviar(), 'Foto y enviar: ' + errorCierre());
+  await hasta(() => one('SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=543 AND resultado=\'rechazada\'').n === 1 && !enVuelo && !/Enviando/.test(pill()), 'el servidor de antes no acepta el envío');
+  servidorDeAntes = false;
+  igual(one('SELECT estado FROM ordenes WHERE id=543').estado, 'en_proceso', 'La orden no se da por enviada');
+  ok(pasosDe(543).every((p) => p.estado === 'pendiente'), 'Ni sus pasos por hechos: ' + JSON.stringify(pasosDe(543)));
+  await clic('ir', '[data-h="#hoy"]');
+  await hasta(() => /1 registro sin aceptar/.test(texto()) && doc.querySelector('[data-h="#orden-543"]'), 'Hoy avisa y la orden vuelve');
+  await clic('verRechazos');
+  anotar('rechazo de un servidor de antes');
+  ok(hoja().includes(`Enviar a verificación: ${OTRA_VERSION}`) && !/desconocida/i.test(hoja()), 'Dice qué hacer, no «Operación desconocida»: ' + hoja().slice(0, 300));
+  ok(hoja().includes(`Lo que escribiste: «${nota543}»`), 'Y lo escrito volvió a la orden: ' + hoja().slice(0, 400));
+  await clic('ir', '[data-h="#orden-543"]');
+  ok(enCierre() && filasCierre() === '' && doc.querySelector('#cierre-pie [data-a="enviar"]'), 'La orden abre en el cierre, con su foto ya tomada y el paso sin tocar: ' + pieCierre());
+  igual(doc.querySelector('#nota-fin')?.value, nota543, 'Con la nota en su lugar');
+  // Con el servidor al día otra vez, el mismo envío entra.
+  await clic('enviar');
+  await hasta(() => one('SELECT estado FROM ordenes WHERE id=543').estado === 'completada', 'se reenvía y entra');
+  ok(pasosDe(543).every((p) => p.estado === 'ok') && one('SELECT trabajos_realizados t FROM ordenes WHERE id=543').t.includes(nota543), 'Con el paso hecho y la nota del técnico');
+  await clic('ir', '[data-h="#hoy"]');
+  await clic('verRechazos');
+  await clic('limpiarRechazos');
   ahora = enSV('12:25');
 
   // ══ K7 · Un rango con tres decimales se escribe para leerse igual: solo el máximo, «máximo 1.1250»; mínimo y
@@ -1304,7 +1368,7 @@ try {
     await clic('problemaSeguir');
   }
   ok(enCierre() && filasCierre() === 'Falta la lectura|Falta la lectura', 'El cierre dice qué le falta a cada paso: ' + texto().slice(0, 200));
-  const terminadas = (id) => enviados.filter((op) => op.tipo === 'orden.terminar' && op.ordenId === id).length;
+  const terminadas = (id) => enviados.filter((op) => op.tipo === 'orden.enviar' && op.ordenId === id).length;
   const avisoAhora = () => (doc.querySelector('#aviso').hidden ? '' : doc.querySelector('#aviso').textContent);
   ok(!(await tocarFotoYEnviar()), 'Sin las lecturas, «Foto y enviar» no abre la cámara');
   anotar('falta la lectura antes de enviar');
@@ -1599,7 +1663,7 @@ try {
   await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=531 AND resultado='rechazada'").n === 2 && !enVuelo && !/Enviando/.test(pill()), 'el servidor no acepta la marca ni el envío');
   const paso531 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=531').c)[i];
   ok(one('SELECT estado FROM ordenes WHERE id=531').estado === 'en_proceso' && paso531(1).estado === 'ok' && paso531(2).estado === 'desviacion' && paso531(2).valorMedido === 15, 'La orden sigue en curso, con el paso 2 como lo dejó la jefatura: ' + JSON.stringify([paso531(1), paso531(2)]));
-  igual(one("SELECT detalle d FROM campo_operaciones WHERE orden_id=531 AND tipo='orden.terminar'").d, 'La orden no se envió: el paso 2 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.', 'El envío dice qué paso revisar');
+  igual(one("SELECT detalle d FROM campo_operaciones WHERE orden_id=531 AND tipo='orden.enviar'").d, 'La orden no se envió: el paso 2 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.', 'El envío dice qué paso revisar');
   await clic('ir', '[data-h="#hoy"]');
   await hasta(() => /2 registros sin aceptar/.test(texto()), 'Hoy avisa');
   await clic('verRechazos');
@@ -1695,7 +1759,7 @@ try {
   enLinea = true; w.dispatchEvent(new w.Event('online'));
   await hasta(() => one("SELECT COUNT(*) n FROM campo_operaciones WHERE orden_id=537 AND resultado='rechazada'").n === 2 && !enVuelo && !/Enviando/.test(pill()), 'no entran la lectura ni el envío');
   const paso537 = (i) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=537').c)[i];
-  const terminar537 = () => enviados.filter((op) => op.tipo === 'orden.terminar' && op.ordenId === 537).length;
+  const terminar537 = () => enviados.filter((op) => op.tipo === 'orden.enviar' && op.ordenId === 537).length;
   await abrir('https://test.invalid/campo#orden-537');
   await hasta(() => enCierre(), 'sin pasar por «Ver por qué», la orden abre en el cierre');
   igual(filasCierre(), 'Hecho|Hecho|Cambió en la ficha', 'El cierre señala el paso que cambió en la ficha');

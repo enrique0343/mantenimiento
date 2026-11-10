@@ -9,7 +9,7 @@
 // mismo camino de la ficha completa: aplicarCambioOrden para la orden y
 // src/lib/mop.ts para los prerrequisitos y las lecturas de liberación.
 import type { APIContext } from "astro";
-import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   activos, aopAcciones, aopEventos, aopUmbrales, campoOperaciones, checklistPlantillaItems, checklistPlantillas,
@@ -689,8 +689,8 @@ export interface ResultadoOperacion {
   datos?: unknown;
 }
 
-async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: Record<string, unknown>, momento: string) {
-  const res = await aplicarCambioOrden(ctx, user, id, cuerpo, { momento });
+async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: Record<string, unknown>, momento: string, conLaEscritura?: (guard: SQL) => unknown[]) {
+  const res = await aplicarCambioOrden(ctx, user, id, cuerpo, { momento, conLaEscritura });
   const j: any = await res.json().catch(() => ({}));
   if (res.status >= 500) throw new Error(typeof j.error === "string" ? j.error : "Error del servidor");
   if (!res.ok) {
@@ -1025,8 +1025,31 @@ async function aplicarMarcaDePaso(ctx: APIContext, db: Db, user: Usuario, orden:
 type PasoConforme = { idx: number; texto?: string; antes?: unknown };
 /** Tope de pasos de un «Todo conforme»: ningún checklist real se acerca. */
 const MAX_CONFORMES = 200;
-/** Filas de la bitácora de marcas por sentencia: D1 admite 100 valores y cada fila lleva 11. */
-const MARCAS_POR_SENTENCIA = 9;
+/** La más tardía de varias horas; null si no hay ninguna. */
+const laMasTardia = (horas: Array<string | null | undefined>) =>
+  horas.reduce<string | null>((max, h) => (h && Number.isFinite(Date.parse(h)) && (!max || Date.parse(h) > Date.parse(max)) ? h : max), null);
+/**
+ * La bitácora de los pasos que un envío dio por conformes, como una sola sentencia para el lote del envío: se
+ * escribe solo si la guarda del lote pasó. Así un corte después de guardar no deja la orden enviada con la bitácora
+ * a medias, y reintentar el envío no la repite. Las filas viajan como un texto: no topan con el límite de valores.
+ */
+function bitacoraDeConformes(db: Db, ordenId: number, usuarioId: number, opId: string, marcas: Array<{ idx: number; texto: string }>, m: Momento, guard: SQL) {
+  const filas = db.select({
+    id: sql<number>`null`.as("id"),
+    ordenId: sql<number>`${ordenId}`.as("orden_id"),
+    pasoIdx: sql<number>`json_extract(j.value, '$.idx')`.as("paso_idx"),
+    pasoTexto: sql<string>`json_extract(j.value, '$.texto')`.as("paso_texto"),
+    estado: sql<string>`'ok'`.as("estado"),
+    valor: sql<string | null>`null`.as("valor"),
+    nota: sql<string | null>`null`.as("nota"),
+    ocurridoEn: sql<string>`${m.iso}`.as("ocurrido_en"),
+    recibidoEn: sql<string>`${m.recibido}`.as("recibido_en"),
+    sinSenal: sql<boolean>`${m.sinSenal ? 1 : 0}`.as("sin_senal"),
+    usuarioId: sql<number>`${usuarioId}`.as("usuario_id"),
+    opId: sql<string>`${opId}`.as("op_id"),
+  }).from(sql`json_each(${JSON.stringify(marcas)}) j`).where(guard);
+  return db.insert(ordenPasoMarcas).select(filas as any);
+}
 function conformesDeOp(op: OperacionCampo): PasoConforme[] {
   if (!Array.isArray(op.conforme)) return [];
   const vistos = new Set<number>();
@@ -1119,10 +1142,14 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       }
       return { ordenId: o.id, m };
     }
-    case "orden.terminar": {
+    case "orden.terminar":
+    // «orden.enviar» es el mismo envío, con el nombre que usa el celular del cierre en dos pasos. Un servidor de
+    // antes no lo conoce y lo rechaza: no da por enviada una orden cuyos pasos no sabe dar por conformes.
+    case "orden.enviar": {
       let o = await ordenDeOp(db, op);
       const [ultima] = await db.select({ en: ordenPasoMarcas.ocurridoEn }).from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, o.id)).orderBy(desc(ordenPasoMarcas.ocurridoEn)).limit(1);
-      const m = momentoCapturado(op.at, ultima?.en ?? o.iniciadaEn);
+      // El envío no queda antes de lo que ya pasó en la orden: su última marca, su inicio o un toque de la emergencia.
+      const m = momentoCapturado(op.at, laMasTardia([ultima?.en ?? o.iniciadaEn, o.horaLlegada, o.horaMitigacion, o.horaRestablecimiento]));
       if (!["completada", "verificada", "cerrada"].includes(o.estado)) {
         // K19 · Un paso cuya marca se rechazó porque cambió en la ficha no se envía como lo dejó la ficha: primero el
         // técnico lo revisa y lo marca otra vez. No se escribe nada.
@@ -1142,18 +1169,25 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
           ? await db.select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
               .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, o.id)).orderBy(asc(ordenLiberaciones.orden), asc(ordenLiberaciones.id))
           : [];
-        // Las marcas y el envío van en una sola escritura: o la orden queda enviada con todos sus pasos, o no cambia.
+        // Las marcas, su bitácora y el envío van en una sola escritura: o la orden queda enviada con todos sus pasos, o no cambia.
         const enviar = async (orden: typeof ordenes.$inferSelect) => {
           const hecho = conformes.length ? conformarPasos(orden, user, conformes, m) : null;
+          const marcas = hecho?.marcas ?? [];
+          // Enviar una emergencia dice que ya está controlada y que el servicio volvió: el toque que no se dio lleva la
+          // hora del envío, en la misma escritura. Si el envío no entra, la hora tampoco queda. La llegada no se supone,
+          // ni la hora en que se controló si el servicio ya había vuelto antes: esas las pone la jefatura.
+          const horas = orden.tipo === "emergencia" && EN_CURSO.includes(orden.estado)
+            ? { ...(orden.horaMitigacion || orden.horaRestablecimiento ? {} : { horaMitigacion: m.iso }), ...(orden.horaRestablecimiento ? {} : { horaRestablecimiento: m.iso }) }
+            : {};
           const texto = textoDeTrabajos(hecho?.checklist ?? orden.checklistEjecucion, orden.titulo, nota, {
             liberaciones, reversa: orden.reversaEjecutada ? orden.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa, emergencia: orden.tipo === "emergencia",
           }) || orden.trabajosRealizados || "";
           try {
             await cambiarOrden(ctx, user, orden.id, {
-              estado: "completada", trabajosRealizados: texto,
-              ...(hecho?.marcas.length ? { checklistEjecucion: hecho.checklist, checklistBase: hecho.base } : {}),
+              estado: "completada", trabajosRealizados: texto, ...horas,
+              ...(hecho && marcas.length ? { checklistEjecucion: hecho.checklist, checklistBase: hecho.base } : {}),
               ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}),
-            }, m.iso);
+            }, m.iso, marcas.length ? (guard) => [bitacoraDeConformes(db, orden.id, user.id, op.opId, marcas, m, guard)] : undefined);
           } catch (e) {
             // K17 · La ficha cambió uno de esos pasos entre la lectura y el guardado: el envío vuelve nombrándolo.
             if (e instanceof RechazoCampo && e.motivo === "paso-cambio" && e.pasos?.length) {
@@ -1161,23 +1195,15 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
             }
             throw e;
           }
-          return hecho?.marcas ?? [];
         };
-        let marcas: Array<{ idx: number; texto: string }>;
         try {
-          marcas = await enviar(o);
+          await enviar(o);
         } catch (e) {
           // Otra escritura entre la lectura y el guardado: con pasos por marcar se lee la orden otra vez, una sola vez.
           if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conformes.length) throw e;
           o = await ordenDeOp(db, op);
           if (["completada", "verificada", "cerrada"].includes(o.estado)) return { ordenId: o.id, m };
-          marcas = await enviar(o);
-        }
-        for (let i = 0; i < marcas.length; i += MARCAS_POR_SENTENCIA) {
-          await db.insert(ordenPasoMarcas).values(marcas.slice(i, i + MARCAS_POR_SENTENCIA).map((x) => ({
-            ordenId: o.id, pasoIdx: x.idx, pasoTexto: x.texto, estado: "ok", valor: null, nota: null,
-            ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
-          })));
+          await enviar(o);
         }
       }
       return { ordenId: o.id, m };

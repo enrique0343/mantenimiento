@@ -184,6 +184,7 @@ function aplicarLocal(p: Any, op: Op) {
       break;
     }
     case "orden.terminar":
+    case "orden.enviar":
       if (o) {
         p.ordenes = p.ordenes.filter((x: Any) => x.id !== o.id);
         p.libres = (p.libres ?? []).filter((x: Any) => x.id !== o.id);
@@ -447,11 +448,14 @@ const describirOp = (op: Any) => {
   return op.tipo?.startsWith("orden.") ? "Orden" : "Registro";
 };
 const QUE_HIZO: Record<string, string> = {
-  "orden.iniciar": "Empezar", "orden.pausar": "Pausar", "orden.reanudar": "Reanudar", "orden.terminar": "Enviar a verificación",
+  "orden.iniciar": "Empezar", "orden.pausar": "Pausar", "orden.reanudar": "Reanudar", "orden.terminar": "Enviar a verificación", "orden.enviar": "Enviar a verificación",
   "mop.prerrequisito": "Permiso", "mop.liberacion": "Lectura de liberación", "mop.reversa": "Plan de reversa", foto: "Foto",
   "emergencia.abrir": "Abrir la emergencia", "correctivo.abrir": "Abrir el correctivo", "aop.abrir": "Abrir la desviación",
   "ronda.iniciar": "Empezar la ronda", "ronda.lectura": "Parada", "ronda.cerrar": "Cerrar la ronda",
 };
+/** Un servidor de una versión anterior no conoce el registro: lo rechaza sin aplicarlo y el trabajo vuelve a la orden. */
+const OTRA_VERSION = "Esta versión de la app ya no coincide con el sistema. Cierra la app, ábrela otra vez con señal y vuelve a enviar.";
+const errorDicho = (error?: string) => (!error ? "No se pudo guardar." : /^Operación desconocida/.test(error) ? OTRA_VERSION : error);
 /** Qué se intentó registrar. */
 const queHizo = (op: Any) => {
   if (op.tipo === "orden.paso") return `${ordenParaNombrar(op.ordenId)?.modo === "emergencia" ? "Acción" : "Paso"} ${Number(op.idx) + 1}`;
@@ -478,7 +482,11 @@ function devolverAlBorrador(op: Op): string {
   return principal;
 }
 
-async function enviarFoto(op: Op): Promise<{ ok: boolean; error?: string; status: number }> {
+/**
+ * Sube una foto. Solo la respuesta del servidor de fotos decide si entró o no: `ok` queda en null cuando contestó otra
+ * cosa (un filtro de la red, una página de aviso, un límite de solicitudes) y la foto se queda en la cola.
+ */
+async function enviarFoto(op: Op): Promise<{ ok: boolean | null; error?: string; status: number }> {
   const fd = new FormData();
   fd.set("opId", op.opId);
   fd.set("ordenId", String(op.ordenId));
@@ -486,9 +494,9 @@ async function enviarFoto(op: Op): Promise<{ ok: boolean; error?: string; status
   fd.set("at", op.at);
   fd.set("file", new File([op.blob as Blob], String(op.nombre ?? "foto.jpg"), { type: (op.blob as Blob)?.type || "image/jpeg" }));
   const r = await fetch("/api/campo/foto", { method: "POST", body: fd });
-  if (r.status === 401 || r.status >= 500) return { ok: false, status: r.status };
-  const j: Any = await r.json().catch(() => ({}));
-  return { ok: !!j.ok, error: j.error, status: r.status };
+  if (r.status === 401 || r.status >= 500) return { ok: null, status: r.status };
+  const j: Any = await r.json().catch(() => null);
+  return { ok: typeof j?.ok === "boolean" ? j.ok : null, error: typeof j?.error === "string" ? j.error : undefined, status: r.status };
 }
 
 let tReintento: ReturnType<typeof setTimeout> | undefined;
@@ -523,7 +531,7 @@ async function drenar() {
     huboRechazo = true;
     const texto = devolverAlBorrador(op);
     if (texto) huboTexto = true;
-    const x = { que: op.rotulo?.que ?? describirOp(op), accion: op.rotulo?.accion ?? queHizo(op), error: error ?? "No se pudo guardar.", at: op.at, ordenId: op.ordenId ?? null, ...(texto ? { texto } : {}) };
+    const x = { que: op.rotulo?.que ?? describirOp(op), accion: op.rotulo?.accion ?? queHizo(op), error: errorDicho(error), at: op.at, ordenId: op.ordenId ?? null, ...(texto ? { texto } : {}) };
     E.rechazos.push(x);
     nuevos.push(x);
   };
@@ -536,7 +544,8 @@ async function drenar() {
         fotoEnVuelo = primero.seq;
         const r = await enviarFoto(primero).finally(() => { fotoEnVuelo = null; });
         if (r.status === 401) { E.sesionVencida = true; break; }
-        if (r.status >= 500) { fallo = true; break; }
+        // Sin respuesta del servidor de fotos no hay rechazo: la foto espera en la cola y sale en el siguiente intento.
+        if (r.ok === null) { fallo = true; break; }
         if (!r.ok) rechazar(primero, r.error);
         await quitarOp(primero, r.ok);
       } else {
@@ -2733,18 +2742,17 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     // Se calcula antes de despachar: cada operación cambia la copia del celular en cuanto entra a la cola.
     const conforme = pasos.map((p, i) => ({ p, i })).filter(({ p }) => p.estado === "pendiente" && !p.pideValor).map(({ p, i }) => ({ idx: i, texto: p.texto, ...antesDe(p) }));
     const acciones = accionesMostradas(o);
-    const faltanHitos = o.modo === "emergencia" ? (["mitigacion", "restablecimiento"] as const).filter((h) => !o.hitos?.[h]) : [];
     E.listo = { titulo: [o.activo?.codigo, tituloOrden(o)].filter(Boolean).join(" · "), lugar: o.lugar?.ubicacion, sinEnviar: !E.enLinea };
     // Las lecturas escritas en el cierre van primero, cada una como la marca de su paso.
     for (const { i, p, valor, crudo } of listo.lecturas) {
       void despachar({ tipo: "orden.paso", ordenId: o.id, idx: i, texto: p.texto, estado: "ok", valor, ...antesDe(p), ...acciones, ...conTexto({ [`lect:${o.id}:${i}`]: crudo }) });
     }
-    // Enviar una emergencia dice que ya está controlada y que el servicio volvió: el toque que no se dio lleva esta hora.
-    for (const hito of faltanHitos) void despachar({ tipo: "emergencia.hito", ordenId: o.id, hito });
+    // Enviar una emergencia dice que ya está controlada y que el servicio volvió: el toque que no se dio lleva la hora
+    // del envío, y la pone el servidor en la misma escritura. Si el envío no entra, esa hora tampoco queda.
     // La causa raíz la escribe la jefatura: el celular manda solo lo que el técnico encontró e hizo.
     // Lo escrito y los opcionales saltados viajan con el envío: si el servidor no lo acepta, vuelven a la orden.
     const saltos = Object.fromEntries([`pre:${o.id}`, `lib:${o.id}`].filter((k) => E.saltos[k]?.length).map((k) => [k, E.saltos[k]]));
-    void despachar({ tipo: "orden.terminar", ordenId: o.id, nota: listo.nota || null, ...(conforme.length ? { conforme } : {}), ...acciones, ...conTexto({ [`fin:${o.id}`]: listo.nota }, Object.keys(saltos).length ? saltos : undefined) });
+    void despachar({ tipo: "orden.enviar", ordenId: o.id, nota: listo.nota || null, ...(conforme.length ? { conforme } : {}), ...acciones, ...conTexto({ [`fin:${o.id}`]: listo.nota }, Object.keys(saltos).length ? saltos : undefined) });
     zumbar();
     soltarPantalla();
     olvidarDeOrden(o.id);
@@ -2854,10 +2862,17 @@ const movil = $("#movil") as HTMLElement;
 let ultimoToque = -1000;
 movil.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
-  // «Foto y enviar» abre la cámara solo si la orden ya se puede enviar: lo que falte se dice antes de tomar la foto.
-  if (t.closest("label[data-revisa]")) {
-    const o = ordenDelFlujo();
-    if (!o || !revisarEnvio(o)) ev.preventDefault();
+  // Las etiquetas que abren la cámara son botones: un doble toque en «Hecho» no debe caer en «Foto y enviar», que se
+  // pintó en su lugar.
+  const camara = t.closest<HTMLLabelElement>("label[for]");
+  if (camara && (document.getElementById(camara.htmlFor) as HTMLInputElement | null)?.type === "file") {
+    if (ev.isTrusted && ev.timeStamp - ultimoToque < 400) { ev.preventDefault(); return; }
+    if (ev.isTrusted) ultimoToque = ev.timeStamp;
+    // «Foto y enviar» abre la cámara solo si la orden ya se puede enviar: lo que falte se dice antes de tomar la foto.
+    if (camara.dataset.revisa) {
+      const o = ordenDelFlujo();
+      if (!o || !revisarEnvio(o)) ev.preventDefault();
+    }
     return;
   }
   const b = t.closest<HTMLElement>("[data-a]");
@@ -3055,12 +3070,15 @@ if (vv) {
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
+    const guardarCopia = (sw?: ServiceWorker | null, soltar = true) => {
+      const urls = performance.getEntriesByType("resource").map((r) => r.name).filter((u) => /\/(_astro|fonts|icons|brand)\//.test(u));
+      sw?.postMessage({ tipo: "guardar", urls: ["/campo", ...urls], soltar });
+    };
     navigator.serviceWorker.register("/sw.js").catch(() => {});
-    navigator.serviceWorker.ready.then((reg) => {
-      setTimeout(() => {
-        const urls = performance.getEntriesByType("resource").map((r) => r.name).filter((u) => /\/(_astro|fonts|icons|brand)\//.test(u));
-        reg.active?.postMessage({ tipo: "guardar", urls: ["/campo", ...urls] });
-      }, 2500);
-    }).catch(() => {});
+    navigator.serviceWorker.ready.then((reg) => { setTimeout(() => guardarCopia(reg.active), 2500); }).catch(() => {});
+    // Una versión nueva del servicio borra la copia anterior al activarse. Si se activa después del guardado de arriba,
+    // la copia nueva quedaría vacía hasta la próxima visita con señal: se le pide guardarla en cuanto toma el control.
+    // Aquí solo se agrega: una pestaña que quedó abierta con la versión anterior no debe soltar lo que guardó la nueva.
+    navigator.serviceWorker.addEventListener("controllerchange", () => guardarCopia(navigator.serviceWorker.controller, false));
   });
 }

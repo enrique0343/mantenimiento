@@ -42,7 +42,7 @@ const ponerFoto = (ordenId, { nombre = 'evidencia.jpg', tipo = 'image/jpeg', en 
 // Como el celular: lo que no cupo en el presupuesto de una solicitud sale en la siguiente.
 const enviar = async (lista, rol = 'tecnico', extra = {}) => {
   const ops = lista.map(({ sinFoto, ...o }) => {
-    if (o.tipo === 'orden.terminar' && !sinFoto) ponerFoto(o.ordenId);
+    if ((o.tipo === 'orden.terminar' || o.tipo === 'orden.enviar') && !sinFoto) ponerFoto(o.ordenId);
     return o;
   });
   const salida = [];
@@ -1441,6 +1441,179 @@ try {
   igual(e.estado, 'completada');
   igual(JSON.parse(e.checklist_ejecucion).map((x) => `${x.texto}:${x.estado}`).join('|'), 'Verificar la transferencia:ok|Encender la planta:ok');
   ok((e.trabajos_realizados ?? '').length >= 10, e.trabajos_realizados);
+
+  // ── El envío del cierre en dos pasos viaja como «orden.enviar»: es el mismo envío, con las mismas reglas ──
+  seed(9709, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9709 })]);
+  [r] = await enviar([op('orden.enviar', hace(5), { ordenId: 9709, conforme: conformes(9709), sinFoto: true })]);
+  ok(!r.ok && r.error === FALTA_FOTO, `Con su nombre nuevo, la foto se exige igual: ${JSON.stringify(r)}`);
+  igual(estadosDe(9709), 'pendiente,pendiente,pendiente');
+  const envio9709 = op('orden.enviar', hace(4), { ordenId: 9709, conforme: conformes(9709) });
+  [r] = await enviar([envio9709]);
+  ok(r.ok, JSON.stringify(r));
+  o = one('SELECT * FROM ordenes WHERE id=9709');
+  igual(o.estado, 'completada');
+  igual(o.completada_en, hace(4));
+  igual(estadosDe(9709), 'ok,ok,ok');
+  igual(marcasDeOrden(9709), 3);
+  ok(o.hora_mitigacion === null && o.hora_restablecimiento === null, 'Las horas de la emergencia son solo de la emergencia');
+  igual(one('SELECT tipo FROM campo_operaciones WHERE op_id=?', envio9709.opId).tipo, 'orden.enviar', 'Queda registrada con su nombre');
+  [r] = await enviar([envio9709]);
+  ok(r.ok && marcasDeOrden(9709) === 3, `Repetida, no vuelve a marcar: ${JSON.stringify(r)}`);
+
+  // ── La bitácora de los conformes se escribe en el mismo lote que el envío: queda todo o no queda nada ──
+  const sincronizar = (ops) => call(app.sync.POST, '/api/campo/sync', { method: 'POST', data: { ops }, rol: 'tecnico' });
+  const registrada = (opId) => !!one('SELECT 1 x FROM campo_operaciones WHERE op_id=?', opId);
+  // Si la sentencia de la bitácora falla, el lote entero se deshace: ni marcas, ni pasos, ni envío. El celular reintenta.
+  seed(9710, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9710 })]);
+  ponerFoto(9710);
+  const envio9710 = op('orden.enviar', hace(5), { ordenId: 9710, conforme: conformes(9710) });
+  const deshechos = faults.rollbackCount;
+  let bitacoraEnElLote = false;
+  faults.statement = (sql) => { const es = /insert into "orden_paso_marcas"/i.test(sql); bitacoraEnElLote ||= es; return es; };
+  let caida = await sincronizar([envio9710]);
+  faults.statement = null;
+  ok(bitacoraEnElLote, 'La bitácora de los conformes viaja en el lote del envío');
+  igual(caida.status, 200, JSON.stringify(caida.body));
+  igual(caida.body.detenido, envio9710.opId, `Un fallo del servidor no es un rechazo: el celular lo reintenta. ${JSON.stringify(caida.body)}`);
+  igual(caida.body.resultados.length, 0);
+  igual(faults.rollbackCount, deshechos + 1);
+  igual(one('SELECT estado FROM ordenes WHERE id=9710').estado, 'en_proceso');
+  igual(estadosDe(9710), 'pendiente,pendiente,pendiente', 'Sin bitácora no hay pasos marcados');
+  igual(marcasDeOrden(9710), 0);
+  ok(!registrada(envio9710.opId), 'La operación no queda registrada: puede repetirse');
+  [r] = await enviar([envio9710]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9710').estado, 'completada');
+  igual(estadosDe(9710), 'ok,ok,ok');
+  igual(all('SELECT paso_idx i, paso_texto t, estado e, ocurrido_en en, usuario_id u FROM orden_paso_marcas WHERE orden_id=9710 AND op_id=? ORDER BY paso_idx', envio9710.opId).map((x) => `${x.i}:${x.t}:${x.e}:${x.en === hace(5)}:${x.u}`).join('|'),
+    '0:Apagar y bloquear:ok:true:3|1:Limpiar filtros:ok:true:3|2:Probar el arranque:ok:true:3', 'Una marca por paso, con su texto, su hora, quién la hizo y la operación que la trajo');
+
+  // El servidor escribió y se cayó antes de responder: la bitácora ya está, y el reintento no la repite ni la pierde.
+  seed(9711, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9711 })]);
+  ponerFoto(9711);
+  const envio9711 = op('orden.enviar', hace(5), { ordenId: 9711, conforme: conformes(9711) });
+  const eventos9711 = eventosDe(9711);
+  let seCayo = false;
+  faults.beforeBatch = () => { faults.beforeStatement = { matches: (sql) => /^select\b.*\bfrom "ordenes"/is.test(sql), run() { seCayo = true; throw new Error('Se cayó la lectura después de escribir'); } }; };
+  caida = await sincronizar([envio9711]);
+  faults.beforeBatch = null; faults.beforeStatement = null;
+  ok(seCayo, 'La lectura posterior a la escritura falló');
+  igual(caida.body.detenido, envio9711.opId, JSON.stringify(caida.body));
+  ok(!registrada(envio9711.opId));
+  igual(one('SELECT estado FROM ordenes WHERE id=9711').estado, 'completada', 'La escritura ya había entrado');
+  igual(estadosDe(9711), 'ok,ok,ok');
+  igual(marcasDeOrden(9711), 3, 'Las marcas entraron con el envío, no después');
+  [r] = await enviar([envio9711]);
+  ok(r.ok, JSON.stringify(r));
+  igual(marcasDeOrden(9711), 3, 'El reintento no las repite');
+  igual(eventosDe(9711), eventos9711 + 1, 'Un solo evento, aunque la operación llegó dos veces');
+  ok(registrada(envio9711.opId));
+
+  // ── Una emergencia enviada sin sus dos toques: «controlado» y «volvió a la normalidad» llevan la hora del envío ──
+  const conformesDe = (lista) => lista.map((texto, idx) => ({ idx, texto, antes: SIN_MARCA }));
+  emergencia(9712, { activo: 2, eop: null });
+  await enviar([op('emergencia.hito', hace(20), { ordenId: 9712, hito: 'llegada' }), op('orden.iniciar', hace(20), { ordenId: 9712, acciones: vistas })]);
+  // Sin foto el envío no entra, y sus horas tampoco: no queda «controlada» una emergencia que no se envió.
+  [r] = await enviar([op('orden.enviar', hace(7), { ordenId: 9712, acciones: vistas, conforme: conformesDe(vistas), sinFoto: true })]);
+  ok(!r.ok && r.error === FALTA_FOTO, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9712');
+  ok(e.estado === 'en_proceso' && e.hora_mitigacion === null && e.hora_restablecimiento === null, `El envío rechazado no deja horas: ${e.estado} ${e.hora_mitigacion} ${e.hora_restablecimiento}`);
+  const eventos9712 = eventosDe(9712);
+  [r] = await enviar([op('orden.enviar', hace(6), { ordenId: 9712, acciones: vistas, conforme: conformesDe(vistas) })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9712');
+  igual(e.estado, 'completada');
+  igual(e.completada_en, hace(6));
+  igual(e.hora_llegada, hace(20), 'La llegada es la del toque');
+  igual(e.hora_mitigacion, hace(6), 'Sin el toque, se controló a la hora del envío');
+  igual(e.hora_restablecimiento, hace(6), 'Sin el toque, volvió a la normalidad a la hora del envío');
+  igual(JSON.parse(e.checklist_ejecucion).map((x) => x.estado).join(), 'ok,ok');
+  igual(eventosDe(9712), eventos9712 + 1, 'Las horas, las acciones y el envío son una sola escritura');
+
+  // El toque que sí se dio conserva su hora: el envío solo pone la que falta.
+  emergencia(9713, { activo: 2, eop: null });
+  await enviar([op('emergencia.hito', hace(20), { ordenId: 9713, hito: 'llegada' }), op('orden.iniciar', hace(20), { ordenId: 9713, acciones: vistas }), op('emergencia.hito', hace(12), { ordenId: 9713, hito: 'mitigacion' })]);
+  [r] = await enviar([op('orden.enviar', hace(6), { ordenId: 9713, acciones: vistas, conforme: conformesDe(vistas) })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9713');
+  igual(e.hora_mitigacion, hace(12), 'El primer toque manda');
+  igual(e.hora_restablecimiento, hace(6));
+
+  // El envío no queda antes de un toque, y la llegada nunca se supone.
+  emergencia(9714, { activo: 2, eop: null, estado: 'en_proceso' });
+  await enviar([op('emergencia.hito', hace(4), { ordenId: 9714, hito: 'mitigacion' })]);
+  [r] = await enviar([op('orden.enviar', hace(9), { ordenId: 9714, acciones: vistas, conforme: conformesDe(vistas) })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9714');
+  igual(e.hora_llegada, null, 'La llegada no se supone');
+  igual(e.hora_mitigacion, hace(4));
+  igual(e.completada_en, hace(4), 'Un celular con la hora atrasada no envía antes de haber controlado');
+  igual(e.hora_restablecimiento, hace(4));
+
+  // Si el servicio ya había vuelto y nadie anotó cuándo se controló, esa hora no se supone después: la pone la jefatura.
+  emergencia(9715, { activo: 2, eop: null, estado: 'en_proceso' });
+  await enviar([op('emergencia.hito', hace(8), { ordenId: 9715, hito: 'restablecimiento' })]);
+  [r] = await enviar([op('orden.enviar', hace(6), { ordenId: 9715, acciones: vistas, conforme: conformesDe(vistas) })]);
+  ok(r.ok, JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9715');
+  igual(e.estado, 'completada');
+  igual(e.hora_restablecimiento, hace(8));
+  igual(e.hora_mitigacion, null, 'No queda «controlada» después de haber vuelto a la normalidad');
+
+  // Una emergencia que ya no está en curso se rechaza como siempre, sin hablar de horas.
+  emergencia(9720, { activo: 2, eop: null, estado: 'cancelada' });
+  [r] = await enviar([op('orden.enviar', hace(6), { ordenId: 9720 })]);
+  ok(!r.ok && !/horas de la emergencia/i.test(r.error), JSON.stringify(r));
+  e = one('SELECT * FROM ordenes WHERE id=9720');
+  ok(e.estado === 'cancelada' && e.hora_mitigacion === null && e.hora_restablecimiento === null, JSON.stringify([e.estado, e.hora_mitigacion, e.hora_restablecimiento]));
+
+  // ── La orden que vuelve de verificación pide otra foto: la del envío anterior ya no cuenta ──
+  const devolver = (id, motivo) => call(app.order.PATCH, `/api/ordenes/${id}`, { method: 'PATCH', id, data: { accion: 'devolver', motivo }, rol: 'jefe' });
+  seed(9716, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9716 })]);
+  ponerFoto(9716, { nombre: 'primer-envio.jpg', en: horaSqlite(Date.parse(hace(20))) });
+  [r] = await enviar([op('orden.enviar', hace(15), { ordenId: 9716, conforme: conformes(9716), sinFoto: true })]);
+  ok(r.ok, JSON.stringify(r));
+  let vuelta = await devolver(9716, 'Falta limpiar el filtro del retorno.');
+  igual(vuelta.status, 200, JSON.stringify(vuelta.body));
+  igual(one('SELECT estado FROM ordenes WHERE id=9716').estado, 'en_proceso');
+  v = await vistaDe(9716);
+  igual(v.devuelta, 'Falta limpiar el filtro del retorno.', 'El celular muestra por qué volvió');
+  igual(v.fotos, 0, 'La foto del envío anterior ya no cuenta: el paquete pide otra');
+  [r] = await enviar([op('orden.enviar', hace(1), { ordenId: 9716, sinFoto: true })]);
+  ok(!r.ok && r.error === FALTA_FOTO, `Sin foto de la corrección no se vuelve a enviar: ${JSON.stringify(r)}`);
+  igual(one('SELECT estado FROM ordenes WHERE id=9716').estado, 'en_proceso');
+  igual((await subir('foto-correccion-9716', 9716)).status, 201);
+  igual((await vistaDe(9716)).fotos, 1, 'La foto de la corrección sí cuenta');
+  [r] = await enviar([op('orden.enviar', hace(1), { ordenId: 9716, sinFoto: true })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9716').estado, 'completada');
+  igual(one("SELECT count(*) n FROM adjuntos WHERE orden_id=9716 AND content_type LIKE 'image/%'").n, 2, 'Las dos fotos quedan en la orden');
+  // La jefatura, desde el celular, vuelve a enviar sin foto.
+  seed(9717, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9717 })]);
+  ponerFoto(9717, { nombre: 'primer-envio.jpg', en: horaSqlite(Date.parse(hace(20))) });
+  await enviar([op('orden.enviar', hace(15), { ordenId: 9717, conforme: conformes(9717), sinFoto: true })]);
+  vuelta = await devolver(9717, 'Revisar otra vez el arranque.');
+  igual(vuelta.status, 200, JSON.stringify(vuelta.body));
+  [r] = await enviar([op('orden.enviar', hace(1), { ordenId: 9717, sinFoto: true })], 'jefe');
+  ok(r.ok, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9717').estado, 'completada');
+  // Lo mismo si la reabrió la jefatura o la devolvió quien la pidió: cuentan las fotos tomadas desde esa vuelta.
+  for (const [k, accion] of ['reapertura', 'devolucion_solicitante'].entries()) {
+    const id = 9718 + k;
+    seed(id, { checklist: TRES_PASOS });
+    await enviar([op('orden.iniciar', hace(30), { ordenId: id })]);
+    ponerFoto(id, { nombre: 'antes-de-volver.jpg', en: horaSqlite(Date.parse(hace(20))) });
+    igual((await vistaDe(id)).fotos, 1);
+    sqlite.prepare("INSERT INTO orden_verificacion_eventos(orden_id,ciclo,accion,estado_antes,estado_despues,actor_id,actor_nombre,ocurrido_en,motivo,evidencia_json,operacion_id) VALUES(?,1,?,'completada','en_proceso',2,'Prueba jefe',?,'Motivo de la vuelta','{}',?)").run(id, accion, hace(10), `prueba-${accion}-${id}`);
+    igual((await vistaDe(id)).fotos, 0, `Tras «${accion}», la foto de antes no cuenta`);
+    ponerFoto(id, { nombre: 'despues-de-volver.jpg', en: horaSqlite(Date.parse(hace(9))) });
+    igual((await vistaDe(id)).fotos, 1, `Tras «${accion}», la foto nueva cuenta`);
+  }
 
 } finally {
   await close();

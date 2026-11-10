@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { ordenes, usuarios, adjuntos, planesMantenimiento, actividades, activos, ordenPrerrequisitos, ordenLiberaciones } from './schema';
 import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';
 import {
@@ -27,8 +27,10 @@ const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 
 const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
 /**
  * Evidencia mínima de un cierre: las fotos (imágenes adjuntas, de cualquier categoría) subidas desde que se empezó
- * el trabajo. Las que venían con el reporte muestran la falla, no lo que se hizo: no cuentan. Devuelve cuántas tiene
- * cada orden; la que no tiene ninguna no aparece. Es la misma cuenta que ve el celular antes de enviar.
+ * el trabajo. Las que venían con el reporte muestran la falla, no lo que se hizo: no cuentan. Si la orden volvió de
+ * verificación o se reabrió, cuentan las tomadas desde esa vuelta: cada envío lleva una foto de cómo quedó lo que
+ * se corrigió. Devuelve cuántas tiene cada orden; la que no tiene ninguna no aparece. Es la misma cuenta que ve el
+ * celular antes de enviar.
  *
  * `horaDeAdjunto` fecha el adjunto con el mismo reloj que fecha el inicio del trabajo, en el formato que SQLite usa
  * por omisión (UTC, sin zona): así la comparación no depende de dos relojes.
@@ -36,13 +38,18 @@ const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
 export const horaDeAdjunto = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 export async function fotosDeEvidencia(db: DB, ids: number[]): Promise<Map<number, number>> {
   const cuenta = new Map<number, number>();
+  // Desde cuándo cuenta una foto: lo más tardío entre el inicio del trabajo y la última devolución o reapertura.
+  const desde = sql`nullif(max(
+    coalesce((select max(datetime(e.ocurrido_en)) from orden_verificacion_eventos e
+      where e.orden_id = ${ordenes.id} and e.accion in ('devolucion', 'reapertura', 'devolucion_solicitante')), ''),
+    coalesce(datetime(${ordenes.iniciadaEn}), '')), '')`;
   for (let i = 0; i < ids.length; i += 80) {
     const filas = await db.select({ ordenId: adjuntos.ordenId, n: sql<number>`count(*)` }).from(adjuntos)
       .innerJoin(ordenes, eq(ordenes.id, adjuntos.ordenId))
       .where(and(
         inArray(adjuntos.ordenId, ids.slice(i, i + 80)),
         sql`${adjuntos.contentType} like 'image/%'`,
-        sql`(${ordenes.iniciadaEn} is null or datetime(${adjuntos.createdAt}) >= datetime(${ordenes.iniciadaEn}))`,
+        sql`(${desde} is null or datetime(${adjuntos.createdAt}) >= ${desde})`,
       ))
       .groupBy(adjuntos.ordenId);
     for (const f of filas) cuenta.set(f.ordenId, Number(f.n));
@@ -287,8 +294,12 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
 
 /** One transactional mutation, immutable snapshot and one-time PM advancement.
  * Completion remains `completada` (pending review); only independent approval closes.
- * Server identities/timestamps cannot be supplied by callers. */
-export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString()) {
+ * Server identities/timestamps cannot be supplied by callers.
+ *
+ * `conLaEscritura` da sentencias que deben quedar escritas con este cambio o no quedar (la bitácora de las marcas
+ * de un envío): van al final del mismo lote y cada una lleva la guarda que recibe, así que no escriben nada si el
+ * cambio no entró. Si no hay nada que cambiar, tampoco se escriben. */
+export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString(), conLaEscritura?: (guard: SQL) => unknown[]) {
   input = { ...input };
   // Lo que llegó igual a lo guardado, o viejo de una pestaña de antes, no es un
   // cambio: se deja fuera sin error.
@@ -616,6 +627,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
       if (activity) batch.push(db.update(actividades).set({ proximaFecha: siguienteFecha(order.completadaEn!.slice(0,10), activity.frecuencia as any), ultimaEjecucion: order.completadaEn }).where(and(eq(actividades.id, activity.id), guard)));
     }
   }
+  if (conLaEscritura) batch.push(...conLaEscritura(guard));
   const results = await db.batch(batch as any);
   if (!(results[1] as any[])?.length) deny('La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.', 409, 'otra-escritura');
   const [row] = await db.select().from(ordenes).where(eq(ordenes.id, order.id)).limit(1);

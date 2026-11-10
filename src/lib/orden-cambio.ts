@@ -1,6 +1,6 @@
 import type { APIContext } from "astro";
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, planesMantenimiento, tickets, actividades, movimientosInventario, extintorEventos, ubicaciones, sucursales, ordenPrerrequisitos, ordenLiberaciones } from "@/lib/schema";
 
@@ -79,6 +79,8 @@ const updateSchema = z.object({
 
 export interface OpcionesCambioOrden {
   momento?: string;
+  /** Sentencias que se escriben en el mismo lote que el cambio, con su guarda: queda todo o no queda nada. */
+  conLaEscritura?: (guard: SQL) => unknown[];
 }
 
 export async function aplicarCambioOrden(
@@ -129,7 +131,7 @@ export async function aplicarCambioOrden(
   // Los pasos del checklist que chocaron y quedaron como estaban guardados (K11).
   let pasosSinAplicar: number[] = [];
   try {
-    const result = await actualizarOrdenConVerificacion(db, actual, user, entrada, now);
+    const result = await actualizarOrdenConVerificacion(db, actual, user, entrada, now, opciones.conLaEscritura);
     row = result.row;
     pasosSinAplicar = result.pasosSinAplicar;
     if (result.estado !== actual.estado) parsed.data.estado = result.estado as EstadoOT;
