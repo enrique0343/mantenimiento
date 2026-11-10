@@ -195,6 +195,52 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
 .chip{min-height:44px;padding:6px 12px;background:var(--blanco);border:1px solid var(--filete);border-radius:2px;font-size:15px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--azul);color:var(--blanco);border-color:var(--azul)}
 
+/* Cierre por excepción: una pantalla para terminar la orden. Los pasos se ven en una lista; se toca solo el que
+   falló. La foto y el botón de enviar quedan fijos abajo; lo que no cabe se desplaza dentro del cuerpo. */
+.cierre .paso-cuerpo h1{font-size:26px}
+.cierre .paso-cuerpo>.ayuda{font-size:15px}
+.cierre .paso-cuerpo>.etq{margin-top:4px}
+.pasos-cierre{list-style:none;margin:0;padding:0;border-bottom:1px solid var(--filete)}
+.pc{border-top:1px solid var(--filete)}
+.pc-fila{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 0;text-align:left}
+.pc-fila:active{background:var(--panel)}
+.pc-n{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;border:1.5px solid var(--filete);border-radius:2px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--tinta2)}
+.pc-t{flex:1;min-width:0;font-size:16px;font-weight:600;line-height:1.25;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.pc-t .critico{font-size:11px;vertical-align:1px}
+.pc-e{display:inline-flex;align-items:center;gap:6px;flex:none;max-width:44%;font-size:13px;font-weight:700;line-height:1.2;text-align:right;color:var(--ref)}
+.pc.ok .pc-n{border-color:var(--verde);color:var(--verde)}
+.pc.ok .pc-e{color:var(--verde)}
+.pc.mal .pc-n{border-color:var(--rojo);color:var(--tinta)}
+.pc.mal .pc-e,.pc.rev .pc-e{color:var(--tinta)}
+.pc.mal .pc-e::before,.pc.rev .pc-e::before{content:"";flex:none;width:8px;height:8px;border-radius:999px;background:var(--rojo)}
+.pc.rev .pc-e::before{background:var(--ambar)}
+.pc.rev .pc-n{border-color:var(--ambar)}
+.pc.na .pc-t{color:var(--tinta2)}
+/* La lectura de un paso se escribe en su fila: el campo, su juicio al lado y el rango debajo. */
+.pc-lect{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr);align-items:center;gap:4px 10px;padding:0 0 10px 34px}
+.pc-lect .lect-caja{border-width:1.5px}
+.pc-lect .lect-caja.mini input{min-height:48px;font-size:22px}
+.pc-lect .lect-caja.texto{grid-column:1/-1}
+.pc-lect .lect-caja.texto input{font-size:18px}
+.pc-lect .lect-caja span{font-size:16px}
+.pc-juicio{min-width:0;font-size:14px;font-weight:600;line-height:1.25}
+.pc-juicio.bien{color:var(--verde)}
+.pc-juicio.mal{color:var(--rojo)}
+.pc-juicio.falta{grid-column:1/-1;color:var(--tinta)}
+.pc-juicio.falta::before{content:"";display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:999px;background:var(--rojo);vertical-align:1px}
+.pc-rango{grid-column:1/-1;font-size:13px;color:var(--tinta2)}
+.pc-rango b{font-weight:600;color:var(--tinta)}
+/* Los dos toques de la emergencia: fijan su hora al tocarlos. Hechos, quedan dichos con su marca. */
+.chips.hitos .chip{flex:1 1 auto;min-height:48px}
+.chip.hecho{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-color:var(--verde);color:var(--verde)}
+.chip.hecho svg{flex:none;width:18px;height:18px}
+/* El pie del cierre: la foto que ya está, y el botón que toca. */
+label.b1,label.b2{cursor:pointer}
+.foto-res.mini{padding:6px 8px;font-size:13px;line-height:1.25}
+.foto-res.mini img{width:40px;height:40px}
+.cierre .paso-pie>.ayuda{font-size:14px;line-height:1.3;color:var(--tinta)}
+.cierre .paso-pie .dos .b2{font-size:15px}
+
 #aviso{position:absolute;left:0;right:0;top:var(--ga);min-height:44px;z-index:30;display:flex;align-items:center;background:var(--azul);color:var(--blanco);font-size:14px;line-height:1.2;font-weight:600;padding:4px var(--gd) 4px var(--gi)}
 #aviso[hidden]{display:none}
 
@@ -231,5 +277,13 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
   .ahora.lleno .otra+.otra{margin-top:-4px}
   .hoy-cab.compacta h1{display:none}
   .hoy-cab.compacta .etq{display:block}
+  /* El cierre en 360×640: la lista de pasos gana el alto que suelta el aire de arriba y del pie. */
+  .cierre .paso-cuerpo{gap:8px;padding-top:12px}
+  .cierre .paso-cuerpo h1{font-size:22px}
+  .cierre .paso-cuerpo>.ayuda{font-size:14px;line-height:1.3}
+  .pc-fila{min-height:44px;padding:4px 0}
+  .pc-t{font-size:15px}
+  .cierre .paso-pie{gap:6px;padding-top:8px}
+  .cierre .paso-pie .b1{min-height:56px}
 }
 @media(prefers-reduced-motion:no-preference){.paso-cuerpo{animation:entra .14s ease-out}@keyframes entra{from{transform:translateX(12px);opacity:.3}to{transform:none;opacity:1}}}
