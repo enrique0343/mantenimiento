@@ -231,9 +231,13 @@ ol.acc li::before{content:counter(n);font-weight:700;color:var(--azul)}
 .pc-rango{grid-column:1/-1;font-size:13px;color:var(--tinta2)}
 .pc-rango b{font-weight:600;color:var(--tinta)}
 /* Los dos toques de la emergencia: fijan su hora al tocarlos. Hechos, quedan dichos con su marca. */
-.chips.hitos .chip{flex:1 1 auto;min-height:48px}
-.chip.hecho{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-color:var(--verde);color:var(--verde)}
+.chips.hitos{align-items:center;gap:6px 14px}
+.chips.hitos button.chip{flex:1 1 100%;min-height:48px}
+.chips.hitos .chip small{display:block;font-size:13px;font-weight:400;line-height:1.25;color:var(--tinta2)}
+.chip.hecho{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:28px;padding:0;border:0;background:none;font-size:14px;color:var(--verde)}
 .chip.hecho svg{flex:none;width:18px;height:18px}
+/* «Ir paso a paso» y «Agregar una nota», en un renglón. */
+.enlaces{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 16px}
 /* El pie del cierre: la foto que ya está, y el botón que toca. */
 label.b1,label.b2{cursor:pointer}
 .foto-res.mini{padding:6px 8px;font-size:13px;line-height:1.25}

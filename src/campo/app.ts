@@ -1594,6 +1594,23 @@ function evaluarFila(t: HTMLInputElement) {
 }
 /** Las dos cámaras del cierre. Viven fuera del pie: repintar el pie con la cámara abierta no pierde la foto. */
 const camarasDelCierre = (o: Any) => ["foto-enviar", "foto-cierre"].map((id) => `<input class="oculto" type="file" accept="image/*" capture="environment" id="${id}" data-foto="despues" data-clave="fin:${o.id}"${id === "foto-enviar" ? ' data-enviar="1"' : ""}>`).join("");
+/** Lo que dice el cierre bajo el título: qué falta para enviar. Cambia cuando entra la foto, así que se repinta con el pie. */
+function ayudaDeCierre(o: Any): string {
+  const pasos: Any[] = o.pasos ?? [];
+  const emergencia = o.modo === "emergencia";
+  const mal = pasos.filter((p) => p.estado === "desviacion").length;
+  const lecturas = pasos.filter(lecturaPendiente).length;
+  const conFoto = fotosDe(o) > 0;
+  // Lo que dice el texto es lo que pide el botón: con lecturas de liberación sin anotar, primero van esas.
+  const liberar = liberacionPendiente(o) >= 0;
+  if (!pasos.length) return ["Escríbelo o díctalo", liberar ? "anota las lecturas de liberación" : "", conFoto ? "y envíala." : "toma la foto y se envía."].filter(Boolean).join(", ");
+  if (mal) return `Lo demás se envía como hecho.${lecturas ? (lecturas === 1 ? " Falta anotar una lectura." : ` Falta anotar ${lecturas} lecturas.`) : ""}${liberar ? " Faltan las lecturas de liberación." : ""}`;
+  const antes = liberar ? (lecturas ? "anota las lecturas de los pasos y las de liberación" : "anota las lecturas de liberación")
+    : lecturas ? (lecturas === 1 ? "anota la lectura" : "anota las lecturas") : "";
+  // Con la foto ya tomada solo falta enviarla.
+  const falta = conFoto ? [antes, "envíala"].filter(Boolean).join(" y ") : [antes, "toma la foto y se envía"].filter(Boolean).join(", ");
+  return emergencia ? `Si ya está controlada y el servicio volvió a la normalidad, ${falta}. Si una acción no se pudo, tócala.` : `Si todo salió bien, ${falta}. Si algo falló, toca ese paso.`;
+}
 /**
  * El cierre por excepción: una sola pantalla para terminar una orden. Lo que no se toca viaja como
  * conforme; se toca solo el paso que falló. La foto es obligatoria y va junto al botón de enviar.
@@ -1606,40 +1623,38 @@ function vCierre(o: Any) {
   const clave = `fin:${o.id}`;
   const nota = String(E.notas[clave] ?? "");
   const mal = pasos.filter((p) => p.estado === "desviacion").length;
-  const lecturas = pasos.filter(lecturaPendiente).length;
   const cambiados = new Set(pasosPorRevisar(o));
-  const conFoto = fotosDe(o) > 0;
-  const etq = emergencia ? ["Emergencia", o.eop?.codigo] : intervencion ? ["Intervención", o.activo?.codigo] : [o.activo?.codigo, tituloOrden(o)];
+  // La cabecera ya dice de qué equipo es: aquí va qué trabajo es y de qué tamaño. La emergencia dice su plazo.
+  const cuenta = !n ? "" : emergencia ? (n === 1 ? "1 acción" : `${n} acciones`) : n === 1 ? "1 paso" : `${n} pasos`;
+  const etq = emergencia ? ["Emergencia", vencePlazo(o.vencimiento) || cuenta] : [intervencion ? "Intervención" : o.tipo === "preventivo" ? "Preventivo" : o.tipo === "correctivo" ? "Correctivo" : o.tipo, cuenta];
   const titulo = !n ? (o.modo === "pasos" ? "¿Qué hiciste?" : "¿Qué encontraste y qué hiciste?")
     : mal ? (emergencia ? (mal === 1 ? "1 acción no se pudo" : `${mal} acciones no se pudieron`) : mal === 1 ? "1 paso con problema" : `${mal} pasos con problema`)
     : emergencia ? "¿Emergencia resuelta?" : "¿Todo conforme?";
-  const enviala = conFoto ? "envíala" : "toma la foto y se envía";
-  const faltan = lecturas ? (lecturas === 1 ? "anota la lectura, " : "anota las lecturas, ") : "";
-  const ayuda = !n ? (conFoto ? "Escríbelo o díctalo, y envíala." : "Escríbelo o díctalo, toma la foto y se envía.")
-    : mal ? `Lo demás se envía como hecho.${lecturas ? (lecturas === 1 ? " Falta anotar una lectura." : ` Falta anotar ${lecturas} lecturas.`) : ""}`
-    : emergencia ? `Si ya está controlada y el servicio volvió a la normalidad, ${faltan}${enviala}. Si una acción no se pudo, tócala.`
-    : `Si todo salió bien, ${faltan}${enviala}. Si algo falló, toca ese paso.`;
   // Los dos toques de la emergencia fijan su hora cuando se tocan. Si no se tocan, la hora es la del envío.
+  // El EOP puede decir qué es «controlado» en esta emergencia («Energía de emergencia en servicio»): va en el mismo botón.
+  const queEsControlado = String(o.eop?.etiquetaMitigacion ?? "").trim();
   const hitos = emergencia
     ? `<div class="chips hitos">${o.hitos?.mitigacion
       ? `<span class="chip hecho">${ico.check}Controlado</span>${o.hitos?.restablecimiento ? `<span class="chip hecho">${ico.check}Volvió a la normalidad</span>` : `<button class="chip" data-a="restablecido">Ya volvió a la normalidad</button>`}`
-      : `<button class="chip" data-a="controlado">Ya está controlado</button>`}</div>`
+      : `<button class="chip" data-a="controlado">Ya está controlado${queEsControlado && queEsControlado !== "Situación controlada" ? `<small>${esc(queEsControlado)}</small>` : ""}</button>`}</div>`
     : "";
   const filas = pasos.map((p, i) => {
     const e = estadoEnCierre(o, p, cambiados.has(i));
     return `<li class="pc${e.clase ? ` ${e.clase}` : ""}" data-v="${firmaDePaso(p)}"><button class="pc-fila" data-a="irPaso" data-i="${i}"><span class="pc-n">${i + 1}</span><span class="pc-t">${esc(String(p.texto ?? "").replace(/ · /g, ": "))}${p.critico ? ' <span class="critico">CRÍTICO</span>' : ""}</span><span class="pc-e">${e.texto ? esc(e.texto) : ico.flecha}</span></button>${lecturaPendiente(p) ? lecturaEnCierre(o, p, i) : ""}</li>`;
   }).join("");
   const lista = n ? `<span class="etq">${emergencia ? "Acciones · toca solo la que no se pudo" : "Pasos · toca solo el que falló"}</span><ol class="pasos-cierre">${filas}</ol>` : "";
-  const pasoAPaso = n > 1 && pasos.some((p) => p.estado === "pendiente") ? `<button class="link" data-a="pasoAPaso" style="align-self:flex-start">${emergencia ? "Ir acción por acción" : "Ir paso a paso"}</button>` : "";
+  const pasoAPaso = n > 1 && pasos.some((p) => p.estado === "pendiente") ? `<button class="link" data-a="pasoAPaso">${emergencia ? "Ir acción por acción" : "Ir paso a paso"}</button>` : "";
   const conNota = !n || emergencia || intervencion || E.verNota || !!nota;
   const campoNota = conNota
     ? `<label class="etq" for="nota-fin">${!n ? "Trabajos realizados" : emergencia || intervencion ? "Qué encontraste y qué hiciste (opcional)" : "Algo más que anotar"}</label><textarea id="nota-fin" data-nota="${clave}" placeholder="Usa el micrófono del teclado para dictarlo.">${esc(nota)}</textarea>`
-    : `<button class="link" data-a="verNota" style="align-self:flex-start">Agregar una nota</button>`;
+    : "";
+  const enlaces = pasoAPaso || !conNota ? `<div class="enlaces">${pasoAPaso}${conNota ? "" : `<button class="link" data-a="verNota">Agregar una nota</button>`}</div>` : "";
   return `<div class="paso cierre">${cabOrden(o)}<div class="paso-cuerpo">`
     + `<div class="paso-meta"><span class="etq${emergencia ? " urgente" : ""}">${esc(etq.filter(Boolean).join(" · "))}</span></div>`
-    + `<h1>${titulo}</h1><p class="ayuda">${ayuda}</p>`
+    + `<h1>${titulo}</h1><p class="ayuda" id="cierre-ayuda">${ayudaDeCierre(o)}</p>`
+    + (!n && o.descripcion ? dato(emergencia ? "Lo que reportaron" : "Lo que pidieron", o.descripcion) : "")
     + (o.devuelta ? dato("Te la devolvieron", o.devuelta) : "")
-    + hitos + lista + pasoAPaso
+    + hitos + lista + enlaces
     + (intervencion ? resumenLecturas(o) + (o.reversa?.ejecutada ? dato("Plan de reversa", "Ejecutado: no hace falta liberar el sistema.") : "") : "")
     + campoNota
     + (emergencia ? `<p class="ayuda">La causa raíz la escribe tu jefatura.</p>` : "")
@@ -1673,6 +1688,8 @@ function refrescarPieCierre() {
   const mensaje = previo && !previo.hidden ? previo.textContent : null;
   pie.innerHTML = pieCierre(o);
   if (mensaje) { const e = $("#err-fin"); if (e) { e.textContent = mensaje; e.hidden = false; } }
+  const ayuda = $("#cierre-ayuda");
+  if (ayuda) ayuda.textContent = ayudaDeCierre(o);
 }
 /** Las lecturas de liberación en una línea: cuántas se anotaron y cuántas quedaron fuera de rango. Cada una se revisa en su pantalla. */
 function resumenLecturas(o: Any) {
@@ -2347,6 +2364,9 @@ function revisarEnvio(o: Any): { nota: string; lecturas: { i: number; p: Any; va
     $<HTMLTextAreaElement>("#nota-fin")?.focus();
     return null;
   }
+  // Todo en orden: lo que se dijo en el pie ya no aplica.
+  const dicho = $("#err-fin");
+  if (dicho) dicho.hidden = true;
   return { nota, lecturas };
 }
 
@@ -2858,6 +2878,8 @@ movil.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
   if (t.id === "lectura") evaluarLectura();
   if (t.dataset.lect !== undefined) evaluarFila(t);
+  // Lo que se pidió en el pie del cierre se quita en cuanto se empieza a escribir.
+  if (t.id === "nota-fin") { const e = $("#err-fin"); if (e) e.hidden = true; }
   // Lo que se escribe se guarda en el celular mientras se escribe.
   if (t.dataset.nota) { E.notas[t.dataset.nota] = t.value; guardarBorrador(); }
   if (t.id === "filtro") {
