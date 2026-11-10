@@ -16,7 +16,7 @@ import { comprimir, peso } from "./foto";
 import { laHora, turnoActual, type TurnoInfo } from "../lib/turnos";
 import { etiquetaOT } from "../lib/orden-codigo";
 import { leerNumero, numeroAlInicio, textoDeNumero, valorDe } from "../lib/numero";
-import { envioConPasosCambiados, pasoDeLaFrase } from "../lib/frases-campo";
+import { envioConPasosCambiados, FALTA_LA_FOTO, pasoDeLaFrase, pasosDelEnvio } from "../lib/frases-campo";
 
 const TZ = "America/El_Salvador";
 const cuerpo = document.body.dataset;
@@ -725,6 +725,9 @@ const reduciendo = new Map<number, number>();
 const fotosDe = (o: Any) => Number(o.fotos ?? 0) + (reduciendo.get(Number(o.id)) ?? 0);
 /** La última foto tomada en cada cierre, para mostrarla sin esperar al servidor. */
 const miniaturas = new Map<string, string>();
+/** La orden cuyo «Foto y enviar» espera a que su foto termine de reducirse: al entrar a la cola, se envía sola. */
+let esperaEnvio: number | null = null;
+const CRITICO_CON_PROBLEMA = "Un punto crítico quedó con problema. Mientras siga así, la orden no se puede enviar a verificación. Corrígelo o déjala en espera y avisa a tu jefatura.";
 /** Un paso sin anotar que pide el número del instrumento: en el cierre se escribe ahí mismo. */
 const lecturaPendiente = (p: Any) => p.estado === "pendiente" && !!p.pideValor;
 /** La primera lectura de liberación que falta en una intervención sin reversa; -1 si no falta ninguna. */
@@ -1271,23 +1274,7 @@ const mismaLectura = (a: unknown, b: unknown) => {
   return x != null || y != null ? x === y : String(a ?? "").trim() === String(b ?? "").trim();
 };
 
-/** Las dos preguntas de la emergencia. Cada «Sí» fija su hora con el toque. */
-function vPregunta(o: Any, pregunta: string, ayuda: string, si: string, accionSi: string, accionNo: string) {
-  return `<div class="paso">${cabOrden(o)}<div class="paso-cuerpo"><div class="paso-meta"><span class="etq urgente">Emergencia</span></div>`
-    + `<h1>${esc(pregunta)}</h1><p class="ayuda">${esc(ayuda)}</p>${E.vista === "controlado" ? enlaceAtras(o, "controlado", 0) : ""}</div>`
-    + `<div class="paso-pie"><button class="b1" data-a="${accionSi}">${esc(si)}</button><button class="b2" data-a="${accionNo}">Todavía no</button></div></div>`;
-}
 const ordenDelFlujo = () => (E.flujo?.tipo === "pm" ? ordenDe(E.flujo.ordenId as number) : null);
-function vControlado() {
-  const o = ordenDelFlujo();
-  if (!o) { E.flujo = null; E.vista = "hoy"; return vHoy(); }
-  return vPregunta(o, "¿Ya está controlado?", "Toca Sí cuando la situación ya no empeora, aunque todavía falte reparar.", `Sí: ${o.eop?.etiquetaMitigacion || "Situación controlada"}`, "controlado", "todaviaNoControlado");
-}
-function vNormalidad() {
-  const o = ordenDelFlujo();
-  if (!o) { E.flujo = null; E.vista = "hoy"; return vHoy(); }
-  return vPregunta(o, "¿Volvió a la normalidad?", "Toca Sí cuando el servicio funciona como antes de la falla.", "Sí, restablecido", "restablecido", "todaviaNoNormal");
-}
 
 /** Un permiso por pantalla: qué es, qué anotar y la referencia que lo vuelve verificable. */
 function vPermiso() {
@@ -1510,18 +1497,6 @@ const origenRonda = () => {
 };
 
 // ── Fin ─────────────────────────────────────────────────────────────────────
-function trabajosEscritos(o: Any) {
-  const pasos = o.pasos;
-  if (!pasos.length) return "";
-  const limpio = limpiarTitulo(o.titulo).replace(/\s+-\s+\S+$/, "").trim() || "Mantenimiento";
-  const ok = pasos.filter((p: Any) => p.estado === "ok").length;
-  const na = pasos.filter((p: Any) => p.estado === "na").length;
-  const nov = pasos.filter((p: Any) => p.estado === "desviacion").length;
-  const lect = pasos.filter((p: Any) => p.valor).map((p: Any) => `${p.texto}: ${p.valor}${p.unidad ? ` ${p.unidad}` : ""}`);
-  // En una emergencia, cada acción del EOP se hizo o no se pudo: igual que lo escribe el servidor.
-  if (o.modo === "emergencia") return `${limpio}: ${ok} de ${pasos.length} acciones hechas${na ? `, ${na} no aplica` : ""}${nov ? `; ${nov} ${nov === 1 ? "no se pudo" : "no se pudieron"}` : ""}.${lect.length ? ` Lecturas: ${lect.join("; ")}.` : ""}`;
-  return `${limpio}: ${ok + nov} de ${pasos.length} puntos realizados${nov ? `, ${nov} con novedad` : " sin novedad"}${na ? `, ${na} no aplica` : ""}.${lect.length ? ` Lecturas: ${lect.join("; ")}.` : ""}`;
-}
 /** Tomar una foto. Si en esta pantalla u hoja ya se tomó, se dice así: «1 foto lista». */
 function fotoCampo(id: string, clave: string, categoria: string, texto: string) {
   const n = E.fotos[clave] ?? 0;
@@ -1554,62 +1529,138 @@ function vFin() {
   if (f.tipo === "ronda") return E.p?.ronda ? vFinRonda() : vHoy();
   const o = ordenDe(f.ordenId as number);
   if (!o) { E.flujo = null; E.vista = "hoy"; return vHoy(); }
-  if (o.modo !== "pasos") return vFinTrabajo(o);
-  const n = o.pasos.length;
-  const pendientes = o.pasos.filter((p: Any) => p.estado === "pendiente");
-  if (pendientes.length) {
-    return `<div class="final"><span class="etq">${esc(tituloOrden(o))}</span><h1>Faltan ${pendientes.length} paso${pendientes.length === 1 ? "" : "s"}</h1><div class="empuja"><button class="b1" data-a="irPaso" data-i="${primerPendiente(o)}">Ir al paso pendiente</button></div></div>`;
-  }
-  const criticos = o.pasos.map((p: Any, i: number) => ({ p, i })).filter(({ p }: Any) => p.estado === "desviacion" && p.critico);
-  if (criticos.length) {
-    return `<div class="final"><span class="etq">${esc(tituloOrden(o))}</span><h1>Un punto crítico quedó con problema</h1>`
-      + `<p class="ayuda">Mientras siga así, la orden no se puede enviar a verificación. Corrígelo o déjala en espera y avisa a tu jefatura.</p>`
-      + criticos.map(({ p, i }: Any) => `<div class="dato"><span class="etq">${esc(p.texto)}</span><b>${esc(p.nota ?? "")}</b><button class="link" data-a="irPaso" data-i="${i}">Corregir este paso</button></div>`).join("")
-      + `<div class="empuja"><button class="b1" data-a="pausar">Dejar en espera</button><button class="b2" data-a="abrirCorrectivoDesdeFin">Abrir correctivo</button></div></div>`;
-  }
-  const clave = `fin:${o.id}`;
-  const nota = E.notas[clave] ?? "";
-  const texto = trabajosEscritos(o);
-  const mostrarNota = !n || E.verNota || nota;
-  return `<div class="final"><span class="etq">${esc([o.activo?.codigo, tituloOrden(o)].filter(Boolean).join(" · "))}</span>`
-    + `<h1>${n ? `${n} de ${n} pasos anotados` : "¿Qué hiciste?"}</h1>`
-    + (o.devuelta ? `<div class="dato"><span class="etq">Te la devolvieron</span><b>${esc(o.devuelta)}</b></div>` : "")
-    + (texto ? `<div class="dato"><span class="etq">Trabajos realizados, escritos solos</span><b>${esc(texto)}</b></div>` : "")
-    + (mostrarNota
-      ? `<label class="etq" for="nota-fin">${n ? "Algo más que anotar" : "Trabajos realizados"}</label><textarea id="nota-fin" data-nota="${clave}" placeholder="Usa el micrófono del teclado para dictarlo.">${esc(nota)}</textarea>`
-      : `<button class="link" data-a="verNota" style="align-self:flex-start">Agregar una nota</button>`)
-    + fotoCampo("foto-final", clave, "despues", "Foto final (opcional)")
-    + `<p class="err" id="err-fin" hidden></p>`
-    + `<div class="empuja"><button class="b1" data-a="enviar">Enviar a verificación</button>${n ? `<button class="link" data-a="anterior" style="justify-content:center">Revisar los pasos</button>` : `<a class="link" href="#hoy" data-a="ir" data-h="#hoy" style="justify-content:center">Volver a Hoy</a>`}</div></div>`;
-}
-/** El cierre de una emergencia o de una intervención: qué encontró y qué hizo. La causa raíz la escribe la jefatura. */
-function vFinTrabajo(o: Any) {
-  // Si falta algo (un paso, un toque, una lectura), se va primero a eso.
-  const falta = pantallaDe(o);
-  if (falta.vista !== "fin") {
-    E.vista = falta.vista;
+  // Una orden que ya no está en curso (la pausaron o volvió a estar sin empezar) no se cierra: va a su pantalla.
+  const toca = pantallaDe(o);
+  if (toca.vista !== "fin") {
+    soltarPantalla();
+    E.vista = toca.vista;
     E.params = { id: o.id };
-    E.flujo = falta.vista === "inicio" || falta.vista === "pausa" ? null : { tipo: "pm", ordenId: o.id, i: falta.i };
-    return (VISTAS[falta.vista] ?? vHoy)();
+    E.flujo = null;
+    return (VISTAS[toca.vista] ?? vHoy)();
   }
-  const clave = `fin:${o.id}`;
+  return vCierre(o);
+}
+/** Cómo quedó un paso, dicho en su fila del cierre. Uno sin marcar no dice nada: viaja como conforme. */
+function estadoEnCierre(o: Any, p: Any, cambio: boolean): { clase: string; texto: string } {
+  if (cambio) return { clase: "rev", texto: "Cambió en la ficha" };
+  if (p.estado !== "pendiente" && pasoSinLectura(p)) return { clase: "rev", texto: "Falta la lectura" };
+  if (p.estado === "desviacion") return { clase: "mal", texto: o.modo === "emergencia" ? "No se pudo" : "Problema" };
+  if (p.estado === "na") return { clase: "na", texto: "No aplica" };
+  if (p.estado === "ok") return { clase: "ok", texto: p.pideValor && comoTexto(p.valor) ? `${comoTexto(p.valor)}${p.unidad ? ` ${p.unidad}` : ""}` : "Hecho" };
+  return { clase: "", texto: "" };
+}
+/** Una lectura escrita en el cierre, juzgada mientras se escribe: igual que en la pantalla del paso. */
+function juicioDeLectura(p: Any, texto: string): { clase: string; texto: string } {
+  const leido = leerNumero(texto);
+  if (leido.tipo === "ambiguo") return { clase: "falta", texto: leido.mensaje };
+  const v = valorDe(leido);
+  if (v == null || !conRango(p)) return { clase: "", texto: "" };
+  return fueraDe(p, v) ? { clase: "mal", texto: "Fuera de rango" } : { clase: "bien", texto: "Dentro de rango" };
+}
+/** La lectura de un paso sin anotar se escribe en su fila del cierre: no hace falta abrir el paso. */
+function lecturaEnCierre(o: Any, p: Any, i: number) {
+  const clave = `lect:${o.id}:${i}`;
+  const escrito = String(E.notas[clave] ?? "");
+  const j = juicioDeLectura(p, escrito);
+  const normal = rangoDe(p);
+  const info = [normal ? `Normal: <b>${esc(normal)}</b>` : "", p.ultima ? `Última vez: <b>${esc(p.ultima)}${p.unidad ? ` ${esc(p.unidad)}` : ""}</b>` : ""].filter(Boolean).join(" · ");
+  return `<div class="pc-lect"><div class="lect-caja mini${conRango(p) ? "" : " texto"}"><input inputmode="${conRango(p) ? "decimal" : "text"}" autocomplete="off" enterkeyhint="done" aria-label="Lectura del paso ${i + 1}${p.unidad ? ` en ${esc(p.unidad)}` : ""}" placeholder="Lectura" data-nota="${esc(clave)}" data-lect="${i}" value="${esc(escrito)}"><span>${esc(p.unidad ?? "")}</span></div>`
+    + `<span class="pc-juicio${j.clase ? ` ${j.clase}` : ""}" aria-live="polite">${esc(j.texto)}</span>`
+    + (info ? `<span class="pc-rango">${info}</span>` : "") + `</div>`;
+}
+/** El juicio de una lectura del cierre, al lado de su campo, mientras se escribe. */
+function evaluarFila(t: HTMLInputElement) {
+  const o = ordenDelFlujo();
+  const p = o?.pasos?.[Number(t.dataset.lect)];
+  const s = t.closest(".pc-lect")?.querySelector<HTMLElement>(".pc-juicio");
+  if (!p || !s) return;
+  const j = juicioDeLectura(p, t.value);
+  s.textContent = j.texto;
+  s.className = `pc-juicio${j.clase ? ` ${j.clase}` : ""}`;
+  const e = $("#err-fin");
+  if (e) e.hidden = true;
+}
+/** Las dos cámaras del cierre. Viven fuera del pie: repintar el pie con la cámara abierta no pierde la foto. */
+const camarasDelCierre = (o: Any) => ["foto-enviar", "foto-cierre"].map((id) => `<input class="oculto" type="file" accept="image/*" capture="environment" id="${id}" data-foto="despues" data-clave="fin:${o.id}"${id === "foto-enviar" ? ' data-enviar="1"' : ""}>`).join("");
+/**
+ * El cierre por excepción: una sola pantalla para terminar una orden. Lo que no se toca viaja como
+ * conforme; se toca solo el paso que falló. La foto es obligatoria y va junto al botón de enviar.
+ */
+function vCierre(o: Any) {
+  const pasos: Any[] = o.pasos ?? [];
+  const n = pasos.length;
   const emergencia = o.modo === "emergencia";
-  const texto = trabajosEscritos(o);
-  const atras = pantallaAnterior(o, "fin", 0);
-  const volver = atras
-    ? `<button class="link" data-a="anterior" style="justify-content:center">${atras.vista === "liberacion" ? "Revisar las lecturas" : emergencia ? "Revisar las acciones" : "Revisar los pasos"}</button>`
-    : `<a class="link" href="#hoy" data-a="ir" data-h="#hoy" style="justify-content:center">Volver a Hoy</a>`;
-  return marco(`<span class="etq${emergencia ? " urgente" : ""}">${esc([emergencia ? "Emergencia" : "Intervención", emergencia ? o.eop?.codigo : o.activo?.codigo].filter(Boolean).join(" · "))}</span>`
-    + `<h1>¿Qué encontraste y qué hiciste?</h1>`
+  const intervencion = o.modo === "intervencion";
+  const clave = `fin:${o.id}`;
+  const nota = String(E.notas[clave] ?? "");
+  const mal = pasos.filter((p) => p.estado === "desviacion").length;
+  const lecturas = pasos.filter(lecturaPendiente).length;
+  const cambiados = new Set(pasosPorRevisar(o));
+  const conFoto = fotosDe(o) > 0;
+  const etq = emergencia ? ["Emergencia", o.eop?.codigo] : intervencion ? ["Intervención", o.activo?.codigo] : [o.activo?.codigo, tituloOrden(o)];
+  const titulo = !n ? (o.modo === "pasos" ? "¿Qué hiciste?" : "¿Qué encontraste y qué hiciste?")
+    : mal ? (emergencia ? (mal === 1 ? "1 acción no se pudo" : `${mal} acciones no se pudieron`) : mal === 1 ? "1 paso con problema" : `${mal} pasos con problema`)
+    : emergencia ? "¿Emergencia resuelta?" : "¿Todo conforme?";
+  const enviala = conFoto ? "envíala" : "toma la foto y se envía";
+  const faltan = lecturas ? (lecturas === 1 ? "anota la lectura, " : "anota las lecturas, ") : "";
+  const ayuda = !n ? (conFoto ? "Escríbelo o díctalo, y envíala." : "Escríbelo o díctalo, toma la foto y se envía.")
+    : mal ? `Lo demás se envía como hecho.${lecturas ? (lecturas === 1 ? " Falta anotar una lectura." : ` Falta anotar ${lecturas} lecturas.`) : ""}`
+    : emergencia ? `Si ya está controlada y el servicio volvió a la normalidad, ${faltan}${enviala}. Si una acción no se pudo, tócala.`
+    : `Si todo salió bien, ${faltan}${enviala}. Si algo falló, toca ese paso.`;
+  // Los dos toques de la emergencia fijan su hora cuando se tocan. Si no se tocan, la hora es la del envío.
+  const hitos = emergencia
+    ? `<div class="chips hitos">${o.hitos?.mitigacion
+      ? `<span class="chip hecho">${ico.check}Controlado</span>${o.hitos?.restablecimiento ? `<span class="chip hecho">${ico.check}Volvió a la normalidad</span>` : `<button class="chip" data-a="restablecido">Ya volvió a la normalidad</button>`}`
+      : `<button class="chip" data-a="controlado">Ya está controlado</button>`}</div>`
+    : "";
+  const filas = pasos.map((p, i) => {
+    const e = estadoEnCierre(o, p, cambiados.has(i));
+    return `<li class="pc${e.clase ? ` ${e.clase}` : ""}"><button class="pc-fila" data-a="irPaso" data-i="${i}"><span class="pc-n">${i + 1}</span><span class="pc-t">${esc(String(p.texto ?? "").replace(/ · /g, ": "))}${p.critico ? ' <span class="critico">CRÍTICO</span>' : ""}</span><span class="pc-e">${e.texto ? esc(e.texto) : ico.flecha}</span></button>${lecturaPendiente(p) ? lecturaEnCierre(o, p, i) : ""}</li>`;
+  }).join("");
+  const lista = n ? `<span class="etq">${emergencia ? "Acciones · toca solo la que no se pudo" : "Pasos · toca solo el que falló"}</span><ol class="pasos-cierre">${filas}</ol>` : "";
+  const pasoAPaso = n > 1 && pasos.some((p) => p.estado === "pendiente") ? `<button class="link" data-a="pasoAPaso" style="align-self:flex-start">${emergencia ? "Ir acción por acción" : "Ir paso a paso"}</button>` : "";
+  const conNota = !n || emergencia || intervencion || E.verNota || !!nota;
+  const campoNota = conNota
+    ? `<label class="etq" for="nota-fin">${!n ? "Trabajos realizados" : emergencia || intervencion ? "Qué encontraste y qué hiciste (opcional)" : "Algo más que anotar"}</label><textarea id="nota-fin" data-nota="${clave}" placeholder="Usa el micrófono del teclado para dictarlo.">${esc(nota)}</textarea>`
+    : `<button class="link" data-a="verNota" style="align-self:flex-start">Agregar una nota</button>`;
+  return `<div class="paso cierre">${cabOrden(o)}<div class="paso-cuerpo">`
+    + `<div class="paso-meta"><span class="etq${emergencia ? " urgente" : ""}">${esc(etq.filter(Boolean).join(" · "))}</span></div>`
+    + `<h1>${titulo}</h1><p class="ayuda">${ayuda}</p>`
     + (o.devuelta ? dato("Te la devolvieron", o.devuelta) : "")
-    + (texto ? dato("Ya quedó anotado", texto, "solo-alto") : "")
-    + (emergencia ? "" : resumenLecturas(o))
-    + (o.reversa?.ejecutada ? dato("Plan de reversa", "Ejecutado: no hace falta liberar el sistema.") : "")
-    + `<label class="oculto" for="nota-fin">Qué encontraste y qué hiciste</label><textarea id="nota-fin" data-nota="${clave}" placeholder="Usa el micrófono del teclado para dictarlo.">${esc(E.notas[clave] ?? "")}</textarea>`
-    + fotoCampo("foto-final", clave, "despues", "Foto (opcional)")
+    + hitos + lista + pasoAPaso
+    + (intervencion ? resumenLecturas(o) + (o.reversa?.ejecutada ? dato("Plan de reversa", "Ejecutado: no hace falta liberar el sistema.") : "") : "")
+    + campoNota
     + (emergencia ? `<p class="ayuda">La causa raíz la escribe tu jefatura.</p>` : "")
-    + `<p class="err" id="err-fin" hidden></p>`,
-    `<button class="b1" data-a="enviar">Enviar a verificación</button>${volver}`);
+    + `</div><div class="paso-pie" id="cierre-pie">${pieCierre(o)}</div>${camarasDelCierre(o)}</div>`;
+}
+/** El pie del cierre: la foto y el botón que toca. Se repinta solo, sin tocar lo que se escribe arriba ni las cámaras. */
+function pieCierre(o: Any) {
+  const clave = `fin:${o.id}`;
+  const listas = Number(o.fotos ?? 0);
+  const enCamino = reduciendo.get(Number(o.id)) ?? 0;
+  const mini = miniaturas.get(clave);
+  const tira = listas || enCamino
+    ? `<div class="foto-res mini si" id="foto-res">${mini ? `<img alt="Foto guardada" src="${mini}">` : ""}<span>${listas ? `<b>${listas === 1 ? "1 foto lista" : `${listas} fotos listas`}.</b> ${listas === 1 ? "Se envía" : "Se envían"} con la orden.` : ""}${enCamino ? `${listas ? " " : ""}Reduciendo la foto…` : ""}</span></div>`
+    : `<div class="foto-res mini" id="foto-res"></div>`;
+  const error = `<p class="err" id="err-fin" hidden></p>`;
+  const algo = `<button class="b2" data-a="algo">Algo salió mal</button>`;
+  if (esperaEnvio === Number(o.id)) return `${error}${tira}<button class="b1" disabled>Reduciendo la foto… Se envía sola.</button>`;
+  if (liberacionPendiente(o) >= 0) return `${error}${tira}<button class="b1" data-a="irLiberacion">Anotar lecturas de liberación</button>${algo}`;
+  if ((o.pasos ?? []).some((p: Any) => p.estado === "desviacion" && p.critico)) return `${error}${tira}<p class="ayuda">${CRITICO_CON_PROBLEMA}</p><button class="b1" data-a="pausar">Dejar en espera</button><button class="b2" data-a="abrirCorrectivoDesdeFin">Abrir correctivo</button>`;
+  if (listas + enCamino < 1) return `${error}${tira}<label class="b1" for="foto-enviar" data-revisa="1">${ico.camara}Foto y enviar</label><div class="dos"><label class="b2" for="foto-cierre">Varias fotos</label>${algo}</div>`;
+  return `${error}${tira}<button class="b1" data-a="enviar">Enviar a verificación</button><div class="dos"><label class="b2" for="foto-cierre">${ico.camara}Otra foto</label>${algo}</div>`;
+}
+/** Repinta solo el pie del cierre: la foto que entró, la que se reduce, el botón que toca. Lo escrito arriba no se toca. */
+function refrescarPieCierre() {
+  const pie = $("#cierre-pie");
+  const o = ordenDelFlujo();
+  if (!pie || !o || E.vista !== "fin") return;
+  // La orden dejó de estar en curso (la pausaron o la cerraron desde otro lado): se pinta la pantalla que le toca.
+  if (pantallaDe(o).vista !== "fin") { pintar(); return; }
+  const previo = $("#err-fin");
+  const mensaje = previo && !previo.hidden ? previo.textContent : null;
+  pie.innerHTML = pieCierre(o);
+  if (mensaje) { const e = $("#err-fin"); if (e) { e.textContent = mensaje; e.hidden = false; } }
 }
 /** Las lecturas de liberación en una línea: cuántas se anotaron y cuántas quedaron fuera de rango. Cada una se revisa en su pantalla. */
 function resumenLecturas(o: Any) {
@@ -1985,11 +2036,11 @@ const PERDIDA: Record<string, string> = {
 
 // ── Pintar ──────────────────────────────────────────────────────────────────
 const VISTAS: Record<string, () => string> = {
-  hoy: vHoy, inicio: vInicio, pausa: vPausa, permiso: vPermiso, paso: vPaso, liberacion: vLiberacion, controlado: vControlado, normalidad: vNormalidad, fin: vFin, listo: vListo,
+  hoy: vHoy, inicio: vInicio, pausa: vPausa, permiso: vPermiso, paso: vPaso, liberacion: vLiberacion, fin: vFin, listo: vListo,
   buscar: vBuscar, reportarLugar: vBuscar, equipos: vEquipos, equipo: vEquipo, falla: vFalla, reportar: vReportar, ayuda: vAyuda,
 };
 // En el trabajo la pantalla es una sola cosa: sin el menú de abajo.
-const SIN_TABS = ["permiso", "paso", "liberacion", "controlado", "normalidad", "fin"];
+const SIN_TABS = ["permiso", "paso", "liberacion", "fin"];
 const TAB_DE: Record<string, string> = { hoy: "hoy", inicio: "hoy", pausa: "hoy", listo: "hoy", buscar: "buscar", equipo: "buscar", reportar: "reportar", reportarLugar: "reportar", falla: "reportar", ayuda: "ayuda" };
 function pintarTabs() {
   const T: [string, string, string, string][] = [["hoy", "Hoy", ico.casa, "#hoy"], ["buscar", "Buscar equipo", ico.lupa, "#buscar"], ["reportar", "Reportar falla", ico.falla, "#reportar"], ["ayuda", "Ayuda", ico.ayuda, "#ayuda"]];
