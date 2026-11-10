@@ -1293,6 +1293,155 @@ try {
   faults.beforeBatch = null;
   ok(r.error === 'El paso 3 cambió en la ficha mientras tanto: revísalo y márcalo otra vez.' && pasoDe(9631, 2).valorMedido === 49 && !pasoDe(9631, 2).notas && marcasDe(9631, 2) === 1, `Con la orden leída de nuevo, la lectura de antes no pisa la nueva: ${JSON.stringify(r)} ${JSON.stringify(pasoDe(9631, 2))}`);
 
+  // ── Cierre en dos pasos: «Todo conforme» marca los pasos pendientes y envía, en una sola escritura ──
+  const TRES_PASOS = JSON.stringify([
+    { texto: 'Apagar y bloquear', bloqueante: true, estado: 'pendiente' },
+    { texto: 'Limpiar filtros', estado: 'pendiente' },
+    { texto: 'Probar el arranque', estado: 'pendiente' },
+  ]);
+  const FALTA_FOTO = 'Falta la foto: toma al menos una foto del trabajo antes de enviar a verificación.';
+  const estadosDe = (id) => JSON.parse(ckDe(id)).map((x) => x.estado).join();
+  const marcasDeOrden = (id) => one('SELECT count(*) n FROM orden_paso_marcas WHERE orden_id=?', id).n;
+  // Los pasos que el celular mostraba pendientes, con su texto y como los mostraba.
+  const conformes = (id, solo = null) => JSON.parse(ckDe(id)).map((x, idx) => ({ idx, texto: x.texto, antes: SIN_MARCA })).filter((c) => !solo || solo.includes(c.idx));
+  const ultimo = (x) => [x.find((y) => !y.ok) ?? x.at(-1)];
+
+  // Sin foto no se envía, y de lo que venía en el envío no queda nada a medias.
+  seed(9701, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9701 })]);
+  igual((await vistaDe(9701)).fotos, 0, 'El paquete dice que todavía no tiene foto');
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9701, conforme: conformes(9701), sinFoto: true })]);
+  ok(!r.ok && r.error === FALTA_FOTO, JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9701').estado, 'en_proceso');
+  igual(estadosDe(9701), 'pendiente,pendiente,pendiente', 'Sin foto no se marca ningún paso');
+  igual(marcasDeOrden(9701), 0);
+  // La foto que venía con el reporte, de antes de empezar, muestra la falla y no el trabajo.
+  ponerFoto(9701, { nombre: 'reporte.jpg', en: horaSqlite(Date.parse(hace(31))) });
+  igual((await vistaDe(9701)).fotos, 0, 'La foto del reporte no cuenta');
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9701, conforme: conformes(9701), sinFoto: true })]);
+  ok(!r.ok && r.error === FALTA_FOTO, JSON.stringify(r));
+  // Con la foto subida desde el celular, un solo envío marca los tres pasos y deja la orden en verificación.
+  igual((await subir('foto-cierre-9701', 9701)).status, 201);
+  igual((await vistaDe(9701)).fotos, 1, 'El paquete cuenta la foto del trabajo');
+  const eventos9701 = eventosDe(9701);
+  [r] = await enviar([op('orden.terminar', hace(4), { ordenId: 9701, conforme: conformes(9701), sinFoto: true })]);
+  ok(r.ok, JSON.stringify(r));
+  o = one('SELECT * FROM ordenes WHERE id=9701');
+  igual(o.estado, 'completada');
+  igual(o.completada_en, hace(4));
+  igual(estadosDe(9701), 'ok,ok,ok');
+  ok(JSON.parse(o.checklist_ejecucion).every((x) => x.hora && x.iniciales), 'Cada paso queda con su hora y sus iniciales');
+  igual(one("SELECT count(*) n FROM orden_paso_marcas WHERE orden_id=9701 AND estado='ok' AND ocurrido_en=?", hace(4)).n, 3, 'Una marca por paso, con la hora del envío');
+  igual(eventosDe(9701), eventos9701 + 1, 'Un solo evento: marcar y enviar es una escritura');
+  ok(o.trabajos_realizados.includes('3 de 3 puntos realizados'), o.trabajos_realizados);
+  // Repetido (el celular reintenta): no vuelve a marcar ni a enviar.
+  [r] = await enviar([op('orden.terminar', hace(3), { ordenId: 9701, conforme: conformes(9701), sinFoto: true })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(marcasDeOrden(9701), 3);
+  igual(eventosDe(9701), eventos9701 + 1);
+
+  // La jefatura cambió dos pasos en la ficha mientras el celular los mostraba pendientes: no se pisan y la orden no sale.
+  seed(9702, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9702 })]);
+  const mostrados = conformes(9702);
+  await enLaFicha(9702, 1, { estado: 'desviacion', notas: 'Filtro roto: lo vio el jefe de turno.' });
+  await enLaFicha(9702, 2, { estado: 'na', notas: 'No aplica en este equipo.' });
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9702, conforme: mostrados })]);
+  ok(!r.ok && r.error === 'La orden no se envió: los pasos 2 y 3 cambiaron en la ficha mientras tanto. Revísalos, márcalos otra vez y vuelve a enviarla.', JSON.stringify(r));
+  igual(one('SELECT estado FROM ordenes WHERE id=9702').estado, 'en_proceso');
+  igual(estadosDe(9702), 'pendiente,desviacion,na', 'Ni el paso que nadie tocó se marca: el envío es todo o nada');
+  igual(marcasDeOrden(9702), 0);
+  // El técnico los revisa, los marca otra vez como los ve y vuelve a enviar con el paso que seguía pendiente.
+  [r] = await enviar([
+    op('orden.paso', hace(4), { ordenId: 9702, idx: 1, texto: 'Limpiar filtros', estado: 'desviacion', nota: 'Filtro roto: se pidió el repuesto.', antes: { estado: 'desviacion', valor: null, nota: 'Filtro roto: lo vio el jefe de turno.' } }),
+    op('orden.paso', hace(4), { ordenId: 9702, idx: 2, texto: 'Probar el arranque', estado: 'na', nota: 'No aplica en este equipo.', antes: { estado: 'na', valor: null, nota: 'No aplica en este equipo.' } }),
+    op('orden.terminar', hace(3), { ordenId: 9702, conforme: [mostrados[0]] }),
+  ]).then(ultimo);
+  ok(r.ok, JSON.stringify(r));
+  igual(estadosDe(9702), 'ok,desviacion,na');
+  igual(one('SELECT estado FROM ordenes WHERE id=9702').estado, 'completada');
+  ok(pasoDe(9702, 1).notas === 'Filtro roto: se pidió el repuesto.', JSON.stringify(pasoDe(9702, 1)));
+
+  // «Todo conforme» nunca borra un problema ya anotado: el paso que no está pendiente se queda como está.
+  seed(9703, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9703 }), op('orden.paso', hace(20), { ordenId: 9703, idx: 1, texto: 'Limpiar filtros', estado: 'desviacion', nota: 'Filtro roto: se pidió el repuesto.', antes: SIN_MARCA })]);
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9703, conforme: [
+    { idx: 0, texto: 'Apagar y bloquear', antes: SIN_MARCA },
+    { idx: 1, texto: 'Limpiar filtros', antes: { estado: 'desviacion', valor: null, nota: 'Filtro roto: se pidió el repuesto.' } },
+    { idx: 1, texto: 'Limpiar filtros' },
+    { idx: 2, texto: 'Probar el arranque' },
+  ] })]);
+  ok(r.ok, JSON.stringify(r));
+  igual(estadosDe(9703), 'ok,desviacion,ok');
+  igual([0, 1, 2].map((i) => marcasDe(9703, i)).join(), '1,1,1', 'El paso con problema conserva su única marca');
+  ok(one('SELECT trabajos_realizados t FROM ordenes WHERE id=9703').t.includes('1 con novedad'), one('SELECT trabajos_realizados t FROM ordenes WHERE id=9703').t);
+
+  // Un paso que pide lectura no se da por bueno sin leerla: el envío completo se rechaza y nada queda marcado.
+  seed(9704);
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9704 })]);
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9704, conforme: conformes(9704) })]);
+  ok(!r.ok && /valor medido/.test(r.error), JSON.stringify(r));
+  igual(estadosDe(9704), 'pendiente,pendiente,pendiente');
+  igual(marcasDeOrden(9704), 0);
+  igual(one('SELECT estado FROM ordenes WHERE id=9704').estado, 'en_proceso');
+  [r] = await enviar([
+    op('orden.paso', hace(4), { ordenId: 9704, idx: 2, texto: 'Medir corriente', estado: 'ok', valor: '10,5', antes: SIN_MARCA }),
+    op('orden.terminar', hace(3), { ordenId: 9704, conforme: conformes(9704, [0, 1]) }),
+  ]).then(ultimo);
+  ok(r.ok, JSON.stringify(r));
+  igual(estadosDe(9704), 'ok,ok,ok');
+  igual(pasoDe(9704, 2).valorMedido, 10.5);
+
+  // El checklist cambió en la oficina, o el paso ya no existe: no se marca a ciegas.
+  seed(9705, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9705 })]);
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9705, conforme: [{ idx: 0, texto: 'Apagar el equipo', antes: SIN_MARCA }] })]);
+  ok(!r.ok && /El checklist cambió en la oficina/.test(r.error), JSON.stringify(r));
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9705, conforme: [{ idx: 7, texto: 'Paso que no existe', antes: SIN_MARCA }] })]);
+  ok(!r.ok && /ya no existe/.test(r.error), JSON.stringify(r));
+  // Solo algunos conformes: los demás siguen pendientes y las reglas del cierre mandan.
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9705, conforme: conformes(9705, [0, 1]) })]);
+  ok(!r.ok && /pendiente/i.test(r.error), JSON.stringify(r));
+  igual(estadosDe(9705), 'pendiente,pendiente,pendiente');
+  // Quien no la tiene asignada no la cierra por otro.
+  sqlite.prepare('UPDATE ordenes SET asignado_a=20 WHERE id=9705').run();
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9705, conforme: conformes(9705) })]);
+  ok(!r.ok && r.error === 'Esta orden está asignada a otra persona.', JSON.stringify(r));
+  igual(estadosDe(9705), 'pendiente,pendiente,pendiente');
+  igual(one('SELECT estado FROM ordenes WHERE id=9705').estado, 'en_proceso');
+
+  // Otra escritura en medio del envío: se lee la orden otra vez y el paso que cambió no se pisa.
+  seed(9706, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9706 })]);
+  const mostrados9706 = conformes(9706);
+  faults.beforeBatch = otraEscritura(9706, 1, { estado: 'na', notas: 'No aplica: equipo sin filtro.' });
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9706, conforme: mostrados9706 })]);
+  faults.beforeBatch = null;
+  ok(!r.ok && r.error === 'La orden no se envió: el paso 2 cambió en la ficha mientras tanto. Revísalo, márcalo otra vez y vuelve a enviarla.', JSON.stringify(r));
+  igual(estadosDe(9706), 'pendiente,na,pendiente', 'Lo que se escribió en medio queda, y lo demás no se marca');
+  igual(one('SELECT estado FROM ordenes WHERE id=9706').estado, 'en_proceso');
+  igual(marcasDeOrden(9706), 0);
+
+  // La jefatura, desde el celular, envía sin foto.
+  seed(9707, { checklist: TRES_PASOS });
+  await enviar([op('orden.iniciar', hace(30), { ordenId: 9707 })], 'jefe');
+  [r] = await enviar([op('orden.terminar', hace(5), { ordenId: 9707, conforme: conformes(9707), sinFoto: true })], 'jefe');
+  ok(r.ok, JSON.stringify(r));
+  igual(estadosDe(9707), 'ok,ok,ok');
+
+  // Una emergencia en curso sin pasos sembrados: el envío siembra las acciones que el celular mostró y las da por hechas.
+  emergencia(9708, { activo: 2, eop: null, estado: 'en_proceso' });
+  const vistas = ['Verificar la transferencia', 'Encender la planta'];
+  [r] = await enviar([
+    op('emergencia.hito', hace(9), { ordenId: 9708, hito: 'llegada' }), op('emergencia.hito', hace(8), { ordenId: 9708, hito: 'mitigacion' }), op('emergencia.hito', hace(7), { ordenId: 9708, hito: 'restablecimiento' }),
+    op('orden.terminar', hace(6), { ordenId: 9708, acciones: vistas, conforme: vistas.map((texto, idx) => ({ idx, texto, antes: SIN_MARCA })) }),
+  ]).then(ultimo);
+  ok(r.ok, `La emergencia se envía con sus acciones conformes y sin nota: ${JSON.stringify(r)}`);
+  e = one('SELECT * FROM ordenes WHERE id=9708');
+  igual(e.estado, 'completada');
+  igual(JSON.parse(e.checklist_ejecucion).map((x) => `${x.texto}:${x.estado}`).join('|'), 'Verificar la transferencia:ok|Encender la planta:ok');
+  ok((e.trabajos_realizados ?? '').length >= 10, e.trabajos_realizados);
+
 } finally {
   await close();
 }
