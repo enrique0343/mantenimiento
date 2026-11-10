@@ -667,6 +667,8 @@ async function refrescarHoy() {
 function repintarSiEsSeguro() {
   if (E.hoja) return;
   if (["hoy", "inicio", "pausa", "ayuda", "reportar"].includes(E.vista)) pintar({ conservar: true });
+  // En el cierre solo se repinta el pie: lo que se escribe arriba y la cámara abierta no se tocan.
+  else if (E.vista === "fin" && E.flujo?.tipo === "pm") refrescarPieCierre();
 }
 
 // ── Señal ───────────────────────────────────────────────────────────────────
@@ -1541,6 +1543,15 @@ function vFin() {
   }
   return vCierre(o);
 }
+/**
+ * Cómo se ve un paso en el cierre, en una cifra. El cierre no se repinta mientras se escribe o con la cámara abierta:
+ * si la ficha cambia un paso mientras tanto, la fila ya no coincide y el envío se detiene para que el técnico lo vea.
+ */
+function firmaDePaso(p: Any) {
+  let h = 5381;
+  for (const c of JSON.stringify([p.texto ?? "", p.estado ?? "", p.valor ?? null, p.nota ?? null, !!p.critico, !!p.pideValor])) h = ((h << 5) + h + c.charCodeAt(0)) | 0;
+  return String(h);
+}
 /** Cómo quedó un paso, dicho en su fila del cierre. Uno sin marcar no dice nada: viaja como conforme. */
 function estadoEnCierre(o: Any, p: Any, cambio: boolean): { clase: string; texto: string } {
   if (cambio) return { clase: "rev", texto: "Cambió en la ficha" };
@@ -1616,7 +1627,7 @@ function vCierre(o: Any) {
     : "";
   const filas = pasos.map((p, i) => {
     const e = estadoEnCierre(o, p, cambiados.has(i));
-    return `<li class="pc${e.clase ? ` ${e.clase}` : ""}"><button class="pc-fila" data-a="irPaso" data-i="${i}"><span class="pc-n">${i + 1}</span><span class="pc-t">${esc(String(p.texto ?? "").replace(/ · /g, ": "))}${p.critico ? ' <span class="critico">CRÍTICO</span>' : ""}</span><span class="pc-e">${e.texto ? esc(e.texto) : ico.flecha}</span></button>${lecturaPendiente(p) ? lecturaEnCierre(o, p, i) : ""}</li>`;
+    return `<li class="pc${e.clase ? ` ${e.clase}` : ""}" data-v="${firmaDePaso(p)}"><button class="pc-fila" data-a="irPaso" data-i="${i}"><span class="pc-n">${i + 1}</span><span class="pc-t">${esc(String(p.texto ?? "").replace(/ · /g, ": "))}${p.critico ? ' <span class="critico">CRÍTICO</span>' : ""}</span><span class="pc-e">${e.texto ? esc(e.texto) : ico.flecha}</span></button>${lecturaPendiente(p) ? lecturaEnCierre(o, p, i) : ""}</li>`;
   }).join("");
   const lista = n ? `<span class="etq">${emergencia ? "Acciones · toca solo la que no se pudo" : "Pasos · toca solo el que falló"}</span><ol class="pasos-cierre">${filas}</ol>` : "";
   const pasoAPaso = n > 1 && pasos.some((p) => p.estado === "pendiente") ? `<button class="link" data-a="pasoAPaso" style="align-self:flex-start">${emergencia ? "Ir acción por acción" : "Ir paso a paso"}</button>` : "";
@@ -1805,9 +1816,10 @@ function vAyuda() {
   const enIphone = /iP(hone|ad|od)/.test(navigator.userAgent) && !(navigator as Any).standalone;
   return `<div class="simple"><span class="etq">Ayuda</span><h1>Cómo se usa, en un minuto</h1>`
     + `<ol class="acc"><li><span>Al entrar de turno, haz la ronda. Es lo primero que aparece.</span></li>`
-    + `<li><span>Frente al equipo, toca Empezar. Solo escribes si hay un problema.</span></li>`
+    + `<li><span>Frente al equipo, toca Empezar. Al terminar, toca Foto y enviar: lo que no tocas va como hecho.</span></li>`
     + `<li><span>Si te interrumpen, toca Pausar y elige el motivo.</span></li>`
-    + `<li><span>En una emergencia, toca Ya estoy en el sitio al llegar y sigue las acciones en orden.</span></li>`
+    + `<li><span>Si algo falló, toca ese paso y di qué encontraste. Solo ahí escribes.</span></li>`
+    + `<li><span>En una emergencia, toca Ya estoy en el sitio al llegar. Cuando todo vuelva a la normalidad, Foto y enviar.</span></li>`
     + `<li><span>Si se va la señal, sigue: todo queda en el celular y se envía solo.</span></li>`
     + `<li><span>Para un equipo que no está en tu lista, usa Buscar equipo: sede, ubicación y equipo.</span></li>`
     + `<li><span>Si algo falla, Reportar falla te dice qué documento manda y qué hacer primero.</span></li></ol>`
@@ -1865,6 +1877,18 @@ function vHoja() {
         + `<p class="ayuda">${ayuda}</p>`
         + `<div class="lista desplaza">${filas}</div>`
         + `<button class="b1" data-a="limpiarRechazos">Entendido</button></div>`;
+    }
+    case "algo": {
+      // La excepción del cierre: solo quien tuvo un problema pasa por aquí, y sale por el flujo que le toca.
+      const pasos: Any[] = o?.pasos ?? [];
+      const emergencia = o?.modo === "emergencia";
+      const filas = pasos.map((p, i) => ({ p, i })).filter(({ p }) => p.estado !== "desviacion")
+        .map(({ p, i }) => `<button class="fila" data-a="pasoConProblema" data-i="${i}"><span class="txt"><strong>${i + 1}. ${esc(corto(String(p.texto ?? "").split(" · ")[0], 80))}</strong></span>${ico.flecha}</button>`).join("");
+      return `<div class="hoja-caja"><span class="etq">Algo salió mal</span><h2>${!filas ? "¿Qué pasó?" : emergencia ? "¿Qué acción no se pudo?" : "¿En qué paso?"}</h2>`
+        + (filas ? `<div class="lista desplaza">${filas}</div>` : "")
+        + (emergencia ? `<button class="b2" data-a="todaviaNoNormal">Todavía no vuelve a la normalidad</button>` : `<button class="b2" data-a="pausar">No puedo terminar ahora</button>`)
+        + `<button class="b2" data-a="ir" data-h="#reportar">Reportar otra falla</button>`
+        + `<button class="link" data-a="cerrarHoja">Cancelar</button></div>`;
     }
     case "pausar": {
       // «Todavía no» en la emergencia y «Dejar en espera» en una lectura llegan con su motivo ya marcado.
@@ -2274,6 +2298,13 @@ function revisarEnvio(o: Any): { nota: string; lecturas: { i: number; p: Any; va
   const decir = (m: string) => { const e = $("#err-fin"); if (e) { e.textContent = m; e.hidden = false; } else aviso(m); };
   // La orden dejó de estar en curso mientras tanto: se pinta la pantalla que le toca.
   if (pantallaDe(o).vista !== "fin") { pintar(); return null; }
+  // Lo que viaja como conforme es lo que el técnico vio: si un paso cambió mientras tanto, el cierre se pinta otra vez.
+  const filas = [...document.querySelectorAll<HTMLElement>(".pasos-cierre > li")];
+  if ($("#cierre-pie") && (filas.length !== pasos.length || filas.some((li, i) => li.dataset.v !== firmaDePaso(pasos[i])))) {
+    pintar({ conservar: true });
+    decir("La orden cambió mientras tanto: revisa los pasos y envíala otra vez.");
+    return null;
+  }
   // K19 · Un paso que cambió en la ficha y no se volvió a marcar: la orden no sale (el servidor no la aceptaría) y lo
   // que el técnico escribió en ese paso se queda en el celular. Se va al primero de esos pasos, como está guardado.
   const cambiados = pasosPorRevisar(o);
@@ -2669,7 +2700,9 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     if (!o) return;
     const listo = revisarEnvio(o);
     if (!listo) return;
-    if (fotosDe(o) < 1) {
+    if (Number(o.fotos ?? 0) < 1) {
+      // La foto todavía se está reduciendo: la orden sale sola en cuanto esté lista.
+      if (fotosDe(o) > 0) { esperaEnvio = Number(o.id); refrescarPieCierre(); return; }
       const e = $("#err-fin");
       if (e) { e.textContent = FALTA_LA_FOTO; e.hidden = false; } else aviso(FALTA_LA_FOTO);
       return;
@@ -2694,6 +2727,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     soltarPantalla();
     olvidarDeOrden(o.id);
     esperaEnvio = null;
+    miniaturas.delete(`fin:${o.id}`);
     E.verNota = false;
     E.flujo = null;
     E.vista = "listo";
@@ -2798,6 +2832,12 @@ const movil = $("#movil") as HTMLElement;
 let ultimoToque = -1000;
 movil.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
+  // «Foto y enviar» abre la cámara solo si la orden ya se puede enviar: lo que falte se dice antes de tomar la foto.
+  if (t.closest("label[data-revisa]")) {
+    const o = ordenDelFlujo();
+    if (!o || !revisarEnvio(o)) ev.preventDefault();
+    return;
+  }
   const b = t.closest<HTMLElement>("[data-a]");
   if (b) {
     if (b.hasAttribute("disabled")) return;
@@ -2817,6 +2857,7 @@ movil.addEventListener("click", (ev) => {
 movil.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
   if (t.id === "lectura") evaluarLectura();
+  if (t.dataset.lect !== undefined) evaluarFila(t);
   // Lo que se escribe se guarda en el celular mientras se escribe.
   if (t.dataset.nota) { E.notas[t.dataset.nota] = t.value; guardarBorrador(); }
   if (t.id === "filtro") {
@@ -2829,6 +2870,8 @@ movil.addEventListener("keydown", (ev) => {
   if (ev.key !== "Enter") return;
   if (t.id === "lectura") { ev.preventDefault(); if (E.vista === "liberacion") A.lecturaLib({}, t); else guardarLectura(); }
   if (t.id === "referencia") { ev.preventDefault(); A.cumplido({}, t); }
+  // En el cierre, «Listo» en el teclado lo cierra: la lectura ya quedó escrita.
+  if (t.dataset.lect !== undefined) { ev.preventDefault(); t.blur(); }
 });
 movil.addEventListener("change", async (ev) => {
   const t = ev.target as HTMLInputElement;
@@ -2842,18 +2885,52 @@ movil.addEventListener("change", async (ev) => {
   const categoria = t.dataset.foto;
   const ordenId = E.flujo?.ordenId;
   const at = new Date().toISOString();
+  const yEnviar = t.dataset.enviar === "1";
   t.value = "";
-  r.classList.add("si");
-  if (!ordenId) { r.textContent = "No se pudo leer esa imagen. Prueba tomarla otra vez."; return; }
+  // La foto del cierre se cuenta en el pie del cierre, que se pinta solo con lo que hay: no se escribe a mano en él.
+  const id = Number(ordenId);
+  const delCierre = !!ordenId && clave === `fin:${ordenId}`;
+  const enCierre = () => delCierre && E.vista === "fin" && E.flujo?.tipo === "pm" && Number(E.flujo.ordenId) === id;
+  const noSePudo = () => {
+    const m = "No se pudo leer esa imagen. Prueba tomarla otra vez.";
+    if (!delCierre) { r.textContent = m; return; }
+    const e = enCierre() ? $("#err-fin") : null;
+    if (e) { e.textContent = m; e.hidden = false; } else aviso(m);
+  };
+  if (!delCierre) r.classList.add("si");
+  if (!ordenId) { noSePudo(); return; }
   const hoja = hojaViva(clave);
   const seq = nuevoSeq();
   apartadas.add(seq);
-  const limite = setTimeout(() => { if (apartadas.delete(seq)) void drenar(); }, LIMITE_FOTO_MS);
-  r.textContent = "Reduciendo la foto…";
+  // Mientras se reduce, la foto del cierre ya cuenta: el pie dice «Reduciendo la foto…» y no pide otra.
+  let contada = delCierre;
+  if (contada) reduciendo.set(id, (reduciendo.get(id) ?? 0) + 1);
+  const soltar = () => {
+    if (!contada) return;
+    contada = false;
+    const quedan = (reduciendo.get(id) ?? 1) - 1;
+    if (quedan > 0) reduciendo.set(id, quedan); else reduciendo.delete(id);
+  };
+  const limite = setTimeout(() => {
+    if (apartadas.delete(seq)) void drenar();
+    // Una foto que no termina de reducirse no deja el cierre esperándola: se puede tomar otra.
+    if (!contada) return;
+    soltar();
+    if (esperaEnvio === id) esperaEnvio = null;
+    if (enCierre()) { refrescarPieCierre(); noSePudo(); }
+  }, LIMITE_FOTO_MS);
+  if (delCierre) {
+    // «Foto y enviar»: la orden sale sola en cuanto la foto esté lista.
+    if (yEnviar) esperaEnvio = id;
+    refrescarPieCierre();
+  } else r.textContent = "Reduciendo la foto…";
+  let seEnvia = false;
   try {
     const c = await comprimir(archivo);
     // La hoja se canceló mientras tanto: la foto no se envía.
     if (hoja.fin === "cancelada") return;
+    // La foto entra a la cola y deja de contarse como «reduciéndose» en el mismo instante: nunca se cuenta dos veces.
+    soltar();
     // Mientras la hoja siga abierta, la foto lleva su clave: si el técnico la cancela antes de que salga, no se envía.
     // Si la hoja ya se envió, la foto es de lo anotado y ninguna hoja posterior la cuenta como suya.
     await meter({ seq, uid: UID, opId: uuid(), at, tipo: "foto", ordenId, categoria, blob: c.blob, nombre: `foto-${Date.now()}.jpg`, ...(hoja.fin ? {} : { clave }) });
@@ -2861,6 +2938,13 @@ movil.addEventListener("change", async (ev) => {
     // La foto ya está en la cola: si la página se recarga, esta hoja dice «1 foto lista».
     const n = (E.fotos[clave] ?? 0) + 1;
     if (clave) { E.fotos[clave] = n; guardarBorrador(true); }
+    if (delCierre) {
+      miniaturas.set(clave, c.url);
+      seEnvia = esperaEnvio === id;
+      if (seEnvia) esperaEnvio = null;
+      if (enCierre()) refrescarPieCierre();
+      return;
+    }
     // La hoja pudo cerrarse y abrirse otra vez mientras se reducía: se avisa en la que está a la vista.
     const campo = r.isConnected ? t : [...document.querySelectorAll<HTMLInputElement>("[data-foto]")].find((x) => x.dataset.clave === clave);
     const res = r.isConnected ? r : campo?.nextElementSibling;
@@ -2868,11 +2952,17 @@ movil.addEventListener("change", async (ev) => {
     const etiqueta = campo ? document.querySelector(`label[for="${campo.id}"]`) : null;
     if (etiqueta) etiqueta.innerHTML = `${ico.camara}Otra foto`;
   } catch {
-    r.textContent = "No se pudo leer esa imagen. Prueba tomarla otra vez.";
+    soltar();
+    if (esperaEnvio === id) esperaEnvio = null;
+    if (enCierre()) refrescarPieCierre();
+    noSePudo();
   } finally {
     clearTimeout(limite);
     apartadas.delete(seq);
+    soltar();
     void drenar();
+    // Con la foto lista y el técnico todavía en el cierre, la orden se envía. Si algo falta, el cierre lo dice.
+    if (seEnvia && enCierre() && !E.hoja) A.enviar({}, document.body);
   }
 });
 window.addEventListener("popstate", () => {
