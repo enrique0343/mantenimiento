@@ -40,7 +40,8 @@ const ico = {
 };
 
 type Any = any;
-interface Flujo { tipo: "pm" | "ronda"; ordenId?: number; i: number }
+/** `modo` vale en un paso de una orden: «uno» vuelve al cierre al anotarlo; «secuencia» sigue con el siguiente pendiente. */
+interface Flujo { tipo: "pm" | "ronda"; ordenId?: number; i: number; modo?: "uno" | "secuencia" }
 const E = {
   base: null as Any,
   p: null as Any,
@@ -385,6 +386,7 @@ function descartarFotos(claves: Set<string>) {
     const seqs = new Set(quitar.map((op) => op.seq));
     E.pend = E.pend.filter((op) => !seqs.has(op.seq));
     for (const op of quitar) void cola.quitar(op.seq);
+    rebase();
     refrescarPill();
   }
   const salieron = tomadas - quitar.length;
@@ -717,24 +719,25 @@ const libHecha = (o: Any, k: number) => {
   return medidaConNumero(l) && l.conforme !== false;
 };
 
+/** Fotos de una orden que todavía se están reduciendo: ya se tomaron, pero aún no entran a la cola. */
+const reduciendo = new Map<number, number>();
+/** Fotos del trabajo desde que se empezó: las que ya tiene el servidor, las que esperan en la cola y las que se reducen. */
+const fotosDe = (o: Any) => Number(o.fotos ?? 0) + (reduciendo.get(Number(o.id)) ?? 0);
+/** La última foto tomada en cada cierre, para mostrarla sin esperar al servidor. */
+const miniaturas = new Map<string, string>();
+/** Un paso sin anotar que pide el número del instrumento: en el cierre se escribe ahí mismo. */
+const lecturaPendiente = (p: Any) => p.estado === "pendiente" && !!p.pideValor;
+/** La primera lectura de liberación que falta en una intervención sin reversa; -1 si no falta ninguna. */
+const liberacionPendiente = (o: Any) => (o.modo === "intervencion" && !o.reversa?.ejecutada ? (o.liberaciones ?? []).findIndex((_: Any, j: number) => !libHecha(o, j)) : -1);
+
 /**
- * La pantalla que le toca a una orden: lo primero que falta, en el orden en que
- * se trabaja. Emergencia: llegar, sus acciones, controlado, restablecido, cierre.
- * Intervención: permisos, empezar, pasos, lecturas de liberación, cierre.
+ * La pantalla que le toca a una orden. Cierre por excepción: una orden empezada va siempre a su
+ * cierre, donde lo que no se marca viaja como conforme; a un paso se entra solo si algo salió mal
+ * (o si se quiere ir paso a paso). Antes de empezar, la pantalla de inicio; en pausa, la de reanudar.
  */
 function pantallaDe(o: Any): { vista: string; i: number } {
   if (o.estado === "en_espera") return { vista: "pausa", i: 0 };
   if (o.estado === "abierta" || (o.modo === "emergencia" && !o.hitos?.llegada)) return { vista: "inicio", i: 0 };
-  const paso = primerPendiente(o);
-  if (paso >= 0) return { vista: "paso", i: paso };
-  if (o.modo === "emergencia") {
-    if (!o.hitos?.mitigacion) return { vista: "controlado", i: 0 };
-    if (!o.hitos?.restablecimiento) return { vista: "normalidad", i: 0 };
-  }
-  if (o.modo === "intervencion" && !o.reversa?.ejecutada) {
-    const k = (o.liberaciones ?? []).findIndex((_: Any, j: number) => !libHecha(o, j));
-    if (k >= 0) return { vista: "liberacion", i: k };
-  }
   return { vista: "fin", i: 0 };
 }
 function siguienteOrden(lugar?: string | null) {
@@ -745,19 +748,17 @@ function siguienteOrden(lugar?: string | null) {
 const enCurso = () => (E.p?.ordenes ?? []).find((o: Any) => o.estado === "en_proceso" && o.modo !== "emergencia") ?? null;
 const activaCualquiera = () => (E.p?.ordenes ?? []).find((o: Any) => o.estado === "en_proceso") ?? null;
 
-/** Dónde va una orden en curso, sin tiempos. */
+/** Dónde va una orden en curso, sin tiempos: qué quedó con problema y qué falta para enviarla. */
 function dondeVas(o: Any) {
-  if (o.modo === "pasos") {
-    const hechos = o.pasos.filter((x: Any) => x.estado !== "pendiente").length;
-    return o.pasos.length && hechos >= o.pasos.length ? "Todos los pasos están anotados; falta enviarla." : `${o.pasos.length ? `Paso ${hechos + 1} de ${o.pasos.length}. ` : ""}Sigues justo donde quedaste.`;
+  if (pantallaDe(o).vista !== "fin") return "Sigues justo donde quedaste.";
+  const mal = (o.pasos ?? []).filter((x: Any) => x.estado === "desviacion").length;
+  const conFoto = fotosDe(o) > 0;
+  if (mal) {
+    const que = o.modo === "emergencia" ? (mal === 1 ? "Una acción no se pudo." : `${mal} acciones no se pudieron.`) : mal === 1 ? "Un paso quedó con problema." : `${mal} pasos quedaron con problema.`;
+    return `${que} ${conFoto ? "Falta enviarla." : "Faltan la foto y enviarla."}`;
   }
-  const s = pantallaDe(o);
-  if (s.vista === "paso") return `${o.modo === "emergencia" ? "Acción" : "Paso"} ${s.i + 1} de ${o.pasos.length}. Sigues justo donde quedaste.`;
-  if (s.vista === "liberacion") return `Lectura de liberación ${s.i + 1} de ${o.liberaciones.length}. Sigues justo donde quedaste.`;
-  if (s.vista === "controlado") return "Falta confirmar que está controlado.";
-  if (s.vista === "normalidad") return "Falta confirmar que volvió a la normalidad.";
-  if (s.vista === "fin") return "Todo está anotado; falta enviarla.";
-  return "Sigues justo donde quedaste.";
+  if (liberacionPendiente(o) >= 0) return "Faltan las lecturas de liberación.";
+  return conFoto ? "Ya tiene foto: falta enviarla." : "Falta la foto y enviarla.";
 }
 
 /**
@@ -966,12 +967,13 @@ function abrirOrden(id: number) {
   // K17 y K19 · Desde «Ver por qué», el paso que cambió en la ficha, como está guardado. En pausa, después de reanudar.
   const alPaso = irAlPaso?.hash === `#orden-${id}` ? irAlPaso.i : null;
   if (s.vista !== "pausa") irAlPaso = null;
+  let modo: Flujo["modo"];
   if (alPaso !== null && s.vista !== "pausa" && pantallaValida(o, "paso", alPaso)) s = { vista: "paso", i: alPaso };
   else {
-    if (previo?.flujo?.tipo === "pm" && previo.flujo.ordenId === id && s.vista !== "pausa" && pantallaValida(o, previo.vista, previo.flujo.i)) s = { vista: previo.vista, i: previo.flujo.i };
+    if (previo?.flujo?.tipo === "pm" && previo.flujo.ordenId === id && s.vista !== "pausa" && pantallaValida(o, previo.vista, previo.flujo.i)) { s = { vista: previo.vista, i: previo.flujo.i }; modo = previo.flujo.modo; }
     if (previo?.hoja && previo.vista === s.vista && (previo.flujo?.i ?? 0) === s.i) E.hojaPendiente = previo.hoja;
   }
-  irAPantalla(o, s);
+  irAPantalla(o, s, modo);
 }
 /** Una pantalla guardada sigue valiendo si la orden todavía está en ese punto. */
 function pantallaValida(o: Any, vista: string, i: number) {
@@ -980,13 +982,14 @@ function pantallaValida(o: Any, vista: string, i: number) {
   if (o.estado !== "en_proceso" || (o.modo === "emergencia" && !o.hitos?.llegada)) return false;
   if (vista === "paso") return dentro(o.pasos);
   if (vista === "liberacion") return !o.reversa?.ejecutada && dentro(o.liberaciones);
-  if (vista === "controlado") return o.modo === "emergencia" && !o.hitos?.mitigacion;
-  if (vista === "normalidad") return o.modo === "emergencia" && !!o.hitos?.mitigacion && !o.hitos?.restablecimiento;
   return vista === "fin";
 }
-function irAPantalla(o: Any, s: { vista: string; i: number }) {
+function irAPantalla(o: Any, s: { vista: string; i: number }, modo?: Flujo["modo"]) {
   E.params = { id: o.id };
-  E.flujo = s.vista === "inicio" || s.vista === "pausa" ? null : { tipo: "pm", ordenId: o.id, i: s.i };
+  // El modo solo vale en un paso: el que se pide o, si no se dice, el que ya traía esta orden.
+  const previo = E.flujo?.tipo === "pm" && E.flujo.ordenId === o.id ? E.flujo.modo : undefined;
+  const m = s.vista === "paso" ? modo ?? previo : undefined;
+  E.flujo = s.vista === "inicio" || s.vista === "pausa" ? null : { tipo: "pm", ordenId: o.id, i: s.i, ...(m ? { modo: m } : {}) };
   E.vista = s.vista;
   if (E.flujo) mantenerPantalla();
   pintar();
@@ -1201,9 +1204,9 @@ const cabRonda = (r: Any, p: Any) => `<div class="paso-cab"><button class="ic" d
 const segmentos = (n: number, actual: number, hecho: (k: number) => boolean, clase = "") => `<div class="segs${clase ? ` ${clase}` : ""}">${Array.from({ length: n }, (_, k) => `<i class="${k === actual ? "a" : hecho(k) ? "h" : ""}"></i>`).join("")}</div>`;
 /** «Volver al…» de cada pantalla del trabajo, si hay a dónde volver. */
 function enlaceAtras(o: Any, vista: string, i: number) {
-  const atras = pantallaAnterior(o, vista, i);
+  const atras = pantallaAnterior(o, vista, i, E.flujo?.modo);
   if (!atras) return "";
-  const texto = atras.vista === "permiso" ? "Volver al permiso anterior" : atras.vista === "liberacion" ? "Volver a la lectura anterior" : o.modo === "emergencia" ? "Volver a la acción anterior" : "Volver al paso anterior";
+  const texto = atras.vista === "fin" ? (o.modo === "emergencia" ? "Volver a la emergencia" : "Volver a la orden") : atras.vista === "permiso" ? "Volver al permiso anterior" : atras.vista === "liberacion" ? "Volver a la lectura anterior" : o.modo === "emergencia" ? "Volver a la acción anterior" : "Volver al paso anterior";
   return `<button class="link" data-a="anterior" style="align-self:flex-start">${texto}</button>`;
 }
 
@@ -1397,9 +1400,11 @@ function avanzar() {
   const o = ordenDe(f.ordenId as number);
   if (!o) { E.flujo = null; ir("#hoy", true); return; }
   let sig = -1;
-  for (let k = f.i + 1; k < o.pasos.length; k++) if (o.pasos[k].estado === "pendiente") { sig = k; break; }
-  if (sig < 0) sig = primerPendiente(o);
-  // Sin pasos pendientes sigue lo que toque: la pregunta de la emergencia, las lecturas de liberación o el cierre.
+  // Paso a paso se sigue con el siguiente pendiente; si se entró a un solo paso, se vuelve al cierre.
+  if (f.modo === "secuencia") {
+    for (let k = f.i + 1; k < o.pasos.length; k++) if (o.pasos[k].estado === "pendiente") { sig = k; break; }
+    if (sig < 0) sig = primerPendiente(o);
+  }
   irAPantalla(o, sig >= 0 ? { vista: "paso", i: sig } : pantallaDe(o));
 }
 
@@ -1476,18 +1481,13 @@ function siguienteLiberacion(o: Any, desde: number) {
   if (!o.reversa?.ejecutada) for (let k = desde + 1; k < lista.length; k++) if (!libHecha(o, k)) { irAPantalla(o, { vista: "liberacion", i: k }); return; }
   irAPantalla(o, pantallaDe(o));
 }
-/** A dónde lleva «Volver». Una hora ya registrada no se deshace: la corrige la jefatura en la ficha. */
-function pantallaAnterior(o: Any, vista: string, i: number): { vista: string; i: number } | null {
-  const ultimoPaso = o.pasos.length - 1;
-  const ultimaLectura = (o.liberaciones?.length ?? 0) - 1;
+/** A dónde lleva «Volver»: de un paso o de la primera lectura, al cierre de la orden; paso a paso, al paso anterior. */
+function pantallaAnterior(o: Any, vista: string, i: number, modo?: Flujo["modo"]): { vista: string; i: number } | null {
+  const cierre = { vista: "fin", i: 0 };
   switch (vista) {
     case "permiso": return i > 0 ? { vista: "permiso", i: i - 1 } : null;
-    case "paso": return i > 0 ? { vista: "paso", i: i - 1 } : null;
-    case "liberacion": return i > 0 ? { vista: "liberacion", i: i - 1 } : ultimoPaso >= 0 ? { vista: "paso", i: ultimoPaso } : null;
-    case "controlado": return ultimoPaso >= 0 ? { vista: "paso", i: ultimoPaso } : null;
-    case "fin":
-      if (o.modo === "intervencion" && ultimaLectura >= 0 && !o.reversa?.ejecutada) return { vista: "liberacion", i: ultimaLectura };
-      return o.modo === "emergencia" && !o.hitos?.restablecimiento ? null : ultimoPaso >= 0 ? { vista: "paso", i: ultimoPaso } : null;
+    case "paso": return modo === "secuencia" && i > 0 ? { vista: "paso", i: i - 1 } : cierre;
+    case "liberacion": return i > 0 && !o.reversa?.ejecutada ? { vista: "liberacion", i: i - 1 } : cierre;
   }
   return null;
 }
@@ -2001,6 +2001,7 @@ function pintar(op: { conservar?: boolean } = {}) {
   const pantalla = $("#pantalla");
   if (!pantalla) return;
   const antes = pantalla.scrollTop;
+  const cuerpoAntes = op.conservar ? pantalla.querySelector(".paso-cuerpo")?.scrollTop ?? 0 : 0;
   pantalla.innerHTML = (VISTAS[E.vista] ?? vHoy)();
   const sinTabs = SIN_TABS.includes(E.vista);
   const nav = $("#tabs");
@@ -2010,6 +2011,7 @@ function pintar(op: { conservar?: boolean } = {}) {
   if (!sinTabs) pintarTabs();
   pintarHoja();
   pantalla.scrollTop = op.conservar ? antes : 0;
+  if (cuerpoAntes) { const cuerpo = pantalla.querySelector(".paso-cuerpo"); if (cuerpo) cuerpo.scrollTop = cuerpoAntes; }
   refrescarPill();
   abrirHojaPendiente();
   const campo = $<HTMLInputElement>("#lectura") ?? $<HTMLInputElement>("#referencia");
@@ -2395,7 +2397,7 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
       return;
     }
     const o = ordenDe(f.ordenId as number);
-    const atras = o ? pantallaAnterior(o, E.vista, f.i) : null;
+    const atras = o ? pantallaAnterior(o, E.vista, f.i, f.modo) : null;
     if (atras) irAPantalla(o, atras);
   },
   irPaso(d) { const f = E.flujo; if (!f) return; f.i = Number(d.i); E.vista = "paso"; pintar(); },
