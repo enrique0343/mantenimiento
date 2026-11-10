@@ -93,6 +93,8 @@ try {
   // J5: EOP que el técnico termina de marcar en el celular y envía desde su ficha vieja.
   orden(123, { tipo: 'emergencia', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(0.5), hora_alarma: hace(0.5), checklist_ejecucion: lista(PASOS[0], PASOS[1]),
     trabajos_realizados: 'Planta en manual; transferencia operada con un segundo técnico.' });
+  // Sin foto no hay cierre: el técnico que la envía desde la ficha sin una foto del trabajo.
+  orden(254, { tipo: 'correctivo', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(0.5), trabajos_realizados: 'Se cambió el fusible de control y se probó la carga.' });
   // Sin señal: el paso marcado en la ficha sale cuando se deja la página.
   orden(136, { tipo: 'emergencia', estado: 'en_proceso', activo_id: 1, asignado_a: 3, iniciada_en: hace(0.5), hora_alarma: hace(0.5), checklist_ejecucion: lista(PASOS[0], PASOS[1]) });
   // K3: el checklist cambia de forma en el servidor mientras la ficha está abierta.
@@ -289,14 +291,24 @@ try {
     const texto = doc.body.textContent.replace(/\s+/g, ' ');
     return { doc, texto, hay: (sel) => !!doc.querySelector(sel), boton: (s) => doc.querySelector(`[data-transition="${s}"]`) };
   };
+  // Como el celular: nadie envía a verificación sin una foto del trabajo.
+  const ponerFoto = (ordenId) => {
+    if (one("SELECT id FROM adjuntos WHERE orden_id=? AND nombre='evidencia.jpg'", ordenId)) return;
+    sqlite.prepare("INSERT INTO adjuntos(orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria,created_at) VALUES(?,3,'evidencia.jpg','image/jpeg',1,?,'despues',?)")
+      .run(ordenId, `prueba/${ordenId}/evidencia.jpg`, new Date().toISOString().slice(0, 19).replace('T', ' '));
+  };
   // Lo que el técnico hace en el celular, por la ruta real de sincronización.
   let opSeq = 0;
   const celular = async (...ops) => {
+    for (const op of ops) if (op.tipo === 'orden.terminar') ponerFoto(op.ordenId);
     const r = await call(app.sync.POST, '/api/campo/sync', { method: 'POST', rol: 'tecnico', data: { ops: ops.map((op) => ({ opId: `ficha-celular-${++opSeq}`, at: new Date().toISOString(), ...op })) } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     return r.body.resultados;
   };
-  const patch = (id, rol, data) => call(app.order.PATCH, `/api/ordenes/${id}`, { method: 'PATCH', id, data, rol });
+  const patch = (id, rol, data) => {
+    if (data?.estado === 'completada' && rol === 'tecnico') ponerFoto(id);
+    return call(app.order.PATCH, `/api/ordenes/${id}`, { method: 'PATCH', id, data, rol });
+  };
   const estados = (id) => JSON.parse(one('SELECT checklist_ejecucion c FROM ordenes WHERE id=?', id).c).map((p) => p.estado).join(', ');
   const tiemposDeMedicion = /Iniciada|Completada|cronómetro|Duración real|Tiempo de respuesta|Hasta la mitigación|Tiempo de reparación|Horas trabajadas|15 min/;
 
@@ -393,7 +405,8 @@ try {
   // red.cortar: con red.salio, el navegador corta lo que iba en camino sin keepalive: no llega al servidor.
   // recargas: las veces que la ficha se volvió a cargar.
   // confirmaciones: lo que la ficha preguntó con confirm, y confirmar lo que se responde. desplazados: a qué se llevó la vista.
-  const abrir = async (id, rol, { almacen = {}, compartido = null, confirmar = true } = {}) => {
+  // El técnico que envía desde la ficha ya subió su foto; `sinFoto` deja probar la regla.
+  const abrir = async (id, rol, { almacen = {}, compartido = null, confirmar = true, sinFoto = false } = {}) => {
     const enviados = [], avisos = [], errores = [], recargas = [], confirmaciones = [], desplazados = [], red = { caida: false, demora: 0, falsas: [], sinRespuesta: false, cortar: false, salio: false };
     const consola = new VirtualConsole();
     consola.on('jsdomError', (e) => {
@@ -418,6 +431,7 @@ try {
           if (red.cortar && red.salio && !init.keepalive) { envio.cortado = true; throw new TypeError('Failed to fetch'); }
           const m = u.pathname.match(/^\/api\/ordenes\/(\d+)(\/liberaciones)?$/);
           const falsa = m && !m[2] && init.method === 'PATCH' ? red.falsas.shift() : undefined;
+          if (m && !m[2] && init.method === 'PATCH' && data?.estado === 'completada' && rol === 'tecnico' && !sinFoto) ponerFoto(Number(m[1]));
           const r = falsa ?? (m && init.method === 'PATCH' ? await call(m[2] ? app.liberaciones.PATCH : app.order.PATCH, u.pathname, { method: 'PATCH', id: Number(m[1]), data, rol }) : { status: 200, body: {} });
           envio.respuesta = r.body; envio.status = r.status;
           if (red.sinRespuesta) throw new TypeError('Failed to fetch');
@@ -601,6 +615,18 @@ try {
     const envio = p.enviados.find((e) => e.metodo === 'PATCH').data;
     ok(envio.estado === 'completada' && !('checklistEjecucion' in envio), `Sin cambios en la ficha, el checklist no viaja: ${JSON.stringify(envio)}`);
     ok(estados(123) === 'ok, ok' && p.avisos.length === 0, `Los pasos del celular siguen marcados: ${estados(123)} ${p.avisos.join(' | ')}`);
+    p.w.close();
+  }
+  { // Sin foto no hay cierre, tampoco desde la ficha: el técnico ve por qué y, con la foto, la envía.
+    const p = await abrir(254, 'tecnico', { sinFoto: true });
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => p.avisos.length > 0, 'el envío sin foto vuelve con su motivo');
+    ok(JSON.stringify(p.avisos) === JSON.stringify(['Falta la foto: toma al menos una foto del trabajo antes de enviar a verificación.']) && p.recargas.length === 0
+      && one('SELECT estado FROM ordenes WHERE id=254').estado === 'en_proceso', `La ficha dice que falta la foto y la orden sigue en proceso: ${p.avisos.join(' | ')}`);
+    ponerFoto(254);
+    p.doc.querySelector('[data-transition="completada"]').click();
+    await p.hasta(() => one('SELECT estado FROM ordenes WHERE id=254').estado === 'completada', 'con la foto, la envía');
+    ok(p.avisos.length === 1 && p.errores.length === 0, `Con la foto se envía, sin más avisos ni errores de script: ${p.avisos.join(' | ')} ${p.errores.join(' | ')}`);
     p.w.close();
   }
   { // Decisión 4 · Un paso marcado sin señal sale al servidor, con su base, cuando se deja la página.

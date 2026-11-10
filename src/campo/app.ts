@@ -142,6 +142,8 @@ const limpiarTitulo = (t: string) => String(t ?? "").replace(/^\[[^\]]+\]\s*/, "
 /** Una emergencia se nombra por su documento; las demás, por su equipo. */
 const tituloOrden = (o: Any) => (o.modo === "emergencia" ? o.eop?.titulo || limpiarTitulo(o.titulo) : o.activo?.nombre || limpiarTitulo(o.titulo));
 const subOrden = (o: Any) => [o.activo?.codigo, o.lugar?.ubicacion].filter(Boolean).join(" · ");
+/** «1 paso», «3 pasos»: la cuenta de pasos, con su singular. */
+const nPasos = (n: number) => (n === 1 ? "1 paso" : `${n} pasos`);
 const lugarDe = (o: Any) => [o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · ");
 const ordenDe = (id: number) => E.p?.ordenes.find((o: Any) => o.id === id) ?? E.p?.libres?.find((o: Any) => o.id === id) ?? null;
 // Estas crean una orden nueva en el servidor: en la copia del día no hay nada que aplicarles.
@@ -858,7 +860,7 @@ function bloqueAhora(): { html: string; ordenId?: number; enAhora: number[]; lle
     const etq = sig.tipo === "preventivo" ? "Siguiente preventivo" : sig.tipo === "correctivo" ? "Siguiente correctivo" : sig.tipo === "intervencion" ? "Siguiente intervención" : "Siguiente orden";
     // Una intervención no empieza sin sus permisos: el botón lleva a ellos.
     const permisos = sig.modo === "intervencion" ? (sig.prerrequisitos ?? []).filter((x: Any) => x.obligatorio && !x.cumplido).length : 0;
-    const det = [subOrden(sig), sig.pasos.length ? `${sig.pasos.length} pasos` : "", permisos ? `${permisos} permiso${permisos === 1 ? "" : "s"} antes de empezar` : ""].filter(Boolean).join(" · ");
+    const det = [subOrden(sig), sig.pasos.length ? nPasos(sig.pasos.length) : "", permisos ? `${permisos} permiso${permisos === 1 ? "" : "s"} antes de empezar` : ""].filter(Boolean).join(" · ");
     const boton = permisos
       ? `<button class="b1 claro" data-a="ir" data-h="#orden-${sig.id}">Ver los permisos</button>`
       : `<button class="b1 claro" data-a="empezar" data-id="${sig.id}">${ico.play}Empezar</button>`;
@@ -1121,7 +1123,7 @@ function vInicio() {
   const mats = [...new Set(o.pasos.map((p: Any) => p.materiales).filter(Boolean))] as string[];
   return marco(`<span class="etq">${esc(dets)}</span><h1 class="recorte">${esc(tituloOrden(o))}</h1><p class="ayuda">${esc([o.activo?.codigo, o.lugar?.ubicacion, o.lugar?.sede].filter(Boolean).join(" · "))}</p>`
     + (o.descripcion ? dato("Lo que pidieron", o.descripcion) : "")
-    + dato("Trabajo", o.pasos.length ? `${o.pasos.length} pasos` : "Sin lista de pasos")
+    + dato("Trabajo", o.pasos.length ? nPasos(o.pasos.length) : "Sin lista de pasos")
     + (mats.length ? dato("Lleva contigo", mats.join(" · ")) : ""),
     `<button class="b1" data-a="empezar" data-id="${o.id}">${ico.play}Empezar</button>${volverAHoy}`);
 }
@@ -1625,7 +1627,7 @@ function vCierre(o: Any) {
   const mal = pasos.filter((p) => p.estado === "desviacion").length;
   const cambiados = new Set(pasosPorRevisar(o));
   // La cabecera ya dice de qué equipo es: aquí va qué trabajo es y de qué tamaño. La emergencia dice su plazo.
-  const cuenta = !n ? "" : emergencia ? (n === 1 ? "1 acción" : `${n} acciones`) : n === 1 ? "1 paso" : `${n} pasos`;
+  const cuenta = !n ? "" : emergencia ? (n === 1 ? "1 acción" : `${n} acciones`) : nPasos(n);
   const etq = emergencia ? ["Emergencia", vencePlazo(o.vencimiento) || cuenta] : [intervencion ? "Intervención" : o.tipo === "preventivo" ? "Preventivo" : o.tipo === "correctivo" ? "Correctivo" : o.tipo, cuenta];
   const titulo = !n ? (o.modo === "pasos" ? "¿Qué hiciste?" : "¿Qué encontraste y qué hiciste?")
     : mal ? (emergencia ? (mal === 1 ? "1 acción no se pudo" : `${mal} acciones no se pudieron`) : mal === 1 ? "1 paso con problema" : `${mal} pasos con problema`)
@@ -1809,7 +1811,7 @@ function vEquipo() {
       : `<div class="fila"><span class="txt"><strong>${esc(limpiarTitulo(o.titulo))}</strong><small>${esc(det)}</small></span></div>`;
   }).join("");
   const planes = fi.planes.map((p: Any) => {
-    const det = [p.frecuencia, p.proxima ? `${p.proxima < hoy ? "vencido" : "próximo"} ${fecha(p.proxima)}` : "", p.pasos ? `${p.pasos} pasos` : ""].filter(Boolean).join(" · ");
+    const det = [p.frecuencia, p.proxima ? `${p.proxima < hoy ? "vencido" : "próximo"} ${fecha(p.proxima)}` : "", p.pasos ? nPasos(p.pasos) : ""].filter(Boolean).join(" · ");
     return `<button class="fila" data-a="confirmarPlan" data-id="${p.id}"><span class="txt"><strong>${esc(p.titulo)}</strong><small>${esc(det)}</small></span>${ico.flecha}</button>`;
   }).join("");
   return `<div class="simple">${cabEquipo(a)}${avisoCopia()}</div>`
