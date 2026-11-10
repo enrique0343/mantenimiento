@@ -33,8 +33,18 @@ const ESCALA_RONDA = Math.min(1, (AHORA - INICIO_TURNO) / (46 * 60000));
 const enRonda = (min) => new Date(AHORA - min * 60000 * ESCALA_RONDA).toISOString();
 let n = 0;
 const op = (tipo, at, extra = {}) => ({ opId: `prueba-${++n}-${tipo}`, tipo, at, ...extra });
+// Como el celular: nadie envía a verificación sin una foto del trabajo. `sinFoto` deja probar la regla del servidor.
+const horaSqlite = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+const ponerFoto = (ordenId, { nombre = 'evidencia.jpg', tipo = 'image/jpeg', en = horaSqlite() } = {}) => {
+  if (!one('SELECT id FROM ordenes WHERE id=?', ordenId) || one('SELECT id FROM adjuntos WHERE orden_id=? AND nombre=?', ordenId, nombre)) return;
+  sqlite.prepare("INSERT INTO adjuntos(orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria,created_at) VALUES(?,3,?,?,1,?,'despues',?)").run(ordenId, nombre, tipo, `prueba/${ordenId}/${nombre}`, en);
+};
 // Como el celular: lo que no cupo en el presupuesto de una solicitud sale en la siguiente.
-const enviar = async (ops, rol = 'tecnico', extra = {}) => {
+const enviar = async (lista, rol = 'tecnico', extra = {}) => {
+  const ops = lista.map(({ sinFoto, ...o }) => {
+    if (o.tipo === 'orden.terminar' && !sinFoto) ponerFoto(o.ordenId);
+    return o;
+  });
   const salida = [];
   let resto = ops;
   while (resto.length) {
@@ -376,7 +386,7 @@ try {
   igual(f.status, 201, JSON.stringify(f.body));
   f = await subir('foto-prueba-1', 3);
   ok(f.body.repetida, 'El reintento no duplica la foto');
-  igual(one('SELECT count(*) c FROM adjuntos WHERE orden_id=3').c, 1);
+  igual(one("SELECT count(*) c FROM adjuntos WHERE orden_id=3 AND nombre='foto.jpg'").c, 1);
   f = await subir('foto-prueba-2', 1);
   igual(f.status, 409, 'Ya enviada a verificación, el técnico no agrega evidencia');
 

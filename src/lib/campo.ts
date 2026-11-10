@@ -17,6 +17,7 @@ import {
   rondaLecturas, sucursales, tickets, ubicaciones, usuarios,
 } from "@/lib/schema";
 import { aplicarCambioOrden } from "@/lib/orden-cambio";
+import { fotosDeEvidencia } from "@/lib/orden-verificacion";
 import { MENSAJE_PASO_SIN_NUMERO, minutosEstimadosChecklist, parseChecklist, pasoConRango, validarAreaTrabajo, vencimientoCausaRaiz, type ChecklistItem } from "@/lib/ordenes";
 import { accionesDelCelular, checklistVacio, eopsDeOrdenes, esHitoEop, fichaEop, HITOS_EOP, minimoDeHito, pasosDeAcciones, sembrarAccionesEop, SIN_EOP, type EopDeOrden, type FichaEop } from "@/lib/eop";
 import { cambiarPrerrequisito, lecturaEscrita, liberacionParaCampo, mopDeOrdenes, prerrequisitoParaCampo, RechazoMop, registrarLiberacion } from "@/lib/mop";
@@ -99,6 +100,8 @@ type ExtraOrden = {
   eop?: EopDeOrden;
   prerrequisitos?: Array<typeof ordenPrerrequisitos.$inferSelect>;
   liberaciones?: Array<typeof ordenLiberaciones.$inferSelect>;
+  /** Fotos del trabajo que ya tiene la orden: sin una, el celular no deja enviarla. */
+  fotos?: number;
 };
 
 /** La sede de la orden: la de la ubicación de su equipo, la de su ubicación o la suya. */
@@ -138,6 +141,8 @@ function ordenParaCampo(fila: FilaOrden, ubis: MapaUbicaciones, sedes: Map<numbe
     modo,
     devuelta: extra.devuelta ?? null,
     motivoPausa: extra.motivoPausa ?? null,
+    // Las fotos de antes de empezar muestran la falla, no el trabajo: una orden sin empezar no tiene ninguna.
+    fotos: o.estado === "abierta" ? 0 : extra.fotos ?? 0,
     activo: a ? { id: a.id, codigo: a.codigo, nombre: a.nombre, marca: a.marca, modelo: a.modelo } : null,
     lugar: {
       sedeId,
@@ -402,9 +407,11 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
   const fichas = eops.map(fichaEop);
   // Prerrequisitos y liberaciones de las intervenciones, y el EOP de cada emergencia, sin una consulta por orden.
   const extras = await extrasDeCampo(db, [...mias, ...libres], ubis, { conocidas: new Map(fichas.map((e) => [e.id, e])) });
+  // Las fotos del trabajo que ya tiene cada orden mía: el celular no deja enviar una sin foto.
+  const fotos = await fotosDeEvidencia(db, ids);
   const armar = (f: FilaOrden) => {
     const ultimas = (f.o.planId && ultimasPorPlan.get(f.o.planId)) || {};
-    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas, ...extras(f.o.id) });
+    return ordenParaCampo(f, ubis, sedes, { devuelta: devueltas.get(f.o.id) ?? null, motivoPausa: f.o.estado === "en_espera" ? pausas.get(f.o.id) ?? null : null, ultimas, fotos: fotos.get(f.o.id) ?? 0, ...extras(f.o.id) });
   };
   const ordenesVista = mias.map(armar);
   const libresVista = libres.map(armar);
@@ -589,7 +596,7 @@ const vencimientoDePlan = (p: typeof planesMantenimiento.$inferSelect) => {
 
 /** Un rechazo por regla. `motivo` es el de la respuesta de la orden («otra-escritura», por ejemplo), si lo trae. */
 export class RechazoCampo extends Error {
-  constructor(message: string, public status = 400, public motivo?: string) { super(message); }
+  constructor(message: string, public status = 400, public motivo?: string, public pasos?: number[]) { super(message); }
 }
 
 /** Mantenimiento fuera de la lista de trabajo: del plan del equipo o no programado. */
@@ -663,7 +670,8 @@ export async function ordenCampoPorId(db: Db, id: number, user: Usuario) {
   const ultimas = f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
   const extras = await extrasDeCampo(db, [f], ubis);
-  return ordenParaCampo(f, ubis, new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas, ...extras(f.o.id) });
+  const fotos = (await fotosDeEvidencia(db, [f.o.id])).get(f.o.id) ?? 0;
+  return ordenParaCampo(f, ubis, new Map(sedesFilas.map((s) => [s.id, s.nombre])), { ultimas, fotos, ...extras(f.o.id) });
 }
 
 // ── Las operaciones ─────────────────────────────────────────────────────────
@@ -687,7 +695,7 @@ async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: 
   if (res.status >= 500) throw new Error(typeof j.error === "string" ? j.error : "Error del servidor");
   if (!res.ok) {
     const msg = typeof j.error === "string" ? j.error : "No se pudo guardar.";
-    throw new RechazoCampo(msg, res.status, typeof j.motivo === "string" ? j.motivo : undefined);
+    throw new RechazoCampo(msg, res.status, typeof j.motivo === "string" ? j.motivo : undefined, Array.isArray(j.pasos) ? j.pasos.filter(Number.isInteger) : undefined);
   }
   return j;
 }
@@ -765,15 +773,19 @@ const limiteDePaso = (v: unknown) => (v === null || v === undefined || v === "" 
  */
 function baseDeLaMarca(checklist: string | null, idx: number, antes: unknown): string | null {
   if (!conAntes(antes)) return null;
-  const { estado, valor, nota } = antes;
   const lista = JSON.parse(checklist ?? "[]");
-  const paso: Record<string, unknown> = { ...lista[idx], estado };
+  lista[idx] = pasoComoLoMostraba(lista[idx], antes);
+  return JSON.stringify(lista);
+}
+/** Un paso guardado, con el estado, la lectura y la nota que el celular mostraba al marcarlo. */
+function pasoComoLoMostraba(guardado: unknown, antes: Record<string, unknown>): Record<string, unknown> {
+  const { estado, valor, nota } = antes;
+  const paso: Record<string, unknown> = { ...(guardado as Record<string, unknown>), estado };
   for (const [clave, v] of [["valorMedido", valor], ["notas", nota]] as const) {
     if (v === null || v === undefined || v === "") delete paso[clave];
     else paso[clave] = v;
   }
-  lista[idx] = paso;
-  return JSON.stringify(lista);
+  return paso;
 }
 /** La marca trae el paso como lo mostraba el celular («antes»). */
 const conAntes = (antes: unknown): antes is Record<string, unknown> => typeof antes === "object" && antes !== null && !Array.isArray(antes);
@@ -1009,6 +1021,55 @@ async function aplicarMarcaDePaso(ctx: APIContext, db: Db, user: Usuario, orden:
   });
 }
 
+/** Lo que manda el celular por cada paso que dio por conforme al enviar: cuál es y cómo lo mostraba. */
+type PasoConforme = { idx: number; texto?: string; antes?: unknown };
+/** Tope de pasos de un «Todo conforme»: ningún checklist real se acerca. */
+const MAX_CONFORMES = 200;
+/** Filas de la bitácora de marcas por sentencia: D1 admite 100 valores y cada fila lleva 11. */
+const MARCAS_POR_SENTENCIA = 9;
+function conformesDeOp(op: OperacionCampo): PasoConforme[] {
+  if (!Array.isArray(op.conforme)) return [];
+  const vistos = new Set<number>();
+  const lista: PasoConforme[] = [];
+  for (const c of op.conforme.slice(0, MAX_CONFORMES) as any[]) {
+    const idx = Number(c?.idx);
+    if (typeof c !== "object" || c === null || !Number.isInteger(idx) || idx < 0 || vistos.has(idx)) continue;
+    vistos.add(idx);
+    lista.push({ idx, texto: typeof c.texto === "string" ? c.texto : undefined, antes: c.antes });
+  }
+  return lista;
+}
+/**
+ * Cierre en dos pasos · «Todo conforme»: los pasos que el celular mostraba pendientes quedan hechos en la misma
+ * operación que envía la orden, para que no quede a medias. Devuelve el checklist con esos pasos hechos, la base
+ * (cómo los mostraba el celular) y las marcas para la bitácora; no escribe nada. Un paso que la ficha cambió
+ * mientras tanto no se pisa: el envío entero se rechaza nombrándolo (K17) y el celular lleva al técnico a revisarlo.
+ * Uno que ya no está pendiente queda como está: «todo conforme» nunca borra un problema anotado.
+ */
+function conformarPasos(o: typeof ordenes.$inferSelect, user: Usuario, conformes: PasoConforme[], m: Momento) {
+  let lista: any[];
+  try { lista = JSON.parse(o.checklistEjecucion ?? "[]"); } catch { throw new RechazoCampo("El checklist de esta orden no se pudo leer."); }
+  if (!Array.isArray(lista)) throw new RechazoCampo("El checklist de esta orden no se pudo leer.");
+  const base = [...lista];
+  const cambiados: number[] = [];
+  const marcas: Array<{ idx: number; texto: string }> = [];
+  for (const c of conformes) {
+    const it = lista[c.idx];
+    if (!it) throw new RechazoCampo("Un paso ya no existe en la orden. Actualiza para ver la versión vigente.", 409);
+    if (typeof it !== "object") throw new RechazoCampo("Un paso tiene un formato antiguo. Abre la orden en la ficha completa.");
+    if (typeof c.texto === "string" && c.texto !== it.texto) throw new RechazoCampo("El checklist cambió en la oficina. Actualiza para ver la versión vigente.", 409);
+    if (conAntes(c.antes) && marcaSobreCambioDeLaFicha(it, c.antes, "ok", undefined)) { cambiados.push(c.idx); continue; }
+    if (estadoComparable(it) !== "pendiente") continue;
+    if (conAntes(c.antes)) base[c.idx] = pasoComoLoMostraba(it, c.antes);
+    const hecho: Record<string, unknown> = { ...it, estado: "ok", hora: horaSV(m.iso), iniciales: iniciales(user.nombre) };
+    delete hecho.hecho;
+    lista[c.idx] = hecho;
+    marcas.push({ idx: c.idx, texto: String(it.texto ?? "").slice(0, 500) });
+  }
+  if (cambiados.length) throw new RechazoCampo(envioConPasosCambiados(o.tipo === "emergencia", cambiados.sort((a, b) => a - b)), 409);
+  return { checklist: JSON.stringify(lista), base: JSON.stringify(base), marcas };
+}
+
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
   switch (op.tipo) {
     case "orden.iniciar": {
@@ -1059,7 +1120,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "orden.terminar": {
-      const o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op);
       const [ultima] = await db.select({ en: ordenPasoMarcas.ocurridoEn }).from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, o.id)).orderBy(desc(ordenPasoMarcas.ocurridoEn)).limit(1);
       const m = momentoCapturado(op.at, ultima?.en ?? o.iniciadaEn);
       if (!["completada", "verificada", "cerrada"].includes(o.estado)) {
@@ -1067,6 +1128,13 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
         // técnico lo revisa y lo marca otra vez. No se escribe nada.
         const porRevisar = await pasosCambiadosSinMarcar(db, user, o);
         if (porRevisar.length) throw new RechazoCampo(envioConPasosCambiados(o.tipo === "emergencia", porRevisar), 409);
+        // Cierre en dos pasos · Los pasos que el técnico dio por conformes al enviar. La emergencia que todavía no
+        // tiene sus acciones en el checklist las recibe aquí, como en la primera marca.
+        const conformes = conformesDeOp(op);
+        if (conformes.length) {
+          exigirEjecutor(user, o);
+          o = await sembrarAccionesEop(ctx, db, o, accionesDeOp(o, op));
+        }
         const nota = typeof op.nota === "string" ? op.nota : null;
         // La causa raíz la escribe la jefatura. Si un celular viejo la manda, lo que el técnico vio queda en los trabajos.
         const causa = typeof op.causaRaiz === "string" ? op.causaRaiz.trim() : "";
@@ -1074,10 +1142,43 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
           ? await db.select({ etiqueta: ordenLiberaciones.etiqueta, unidad: ordenLiberaciones.unidad, valorMedido: ordenLiberaciones.valorMedido, valorMedidoTexto: ordenLiberaciones.valorMedidoTexto })
               .from(ordenLiberaciones).where(eq(ordenLiberaciones.ordenId, o.id)).orderBy(asc(ordenLiberaciones.orden), asc(ordenLiberaciones.id))
           : [];
-        const texto = textoDeTrabajos(o.checklistEjecucion, o.titulo, nota, {
-          liberaciones, reversa: o.reversaEjecutada ? o.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa, emergencia: o.tipo === "emergencia",
-        }) || o.trabajosRealizados || "";
-        await cambiarOrden(ctx, user, o.id, { estado: "completada", trabajosRealizados: texto, ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}) }, m.iso);
+        // Las marcas y el envío van en una sola escritura: o la orden queda enviada con todos sus pasos, o no cambia.
+        const enviar = async (orden: typeof ordenes.$inferSelect) => {
+          const hecho = conformes.length ? conformarPasos(orden, user, conformes, m) : null;
+          const texto = textoDeTrabajos(hecho?.checklist ?? orden.checklistEjecucion, orden.titulo, nota, {
+            liberaciones, reversa: orden.reversaEjecutada ? orden.reversaNotas : null, causaTecnico: esJefatura(user) ? null : causa, emergencia: orden.tipo === "emergencia",
+          }) || orden.trabajosRealizados || "";
+          try {
+            await cambiarOrden(ctx, user, orden.id, {
+              estado: "completada", trabajosRealizados: texto,
+              ...(hecho?.marcas.length ? { checklistEjecucion: hecho.checklist, checklistBase: hecho.base } : {}),
+              ...(causa && esJefatura(user) ? { causaRaiz: causa } : {}),
+            }, m.iso);
+          } catch (e) {
+            // K17 · La ficha cambió uno de esos pasos entre la lectura y el guardado: el envío vuelve nombrándolo.
+            if (e instanceof RechazoCampo && e.motivo === "paso-cambio" && e.pasos?.length) {
+              throw new RechazoCampo(envioConPasosCambiados(orden.tipo === "emergencia", [...e.pasos].sort((a, b) => a - b)), 409);
+            }
+            throw e;
+          }
+          return hecho?.marcas ?? [];
+        };
+        let marcas: Array<{ idx: number; texto: string }>;
+        try {
+          marcas = await enviar(o);
+        } catch (e) {
+          // Otra escritura entre la lectura y el guardado: con pasos por marcar se lee la orden otra vez, una sola vez.
+          if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conformes.length) throw e;
+          o = await ordenDeOp(db, op);
+          if (["completada", "verificada", "cerrada"].includes(o.estado)) return { ordenId: o.id, m };
+          marcas = await enviar(o);
+        }
+        for (let i = 0; i < marcas.length; i += MARCAS_POR_SENTENCIA) {
+          await db.insert(ordenPasoMarcas).values(marcas.slice(i, i + MARCAS_POR_SENTENCIA).map((x) => ({
+            ordenId: o.id, pasoIdx: x.idx, pasoTexto: x.texto, estado: "ok", valor: null, nota: null,
+            ocurridoEn: m.iso, recibidoEn: m.recibido, sinSenal: m.sinSenal, usuarioId: user.id, opId: op.opId,
+          })));
+        }
       }
       return { ordenId: o.id, m };
     }
