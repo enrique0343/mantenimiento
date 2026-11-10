@@ -1423,7 +1423,8 @@ function marcarHito(hito: "mitigacion" | "restablecimiento") {
   if (!o) return;
   void despachar({ tipo: "emergencia.hito", ordenId: o.id, hito });
   zumbar();
-  seguirOrden(o.id);
+  // El toque fija su hora; se sigue en el cierre, sin cambiar de pantalla.
+  pintar({ conservar: true });
 }
 
 function guardarLectura() {
@@ -1998,31 +1999,41 @@ const pasoCambiado = (error: unknown): number | null => {
 };
 /** La orden que «Abrir la orden» lleva al paso que cambió: se abre en ese paso, no en el primero pendiente. */
 let irAlPaso: { hash: string; i: number } | null = null;
+/** Los pasos que nombra un registro sin aceptar: el de una marca (K17) o los de un envío con pasos que cambiaron (K19). */
+function pasosDelRechazo(x: Any): number[] {
+  if (x.revisado) return [];
+  if (Array.isArray(x.pasos)) return x.pasos;
+  const uno = pasoDeLaFrase(x.error);
+  return uno !== null ? [uno] : pasosDelEnvio(x.error);
+}
 /**
- * K19 · Los pasos de la orden con un rechazo de K17 («El paso 3 cambió en la ficha mientras tanto…») que el celular
- * todavía no volvió a marcar (sus índices, ordenados). Mientras haya uno, «Enviar a verificación» no sale. Un paso que
- * ya no está en la orden no cuenta, como en el servidor.
+ * K19 · Los pasos de la orden que cambiaron en la ficha y el celular todavía no volvió a marcar (sus índices,
+ * ordenados): los de una marca que no entró («El paso 3 cambió en la ficha mientras tanto…») y los de un envío que
+ * volvió por ellos. Mientras haya uno, «Enviar a verificación» no sale. Un paso que ya no está en la orden no cuenta,
+ * como en el servidor.
  */
 function pasosPorRevisar(o: Any): number[] {
   const n = o.pasos?.length ?? 0;
   const idxs = new Set<number>();
   for (const x of E.rechazos) {
-    if (Number(x.ordenId) !== Number(o.id) || x.revisado) continue;
-    const i = pasoDeLaFrase(x.error);
-    if (i !== null && i < n) idxs.add(i);
+    if (Number(x.ordenId) !== Number(o.id)) continue;
+    for (const i of pasosDelRechazo(x)) if (i < n) idxs.add(i);
   }
   return [...idxs].sort((a, b) => a - b);
 }
 /**
- * El paso se volvió a marcar: sus rechazos de K17 ya no detienen el envío. Al marcarlo, todos; con `hasta` (una marca
- * que el servidor aceptó), los de las marcas anteriores a ella.
+ * El paso se volvió a marcar: sus rechazos de K17 ya no detienen el envío, y sale de la lista de un envío que volvió
+ * por varios pasos. Al marcarlo, todos; con `hasta` (una marca que el servidor aceptó), los de las marcas anteriores a ella.
  */
 function pasoRevisado(ordenId: unknown, idx: unknown, hasta?: string) {
   let cambio = false;
   for (const x of E.rechazos) {
-    if (x.revisado || Number(x.ordenId) !== Number(ordenId) || pasoDeLaFrase(x.error) !== Number(idx)) continue;
+    if (x.revisado || Number(x.ordenId) !== Number(ordenId)) continue;
+    const pasos = pasosDelRechazo(x);
+    if (!pasos.includes(Number(idx))) continue;
     if (hasta && x.at && String(x.at) > hasta) continue;
-    x.revisado = true;
+    const quedan = pasos.filter((i) => i !== Number(idx));
+    if (quedan.length) x.pasos = quedan; else x.revisado = true;
     cambio = true;
   }
   if (cambio) void cola.guardar(`rechazos:${UID}`, E.rechazos);
@@ -2253,6 +2264,61 @@ function notaDeProblema(): string | null {
   return final;
 }
 
+/**
+ * Lo que tiene que estar bien antes de enviar una orden a verificación. Si algo falta, se dice en el cierre o se va a
+ * la pantalla donde se arregla, y devuelve null. Con todo en orden devuelve lo que viaja con el envío: la nota y las
+ * lecturas escritas en el cierre. No mira la foto: «Foto y enviar» revisa primero y toma la foto después.
+ */
+function revisarEnvio(o: Any): { nota: string; lecturas: { i: number; p: Any; valor: number | string; crudo: string }[] } | null {
+  const pasos: Any[] = o.pasos ?? [];
+  const decir = (m: string) => { const e = $("#err-fin"); if (e) { e.textContent = m; e.hidden = false; } else aviso(m); };
+  // La orden dejó de estar en curso mientras tanto: se pinta la pantalla que le toca.
+  if (pantallaDe(o).vista !== "fin") { pintar(); return null; }
+  // K19 · Un paso que cambió en la ficha y no se volvió a marcar: la orden no sale (el servidor no la aceptaría) y lo
+  // que el técnico escribió en ese paso se queda en el celular. Se va al primero de esos pasos, como está guardado.
+  const cambiados = pasosPorRevisar(o);
+  if (cambiados.length) { irAPantalla(o, { vista: "paso", i: cambiados[0] }, "uno"); aviso(envioConPasosCambiados(o.modo === "emergencia", cambiados)); return null; }
+  // Un paso ya marcado que pide lectura y no la tiene no se envía: el servidor no lo aceptaría y lo escrito volvería a la orden.
+  const sinLectura = pasos.findIndex((p) => p.estado !== "pendiente" && pasoSinLectura(p));
+  if (sinLectura >= 0) { pedirLecturaDePaso(o, sinLectura); return null; }
+  if (pasos.some((p) => p.estado === "desviacion" && p.critico)) { decir(CRITICO_CON_PROBLEMA); return null; }
+  if (o.modo === "intervencion" && !o.reversa?.ejecutada) {
+    // Una obligatoria con rango cuenta como medida solo con su número, igual que en el servidor.
+    const mal = (o.liberaciones ?? []).find((l: Any) => l.obligatoria && (!medidaConNumero(l) || l.conforme === false));
+    if (mal) { decir(!mal.medida ? `Falta la lectura de «${mal.etiqueta}».` : mal.conforme === false ? `«${mal.etiqueta}» quedó fuera de rango: repite la lectura o marca la reversa.` : `«${mal.etiqueta}» necesita el número que marcó el instrumento.`); return null; }
+  }
+  // Las lecturas de los pasos sin marcar se escriben en el cierre. Una fuera de rango nunca pasa como buena: abre su problema.
+  const lecturas: { i: number; p: Any; valor: number | string; crudo: string }[] = [];
+  for (let i = 0; i < pasos.length; i++) {
+    const p = pasos[i];
+    if (!lecturaPendiente(p)) continue;
+    const campo = document.querySelector<HTMLInputElement>(`[data-lect="${i}"]`);
+    const crudo = String(campo?.value ?? E.notas[`lect:${o.id}:${i}`] ?? "").trim();
+    const nombre = corto(String(p.texto ?? "").split(" · ")[0], 60);
+    const falta = (m: string) => { decir(m); campo?.focus(); return null; };
+    if (!crudo) return falta(`Falta la lectura de «${nombre}». Si no aplica, toca ese paso.`);
+    const leido = leerNumero(crudo);
+    if (leido.tipo === "ambiguo") return falta(leido.mensaje);
+    const v = valorDe(leido);
+    // Con mínimo o máximo, lo escrito es el número del instrumento: «14,5 A» u «ok» no se guarda ni se envía.
+    if (v == null && conRango(p)) return falta(`«${nombre}» pide el número que marcó el instrumento, sin letras (por ejemplo 14,5).`);
+    if (v != null && fueraDe(p, v)) {
+      irAPantalla(o, { vista: "paso", i }, "uno");
+      abrirHoja({ tipo: "problema", valor: v, valorTxt: `Lectura ${comoTexto(v)}${p.unidad ? ` ${p.unidad}` : ""} · normal ${rangoDe(p)}` });
+      return null;
+    }
+    lecturas.push({ i, p, valor: v ?? crudo, crudo });
+  }
+  const nota = String($<HTMLTextAreaElement>("#nota-fin")?.value ?? E.notas[`fin:${o.id}`] ?? "").trim();
+  // Sin pasos, lo que se hizo se escribe: es lo único que queda del trabajo, además de la foto.
+  if (!pasos.length && nota.length < 10) {
+    decir(o.modo === "pasos" ? "Describe lo que hiciste (al menos 10 letras)." : "Escribe qué encontraste y qué hiciste (al menos 10 letras).");
+    $<HTMLTextAreaElement>("#nota-fin")?.focus();
+    return null;
+  }
+  return { nota, lecturas };
+}
+
 // ── Acciones ────────────────────────────────────────────────────────────────
 const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   ir(d) {
@@ -2346,12 +2412,6 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   },
   controlado() { marcarHito("mitigacion"); },
   restablecido() { marcarHito("restablecimiento"); },
-  todaviaNoControlado() {
-    soltarPantalla();
-    E.flujo = null;
-    aviso("La emergencia sigue abierta. Está primera en Hoy.");
-    ir("#hoy");
-  },
   todaviaNoNormal() {
     const m = "Todavía no vuelve a la normalidad";
     abrirHoja({ tipo: "pausar", sugerido: m, motivo: m, foco: false });
@@ -2451,7 +2511,40 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
     const atras = o ? pantallaAnterior(o, E.vista, f.i, f.modo) : null;
     if (atras) irAPantalla(o, atras);
   },
-  irPaso(d) { const f = E.flujo; if (!f) return; f.i = Number(d.i); E.vista = "paso"; pintar(); },
+  irPaso(d) {
+    const f = E.flujo;
+    if (!f) return;
+    const i = Number(d.i);
+    if (f.tipo === "ronda") { f.i = i; E.vista = "paso"; pintar(); return; }
+    // Desde el cierre se entra a un solo paso: al marcarlo se vuelve al cierre.
+    const o = ordenDelFlujo();
+    if (o && pantallaValida(o, "paso", i)) irAPantalla(o, { vista: "paso", i }, "uno");
+  },
+  /** Quien prefiere el recorrido completo: un paso por pantalla, del primero sin marcar en adelante. */
+  pasoAPaso() {
+    const o = ordenDelFlujo();
+    const i = o ? primerPendiente(o) : -1;
+    if (i >= 0) irAPantalla(o, { vista: "paso", i }, "secuencia");
+  },
+  irLiberacion() {
+    const o = ordenDelFlujo();
+    const i = o ? liberacionPendiente(o) : -1;
+    if (i >= 0) irAPantalla(o, { vista: "liberacion", i });
+  },
+  algo() { abrirHoja({ tipo: "algo", foco: false }); },
+  /** «Algo salió mal» en un paso: se abre ese paso con su hoja del problema ya abierta. */
+  pasoConProblema(d) {
+    const o = ordenDelFlujo();
+    const i = Number(d.i);
+    if (!o || !pantallaValida(o, "paso", i)) return;
+    E.hoja = null;
+    soltarHistorialDeHoja();
+    irAPantalla(o, { vista: "paso", i }, "uno");
+    // Uno que ya quedó con problema se abre para verlo o corregirlo; uno con lectura la pide primero.
+    if (o.pasos[i].estado === "desviacion") return;
+    if (o.modo === "emergencia") abrirHoja({ tipo: "nopudo" });
+    else if (!$("#lectura")) abrirHoja({ tipo: "problema" });
+  },
   lectura: guardarLectura,
   problema() { abrirHoja({ tipo: "problema" }); },
   problemaSeguir() {
@@ -2567,35 +2660,40 @@ const A: Record<string, (d: DOMStringMap, b: HTMLElement) => void> = {
   },
   verNota() { E.verNota = true; pintar({ conservar: true }); },
   verTodo(_d, b) { b.classList.toggle("entero"); },
+  /**
+   * El segundo paso del cierre: enviar a verificación. Lo que no se tocó viaja como conforme en el mismo envío, con
+   * el paso tal como se veía (K17): si la ficha lo cambió mientras tanto, el servidor no lo acepta y se revisa.
+   */
   enviar() {
-    const f = E.flujo as Flujo;
-    const o = ordenDe(f.ordenId as number);
+    const o = ordenDelFlujo();
     if (!o) return;
-    const nota = ($<HTMLTextAreaElement>("#nota-fin")?.value ?? E.notas[`fin:${o.id}`] ?? "").trim();
-    const err = $("#err-fin");
-    const decir = (m: string) => { if (err) { err.textContent = m; err.hidden = false; } };
-    // K19 · Un paso que cambió en la ficha y no se volvió a marcar: la orden no sale (el servidor no la aceptaría) y lo
-    // que el técnico escribió en ese paso se queda en el celular. Se va al primero de esos pasos, como está guardado.
-    const cambiados = pasosPorRevisar(o);
-    if (cambiados.length) { irAPantalla(o, { vista: "paso", i: cambiados[0] }); aviso(envioConPasosCambiados(o.modo === "emergencia", cambiados)); return; }
-    // Un paso que pide lectura y no la tiene no se envía: el servidor no lo aceptaría y lo escrito volvería a la orden.
-    const sinLectura = (o.pasos ?? []).findIndex(pasoSinLectura);
-    if (sinLectura >= 0) { pedirLecturaDePaso(o, sinLectura); return; }
-    if (o.modo !== "pasos" && nota.length < 10) { decir("Escribe qué encontraste y qué hiciste (al menos 10 letras)."); $<HTMLTextAreaElement>("#nota-fin")?.focus(); return; }
-    if (o.modo === "pasos" && !o.pasos.length && nota.length < 10) { decir("Describe lo que hiciste (al menos 10 letras)."); return; }
-    if (o.modo === "intervencion" && !o.reversa?.ejecutada) {
-      // Una obligatoria con rango cuenta como medida solo con su número, igual que en el servidor.
-      const mal = (o.liberaciones ?? []).find((l: Any) => l.obligatoria && (!medidaConNumero(l) || l.conforme === false));
-      if (mal) { decir(!mal.medida ? `Falta la lectura de «${mal.etiqueta}».` : mal.conforme === false ? `«${mal.etiqueta}» quedó fuera de rango: repite la lectura o marca la reversa.` : `«${mal.etiqueta}» necesita el número que marcó el instrumento.`); return; }
+    const listo = revisarEnvio(o);
+    if (!listo) return;
+    if (fotosDe(o) < 1) {
+      const e = $("#err-fin");
+      if (e) { e.textContent = FALTA_LA_FOTO; e.hidden = false; } else aviso(FALTA_LA_FOTO);
+      return;
     }
+    const pasos: Any[] = o.pasos ?? [];
+    // Se calcula antes de despachar: cada operación cambia la copia del celular en cuanto entra a la cola.
+    const conforme = pasos.map((p, i) => ({ p, i })).filter(({ p }) => p.estado === "pendiente" && !p.pideValor).map(({ p, i }) => ({ idx: i, texto: p.texto, ...antesDe(p) }));
+    const acciones = accionesMostradas(o);
+    const faltanHitos = o.modo === "emergencia" ? (["mitigacion", "restablecimiento"] as const).filter((h) => !o.hitos?.[h]) : [];
     E.listo = { titulo: [o.activo?.codigo, tituloOrden(o)].filter(Boolean).join(" · "), lugar: o.lugar?.ubicacion, sinEnviar: !E.enLinea };
+    // Las lecturas escritas en el cierre van primero, cada una como la marca de su paso.
+    for (const { i, p, valor, crudo } of listo.lecturas) {
+      void despachar({ tipo: "orden.paso", ordenId: o.id, idx: i, texto: p.texto, estado: "ok", valor, ...antesDe(p), ...acciones, ...conTexto({ [`lect:${o.id}:${i}`]: crudo }) });
+    }
+    // Enviar una emergencia dice que ya está controlada y que el servicio volvió: el toque que no se dio lleva esta hora.
+    for (const hito of faltanHitos) void despachar({ tipo: "emergencia.hito", ordenId: o.id, hito });
     // La causa raíz la escribe la jefatura: el celular manda solo lo que el técnico encontró e hizo.
     // Lo escrito y los opcionales saltados viajan con el envío: si el servidor no lo acepta, vuelven a la orden.
     const saltos = Object.fromEntries([`pre:${o.id}`, `lib:${o.id}`].filter((k) => E.saltos[k]?.length).map((k) => [k, E.saltos[k]]));
-    void despachar({ tipo: "orden.terminar", ordenId: o.id, nota: nota || null, ...conTexto({ [`fin:${o.id}`]: nota }, Object.keys(saltos).length ? saltos : undefined) });
+    void despachar({ tipo: "orden.terminar", ordenId: o.id, nota: listo.nota || null, ...(conforme.length ? { conforme } : {}), ...acciones, ...conTexto({ [`fin:${o.id}`]: listo.nota }, Object.keys(saltos).length ? saltos : undefined) });
     zumbar();
     soltarPantalla();
     olvidarDeOrden(o.id);
+    esperaEnvio = null;
     E.verNota = false;
     E.flujo = null;
     E.vista = "listo";
