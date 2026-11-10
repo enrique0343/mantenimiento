@@ -13,7 +13,7 @@ const PRESUPUESTO = 45;
 // La emergencia lee además el código de la orden para anotarlo en la bitácora del AOP.
 // Iniciar una emergencia sin pasos busca antes su EOP; terminar una intervención lee sus
 // liberaciones; la reversa avisa a cada jefatura.
-const PESO: Record<string, number> = { "emergencia.abrir": 16, "orden.iniciar": 22, "orden.terminar": 18, "mop.liberacion": 8, "mop.reversa": 20 };
+const PESO: Record<string, number> = { "emergencia.abrir": 16, "orden.iniciar": 22, "orden.terminar": 24, "orden.enviar": 24, "mop.liberacion": 8, "mop.reversa": 20 };
 const peso = (op: OperacionCampo) => (op?.tipo === "ronda.lectura" ? (op.resultado === "fuera" ? 15 : op.resultado === "no_verificado" ? 10 : 4) : PESO[op?.tipo] ?? 15);
 
 export const POST: APIRoute = async (ctx) => {

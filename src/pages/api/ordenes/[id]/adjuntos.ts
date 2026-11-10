@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { getDb, getEnv } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { esRevisorOrden } from "@/lib/orden-verificacion";
+import { esRevisorOrden, horaDeAdjunto } from "@/lib/orden-verificacion";
 import { adjuntos, ordenes, ordenVerificacion } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
@@ -53,6 +53,7 @@ export const POST: APIRoute = async (ctx) => {
       tamano: file.size,
       r2Key,
       categoria,
+      createdAt: horaDeAdjunto(),
     })
     .returning();
   return Response.json({ adjunto: row }, { status: 201 });

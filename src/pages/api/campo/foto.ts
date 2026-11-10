@@ -5,7 +5,7 @@ import { getDb, getEnv } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { puedeUsarCampo } from "@/lib/campo";
 import { adjuntos, campoOperaciones, ordenes, ordenVerificacion } from "@/lib/schema";
-import { esRevisorOrden } from "@/lib/orden-verificacion";
+import { esRevisorOrden, horaDeAdjunto } from "@/lib/orden-verificacion";
 
 export const prerender = false;
 
@@ -48,7 +48,7 @@ export const POST: APIRoute = async (ctx) => {
   const seguro = (file.name || "foto.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
   const r2Key = `ordenes/${ordenId}/${categoria}/${Date.now()}-${crypto.randomUUID()}-${seguro}`;
   await getEnv(ctx).R2.put(r2Key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || "image/jpeg" } });
-  const [fila] = await db.insert(adjuntos).values({ ordenId, usuarioId: user.id, nombre: file.name || "foto.jpg", contentType: file.type || "image/jpeg", tamano: file.size, r2Key, categoria }).returning();
+  const [fila] = await db.insert(adjuntos).values({ ordenId, usuarioId: user.id, nombre: file.name || "foto.jpg", contentType: file.type || "image/jpeg", tamano: file.size, r2Key, categoria, createdAt: horaDeAdjunto() }).returning();
   await db.insert(campoOperaciones).values({ opId, usuarioId: user.id, tipo: "foto", ordenId, capturadoEn: at || recibido, recibidoEn: recibido, resultado: "ok", detalle: JSON.stringify({ adjuntoId: fila.id }) }).onConflictDoNothing();
   return Response.json({ ok: true, adjuntoId: fila.id }, { status: 201 });
 };

@@ -29,7 +29,18 @@ const fixture = await setupConjuntos({ modules: {
 const { app, sqlite, faults, call } = fixture;
 const one = (q, ...args) => sqlite.prepare(q).get(...args);
 const all = (q, ...args) => sqlite.prepare(q).all(...args);
-const patch = (id, data, rol='admin') => call(app.order.PATCH, `/api/ordenes/${id}`, { method:'PATCH', id, data, rol });
+// Sin foto no hay cierre: quien envía a verificación ya subió la suya. `sinFoto` deja probar la regla.
+const horaSqlite = (ms=Date.now()) => new Date(ms).toISOString().slice(0,19).replace('T',' ');
+const FOTO = 'evidencia.jpg';
+let fotoId = 9000; // lejos de los adjuntos que las pruebas numeran a mano
+const ponerFoto = (id, { nombre=FOTO, tipo='image/jpeg', en=horaSqlite(), categoria='despues' }={}) => {
+  if (!one('SELECT id FROM ordenes WHERE id=?',id) || one('SELECT id FROM adjuntos WHERE orden_id=? AND nombre=?',id,nombre)) return;
+  sqlite.prepare('INSERT INTO adjuntos(id,orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria,created_at) VALUES(?,?,3,?,?,1,?,?,?)').run(++fotoId,id,nombre,tipo,`prueba/${id}/${nombre}`,categoria,en);
+};
+const patch = (id, data, rol='admin', { sinFoto=false }={}) => {
+  if (data?.estado==='completada' && !sinFoto) ponerFoto(id);
+  return call(app.order.PATCH, `/api/ordenes/${id}`, { method:'PATCH', id, data, rol });
+};
 const expect = async (promise, status=200) => { const r=await promise; assert.equal(r.status,status,JSON.stringify(r.body)); return r.body; };
 const history = id => all('SELECT * FROM orden_verificacion_eventos WHERE orden_id=? ORDER BY id',id);
 const order = id => one('SELECT * FROM ordenes WHERE id=?',id);
@@ -147,7 +158,7 @@ try {
   assert.equal(JSON.stringify([order(14),history(14),pm()]),beforeConcurrentCompletion);
   assert.equal(one('SELECT ejecutado_por FROM orden_verificacion WHERE orden_id=14').ejecutado_por,null);
   await expect(patch(14,{estado:'completada'},'tecnico'));
-  assert.deepEqual(JSON.parse(history(14).at(-1).evidencia_json).adjuntos,[]);
+  assert.deepEqual(JSON.parse(history(14).at(-1).evidencia_json).adjuntos.map(a=>a.nombre),[FOTO],'Solo queda la foto del trabajo');
 
   // The opposite ordering preserves both the published evidence and its blob:
   // a stale DELETE precheck cannot remove an attachment after completion wins.
@@ -163,7 +174,7 @@ try {
   assert.equal(staleDeletionResponse.status,409,await staleDeletionResponse.text());
   assert.equal(deletedAfterCompletion,0);
   assert.equal(one('SELECT id FROM adjuntos WHERE id=3').id,3);
-  assert.deepEqual(JSON.parse(history(15).at(-1).evidencia_json).adjuntos.map(a=>a.id),[3]);
+  assert.deepEqual(JSON.parse(history(15).at(-1).evidencia_json).adjuntos.filter(a=>a.nombre!==FOTO).map(a=>a.id),[3]);
   assert.equal(order(15).estado,'completada');
   assert.equal(one('SELECT ejecutado_por FROM orden_verificacion WHERE orden_id=15').ejecutado_por,3);
   assert.equal(JSON.stringify(pm()),beforeConcurrentPM);
@@ -177,6 +188,7 @@ try {
   const db = app.database.getDb(fixture.ctx('/'));
   seed(10,{trabajos:'PM ejecutado antes de la verificación',planId:1});
   const orderModel = async id => (await expect(call(app.order.GET,`/api/ordenes/${id}`,{id}))).orden;
+  ponerFoto(10);
   await app.verification.actualizarOrdenConVerificacion(db,await orderModel(10),{id:3,rol:'tecnico',nombre:'Prueba técnico'},{estado:'completada'},'2026-09-03T12:00:00.000Z');
   await app.verification.actualizarOrdenConVerificacion(db,await orderModel(10),{id:2,rol:'jefe',nombre:'Prueba jefe'},{estado:'verificada',verificacionNotas:'Revisión tardía con evidencia de ejecución fechada'},'2026-10-03T12:00:00.000Z');
   assert.equal(pm().proxima_fecha,'2026-10-03','Delayed review must preserve execution-based recurrence');
@@ -314,7 +326,7 @@ try {
   sqlite.exec("UPDATE ordenes SET estado='cerrada' WHERE id=27");
   await expect(liber(27,{itemId:l27,valorMedido:55},'jefe'),400);
 
-  const sync=(ops,rol='tecnico')=>expect(call(app.sync.POST,'/api/campo/sync',{method:'POST',data:{ops},rol}));
+  const sync=(ops,rol='tecnico')=>{ for (const o of ops) if (o.tipo==='orden.terminar') ponerFoto(o.ordenId); return expect(call(app.sync.POST,'/api/campo/sync',{method:'POST',data:{ops},rol})); };
 
   // ── La causa raíz solo la escribe la jefatura, en cualquier estado ──
   const SOLO_JEFATURA=/^La causa raíz la escribe la jefatura dentro de las 72 h\.$/;
@@ -1188,6 +1200,35 @@ try {
   assert.deepEqual(history(128).map(e=>JSON.parse(e.evidencia_json).despues.causaRaiz),[` ${C1} `,` ${C2}\n`],'Se guardan como llegaron');
   await expect(patch(128,pestana(C1),'admin'));
   assert.deepEqual([order(128).causa_raiz,history(128).length],[` ${C2}\n`,2],'La causa del jefe queda, sin evento');
+
+  // Sin foto no hay cierre: quien ejecutó deja al menos una foto del trabajo.
+  seed(130,{trabajos:'Filtro cambiado y equipo probado con carga'});
+  assert.deepEqual(await expect(patch(130,{estado:'completada'},'tecnico',{sinFoto:true}),400),{error:'Falta la foto: toma al menos una foto del trabajo antes de enviar a verificación.',motivo:'sin-foto'});
+  assert.equal(order(130).estado,'en_proceso'); assert.equal(history(130).length,0,'Sin foto no queda evento');
+  // Un PDF no es una foto, y la foto que venía con el reporte (antes de empezar) muestra la falla, no el trabajo.
+  ponerFoto(130,{nombre:'informe.pdf',tipo:'application/pdf'});
+  ponerFoto(130,{nombre:'reporte.jpg',en:'2026-10-01 09:59:59',categoria:'antes'});
+  assert.equal((await expect(patch(130,{estado:'completada'},'tecnico',{sinFoto:true}),400)).motivo,'sin-foto');
+  // La foto tomada en el mismo segundo en que se empezó ya cuenta.
+  ponerFoto(130,{nombre:'trabajo.jpg',en:'2026-10-01 10:00:00'});
+  await expect(patch(130,{estado:'completada'},'tecnico',{sinFoto:true}));
+  assert.equal(order(130).estado,'completada');
+  assert.deepEqual(JSON.parse(history(130).at(-1).evidencia_json).adjuntos.map(a=>a.nombre).sort(),['informe.pdf','reporte.jpg','trabajo.jpg']);
+  // La jefatura regulariza desde la oficina sin foto.
+  seed(131,{trabajos:'Regularización de una orden atendida sin celular'});
+  await expect(patch(131,{estado:'completada'},'jefe',{sinFoto:true}));
+  assert.equal(order(131).estado,'completada');
+  // Una orden antigua sin hora de inicio: cuenta cualquier foto, y sin ninguna tampoco pasa.
+  seed(132,{trabajos:'Orden antigua sin hora de inicio'}); sqlite.exec('UPDATE ordenes SET iniciada_en=NULL WHERE id=132');
+  assert.equal((await expect(patch(132,{estado:'completada'},'tecnico',{sinFoto:true}),400)).motivo,'sin-foto');
+  ponerFoto(132,{nombre:'antigua.jpg',en:'2020-01-01 00:00:00'});
+  await expect(patch(132,{estado:'completada'},'tecnico',{sinFoto:true}));
+  // La foto que se borra mientras se envía no deja pasar el envío.
+  seed(133,{trabajos:'Foto borrada durante el envío'}); ponerFoto(133);
+  faults.beforeBatch=async()=>{ sqlite.prepare('DELETE FROM adjuntos WHERE orden_id=133').run(); };
+  assert.equal((await expect(patch(133,{estado:'completada'},'tecnico',{sinFoto:true}),409)).motivo,'otra-escritura');
+  assert.equal(order(133).estado,'en_proceso');
+  assert.equal((await expect(patch(133,{estado:'completada'},'tecnico',{sinFoto:true}),400)).motivo,'sin-foto');
 
   console.log(`PASS: independent OT verification (${fixture.requests} authenticated requests): execution evidence, independence, reviewer/backup, return/reopen history, pending PM, exactly-once advancement, immutable evidence, concurrency and rollback; root cause by management at review, MOP release rules and assigned-only MOP records; root cause and EOP hours only by management, no empty root cause once sent, ranged release readings need a number, checklist merged against the form's base; old tabs keep marked steps, key merge, ambiguous thousands never conform, reversa by state and assignment, resent completion without event, collapsed root cause rows; stored numbers read back unambiguously, ranged steps need a number, old tabs' grouped hours, reversa and root cause don't erase newer data, cancelled MOP frozen, concurrency 409 with its motivo; a step changed on both sides keeps the saved one (pasosSinAplicar, or 409 paso-cambio with a state change), soloCambios skips the old-tab rules, an old tab's root cause is stale only when the work changed, step text compared trimmed, release readings written unambiguously, step range, unit and reading protected; an old tab's root cause is stale when another account wrote the last one (K16), the step conflict 409 after the permission rules, a signed step kept against an unsigned one without base (K18), the phone's base per step (K17), range limits written unambiguously (also the AOP range); without base a deviation always stays and an arriving note is added (revised K18), the latest root cause write wins among three accounts, compared trimmed (K16). No network.`);
 } finally { await fixture.close(); }

@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { ordenes, usuarios, adjuntos, planesMantenimiento, actividades, activos, ordenPrerrequisitos, ordenLiberaciones } from './schema';
 import { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';
 import {
@@ -8,6 +8,7 @@ import {
 } from './ordenes';
 import { siguienteFecha } from './frecuencias';
 import { leerNumero } from './numero';
+import { FALTA_LA_FOTO } from './frases-campo';
 import type { getDb } from './db';
 
 type DB = ReturnType<typeof getDb>;
@@ -24,6 +25,37 @@ export class ErrorVerificacion extends Error {
 const deny = (message: string, status = 403, motivo?: string): never => { throw new ErrorVerificacion(message, status, motivo); };
 const executionFields = ['trabajosRealizados', 'causaRaiz', 'solucionAplicada', 'checklistEjecucion'];
 const manager = (user: User) => ['admin', 'jefe'].includes(user.rol);
+/**
+ * Evidencia mínima de un cierre: las fotos (imágenes adjuntas, de cualquier categoría) subidas desde que se empezó
+ * el trabajo. Las que venían con el reporte muestran la falla, no lo que se hizo: no cuentan. Si la orden volvió de
+ * verificación o se reabrió, cuentan las tomadas desde esa vuelta: cada envío lleva una foto de cómo quedó lo que
+ * se corrigió. Devuelve cuántas tiene cada orden; la que no tiene ninguna no aparece. Es la misma cuenta que ve el
+ * celular antes de enviar.
+ *
+ * `horaDeAdjunto` fecha el adjunto con el mismo reloj que fecha el inicio del trabajo, en el formato que SQLite usa
+ * por omisión (UTC, sin zona): así la comparación no depende de dos relojes.
+ */
+export const horaDeAdjunto = (ms = Date.now()) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+export async function fotosDeEvidencia(db: DB, ids: number[]): Promise<Map<number, number>> {
+  const cuenta = new Map<number, number>();
+  // Desde cuándo cuenta una foto: lo más tardío entre el inicio del trabajo y la última devolución o reapertura.
+  const desde = sql`nullif(max(
+    coalesce((select max(datetime(e.ocurrido_en)) from orden_verificacion_eventos e
+      where e.orden_id = ${ordenes.id} and e.accion in ('devolucion', 'reapertura', 'devolucion_solicitante')), ''),
+    coalesce(datetime(${ordenes.iniciadaEn}), '')), '')`;
+  for (let i = 0; i < ids.length; i += 80) {
+    const filas = await db.select({ ordenId: adjuntos.ordenId, n: sql<number>`count(*)` }).from(adjuntos)
+      .innerJoin(ordenes, eq(ordenes.id, adjuntos.ordenId))
+      .where(and(
+        inArray(adjuntos.ordenId, ids.slice(i, i + 80)),
+        sql`${adjuntos.contentType} like 'image/%'`,
+        sql`(${desde} is null or datetime(${adjuntos.createdAt}) >= ${desde})`,
+      ))
+      .groupBy(adjuntos.ordenId);
+    for (const f of filas) cuenta.set(f.ordenId, Number(f.n));
+  }
+  return cuenta;
+}
 // Las horas del EOP. La de alarma, además, corre el plazo de la causa raíz.
 const HORAS_EOP = ['horaAlarma', 'horaLlegada', 'horaMitigacion', 'horaRestablecimiento'] as const;
 /** Un texto como se compara (causa raíz, plan y notas de la reversa): recortado, y null igual a vacío. */
@@ -262,8 +294,12 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
 
 /** One transactional mutation, immutable snapshot and one-time PM advancement.
  * Completion remains `completada` (pending review); only independent approval closes.
- * Server identities/timestamps cannot be supplied by callers. */
-export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString()) {
+ * Server identities/timestamps cannot be supplied by callers.
+ *
+ * `conLaEscritura` da sentencias que deben quedar escritas con este cambio o no quedar (la bitácora de las marcas
+ * de un envío): van al final del mismo lote y cada una lleva la guarda que recibe, así que no escriben nada si el
+ * cambio no entró. Si no hay nada que cambiar, tampoco se escriben. */
+export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString(), conLaEscritura?: (guard: SQL) => unknown[]) {
   input = { ...input };
   // Lo que llegó igual a lo guardado, o viejo de una pestaña de antes, no es un
   // cambio: se deja fuera sin error.
@@ -546,6 +582,10 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
   Object.assign(stateData, { version: state.version + 1, operacionId: operationId, ultimaAccion: eventAction, ultimoActorId: user.id, actualizadoEn: now, ultimoMotivo: motivo?.trim() ?? null });
   const guard = sql`exists (select 1 from orden_verificacion where orden_id = ${order.id} and operacion_id = ${operationId})`;
   const currentAttachments = await db.select({ id: adjuntos.id, categoria: adjuntos.categoria, nombre: adjuntos.nombre }).from(adjuntos).where(eq(adjuntos.ordenId, order.id));
+  // Sin foto no hay cierre: quien ejecutó deja al menos una foto del trabajo. La jefatura cierra sin ella lo que
+  // regulariza desde la oficina. Se cuenta después de leer los adjuntos que el lote vigila: una foto que se borra
+  // en medio no deja pasar el envío.
+  if (isComplete && !manager(user) && !(await fotosDeEvidencia(db, [order.id])).get(order.id)) deny(FALTA_LA_FOTO, 400, 'sin-foto');
   // Attachment routes do not advance the OT version. Validate the captured
   // evidence inside the batch so a concurrent removal cannot publish a dangling
   // snapshot. Once the event commits, its retention trigger protects DB and R2.
@@ -587,6 +627,7 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
       if (activity) batch.push(db.update(actividades).set({ proximaFecha: siguienteFecha(order.completadaEn!.slice(0,10), activity.frecuencia as any), ultimaEjecucion: order.completadaEn }).where(and(eq(actividades.id, activity.id), guard)));
     }
   }
+  if (conLaEscritura) batch.push(...conLaEscritura(guard));
   const results = await db.batch(batch as any);
   if (!(results[1] as any[])?.length) deny('La orden cambió durante la operación. Actualiza la página e inténtalo de nuevo.', 409, 'otra-escritura');
   const [row] = await db.select().from(ordenes).where(eq(ordenes.id, order.id)).limit(1);

@@ -27,3 +27,17 @@ export function envioConPasosCambiados(emergencia: boolean, idxs: number[]): str
     : n.length === 1 ? `el paso ${cuales} cambió en la ficha mientras tanto. Revísalo, márcalo` : `los pasos ${cuales} cambiaron en la ficha mientras tanto. Revísalos, márcalos`;
   return `La orden no se envió: ${que} otra vez y vuelve a enviarla.`;
 }
+
+/**
+ * Los pasos que nombra el rechazo de un envío («La orden no se envió: los pasos 2 y 3 cambiaron en la ficha mientras
+ * tanto…»), como índices. El cierre en dos pasos marca varios pasos de una vez: si la ficha cambió alguno, el envío
+ * entero vuelve y el celular lleva al técnico a cada uno antes de dejarlo enviar otra vez.
+ */
+export const PASOS_DEL_ENVIO = /^La orden no se envió: (?:el paso|la acción|los pasos|las acciones) (\d+(?:, \d+)*(?: y \d+)?) cambi(?:ó|aron) en la ficha mientras tanto/;
+export function pasosDelEnvio(texto: unknown): number[] {
+  const m = PASOS_DEL_ENVIO.exec(String(texto ?? ""));
+  return m ? (m[1].match(/\d+/g) ?? []).map((n) => Number(n) - 1) : [];
+}
+
+/** Sin foto no hay cierre: la regla del servidor y la del celular dicen lo mismo. */
+export const FALTA_LA_FOTO = "Falta la foto: toma al menos una foto del trabajo antes de enviar a verificación.";
