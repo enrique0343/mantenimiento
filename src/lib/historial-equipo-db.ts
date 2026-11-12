@@ -16,30 +16,16 @@ import { labelCampo } from "@/lib/audit";
 import { ESTADO_ORDEN, TIPO_ORDEN } from "./reporte-mantenimiento";
 import { patronVigenteEn, type CalMin } from "./biomedico";
 import type { getDb } from "./db";
-import type { BitacoraH, CambioH, HistorialEquipo } from "./historial-equipo";
+import { leerCambiosBitacora, type BitacoraH, type CambioH, type HistorialEquipo } from "./historial-equipo";
 
 type Db = ReturnType<typeof getDb>;
 
-/** Valor de la bitácora en texto legible. */
-function textoValor(v: unknown): string {
-  if (v === null || v === undefined || v === "") return "(vacío)";
-  if (typeof v === "boolean") return v ? "Sí" : "No";
-  if (typeof v === "object") { try { return JSON.stringify(v); } catch { return String(v); } }
-  return String(v);
-}
-
-/** Cambios guardados en audit_log.cambios ({campo: {antes, despues}}). */
+/**
+ * Cambios guardados en audit_log.cambios ({campo: {antes, despues}}), con los valores tal como se
+ * guardaron (fechas AAAA-MM-DD): el CSV los lleva así y la pantalla los pasa por valorBitacoraVista.
+ */
 export function cambiosDeBitacora(json: string | null): CambioH[] {
-  if (!json) return [];
-  try {
-    const obj = JSON.parse(json) as Record<string, { antes?: unknown; despues?: unknown } | null>;
-    if (!obj || typeof obj !== "object") return [];
-    return Object.entries(obj).map(([campo, val]) => ({
-      campo, etiqueta: labelCampo(campo), antes: textoValor(val?.antes), despues: textoValor(val?.despues),
-    }));
-  } catch {
-    return [];
-  }
+  return leerCambiosBitacora(json, labelCampo);
 }
 
 function idsDeJson(json: string | null | undefined): number[] {

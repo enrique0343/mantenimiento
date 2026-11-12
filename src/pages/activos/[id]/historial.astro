@@ -14,8 +14,8 @@ import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { diaSV, fechaCorta, horaSV, hoySV, puedeVerBio } from "@/lib/biomedico";
 import {
-  TIPO_EVENTO_LABEL, claveTiempo, colorEvento, construirEventos, enPeriodo, enlaceEvento, ordenarEventos, periodoValido,
-  puedeVerIncidentes, textoIncidente, textoPeriodo,
+  TIPO_EVENTO_LABEL, claveTiempo, colorEvento, construirEventos, enPeriodo, enlaceEvento, enlaceIncidentes, ordenarEventos,
+  periodoValido, textoIncidente, textoPeriodo,
 } from "@/lib/historial-equipo";
 import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
 export const prerender = false;
@@ -127,7 +127,8 @@ const maxCosto = Math.max(1, ...costoMes.map((m) => m.total));
 // Las páginas del equipo y de las órdenes llevan el área; los archivos (/api/) y las páginas de otros módulos, no.
 const hrefEvento = (link: string) => (/^\/(ordenes|activos)\//.test(link) ? areaHref(link, area) : link);
 // Sin enlace a una página que este rol no abre (Incidentes no es del técnico, K-G2).
-const verIncidentes = puedeVerIncidentes(user.rol);
+const hrefIncidentes = enlaceIncidentes(a.id, user.rol);
+// Pantalla: fechas DD/MM/AAAA, también en los valores de la bitácora (el CSV las deja en AAAA-MM-DD).
 const eventos = ordenarEventos(construirEventos(historial, { hoy }))
   .filter((e) => enPeriodo(e.fecha, desde, hasta))
   .map((e) => {
@@ -295,8 +296,8 @@ const csvHref = `/api/activos/${a.id}/historial${qsFiltros ? `?${qsFiltros}` : "
                     {[e.responsable, e.resultado, e.tipo === "comentario" || e.tipo === "repuesto" ? e.orden : null].filter(Boolean).join(" · ")}
                   </div>
                 )}
-                {e.incidente && e.tipo !== "incidente" && (verIncidentes
-                  ? <a href={`/incidentes?activo=${a.id}`} class="mt-1 inline-block text-xs font-semibold text-red-700 hover:underline">{textoIncidente(e.incidente)}</a>
+                {e.incidente && e.tipo !== "incidente" && (hrefIncidentes
+                  ? <a href={hrefIncidentes} class="mt-1 inline-block text-xs font-semibold text-red-700 hover:underline">{textoIncidente(e.incidente)}</a>
                   : <span class="mt-1 inline-block text-xs font-semibold text-red-700">{textoIncidente(e.incidente)}</span>
                 )}
               </div>

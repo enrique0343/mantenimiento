@@ -7,7 +7,7 @@ import { activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { csvResponse, toCsv } from "@/lib/csv";
 import { hoySV, puedeVerBio } from "@/lib/biomedico";
-import { COLUMNAS_CSV_HISTORIAL, construirEventos, enPeriodo, fechaCsv, filaCsv, ordenarEventos, periodoValido } from "@/lib/historial-equipo";
+import { COLUMNAS_CSV_HISTORIAL, OPCIONES_CSV, construirEventos, enPeriodo, filaCsv, ordenarEventos, periodoValido } from "@/lib/historial-equipo";
 import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
 
 export const prerender = false;
@@ -29,7 +29,8 @@ export const GET: APIRoute = async (ctx) => {
 
   const historial = await cargarHistorialEquipo(db, id);
   const hoy = hoySV();
-  const eventos = ordenarEventos(construirEventos(historial, { fecha: fechaCsv, hoy }))
+  // CSV: fechas en AAAA-MM-DD, también los valores de la bitácora (como se guardaron).
+  const eventos = ordenarEventos(construirEventos(historial, { ...OPCIONES_CSV, hoy }))
     .filter((e) => enPeriodo(e.fecha, periodo.desde, periodo.hasta));
   const nombre = `historial_${a.codigo.replace(/[^A-Za-z0-9_-]/g, "_")}_${hoy.replace(/-/g, "")}.csv`;
   return csvResponse(nombre, toCsv(eventos.map((e) => filaCsv(e, a.codigo)), COLUMNAS_CSV_HISTORIAL));
