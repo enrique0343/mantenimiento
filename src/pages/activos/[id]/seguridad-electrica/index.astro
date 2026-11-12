@@ -1,0 +1,185 @@
+---
+// Pruebas de seguridad eléctrica IEC 62353 de un equipo: última prueba, prueba de
+// aceptación y todas las pruebas (las anuladas, tachadas).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activos, sucursales, ubicaciones } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+import { areaHref, parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { textoDeNumero } from "@/lib/numero";
+import {
+  CLASE_PROTECCION_LABEL, ESTADO_ACTIVO_COLOR, ESTADO_ACTIVO_LABEL, ESTADO_SEG_ELEC_COLOR, ESTADO_SEG_ELEC_LABEL,
+  PARTE_APLICADA_LABEL, RESULTADO_SE_COLOR, RESULTADO_SE_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL, etiquetaClaseRiesgo,
+  fechaCorta, hoySV, puedeRegistrarBio, puedeVerBio,
+  type ClaseProteccion, type EstadoActivo, type ParteAplicada, type ResultadoPruebaElectrica, type TipoPruebaElectrica,
+} from "@/lib/biomedico";
+import { pruebasDeActivo, resumenSeguridadElectrica, type PruebaConNombres, type ResumenSeguridadElectrica } from "@/lib/seguridad-electrica";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const listaActivos = areaHref("/activos", parseArea(Astro.url.searchParams.get("area")));
+
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id) || id <= 0) return Astro.redirect(listaActivos);
+const [a] = await db
+  .select({
+    id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo,
+    serial: activos.serial, numeroActivo: activos.numeroActivo, claseRiesgo: activos.claseRiesgo, estado: activos.estado,
+    tipo: activos.tipo, rubro: activos.rubro, ubicacionTexto: activos.ubicacion, ubicacion: ubicaciones.nombre, sucursal: sucursales.nombre,
+  })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .where(eq(activos.id, id))
+  .limit(1);
+if (!a) return Astro.redirect(listaActivos);
+
+const area = rubroDeActivo(a.rubro, a.tipo);
+const esBio = area === "biomedico";
+const hoy = hoySV();
+const [pruebas, resumen]: [PruebaConNombres[], ResumenSeguridadElectrica | null] = esBio
+  ? await Promise.all([pruebasDeActivo(db, id), resumenSeguridadElectrica(db, id, hoy)])
+  : [[], null];
+
+const deBaja = a.estado === "baja";
+const puedeRegistrar = esBio && !deBaja && puedeRegistrarBio(user.rol);
+const nuevaHref = (tipo?: TipoPruebaElectrica) => `/activos/${id}/seguridad-electrica/nueva${tipo ? `?tipo=${tipo}` : ""}`;
+const registroHref = (pid: number) => areaHref(`/seguridad-electrica/${pid}`, "biomedico");
+const ubicacion = [a.sucursal, a.ubicacion ?? a.ubicacionTexto].filter(Boolean).join(" · ") || "—";
+const num = (v: number | null, unidad: string) => (v === null || v === undefined ? "—" : `${textoDeNumero(v)} ${unidad}`);
+const ultima = resumen?.ultima ?? null;
+---
+
+<Layout title={`Seguridad eléctrica — ${a.codigo}`}>
+  <div class="print-doc se-hoja">
+    <DocCabecera soloImpresion titulo="Pruebas de seguridad eléctrica del equipo" subtitulo={`${a.codigo} · ${a.nombre}`} codigo={a.codigo} fecha={hoy} />
+
+    <div class="no-print flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <a href={areaHref(`/activos/${id}`, area)} class="text-xs text-slate-400 hover:text-slate-600">← Volver a la ficha</a>
+        <h1 class="mt-1 text-2xl font-bold">Seguridad eléctrica · {a.codigo} {a.nombre}</h1>
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          {esBio && <span class="badge">{etiquetaClaseRiesgo(a.claseRiesgo)}</span>}
+          <span class={`badge ${ESTADO_ACTIVO_COLOR[a.estado as EstadoActivo] ?? ""}`}>{ESTADO_ACTIVO_LABEL[a.estado as EstadoActivo] ?? a.estado}</span>
+          {resumen && <span class={`badge ${ESTADO_SEG_ELEC_COLOR[resumen.estado]}`}>Seguridad eléctrica: {ESTADO_SEG_ELEC_LABEL[resumen.estado]}</span>}
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {puedeRegistrar && <a href={nuevaHref()} class="btn-primary">Registrar prueba</a>}
+        {esBio && <button type="button" onclick="window.print()" class="btn-secondary">Imprimir evidencia</button>}
+        {esBio && <a href={`/api/seguridad-electrica/csv?activoId=${id}`} class="btn-secondary">Descargar CSV</a>}
+        <a href={areaHref(`/activos/${id}`, area)} class="btn-secondary">Volver a la ficha</a>
+      </div>
+    </div>
+
+    {!esBio ? (
+      <div class="card mt-4 p-6 text-sm text-slate-600">Esta prueba aplica a equipos biomédicos.</div>
+    ) : (
+      <>
+        <table class="doc-kv mt-4 hidden print:table">
+          <tbody>
+            <tr><th>Equipo</th><td>{a.codigo} · {a.nombre}</td><th>Marca / Modelo</th><td>{[a.marca, a.modelo].filter(Boolean).join(" / ") || "—"}</td></tr>
+            <tr><th>Serie</th><td>{a.serial ?? "—"}</td><th>Nº de activo</th><td>{a.numeroActivo ?? "—"}</td></tr>
+            <tr><th>Ubicación</th><td>{ubicacion}</td><th>Clase de riesgo</th><td>{etiquetaClaseRiesgo(a.claseRiesgo)}</td></tr>
+          </tbody>
+        </table>
+
+        {deBaja && <p class="no-print mt-4 rounded border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700">El equipo está dado de baja: no se registran pruebas nuevas.</p>}
+
+        <div class="mt-4 grid gap-4 md:grid-cols-2">
+          <div class="card p-4">
+            <h2 class="text-sm font-bold text-slate-800">Última prueba</h2>
+            {ultima ? (
+              <div class="mt-2 space-y-1 text-sm">
+                <p><a class="font-semibold text-blue-700 hover:underline" href={registroHref(ultima.id)}>{fechaCorta(ultima.fecha)}</a> · {TIPO_PRUEBA_ELECTRICA_LABEL[ultima.tipo]} · <span class={`badge ${RESULTADO_SE_COLOR[ultima.resultado]}`}>{RESULTADO_SE_LABEL[ultima.resultado]}</span></p>
+                <p class="text-slate-600">Próxima: <strong>{fechaCorta(ultima.proximaFecha)}</strong> · <span class={`badge ${ESTADO_SEG_ELEC_COLOR[resumen!.estado]}`}>{ESTADO_SEG_ELEC_LABEL[resumen!.estado]}</span></p>
+                <p class="text-xs text-slate-500">Analizador: {ultima.analizadorDescripcion} · S/N {ultima.analizadorSerie} · Realizó: {ultima.realizadoPor}</p>
+              </div>
+            ) : (
+              <p class="mt-2 text-sm text-slate-600">Sin pruebas registradas.</p>
+            )}
+          </div>
+          <div class="card p-4">
+            <h2 class="text-sm font-bold text-slate-800">Prueba eléctrica de aceptación</h2>
+            {resumen?.aceptacion ? (
+              <p class="mt-2 text-sm">
+                <span class={`badge ${RESULTADO_SE_COLOR[resumen.aceptacion.resultado]}`}>{RESULTADO_SE_LABEL[resumen.aceptacion.resultado]}</span>
+                · {fechaCorta(resumen.aceptacion.fecha)} · <a class="font-semibold text-blue-700 hover:underline" href={registroHref(resumen.aceptacion.id)}>Ver</a>
+              </p>
+            ) : (
+              <div class="mt-2 text-sm text-slate-600">
+                <p>Sin prueba de aceptación registrada.</p>
+                {puedeRegistrar && <a href={nuevaHref("aceptacion")} class="no-print btn-secondary btn-sm mt-2">Registrar prueba eléctrica de aceptación</a>}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div class="card mt-4 p-0">
+          {pruebas.length === 0 ? (
+            <p class="p-6 text-sm text-slate-600">Este equipo todavía no tiene pruebas de seguridad eléctrica.</p>
+          ) : (
+            <div class="se-tabla overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th class="px-3 py-2">Fecha</th>
+                    <th class="px-3 py-2">Tipo</th>
+                    <th class="px-3 py-2">Resultado</th>
+                    <th class="px-3 py-2">Clase / Parte</th>
+                    <th class="px-3 py-2">Tierra</th>
+                    <th class="px-3 py-2">Aislamiento</th>
+                    <th class="px-3 py-2">Fuga equipo</th>
+                    <th class="px-3 py-2">Fuga parte</th>
+                    <th class="px-3 py-2">Analizador (serie)</th>
+                    <th class="px-3 py-2">Realizó</th>
+                    <th class="px-3 py-2">Próxima</th>
+                    <th class="px-3 py-2">Informe</th>
+                    <th class="px-3 py-2 no-print"></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  {pruebas.map((p) => {
+                    const anulada = p.estado === "anulada";
+                    return (
+                      <tr class:list={[{ "text-slate-400 line-through": anulada }]}>
+                        <td class="px-3 py-2 whitespace-nowrap">{fechaCorta(p.fecha)}{anulada && <span class="ml-1 badge bg-slate-100 text-slate-600 no-underline">Anulada</span>}</td>
+                        <td class="px-3 py-2 text-xs">{TIPO_PRUEBA_ELECTRICA_LABEL[p.tipo as TipoPruebaElectrica] ?? p.tipo}{p.ordenEtiqueta && <span class="block text-slate-400">{p.ordenEtiqueta}</span>}</td>
+                        <td class="px-3 py-2"><span class={`badge ${anulada ? "bg-slate-100 text-slate-500" : RESULTADO_SE_COLOR[p.resultado as ResultadoPruebaElectrica]}`}>{RESULTADO_SE_LABEL[p.resultado as ResultadoPruebaElectrica] ?? p.resultado}</span></td>
+                        <td class="px-3 py-2 text-xs">{CLASE_PROTECCION_LABEL[p.claseProteccion as ClaseProteccion]}<span class="block">{PARTE_APLICADA_LABEL[p.parteAplicada as ParteAplicada]}</span></td>
+                        <td class="px-3 py-2 whitespace-nowrap">{num(p.tierraOhm, "Ω")}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">{num(p.aislamientoMohm, "MΩ")}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">{num(p.fugaEquipoUa, "µA")}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">{num(p.fugaParteUa, "µA")}</td>
+                        <td class="px-3 py-2 text-xs">{p.analizadorDescripcion}<span class="block font-mono">{p.analizadorSerie}</span></td>
+                        <td class="px-3 py-2 text-xs">{p.realizadoPor}{p.empresaExterna && <span class="block text-slate-400">{p.empresaExterna}</span>}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">{fechaCorta(p.proximaFecha)}</td>
+                        <td class="px-3 py-2 text-xs">{p.informeR2Key ? <a class="text-blue-700 hover:underline" href={`/api/seguridad-electrica/${p.id}/informe`} target="_blank" rel="noopener">Ver</a> : "—"}</td>
+                        <td class="px-3 py-2 no-print"><a class="text-xs font-semibold text-blue-700 hover:underline" href={registroHref(p.id)}>Ver</a></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <p class="mt-3 text-xs text-slate-500">«—» en una medición: no aplica a la clase o parte aplicada de esa prueba, o no se midió (el aislamiento es opcional).</p>
+      </>
+    )}
+
+    <DocFolio soloImpresion codigo={`Seguridad eléctrica · ${a.codigo}`} />
+  </div>
+
+  <style is:global>
+    .se-hoja { page: apaisada; }
+    @media print {
+      .se-tabla { overflow: visible !important; }
+    }
+  </style>
+</Layout>

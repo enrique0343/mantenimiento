@@ -1,0 +1,629 @@
+---
+// Registrar una prueba de seguridad eléctrica IEC 62353 (admin, jefe y técnico).
+// El navegador calcula en vivo con las mismas reglas que el servidor
+// (biomedico.ts); el servidor vuelve a revisar todo y es quien guarda.
+import Layout from "@/layouts/Layout.astro";
+import { getDb } from "@/lib/db";
+import { activos, ordenes, pruebasSeguridadElectrica } from "@/lib/schema";
+import { and, desc, eq } from "drizzle-orm";
+import { areaHref, parseArea } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import { textoDeNumero } from "@/lib/numero";
+import { etiquetaOT } from "@/lib/orden-codigo";
+import { parseChecklist, TIPO_LABEL, type TipoOT } from "@/lib/ordenes";
+import {
+  ARCHIVO_ACCEPT, CLASE_PROTECCION_LABEL, CLASES_PROTECCION, METODO_FUGA_LABEL, METODOS_FUGA, PARTE_APLICADA_LABEL, PARTES_APLICADAS,
+  TIPO_PRUEBA_ELECTRICA_LABEL, TIPOS_PRUEBA_ELECTRICA, diaSV, etiquetaClaseRiesgo, fechaCorta, hoySV, lecturasDesdeChecklist,
+  puedeGestionarBio, puedeRegistrarBio, puedeVerBio, sumarMeses,
+  type LecturasDeOrden, type TipoPruebaElectrica,
+} from "@/lib/biomedico";
+import { idPositivo, ordenesDelEquipo, periodicidadSeguridadElectrica, personasQueRealizan } from "@/lib/seguridad-electrica";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const id = idPositivo(Astro.params.id);
+if (!id) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const pruebasHref = `/activos/${id}/seguridad-electrica`;
+if (!puedeRegistrarBio(user.rol)) return Astro.redirect(pruebasHref);
+
+const db = getDb(Astro);
+const [a] = await db
+  .select({
+    id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo,
+    serial: activos.serial, claseRiesgo: activos.claseRiesgo, estado: activos.estado, tipo: activos.tipo, rubro: activos.rubro,
+  })
+  .from(activos)
+  .where(eq(activos.id, id))
+  .limit(1);
+if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+// La página de pruebas del equipo explica por qué no se registra (no biomédico o de baja).
+if (rubroDeActivo(a.rubro, a.tipo) !== "biomedico" || a.estado === "baja") return Astro.redirect(pruebasHref);
+
+const hoy = hoySV();
+const params = Astro.url.searchParams;
+const [ordenesEquipo, personas, meses, [previa]] = await Promise.all([
+  ordenesDelEquipo(db, id),
+  personasQueRealizan(db),
+  periodicidadSeguridadElectrica(db),
+  db
+    .select({
+      claseProteccion: pruebasSeguridadElectrica.claseProteccion, parteAplicada: pruebasSeguridadElectrica.parteAplicada,
+      metodoFuga: pruebasSeguridadElectrica.metodoFuga, analizadorActivoId: pruebasSeguridadElectrica.analizadorActivoId,
+      analizadorDescripcion: pruebasSeguridadElectrica.analizadorDescripcion, analizadorSerie: pruebasSeguridadElectrica.analizadorSerie,
+      analizadorCalVence: pruebasSeguridadElectrica.analizadorCalVence,
+    })
+    .from(pruebasSeguridadElectrica)
+    .where(and(eq(pruebasSeguridadElectrica.activoId, id), eq(pruebasSeguridadElectrica.estado, "valida")))
+    .orderBy(desc(pruebasSeguridadElectrica.fecha), desc(pruebasSeguridadElectrica.id))
+    .limit(1),
+]);
+
+// Orden elegida (?orden=ID): tiene que ser de este equipo; trae sus lecturas.
+const ordenParam = idPositivo(params.get("orden"));
+let orden: { id: number; codigo: string | null; tipo: string; completadaEn: string | null; asignadoA: number | null; createdAt: string } | null = null;
+let lecturas: LecturasDeOrden = {};
+let avisoOrden: { texto: string; tono: "ok" | "aviso" } | null = null;
+if (ordenParam) {
+  const [o] = await db
+    .select({ id: ordenes.id, codigo: ordenes.codigo, tipo: ordenes.tipo, completadaEn: ordenes.completadaEn, asignadoA: ordenes.asignadoA, createdAt: ordenes.createdAt, activoId: ordenes.activoId, checklist: ordenes.checklistEjecucion })
+    .from(ordenes)
+    .where(eq(ordenes.id, ordenParam))
+    .limit(1);
+  if (!o || o.activoId !== id) {
+    avisoOrden = { texto: "La orden elegida no es de este equipo.", tono: "aviso" };
+  } else {
+    orden = o;
+    lecturas = lecturasDesdeChecklist(parseChecklist(o.checklist));
+    avisoOrden = Object.keys(lecturas).length
+      ? { texto: `Se copiaron las lecturas de la orden ${etiquetaOT(o)}. Revísalas.`, tono: "ok" }
+      : { texto: "La orden no trae lecturas de seguridad eléctrica.", tono: "aviso" };
+  }
+}
+const opcionesOrden = orden && !ordenesEquipo.some((o) => o.id === orden!.id)
+  ? [{ ...orden, estado: "", titulo: "" }, ...ordenesEquipo]
+  : ordenesEquipo;
+
+// Valores iniciales
+const tipoParam = params.get("tipo");
+const tipoInicial: TipoPruebaElectrica = (TIPOS_PRUEBA_ELECTRICA as readonly string[]).includes(tipoParam ?? "")
+  ? (tipoParam as TipoPruebaElectrica)
+  : orden && (orden.tipo === "correctivo" || orden.tipo === "emergencia") ? "post_reparacion" : "periodica";
+const fechaOrden = orden?.completadaEn ? diaSV(orden.completadaEn) : null;
+const fechaInicial = fechaOrden && fechaOrden <= hoy ? fechaOrden : hoy;
+const claseInicial = previa?.claseProteccion ?? null;
+const parteInicial = previa?.parteAplicada ?? null;
+const metodoInicial = previa?.metodoFuga ?? "directo";
+const texto = (n: number | undefined) => (n === undefined ? "" : textoDeNumero(n));
+const realizaInicial = orden?.asignadoA && personas.some((p) => p.id === orden!.asignadoA)
+  ? orden.asignadoA
+  : personas.some((p) => p.id === user.id) ? user.id : null;
+const puedeProxima = puedeGestionarBio(user.rol);
+const analizadorPrevioManual = previa && !previa.analizadorActivoId ? previa : null;
+const TIPO_AYUDA: Partial<Record<TipoPruebaElectrica, string>> = {
+  aceptacion: "Equipo nuevo o que vuelve de préstamo, antes de usarlo con pacientes.",
+};
+const MEDIDAS = [
+  { campo: "tierraOhm", etiqueta: "Resistencia de tierra (Ω)", valor: texto(lecturas.tierraOhm) },
+  { campo: "aislamientoMohm", etiqueta: "Resistencia de aislamiento (MΩ) (opcional)", valor: texto(lecturas.aislamientoMohm) },
+  { campo: "fugaEquipoUa", etiqueta: "Fuga del equipo (µA)", valor: texto(lecturas.fugaEquipoUa) },
+  { campo: "fugaParteUa", etiqueta: "Fuga de parte aplicada (µA)", valor: texto(lecturas.fugaParteUa) },
+] as const;
+const radio = "flex items-start gap-2 rounded border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50";
+---
+
+<Layout title={`Registrar prueba de seguridad eléctrica — ${a.codigo}`}>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <a href={pruebasHref} class="text-xs text-slate-400 hover:text-slate-600">← Pruebas del equipo</a>
+      <h1 class="mt-1 text-2xl font-bold">Registrar prueba de seguridad eléctrica</h1>
+      <p class="mt-1 text-sm text-slate-600">{a.codigo} · {a.nombre}{a.marca || a.modelo ? ` · ${[a.marca, a.modelo].filter(Boolean).join(" ")}` : ""}{a.serial ? ` · S/N ${a.serial}` : ""} · {etiquetaClaseRiesgo(a.claseRiesgo)}</p>
+    </div>
+  </div>
+
+  <div id="se-error" role="alert" class="mt-4 hidden rounded border border-red-300 bg-red-50 p-3 text-sm font-medium text-red-700"></div>
+
+  <form
+    id="se-form"
+    class="mt-4 space-y-4"
+    novalidate
+    data-activo-id={a.id}
+    data-hoy={hoy}
+    data-meses={meses}
+    data-puede-proxima={puedeProxima ? "1" : "0"}
+    data-analizador-previo={previa?.analizadorActivoId ?? ""}
+    data-pruebas-href={pruebasHref}
+  >
+    <!-- 1. Prueba -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">1. Prueba</h2>
+      <div class="mt-3 grid gap-4 md:grid-cols-2">
+        <div>
+          <label class="label" for="se-fecha">Fecha de la prueba</label>
+          <input id="se-fecha" name="fecha" type="date" class="input" max={hoy} value={fechaInicial} required />
+        </div>
+        <div>
+          <label class="label" for="se-orden">Orden de trabajo (opcional)</label>
+          <select id="se-orden" name="ordenId" class="input">
+            <option value="">— Sin orden —</option>
+            {opcionesOrden.map((o) => (
+              <option value={o.id} selected={orden?.id === o.id}>{etiquetaOT(o)} · {TIPO_LABEL[o.tipo as TipoOT] ?? o.tipo} · {fechaCorta(o.completadaEn ?? o.createdAt)}</option>
+            ))}
+          </select>
+          {avisoOrden && <p class:list={["mt-1 text-xs", avisoOrden.tono === "ok" ? "text-emerald-700" : "text-amber-700"]}>{avisoOrden.texto}</p>}
+        </div>
+      </div>
+      <fieldset class="mt-4">
+        <legend class="label">Tipo de prueba</legend>
+        <div class="grid gap-2 sm:grid-cols-3">
+          {TIPOS_PRUEBA_ELECTRICA.map((t) => (
+            <label class={radio}>
+              <input type="radio" name="tipo" value={t} checked={tipoInicial === t} class="mt-0.5" />
+              <span>{TIPO_PRUEBA_ELECTRICA_LABEL[t]}{TIPO_AYUDA[t] && <span class="block text-xs text-slate-500">{TIPO_AYUDA[t]}</span>}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </section>
+
+    <!-- 2. Equipo -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">2. Equipo</h2>
+      {previa && <p class="mt-1 text-xs text-slate-500">Se tomaron de la prueba anterior. Revísalos con la placa del equipo.</p>}
+      <fieldset class="mt-3">
+        <legend class="label">Clase de protección</legend>
+        <p class="mb-2 text-xs text-slate-500">Está en la placa. El símbolo de doble cuadro es Clase II.</p>
+        <div class="grid gap-2 sm:grid-cols-3">
+          {CLASES_PROTECCION.map((c) => (
+            <label class={radio}><input type="radio" name="claseProteccion" value={c} checked={claseInicial === c} class="mt-0.5" /><span>{CLASE_PROTECCION_LABEL[c]}</span></label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset class="mt-4">
+        <legend class="label">Parte aplicada</legend>
+        <p class="mb-2 text-xs text-slate-500">Es la parte que toca al paciente: figura (B), figura en un cuadro (BF) o corazón (CF).</p>
+        <div class="grid gap-2 sm:grid-cols-4">
+          {PARTES_APLICADAS.map((pa) => (
+            <label class={radio}><input type="radio" name="parteAplicada" value={pa} checked={parteInicial === pa} class="mt-0.5" /><span>{PARTE_APLICADA_LABEL[pa]}</span></label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset class="mt-4">
+        <legend class="label">Método de fuga</legend>
+        <p class="mb-2 text-xs text-slate-500">Lo dice el reporte del analizador.</p>
+        <div class="grid gap-2 sm:grid-cols-2">
+          {METODOS_FUGA.map((m) => (
+            <label class={radio}><input type="radio" name="metodoFuga" value={m} checked={metodoInicial === m} class="mt-0.5" /><span>{METODO_FUGA_LABEL[m]}</span></label>
+          ))}
+        </div>
+      </fieldset>
+    </section>
+
+    <!-- 3. Mediciones -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">3. Mediciones</h2>
+      <div class="mt-3 grid gap-4 md:grid-cols-2">
+        <fieldset>
+          <legend class="label">Inspección visual</legend>
+          <div class="flex gap-2">
+            <label class={radio}><input type="radio" name="inspeccionVisual" value="conforme" checked={lecturas.inspeccionVisual === "conforme"} class="mt-0.5" /><span>Conforme</span></label>
+            <label class={radio}><input type="radio" name="inspeccionVisual" value="no_conforme" checked={lecturas.inspeccionVisual === "no_conforme"} class="mt-0.5" /><span>No conforme</span></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend class="label">Prueba funcional</legend>
+          <div class="flex gap-2">
+            <label class={radio}><input type="radio" name="pruebaFuncional" value="conforme" checked={lecturas.pruebaFuncional === "conforme"} class="mt-0.5" /><span>Conforme</span></label>
+            <label class={radio}><input type="radio" name="pruebaFuncional" value="no_conforme" checked={lecturas.pruebaFuncional === "no_conforme"} class="mt-0.5" /><span>No conforme</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <p id="se-medidas-ayuda" class="mt-4 text-sm text-slate-500">Elige la clase de protección y la parte aplicada para ver qué se mide.</p>
+      <div class="mt-4 grid gap-4 md:grid-cols-2">
+        {MEDIDAS.map((m) => (
+          <div data-medida={m.campo} class="hidden">
+            <label class="label" for={`se-${m.campo}`}>{m.etiqueta}</label>
+            <input id={`se-${m.campo}`} name={m.campo} type="text" inputmode="decimal" autocomplete="off" class="input" value={m.valor} />
+            <p class="mt-1 text-xs text-slate-500"><span data-limite></span> <span data-cumple class="font-semibold"></span></p>
+            <p data-error class="mt-1 text-xs text-red-600"></p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- 4. Analizador -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">4. Analizador</h2>
+      <p class="mt-1 text-xs text-slate-500">Equipo patrón con calibración vigente el día de la prueba.</p>
+      <div class="mt-3">
+        <label class="label" for="se-analizador">Analizador</label>
+        <select id="se-analizador" class="input">
+          <option value="">Cargando analizadores…</option>
+        </select>
+        <p id="se-analizador-aviso" class="mt-1 text-xs text-amber-700"></p>
+      </div>
+      <div id="se-analizador-manual" class="mt-3 hidden grid gap-4 md:grid-cols-3">
+        <div>
+          <label class="label" for="se-an-desc">Marca y modelo</label>
+          <input id="se-an-desc" name="analizadorDescripcion" type="text" maxlength="120" class="input" value={analizadorPrevioManual?.analizadorDescripcion ?? ""} />
+        </div>
+        <div>
+          <label class="label" for="se-an-serie">Número de serie</label>
+          <input id="se-an-serie" name="analizadorSerie" type="text" maxlength="120" class="input" value={analizadorPrevioManual?.analizadorSerie ?? ""} />
+        </div>
+        <div>
+          <label class="label" for="se-an-vence">Calibración vigente hasta</label>
+          <input id="se-an-vence" name="analizadorCalVence" type="date" class="input" value={analizadorPrevioManual?.analizadorCalVence ?? ""} />
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Quién realizó -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">5. Quién realizó</h2>
+      <div class="mt-3 grid gap-4 md:grid-cols-3">
+        <div>
+          <label class="label" for="se-realizo">Persona</label>
+          <select id="se-realizo" class="input">
+            {personas.map((p) => <option value={p.id} selected={realizaInicial === p.id}>{p.nombre}</option>)}
+            <option value="otra" selected={realizaInicial === null}>Otra persona…</option>
+          </select>
+        </div>
+        <div data-otra-persona class:list={[{ hidden: realizaInicial !== null }]}>
+          <label class="label" for="se-realizo-nombre">Nombre</label>
+          <input id="se-realizo-nombre" name="realizadoPor" type="text" maxlength="120" class="input" />
+        </div>
+        <div data-otra-persona class:list={[{ hidden: realizaInicial !== null }]}>
+          <label class="label" for="se-empresa">Empresa (si es externa)</label>
+          <input id="se-empresa" name="empresaExterna" type="text" maxlength="120" class="input" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Resultado -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">6. Resultado</h2>
+      <div id="se-calculo" class="mt-3 rounded border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-600">Completa las mediciones para ver el resultado.</div>
+      <fieldset class="mt-4">
+        <legend class="label">Resultado que confirmas</legend>
+        <div class="flex flex-wrap gap-2">
+          <label class={radio}><input id="se-res-pasa" type="radio" name="resultado" value="pasa" class="mt-0.5" /><span>Pasa</span></label>
+          <label class={radio}><input id="se-res-no-pasa" type="radio" name="resultado" value="no_pasa" class="mt-0.5" /><span>No pasa</span></label>
+        </div>
+      </fieldset>
+      <div id="se-motivo-caja" class="mt-3 hidden">
+        <label class="label" for="se-motivo">¿Por qué no pasa?</label>
+        <textarea id="se-motivo" name="motivoResultado" rows="2" maxlength="1000" class="input" placeholder="Al menos 10 letras. Ejemplo: cable de alimentación con el aislamiento dañado."></textarea>
+      </div>
+      <div class="mt-4">
+        <label class="label" for="se-proxima">Próxima prueba</label>
+        {puedeProxima ? (
+          <>
+            <input id="se-proxima" name="proximaFecha" type="date" class="input max-w-xs" value={sumarMeses(fechaInicial, meses)} />
+            <p class="mt-1 text-xs text-slate-500">Por defecto, cada {meses} {meses === 1 ? "mes" : "meses"}. Puedes cambiarla (hasta 5 años después de la prueba).</p>
+          </>
+        ) : (
+          <p id="se-proxima-texto" class="text-sm text-slate-700">{fechaCorta(sumarMeses(fechaInicial, meses))} (cada {meses} {meses === 1 ? "mes" : "meses"})</p>
+        )}
+      </div>
+    </section>
+
+    <!-- 7. Informe y notas -->
+    <section class="card p-4">
+      <h2 class="text-base font-bold text-slate-800">7. Informe y notas</h2>
+      <div class="mt-3">
+        <label class="label" for="se-informe">Informe del analizador (PDF o foto, hasta 15 MB)</label>
+        <input id="se-informe" name="informe" type="file" accept={ARCHIVO_ACCEPT} class="input" />
+        <p id="se-informe-ayuda" class="mt-1 text-xs text-slate-500">Obligatorio en la prueba de aceptación.</p>
+      </div>
+      <div class="mt-4">
+        <label class="label" for="se-notas">Notas</label>
+        <textarea id="se-notas" name="notas" rows="3" maxlength="2000" class="input"></textarea>
+      </div>
+      <label class="mt-4 flex items-start gap-2 text-sm font-medium text-slate-800">
+        <input id="se-confirmado" type="checkbox" name="confirmado" value="1" class="mt-0.5" />
+        <span>Confirmo que los valores y el resultado corresponden a la prueba realizada.</span>
+      </label>
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button id="se-guardar" type="submit" class="btn-primary">Guardar prueba</button>
+        <a href={pruebasHref} class="btn-secondary">Cancelar</a>
+      </div>
+    </section>
+  </form>
+</Layout>
+
+<script>
+  import {
+    ARCHIVO_MAX_BYTES, esFechaISO, evaluarPruebaIec62353, fechaCorta, limitesIec62353, sumarMeses,
+    type ClaseProteccion, type Conformidad, type MetodoFuga, type ParteAplicada,
+  } from "@/lib/biomedico";
+  import { leerNumero } from "@/lib/numero";
+
+  const form = document.getElementById("se-form") as HTMLFormElement | null;
+  if (form) iniciar(form);
+
+  function iniciar(form: HTMLFormElement) {
+    const datos = form.dataset;
+    const activoId = Number(datos.activoId);
+    const hoy = datos.hoy ?? "";
+    const meses = Number(datos.meses) || 12;
+    const puedeProxima = datos.puedeProxima === "1";
+    const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
+    const marcado = (nombre: string) => (form.querySelector(`input[name="${nombre}"]:checked`) as HTMLInputElement | null)?.value ?? "";
+    const errorBox = $("se-error");
+    const fechaInput = $<HTMLInputElement>("se-fecha");
+    const fecha = () => fechaInput?.value ?? "";
+
+    function mostrarError(texto: string) {
+      if (!errorBox) return;
+      errorBox.textContent = texto;
+      errorBox.classList.remove("hidden");
+      errorBox.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    const ocultarError = () => errorBox?.classList.add("hidden");
+
+    // ── Orden: al cambiarla se recarga con sus lecturas ──
+    $<HTMLSelectElement>("se-orden")?.addEventListener("change", (e) => {
+      const valor = (e.target as HTMLSelectElement).value;
+      const q = new URLSearchParams();
+      const tipo = marcado("tipo");
+      if (tipo) q.set("tipo", tipo);
+      if (valor) q.set("orden", valor);
+      location.href = `${location.pathname}?${q.toString()}`;
+    });
+
+    // ── Mediciones y resultado en vivo ──
+    const ETIQUETA: Record<string, string> = {
+      tierraOhm: "Resistencia de tierra (Ω)", aislamientoMohm: "Resistencia de aislamiento (MΩ)",
+      fugaEquipoUa: "Fuga del equipo (µA)", fugaParteUa: "Fuga de parte aplicada (µA)",
+    };
+    const UNIDAD: Record<string, string> = { tierraOhm: "Ω", aislamientoMohm: "MΩ", fugaEquipoUa: "µA", fugaParteUa: "µA" };
+    const cajas = Array.from(form.querySelectorAll<HTMLElement>("[data-medida]"));
+    const calculo = $("se-calculo");
+    const resPasa = $<HTMLInputElement>("se-res-pasa");
+    const resNoPasa = $<HTMLInputElement>("se-res-no-pasa");
+    const motivoCaja = $("se-motivo-caja");
+    let calculado: "pasa" | "no_pasa" | null = null;
+    let aplica: Record<string, boolean> = {};
+    let medidasConError: string[] = [];
+
+    function pintarCalculo(clase: string, textoCalculo: string) {
+      if (!calculo) return;
+      calculo.textContent = textoCalculo;
+      calculo.className = `mt-3 rounded border p-3 text-sm font-semibold ${clase}`;
+    }
+
+    function recalcular() {
+      const clase = marcado("claseProteccion") as ClaseProteccion | "";
+      const parte = marcado("parteAplicada") as ParteAplicada | "";
+      const metodo = (marcado("metodoFuga") || "directo") as MetodoFuga;
+      const visual = marcado("inspeccionVisual") as Conformidad | "";
+      const funcional = marcado("pruebaFuncional") as Conformidad | "";
+      $("se-medidas-ayuda")?.classList.toggle("hidden", !!(clase && parte));
+      medidasConError = [];
+      if (!clase || !parte) {
+        cajas.forEach((c) => c.classList.add("hidden"));
+        aplica = {};
+        calculado = null;
+        pintarCalculo("border-slate-200 bg-slate-50 text-slate-600", "Elige la clase de protección y la parte aplicada.");
+        actualizarConfirmacion();
+        return;
+      }
+      const lim = limitesIec62353(clase, parte, metodo);
+      const limites: Record<string, number | null> = { tierraOhm: lim.tierraOhm, aislamientoMohm: lim.aislamientoMohm, fugaEquipoUa: lim.fugaEquipoUa, fugaParteUa: lim.fugaParteUa };
+      const valores: Record<string, number | null> = { tierraOhm: null, aislamientoMohm: null, fugaEquipoUa: null, fugaParteUa: null };
+      aplica = {};
+      for (const caja of cajas) {
+        const campo = caja.dataset.medida ?? "";
+        const limite = limites[campo];
+        const visible = limite !== null && limite !== undefined;
+        aplica[campo] = visible;
+        caja.classList.toggle("hidden", !visible);
+        const input = caja.querySelector("input") as HTMLInputElement;
+        const limiteTxt = caja.querySelector("[data-limite]") as HTMLElement;
+        const cumpleTxt = caja.querySelector("[data-cumple]") as HTMLElement;
+        const errorTxt = caja.querySelector("[data-error]") as HTMLElement;
+        errorTxt.textContent = "";
+        cumpleTxt.textContent = "";
+        if (!visible) continue;
+        const esMinimo = campo === "aislamientoMohm";
+        limiteTxt.textContent = `Límite: ${esMinimo ? "≥" : "≤"} ${limite} ${UNIDAD[campo]}`;
+        const leido = leerNumero(input.value);
+        if (leido.tipo === "vacio") continue;
+        if (leido.tipo === "numero" && leido.valor >= 0) {
+          valores[campo] = leido.valor;
+          const cumple = esMinimo ? leido.valor >= limite : leido.valor <= limite;
+          cumpleTxt.textContent = cumple ? "· Cumple" : "· No cumple";
+          cumpleTxt.className = `font-semibold ${cumple ? "text-emerald-700" : "text-red-700"}`;
+          continue;
+        }
+        errorTxt.textContent = leido.tipo === "ambiguo" ? leido.mensaje : leido.tipo === "numero" ? "Los valores no pueden ser negativos." : "Escribe solo el número, por ejemplo 0.12";
+        medidasConError.push(ETIQUETA[campo]);
+      }
+      const ev = evaluarPruebaIec62353(
+        {
+          inspeccionVisual: visual || "conforme", pruebaFuncional: funcional || "conforme",
+          tierraOhm: valores.tierraOhm, aislamientoMohm: valores.aislamientoMohm, fugaEquipoUa: valores.fugaEquipoUa, fugaParteUa: valores.fugaParteUa,
+        },
+        clase, parte, metodo,
+      );
+      const faltan = [
+        ...(visual ? [] : ["Inspección visual"]),
+        ...ev.faltan.filter((f) => !medidasConError.includes(f)),
+        ...medidasConError,
+        ...(funcional ? [] : ["Prueba funcional"]),
+      ];
+      // Con algo fuera de límite ya no pasa, aunque falte otra lectura.
+      if (ev.fuera.length) {
+        calculado = "no_pasa";
+        pintarCalculo("border-red-300 bg-red-50 text-red-700", `NO PASA: ${ev.fuera.join(", ")}${faltan.length ? ` · Faltan lecturas: ${faltan.join(", ")}` : ""}`);
+      } else if (faltan.length) {
+        calculado = null;
+        pintarCalculo("border-amber-300 bg-amber-50 text-amber-800", `Faltan lecturas: ${faltan.join(", ")}`);
+      } else {
+        calculado = "pasa";
+        pintarCalculo("border-emerald-300 bg-emerald-50 text-emerald-800", "Según los valores: PASA");
+      }
+      actualizarConfirmacion();
+    }
+
+    function actualizarConfirmacion() {
+      if (resPasa && resNoPasa) {
+        resPasa.disabled = calculado === "no_pasa";
+        if (calculado === "no_pasa" && resPasa.checked) { resPasa.checked = false; resNoPasa.checked = true; }
+        if (calculado === "pasa" && !resPasa.checked && !resNoPasa.checked) resPasa.checked = true;
+        if (calculado === "no_pasa" && !resNoPasa.checked) resNoPasa.checked = true;
+      }
+      motivoCaja?.classList.toggle("hidden", !(calculado === "pasa" && resNoPasa?.checked));
+    }
+
+    form.addEventListener("input", (e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("[data-medida]")) recalcular();
+    });
+    form.addEventListener("change", (e) => {
+      const nombre = (e.target as HTMLInputElement).name;
+      if (["claseProteccion", "parteAplicada", "metodoFuga", "inspeccionVisual", "pruebaFuncional"].includes(nombre)) recalcular();
+      if (nombre === "resultado") actualizarConfirmacion();
+      if (nombre === "tipo") pintarAyudaInforme();
+    });
+
+    function pintarAyudaInforme() {
+      const ayuda = $("se-informe-ayuda");
+      if (!ayuda) return;
+      const obligatorio = marcado("tipo") === "aceptacion";
+      ayuda.textContent = obligatorio ? "Obligatorio: es una prueba de aceptación." : "Obligatorio en la prueba de aceptación.";
+      ayuda.className = `mt-1 text-xs ${obligatorio ? "font-semibold text-amber-700" : "text-slate-500"}`;
+    }
+
+    // ── Próxima prueba ──
+    const proximaInput = $<HTMLInputElement>("se-proxima");
+    let proximaTocada = false;
+    proximaInput?.addEventListener("input", () => { proximaTocada = true; });
+    function pintarProxima() {
+      const f = fecha();
+      const proxima = esFechaISO(f) ? sumarMeses(f, meses) : "";
+      if (puedeProxima) {
+        if (proximaInput && !proximaTocada && proxima) proximaInput.value = proxima;
+      } else {
+        const t = $("se-proxima-texto");
+        if (t) t.textContent = proxima ? `${fechaCorta(proxima)} (cada ${meses} ${meses === 1 ? "mes" : "meses"})` : "—";
+      }
+    }
+
+    // ── Analizadores (equipos patrón con su vigencia en la fecha de la prueba) ──
+    const selAnalizador = $<HTMLSelectElement>("se-analizador");
+    const manual = $("se-analizador-manual");
+    const avisoAnalizador = $("se-analizador-aviso");
+    let previo = datos.analizadorPrevio ?? "";
+    let pedido = 0;
+    function pintarManual() {
+      manual?.classList.toggle("hidden", selAnalizador?.value !== "otro");
+    }
+    type Patron = { id: number; codigo: string; nombre: string; marca: string | null; modelo: string | null; serial: string | null; proxima: string | null; vigenteEnFecha: boolean | null; hasta: string | null };
+    async function cargarAnalizadores() {
+      if (!selAnalizador) return;
+      const f = fecha();
+      const actual = selAnalizador.value && selAnalizador.value !== "otro" ? selAnalizador.value : previo;
+      const mio = ++pedido;
+      let patrones: Patron[] | null = null;
+      try {
+        const res = await fetch(`/api/calibraciones/patrones?fecha=${encodeURIComponent(esFechaISO(f) ? f : hoy)}`);
+        if (res.ok) {
+          const j = await res.json();
+          if (Array.isArray(j?.patrones)) patrones = j.patrones as Patron[];
+        }
+      } catch { /* sin lista: solo «Otro analizador» */ }
+      if (mio !== pedido) return;
+      const eraOtro = selAnalizador.value === "otro";
+      selAnalizador.innerHTML = "";
+      const vacia = new Option(patrones && patrones.length ? "— Elige el analizador —" : "— No hay equipos patrón en la lista —", "");
+      selAnalizador.add(vacia);
+      for (const p of patrones ?? []) {
+        const descripcion = [p.marca, p.modelo].filter(Boolean).join(" ") || p.nombre;
+        const vence = p.hasta ?? p.proxima;
+        const sinSerie = !p.serial;
+        const vencido = p.vigenteEnFecha === false;
+        const opt = new Option(
+          `${descripcion} · S/N ${p.serial ?? "—"} · cal. vence ${fechaCorta(vence)}${vencido ? " · calibración vencida" : sinSerie ? " · sin número de serie" : ""}`,
+          String(p.id),
+        );
+        opt.disabled = vencido || sinSerie;
+        selAnalizador.add(opt);
+      }
+      selAnalizador.add(new Option("Otro analizador (escribir datos)", "otro"));
+      const elegible = Array.from(selAnalizador.options).find((o) => o.value === actual && !o.disabled);
+      if (eraOtro) selAnalizador.value = "otro";
+      else if (elegible) selAnalizador.value = actual;
+      else if (patrones === null || (!datos.analizadorPrevio && !!$<HTMLInputElement>("se-an-desc")?.value)) selAnalizador.value = "otro";
+      if (avisoAnalizador) {
+        avisoAnalizador.textContent = patrones === null
+          ? "No se pudo cargar la lista de equipos patrón: escribe los datos del analizador."
+          : actual && actual !== "otro" && !elegible && Array.from(selAnalizador.options).some((o) => o.value === actual)
+            ? "El analizador elegido no tiene calibración vigente en esta fecha. Elige otro."
+            : "";
+      }
+      previo = "";
+      pintarManual();
+    }
+    selAnalizador?.addEventListener("change", pintarManual);
+
+    // ── Quién realizó ──
+    const selRealizo = $<HTMLSelectElement>("se-realizo");
+    selRealizo?.addEventListener("change", () => {
+      form.querySelectorAll("[data-otra-persona]").forEach((el) => el.classList.toggle("hidden", selRealizo.value !== "otra"));
+    });
+
+    fechaInput?.addEventListener("change", () => {
+      pintarProxima();
+      cargarAnalizadores();
+    });
+
+    // ── Guardar ──
+    const guardar = $<HTMLButtonElement>("se-guardar");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      ocultarError();
+      recalcular();
+      const archivo = ($<HTMLInputElement>("se-informe"))?.files?.[0];
+      if (!$<HTMLInputElement>("se-confirmado")?.checked) return mostrarError("Marca la casilla de confirmación.");
+      if (archivo && archivo.size > ARCHIVO_MAX_BYTES) return mostrarError("El archivo pesa más de 15 MB. Comprímelo o divídelo en partes.");
+      if (marcado("tipo") === "aceptacion" && !archivo) return mostrarError("La prueba de aceptación necesita el informe adjunto (PDF o foto).");
+      if (medidasConError.length) return mostrarError(`Revisa: ${medidasConError.join(", ")}.`);
+
+      const fd = new FormData(form);
+      // Solo viajan las mediciones que aplican a la clase y la parte aplicada.
+      for (const campo of Object.keys(ETIQUETA)) if (!aplica[campo]) fd.delete(campo);
+      const analizador = selAnalizador?.value ?? "";
+      fd.set("analizadorActivoId", analizador === "otro" ? "" : analizador);
+      if (analizador !== "otro") ["analizadorDescripcion", "analizadorSerie", "analizadorCalVence"].forEach((k) => fd.delete(k));
+      const realizo = selRealizo?.value ?? "otra";
+      fd.set("realizadoPorId", realizo === "otra" ? "" : realizo);
+      if (realizo !== "otra") ["realizadoPor", "empresaExterna"].forEach((k) => fd.delete(k));
+      if (!archivo) fd.delete("informe");
+      if (!puedeProxima) fd.delete("proximaFecha");
+
+      if (guardar) { guardar.disabled = true; guardar.textContent = "Guardando…"; }
+      try {
+        const res = await fetch(`/api/activos/${activoId}/seguridad-electrica`, { method: "POST", body: fd });
+        const j = await res.json().catch(() => null);
+        if (res.ok && j && typeof j.url === "string") {
+          location.href = j.url;
+          return;
+        }
+        mostrarError(j && typeof j.error === "string" ? j.error
+          : res.status === 403 ? "No tienes permiso para registrar pruebas."
+          : res.status === 413 ? "El archivo pesa más de 15 MB. Comprímelo o divídelo en partes."
+          : "No se pudo guardar la prueba. Intenta de nuevo.");
+      } catch {
+        mostrarError("Sin conexión. Lo escrito sigue aquí: intenta de nuevo.");
+      }
+      if (guardar) { guardar.disabled = false; guardar.textContent = "Guardar prueba"; }
+    });
+
+    recalcular();
+    pintarProxima();
+    pintarAyudaInforme();
+    cargarAnalizadores();
+  }
+</script>
