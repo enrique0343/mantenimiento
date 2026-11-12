@@ -1,7 +1,9 @@
 ---
-// Fase 59 · WP-D: capacitaciones al personal sobre el equipo (requisito 19). Solo equipos
-// biomédicos. En la ficha, el resumen y las cinco más recientes; en la hoja de vida
-// (variante «hoja», sin botones ni scripts), todas. Solo admin, jefe, técnico y visualizador.
+// Fase 59 · WP-D: capacitaciones al personal sobre el equipo (requisito 19). En la ficha,
+// solo equipos biomédicos: el resumen y las cinco más recientes. En la hoja de vida
+// (variante «hoja», sin botones ni scripts), todas, y la sección sale siempre que la hoja la
+// coloque, también en un equipo que se pasó a otra área con capacitaciones (la hoja la numera).
+// Solo admin, jefe, técnico y visualizador.
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
@@ -10,6 +12,7 @@ import { EVIDENCIA_CAPACITACION, codigoCapacitacion, etiquetaTipoCapacitacion, e
 import { fechaCorta, hoySV, puedeRegistrarBio, puedeVerBio } from "@/lib/biomedico";
 import { rubroDeActivo } from "@/lib/rubros";
 import { areaHref } from "@/lib/areas";
+import { partirTitulo } from "./hoja";
 
 interface Props {
   activoId: number;
@@ -26,10 +29,11 @@ const hoy = hoySV();
 const db = ver ? getDb(Astro) : null;
 const [equipo] = db ? await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
 const esBio = !!equipo && rubroDeActivo(equipo.rubro, equipo.tipo) === "biomedico";
-const datos = db && esBio ? await capacitacionesDeActivo(db, activoId, hoy) : null;
+const datos = db && equipo && (esBio || !ficha) ? await capacitacionesDeActivo(db, activoId, hoy) : null;
 const filas = (datos?.filas ?? []).map((f) => ({ ...f, ev: evidenciaCapacitacion(f, hoy) }));
 const puedeRegistrar = !!user && puedeRegistrarBio(user.rol) && ficha;
 const enlace = (ruta: string) => areaHref(ruta, "biomedico");
+const tituloHoja = partirTitulo(titulo, "Capacitaciones al personal");
 ---
 
 {datos && ficha && (
@@ -69,35 +73,31 @@ const enlace = (ruta: string) => areaHref(ruta, "biomedico");
 )}
 
 {datos && !ficha && (
-  <section id="capacitaciones">
-    <h3 class="mt-6 text-base font-bold text-slate-900">{titulo ?? "Capacitaciones al personal"}</h3>
+  <section id="capacitaciones" class="doc-seccion">
+    <h2 class="doc-h">{tituloHoja.numero ? <><span>{tituloHoja.numero}</span> {tituloHoja.texto}</> : tituloHoja.texto}</h2>
     {filas.length === 0 ? (
-      <p class="mt-2 text-sm text-slate-400">Sin capacitaciones registradas.</p>
+      <p class="doc-nota">Sin capacitaciones registradas.</p>
     ) : (
-      <table class="mt-2 w-full text-left text-xs">
-        <thead class="border-b border-slate-200 text-slate-500">
-          <tr>
-            <th class="px-2 py-1.5 font-medium">Fecha</th>
-            <th class="px-2 py-1.5 font-medium">Tema</th>
-            <th class="px-2 py-1.5 font-medium">Tipo</th>
-            <th class="px-2 py-1.5 font-medium">Instructor</th>
-            <th class="px-2 py-1.5 font-medium">Asistentes</th>
-            <th class="px-2 py-1.5 font-medium">Lista firmada</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {filas.map((f) => (
-            <tr>
-              <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(f.fecha)}</td>
-              <td class="px-2 py-1.5">{f.tema}<span class="block text-[10px] text-slate-500">{codigoCapacitacion(f.id)}</span></td>
-              <td class="px-2 py-1.5">{etiquetaTipoCapacitacion(f.tipo)}</td>
-              <td class="px-2 py-1.5">{f.instructorNombre}</td>
-              <td class="px-2 py-1.5">{f.asistentes}</td>
-              <td class="px-2 py-1.5">{f.listasFirmadas > 0 ? "Sí" : f.ev === "programada" ? "Programada" : "No"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <>
+        <p class="doc-texto">
+          {datos.total} capacitaci{datos.total === 1 ? "ón" : "ones"}{datos.ultima ? ` · última ${fechaCorta(datos.ultima)}` : ""} · {datos.asistentes} persona{datos.asistentes === 1 ? "" : "s"}.
+        </p>
+        <table class="doc-tabla">
+          <thead><tr><th>Fecha</th><th>Tema</th><th>Tipo</th><th>Instructor</th><th class="n">Asistentes</th><th>Lista firmada</th></tr></thead>
+          <tbody>
+            {filas.map((f) => (
+              <tr>
+                <td class="tn">{fechaCorta(f.fecha)}</td>
+                <td>{f.tema}<span class="doc-nota-celda">{codigoCapacitacion(f.id)}</span></td>
+                <td>{etiquetaTipoCapacitacion(f.tipo)}</td>
+                <td>{f.instructorNombre}</td>
+                <td class="n">{f.asistentes}</td>
+                <td>{f.listasFirmadas > 0 ? "Sí" : f.ev === "programada" ? "Programada" : "No"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>
     )}
   </section>
 )}

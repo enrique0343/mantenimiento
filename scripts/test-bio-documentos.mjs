@@ -99,6 +99,12 @@ es(codigos('estado=incompletos'), [2, 4], 'incompletos');
 es(codigos('falta=registro_sanitario'), [], 'registro: 1 vigente, 2 vigente, 4 no aplica');
 es(codigos('falta=aceptacion'), [2], 'acta: el 4 tiene inspección registrada');
 es(codigos('falta=limpieza_desinfeccion'), [2, 4], 'falta el protocolo de limpieza');
+// Las tarjetas abren con los demás filtros: cuentan con ellos (antes contaban todos los biomédicos).
+es(J.resumenExpedientes(filas, f('')), { total: 3, completos: 1, incompletos: 2, porcentaje: 33, porVencer: 1 }, 'tarjetas sin filtros (sin bajas)');
+es(J.resumenExpedientes(filas, f('sede=2&estado=completos&vence=90')), { total: 1, completos: 0, incompletos: 1, porcentaje: 0, porVencer: 1 },
+  'tarjetas con sede: cuentan lo que abre cada una («Expediente» y «vence» no las cambian)');
+es(J.resumenExpedientes(filas, f('sede=1&estado=incompletos')).incompletos, codigos('sede=1&estado=incompletos').length, '«Incompletos» = lo que muestra al abrirla');
+es([J.hayFiltrosDeLista(f('estado=incompletos&vence=90&bajas=1')), J.hayFiltrosDeLista(f('falta=garantia'))], [false, true], 'filtros de la lista');
 es(codigos('falta=garantia'), [1, 2, 4], 'falta la garantía');
 es(codigos('sede=2'), [2], 'por sede');
 es(codigos('subcategoria=soporte_vida'), [2], 'por subcategoría');
@@ -120,5 +126,10 @@ es(J.COLUMNAS_CSV_EXPEDIENTES.map((c) => c.key).filter((k) => k.startsWith('req_
 es(J.filaCsvDocumento({ codigo: 'BIO-001', equipo: 'Monitor', categoria: 'registro_sanitario', nombre: 'RS.pdf', version: null, fechaVersion: '2025-12-01', fechaVencimiento: '2026-12-01', nota: null, subidoPor: 'Ana', subidoEl: '2026-11-10' }, hoy),
   { codigo: 'BIO-001', equipo: 'Monitor', categoria: 'Registro sanitario o inscripción', archivo: 'RS.pdf', version: '', fecha: '2025-12-01', vence: '2026-12-01', diasVence: 19, nota: '', subidoPor: 'Ana', subidoEl: '2026-11-10' },
   'fila del CSV de documentos: fechas AAAA-MM-DD');
+// «Subido el» es una marca (created_at de SQLite, en UTC): en el CSV va 'AAAA-MM-DD HH:MM' de El Salvador (§f.5).
+es(J.filaCsvDocumento({ codigo: 'BIO-001', equipo: 'Monitor', categoria: 'otro', nombre: 'a.pdf', version: null, fechaVersion: null, fechaVencimiento: null, nota: null, subidoPor: null, subidoEl: '2026-11-11 02:30:00' }, hoy).subidoEl,
+  '2026-11-10 20:30', 'subido de noche en El Salvador: el día de SV y su hora, no el día UTC');
+es([J.marcaCsvSV('2026-11-12 15:30:00'), J.marcaCsvSV('2026-11-12T06:00:00.000Z'), J.marcaCsvSV('2026-11-12'), J.marcaCsvSV(null), J.marcaCsvSV('ayer')],
+  ['2026-11-12 09:30', '2026-11-12 00:00', '2026-11-12', '', ''], 'marcaCsvSV');
 
 console.log(`PASS test-bio-documentos: ${n} casos; metadatos del documento, vencimientos que mandan y filtros y CSV de expedientes.`);

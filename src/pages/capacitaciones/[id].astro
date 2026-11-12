@@ -1,14 +1,12 @@
 ---
 // Fase 59 · WP-D: hoja de una capacitación. Se imprime como registro y, sin asistentes,
 // como hoja de asistencia para firmar a mano. Fuera de la hoja: archivos, edición e historial.
-import { asc, eq } from "drizzle-orm";
 import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
 import CapacitacionForm from "@/components/bio/CapacitacionForm.astro";
 import { getDb } from "@/lib/db";
-import { proveedores } from "@/lib/schema";
-import { capacitacionConDetalle, equiposParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
+import { capacitacionConDetalle, equiposParaElegir, proveedoresParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
 import {
   CATEGORIAS_ARCHIVO_CAPACITACION, EVIDENCIA_CAPACITACION, INSTRUCTOR_TIPO, codigoCapacitacion, etiquetaTipoCapacitacion,
   evidenciaCapacitacion, textoDeAsistentes, textoDuracion,
@@ -34,11 +32,12 @@ const ev = evidenciaCapacitacion({ fecha: c.fecha, asistentes: d.asistentes.leng
 const registra = puedeRegistrarBio(user.rol);
 const gestiona = puedeGestionarBio(user.rol);
 const enlace = (ruta: string) => areaHref(ruta, area);
+// El proveedor y la sede que ya tiene van en la lista aunque estén inactivos: si no, editar los borraría.
 const [equiposForm, provs, sedes, servicios] = registra
   ? await Promise.all([
     equiposParaElegir(db, { soloBiomedicos: true, capacitacionId: c.id }),
-    db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre)),
-    sedesActivas(db),
+    proveedoresParaElegir(db, c.proveedorId),
+    sedesActivas(db, c.sucursalId),
     sugerenciasServicio(db),
   ])
   : [[], [], [], []];

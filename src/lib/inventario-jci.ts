@@ -4,8 +4,8 @@
 // y filtros del listado de expedientes técnicos. Sigue siendo puro: lo usan el
 // servidor, el navegador y las pruebas.
 import {
-  CATEGORIAS_DOCUMENTO, RECOMENDADOS_EXPEDIENTE, REQUISITOS_EXPEDIENTE, diasEntre, esCategoriaDocumento, esFechaISO,
-  etiquetaCategoriaDocumento, hoySV, normalizarTexto, sumarMeses,
+  CATEGORIAS_DOCUMENTO, RECOMENDADOS_EXPEDIENTE, REQUISITOS_EXPEDIENTE, diaSV, diasEntre, esCategoriaDocumento, esFechaISO,
+  etiquetaCategoriaDocumento, horaSV, hoySV, normalizarTexto, sumarMeses,
   type CategoriaDocumento, type CompletitudExpediente,
 } from "./biomedico";
 
@@ -252,6 +252,27 @@ export function filtrarExpedientes(filas: readonly FilaExpediente[], f: FiltrosE
   });
 }
 
+/**
+ * Cifras de las tarjetas de /expedientes con los mismos filtros que la tabla, salvo «Expediente» y
+ * «vence», que son los que eligen las tarjetas: cada tarjeta abre con los demás filtros, así que
+ * cuenta lo mismo que muestra al abrirla.
+ */
+export function resumenExpedientes(filas: readonly FilaExpediente[], f: FiltrosExpediente) {
+  const base = filtrarExpedientes(filas, { ...f, estado: "todos", vence: false });
+  const completos = base.filter((r) => r.completitud.completo).length;
+  return {
+    total: base.length,
+    completos,
+    incompletos: base.length - completos,
+    porcentaje: base.length ? Math.round((completos / base.length) * 100) : 0,
+    porVencer: base.reduce((n, r) => n + r.porVencer90, 0),
+  };
+}
+
+/** ¿Hay algún filtro además de «Expediente», «vence» e «Incluir dados de baja»? */
+export const hayFiltrosDeLista = (f: FiltrosExpediente): boolean =>
+  f.sede !== null || f.subcategoria !== null || f.criticidad !== null || f.falta !== null || f.q !== "";
+
 /** Parámetros de la URL que reproducen estos filtros (para el CSV y la impresión). */
 export function paramsDeFiltrosExpediente(f: FiltrosExpediente): URLSearchParams {
   const p = new URLSearchParams();
@@ -318,6 +339,15 @@ export const COLUMNAS_CSV_DOCUMENTOS: ReadonlyArray<{ key: string; label: string
   { key: "subidoPor", label: "Subido por" }, { key: "subidoEl", label: "Subido el" },
 ];
 
+/** Marca de tiempo para el CSV (§f.5): 'AAAA-MM-DD HH:MM' en hora de El Salvador; fecha sola sin hora; ilegible → ''. */
+export function marcaCsvSV(valor: string | null | undefined): string {
+  const dia = diaSV(valor);
+  if (!dia) return "";
+  const hora = horaSV(valor);
+  return hora ? `${dia} ${hora}` : dia;
+}
+
+/** Una fila del CSV de documentos. `subidoEl` es la marca guardada (created_at, UTC de SQLite). */
 export function filaCsvDocumento(
   d: { codigo: string; equipo: string; categoria: string | null; nombre: string; version: string | null; fechaVersion: string | null; fechaVencimiento: string | null; nota: string | null; subidoPor: string | null; subidoEl: string | null },
   hoy: string,
@@ -326,6 +356,6 @@ export function filaCsvDocumento(
     codigo: d.codigo, equipo: d.equipo, categoria: etiquetaCategoriaDocumento(d.categoria), archivo: d.nombre,
     version: d.version ?? "", fecha: d.fechaVersion ?? "", vence: d.fechaVencimiento ?? "",
     diasVence: esFechaISO(d.fechaVencimiento) ? diasEntre(hoy, d.fechaVencimiento) : "",
-    nota: d.nota ?? "", subidoPor: d.subidoPor ?? "", subidoEl: d.subidoEl ?? "",
+    nota: d.nota ?? "", subidoPor: d.subidoPor ?? "", subidoEl: marcaCsvSV(d.subidoEl),
   };
 }

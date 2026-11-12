@@ -5,7 +5,7 @@
 // eligen las columnas, se une por tabla en vez de pasar listas de ids y los
 // selects con uniones no van en db.batch (D1 devuelve objetos y dos columnas
 // «nombre» se pisarían).
-import { and, asc, desc, eq, gte, inArray, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { getDb } from "./db";
 import {
@@ -218,12 +218,18 @@ export async function completarReferenciasLicencia(db: Db, datos: DatosLicencia)
   return { ok: true, datos: d };
 }
 
-/** Usuarios activos que pueden ser responsables de una licencia (admin, jefe y técnico). */
-export function responsablesLicencia(db: Db) {
-  return db.select({ id: usuarios.id, nombre: usuarios.nombre })
+/**
+ * Usuarios activos que pueden ser responsables de una licencia (admin, jefe y técnico), más el
+ * responsable que ya tiene la licencia aunque se haya desactivado: si no estuviera en la lista,
+ * editar la licencia lo borraría sin avisar.
+ */
+export async function responsablesLicencia(db: Db, incluirId?: number | null) {
+  const base = and(eq(usuarios.activo, true), inArray(usuarios.rol, ["admin", "jefe", "tecnico"]));
+  const filas = await db.select({ id: usuarios.id, nombre: usuarios.nombre, activo: usuarios.activo })
     .from(usuarios)
-    .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["admin", "jefe", "tecnico"])))
+    .where(incluirId ? or(base, eq(usuarios.id, incluirId)) : base)
     .orderBy(asc(usuarios.nombre));
+  return filas.map((u) => ({ id: u.id, nombre: u.activo ? u.nombre : `${u.nombre} (inactivo)` }));
 }
 
 export interface EntradaHistorial { id: number; accion: string; resumen: string | null; cuando: string; usuario: string | null }
@@ -421,14 +427,32 @@ export async function sugerenciasServicio(db: Db): Promise<string[]> {
 
 // ═══ Listas para los formularios ════════════════════════════════════════════
 
-/** Sedes activas. */
-export function sedesActivas(db: Db) {
-  return db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
+/**
+ * Sedes activas. Con `incluirId`, también la sede que ya tiene el registro aunque esté inactiva
+ * (si no, editarlo la borraría sin avisar o pediría otra sede).
+ */
+export async function sedesActivas(db: Db, incluirId?: number | null) {
+  const filas = await db.select({ id: sucursales.id, nombre: sucursales.nombre, activa: sucursales.activa })
+    .from(sucursales)
+    .where(incluirId ? or(eq(sucursales.activa, true), eq(sucursales.id, incluirId)) : eq(sucursales.activa, true))
+    .orderBy(asc(sucursales.nombre));
+  return filas.map((s) => ({ id: s.id, nombre: s.activa ? s.nombre : `${s.nombre} (inactiva)` }));
+}
+
+/** Proveedores activos para el instructor externo, más el que ya tiene la capacitación aunque esté inactivo. */
+export async function proveedoresParaElegir(db: Db, incluirId?: number | null) {
+  const filas = await db.select({ id: proveedores.id, nombre: proveedores.nombre, activo: proveedores.activo })
+    .from(proveedores)
+    .where(incluirId ? or(eq(proveedores.activo, true), eq(proveedores.id, incluirId)) : eq(proveedores.activo, true))
+    .orderBy(asc(proveedores.nombre));
+  return filas.map((p) => ({ id: p.id, nombre: p.activo ? p.nombre : `${p.nombre} (inactivo)` }));
 }
 
 /**
  * Equipos sin baja para elegir en una capacitación (solo biomédicos) o en una licencia, más los
  * que ya están enlazados aunque se hayan dado de baja (así editar no los quita sin querer).
+ * El equipo de `activoId` (el que viene de la ficha) entra aunque esté de baja, pero en una
+ * capacitación solo si es biomédico: el servidor no acepta otros.
  */
 export async function equiposParaElegir(db: Db, opciones: { soloBiomedicos: boolean; capacitacionId?: number | null; activoId?: number | null }) {
   const base = opciones.soloBiomedicos ? and(activoAreaCondition("biomedico"), ne(activos.estado, "baja"))! : ne(activos.estado, "baja");
@@ -436,7 +460,9 @@ export async function equiposParaElegir(db: Db, opciones: { soloBiomedicos: bool
   if (opciones.capacitacionId) {
     extra.push(sql`${activos.id} IN (SELECT ce.activo_id FROM capacitacion_equipos ce WHERE ce.capacitacion_id = ${opciones.capacitacionId})`);
   }
-  if (opciones.activoId) extra.push(eq(activos.id, opciones.activoId));
+  if (opciones.activoId) {
+    extra.push(opciones.soloBiomedicos ? and(eq(activos.id, opciones.activoId), activoAreaCondition("biomedico"))! : eq(activos.id, opciones.activoId));
+  }
   const cond = extra.length ? sql`(${base}) OR ${sql.join(extra, sql` OR `)}` : base;
   return db
     .select({
@@ -472,18 +498,28 @@ async function enTandas<T>(db: Db, ids: readonly number[], consulta: (parte: num
   return ((await db.batch(partes as [any, ...any[]])) as T[][]).flat();
 }
 
-/** De estos ids, los que son equipos biomédicos (en tandas de 90). */
-export async function idsBiomedicosExistentes(db: Db, ids: readonly number[]): Promise<Set<number>> {
+/**
+ * De estos ids, los equipos que existen y son biomédicos (en tandas de 90). Con `capacitacionId`
+ * valen también los que ya están enlazados a esa capacitación aunque después se hayan pasado a
+ * otra área: si no, la capacitación no se podría editar sin quitarlos.
+ */
+export async function idsBiomedicosExistentes(db: Db, ids: readonly number[], capacitacionId?: number | null): Promise<Set<number>> {
+  const valido = capacitacionId
+    ? or(activoAreaCondition("biomedico"), sql`${activos.id} IN (SELECT ce.activo_id FROM capacitacion_equipos ce WHERE ce.capacitacion_id = ${capacitacionId})`)
+    : activoAreaCondition("biomedico");
   const filas = await enTandas<{ id: number }>(db, ids, (parte) =>
-    db.select({ id: activos.id }).from(activos).where(and(inArray(activos.id, parte), activoAreaCondition("biomedico"))));
+    db.select({ id: activos.id }).from(activos).where(and(inArray(activos.id, parte), valido)));
   return new Set(filas.map((f) => f.id));
 }
 
-/** Los equipos tienen que existir y ser biomédicos; el proveedor y la sede, existir. */
+/**
+ * Los equipos tienen que existir y ser biomédicos (al editar, también valen los que ya estaban
+ * enlazados); el proveedor y la sede, existir.
+ */
 export async function revisarReferenciasCapacitacion(
-  db: Db, datos: { proveedorId: number | null; sucursalId: number | null }, equipoIds: readonly number[],
+  db: Db, datos: { proveedorId: number | null; sucursalId: number | null }, equipoIds: readonly number[], capacitacionId?: number | null,
 ): Promise<string | null> {
-  const existentes = await idsBiomedicosExistentes(db, equipoIds);
+  const existentes = await idsBiomedicosExistentes(db, equipoIds, capacitacionId);
   if (equipoIds.some((id) => !existentes.has(id))) return "Uno de los equipos ya no existe. Recarga la página.";
   if (datos.proveedorId) {
     const [p] = await db.select({ id: proveedores.id }).from(proveedores).where(eq(proveedores.id, datos.proveedorId)).limit(1);

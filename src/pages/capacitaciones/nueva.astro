@@ -1,12 +1,10 @@
 ---
 // Fase 59 · WP-D: registrar una capacitación. ?activo={id} deja el equipo marcado.
 // Admin, jefe y técnico.
-import { asc, eq } from "drizzle-orm";
 import Layout from "@/layouts/Layout.astro";
 import CapacitacionForm from "@/components/bio/CapacitacionForm.astro";
 import { getDb } from "@/lib/db";
-import { proveedores } from "@/lib/schema";
-import { equiposParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
+import { equiposParaElegir, proveedoresParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
 import { hoySV, puedeRegistrarBio } from "@/lib/biomedico";
 import { idPositivo } from "@/lib/bio-archivos";
 import { areaHref } from "@/lib/areas";
@@ -19,7 +17,7 @@ const db = getDb(Astro);
 const activoId = idPositivo(Astro.url.searchParams.get("activo"));
 const [equipos, provs, sedes, servicios] = await Promise.all([
   equiposParaElegir(db, { soloBiomedicos: true, activoId }),
-  db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre)),
+  proveedoresParaElegir(db),
   sedesActivas(db),
   sugerenciasServicio(db),
 ]);

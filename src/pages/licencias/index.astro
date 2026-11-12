@@ -9,7 +9,7 @@ import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
 import { listarLicencias, sedesActivas } from "@/lib/bio-consultas";
 import {
-  AMBITOS_LICENCIA, ENTIDADES_LICENCIA, SITUACIONES_FILTRO, TIPOS_LICENCIA, aplicaA, codigoLicencia, contarLicencias,
+  AMBITOS_LICENCIA, ENTIDADES_LICENCIA, SITUACIONES_FILTRO, TIPOS_LICENCIA, aplicaA, codigoLicencia, contarLicenciasFiltradas,
   etiquetaEntidad, etiquetaTipoLicencia, filtrarLicencias, leerFiltrosLicencia, paramsDeFiltrosLicencia,
   type FiltrosLicencia,
 } from "@/lib/licencias";
@@ -27,7 +27,8 @@ const [todas, sedes] = await Promise.all([listarLicencias(db), sedesActivas(db)]
 const [equipoFiltro] = filtros.activo
   ? await db.select({ codigo: activos.codigo, nombre: activos.nombre }).from(activos).where(eq(activos.id, filtros.activo)).limit(1)
   : [];
-const conteo = contarLicencias(todas, hoy);
+// Las tarjetas y el aviso de vencidas abren con los demás filtros: cuentan con ellos.
+const conteo = contarLicenciasFiltradas(todas, filtros, hoy);
 const filas = filtrarLicencias(todas, filtros, hoy).map((l) => ({ ...l, s: situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite }) }));
 const enlace = (ruta: string) => areaHref(ruta, area);
 const conFiltro = (cambios: Partial<FiltrosLicencia>) => {

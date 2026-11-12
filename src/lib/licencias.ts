@@ -255,6 +255,15 @@ export function contarLicencias(filas: readonly FilaLicencia[], hoy: string) {
   };
 }
 
+/**
+ * Las tarjetas de la lista con los demás filtros puestos (entidad, tipo, ámbito, sede, equipo y
+ * búsqueda): cada tarjeta y el aviso «Además hay N vencidas» abren con esos filtros, así que
+ * cuentan lo mismo que muestran al abrirlas.
+ */
+export function contarLicenciasFiltradas(filas: readonly FilaLicencia[], f: FiltrosLicencia, hoy: string) {
+  return contarLicencias(filtrarLicencias(filas, { ...f, situacion: "todas" }, hoy), hoy);
+}
+
 /** Lo que dice la columna «Aplica a». */
 export function aplicaA(l: Pick<FilaLicencia, "ambito" | "sede" | "servicio" | "equipoCodigo" | "equipoNombre" | "titular">): string {
   if (l.ambito === "establecimiento") return l.sede ? `Establecimiento · ${l.sede}` : "Establecimiento";
