@@ -122,6 +122,10 @@ const hayFiltros = !!(desde || hasta || activoId || Astro.url.searchParams.get("
 ---
 
 <Layout title="Incidentes con equipos">
+  <!-- Todo el documento en hoja apaisada: con «page: apaisada» solo en la tabla, el navegador
+       cortaba la página antes y después de ella (cabecera sola en una hoja vertical, la tabla
+       en otra y el folio solo en una tercera). -->
+  <div id="incidentesDoc" style="page: apaisada">
   <DocCabecera soloImpresion titulo="Órdenes relacionadas con incidentes" subtitulo={textoFiltros(lectura.filtros, equipoTxt)} />
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
@@ -171,7 +175,7 @@ const hayFiltros = !!(desde || hasta || activoId || Astro.url.searchParams.get("
       {filas.length === 0 ? (
         <div class="card mt-4 p-6 text-center text-sm text-slate-500">No hay órdenes marcadas como incidente con estos filtros.</div>
       ) : (
-        <div class="card mt-4 overflow-x-auto" style="page: apaisada">
+        <div class="card mt-4 overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-xs">
             <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-500">
               <tr>
@@ -214,4 +218,5 @@ const hayFiltros = !!(desde || hasta || activoId || Astro.url.searchParams.get("
   )}
 
   <DocFolio soloImpresion codigo="Incidentes con equipos" />
+  </div>
 </Layout>

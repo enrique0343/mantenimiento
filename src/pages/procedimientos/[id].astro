@@ -712,7 +712,8 @@ const pdfHref = `/api/procedimientos/${p.id}/pdf?v=${encodeURIComponent(p.pdfSub
       const input = ev.currentTarget;
       const file = input.files && input.files[0];
       input.value = "";
-      if (!file) return;
+      // Mientras sube, el campo queda deshabilitado: un segundo archivo no sale en paralelo.
+      if (!file || input.disabled) return;
       if (file.size > maxPdf) return avisoPdf("El PDF pasa de 15 MB. Redúcelo e inténtalo de nuevo.", true);
       if (file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) return avisoPdf("Elige un archivo PDF.", true);
       if (tienePdf) {
@@ -720,17 +721,31 @@ const pdfHref = `/api/procedimientos/${p.id}/pdf?v=${encodeURIComponent(p.pdfSub
         if (!ok) return;
       }
       avisoPdf("Subiendo el PDF…", false);
+      input.disabled = true;
       const fd = new FormData();
       fd.append("file", file);
-      const j = await enviar(`/api/procedimientos/${procId}/pdf`, { method: "POST", body: fd }, "PDF guardado.");
-      if (j) location.reload();
-      else avisoPdf("No se guardó el PDF. Revisa el aviso e inténtalo de nuevo.", true);
+      try {
+        const j = await enviar(`/api/procedimientos/${procId}/pdf`, { method: "POST", body: fd }, "PDF guardado.");
+        if (j) { location.reload(); return; }
+        avisoPdf("No se guardó el PDF. Revisa el aviso e inténtalo de nuevo.", true);
+      } catch {
+        // Sin red el aviso «Subiendo el PDF…» quedaba para siempre.
+        avisoPdf("Sin conexión: no se pudo subir el PDF. Inténtalo de nuevo.", true);
+      }
+      input.disabled = false;
     });
-    $("pdfQuitar")?.addEventListener("click", async () => {
+    $("pdfQuitar")?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
       const ok = await preguntar("¿Quitar el PDF?", "El documento queda sin PDF hasta que subas otro.", { danger: true, confirmLabel: "Quitar PDF" });
       if (!ok) return;
-      const j = await enviar(`/api/procedimientos/${procId}/pdf`, { method: "DELETE" }, "PDF quitado.");
-      if (j) location.reload();
+      btn.disabled = true;
+      try {
+        const j = await enviar(`/api/procedimientos/${procId}/pdf`, { method: "DELETE" }, "PDF quitado.");
+        if (j) { location.reload(); return; }
+      } catch {
+        avisoPdf("Sin conexión: no se pudo quitar el PDF. Inténtalo de nuevo.", true);
+      }
+      btn.disabled = false;
     });
 
     // ── Poner en vigencia. La API vuelve a comprobar la regla del 8.1.

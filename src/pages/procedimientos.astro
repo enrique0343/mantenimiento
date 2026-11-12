@@ -4,10 +4,9 @@ import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
+import { camposYValidacionesActivos } from "@/lib/biblioteca-db";
 import {
   procedimientos,
-  procedimientoCampos,
-  procedimientoValidaciones,
   sucursales,
   usuarios,
 } from "@/lib/schema";
@@ -60,13 +59,10 @@ const filas0 = await db
   .where(eq(procedimientos.activo, true))
   .orderBy(asc(procedimientos.codigoCorto));
 
-const ids = filas0.map((r) => r.p.id);
-const camposAll = ids.length
-  ? await db.select().from(procedimientoCampos).where(inArray(procedimientoCampos.procedimientoId, ids))
-  : [];
-const validacionesAll = ids.length
-  ? await db.select().from(procedimientoValidaciones).where(inArray(procedimientoValidaciones.procedimientoId, ids))
-  : [];
+// Con subconsulta, no con la lista de ids: D1 rechaza más de 100 parámetros por consulta.
+const { campos: camposAll, validaciones: validacionesAll } = filas0.length
+  ? await camposYValidacionesActivos(db)
+  : { campos: [], validaciones: [] };
 
 const filasTodas = filas0.map((r) => ({
   ...r,
@@ -182,6 +178,10 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
 ---
 
 <Layout title="Biblioteca de procedimientos">
+  <!-- La lista impresa va en hoja apaisada: en vertical la tabla (8 columnas) pasa del ancho
+       de la hoja y la columna «Validación» se cortaba. Todo el documento en la misma hoja
+       con nombre, para que cabecera, tabla y folio no queden en hojas separadas. -->
+  <div id="bibliotecaDoc" style="page: apaisada">
   <DocCabecera soloImpresion titulo="Biblioteca de procedimientos y protocolos" subtitulo={filtrosTxt} />
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
@@ -381,6 +381,7 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
   </p>
 
   <DocFolio soloImpresion codigo="Biblioteca de procedimientos" />
+  </div>
 
   {esAdmin && (
     <div id="nuevoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
@@ -721,11 +722,18 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
 
       const btn = $("n_save");
       btn.disabled = true;
-      const res = await fetch("/api/procedimientos", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      let res;
+      try {
+        res = await fetch("/api/procedimientos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        // Sin red el botón quedaba deshabilitado y lo escrito se perdía al recargar.
+        btn.disabled = false;
+        return fail("Sin conexión: no se pudo crear el documento. Inténtalo de nuevo.");
+      }
       btn.disabled = false;
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));

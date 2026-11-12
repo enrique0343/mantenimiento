@@ -48,7 +48,8 @@ export const POST: APIRoute = async (ctx) => {
 
   const body = await ctx.request.json().catch(() => null);
   const parsed = schema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  // El error va en texto (§c del contrato): la lista lo muestra tal cual.
+  if (!parsed.success) return Response.json({ error: "Elige entre 1 y 500 órdenes para borrar." }, { status: 400 });
 
   const db = getDb(ctx);
   const env = getEnv(ctx);

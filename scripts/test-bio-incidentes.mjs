@@ -232,6 +232,11 @@ try {
   es(cap.lotes[0].every((l) => /^OT eliminada en borrado por lote \(2\): OT-MB\d{4} "/.test(l.resumen)), true, 'las dos con su código');
   es(uno('SELECT count(*) AS n FROM ordenes WHERE id IN (901, 902)').n, 0, 'borradas');
 
+  // Un lote vacío, de más de 500 o mal formado responde 400 con texto (antes, el objeto de zod: «Error: [object Object]»).
+  for (const [data, nota] of [[{ ids: [] }, 'lote vacío'], [{ ids: Array.from({ length: 501 }, (_, i) => i + 1) }, '501 órdenes'], [{ ids: ['x'] }, 'id que no es número'], [null, 'sin cuerpo']]) {
+    es((await st(llamar(R.lote.POST, '/api/ordenes/bulk-delete', { method: 'POST', data, rol: 'admin' }), 400, nota)).body, { error: 'Elige entre 1 y 500 órdenes para borrar.' }, `${nota}: error en texto`);
+  }
+
   // Un lote de 150 órdenes se borra y ninguna consulta pasa de 100 parámetros (límite de D1).
   const idsLote = Array.from({ length: 150 }, (_, i) => 2000 + i);
   sqlite.exec(`INSERT INTO ordenes(id, titulo, rubro, tipo, estado, creado_por) VALUES ${idsLote.map((id) => `(${id}, 'Lote ${id}', 'biomedico', 'correctivo', 'abierta', 1)`).join(', ')}`);
