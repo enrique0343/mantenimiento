@@ -30,7 +30,7 @@ export async function setup({ modules, pages = [] }) {
       builder.onLoad({ filter: /.*/, namespace: 'test' }, ({ path: name }) => ({ contents: {
         auth: `export async function requireUser(ctx, roles) { const user=ctx.testUser; return !user ? {user:null,response:new Response('Unauthorized',{status:401})} : roles && !roles.includes(user.rol) ? {user:null,response:new Response('Forbidden',{status:403})} : {user}; }`,
         audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; } export async function logAuditLote() {} export function labelCampo(c) { return c; } export function resumenCambios() { return ""; }',
-        'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; }',
+        'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; } export async function enviarAvisoVencimientosBio() { return {enviados:0}; }',
         'encuestas-recordatorio': 'export async function enviarRecordatoriosEncuestas() { return {enviados:0}; }',
       }[name], loader: 'js' }));
     }}],

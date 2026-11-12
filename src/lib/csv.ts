@@ -20,8 +20,10 @@ function csvEscape(v: any): string {
 function formatCell(v: any): string {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString();
-  // Fechas SQLite vienen como "2024-01-15 12:34:56" → convertir a ISO
-  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(v)) {
+  // Marcas de SQLite, con segundos: "2024-01-15 12:34:56" → ISO "2024-01-15T12:34:56".
+  // Una marca ya en hora de El Salvador sin segundos ("2026-11-12 10:10", fase 59 §f.5)
+  // se deja con su espacio: así la lee Excel como fecha y hora.
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(v)) {
     return v.replace(" ", "T");
   }
   if (typeof v === "boolean") return v ? "true" : "false";
