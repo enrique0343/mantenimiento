@@ -92,11 +92,11 @@ export const INDICADORES: ReadonlyArray<{ clave: ClaveIndicador; titulo: string;
       { texto: "Sin registro", enlace: "/activos?area=biomedico&registro=sin_registro&estado=vigentes" },
       { texto: "Por vencer", enlace: "/activos?area=biomedico&registro=por_vencer&estado=vigentes" },
     ] },
-  { clave: "expediente", titulo: "Expediente técnico", descripcion: "Manuales, ficha técnica, registro sanitario y acta de aceptación.", enlace: "/expedientes?estado=incompletos", enlaceTexto: "Expedientes", extras: [] },
+  { clave: "expediente", titulo: "Expediente técnico", descripcion: "Manuales, ficha técnica, registro sanitario (si el equipo lo requiere) y acta de aceptación.", enlace: "/expedientes?estado=incompletos", enlaceTexto: "Expedientes", extras: [] },
   { clave: "calibracion", titulo: "Calibración", descripcion: `Misma regla que Calibraciones: última calibración conforme, vigente y con certificado; aviso ${DIAS_AVISO.calibracion} días antes.`, enlace: "/calibraciones", enlaceTexto: "Calibraciones", extras: [] },
   { clave: "patron", titulo: "Equipos patrón", descripcion: "Analizadores y simuladores con calibración al día (también cuentan en Calibración).", enlace: "/calibraciones/patrones", enlaceTexto: "Patrones", extras: [] },
   { clave: "laboratorio", titulo: "Laboratorios acreditados", descripcion: `Acreditación vencida o sin vigencia; aviso ${DIAS_AVISO.acreditacion} días antes.`, enlace: "/calibraciones/laboratorios", enlaceTexto: "Laboratorios", extras: [] },
-  { clave: "seguridad_electrica", titulo: "Seguridad eléctrica (Clase III)", descripcion: `Equipos de clase de riesgo III con prueba IEC 62353 vigente; aviso ${DIAS_AVISO.seguridadElectrica} días antes.`, enlace: "/seguridad-electrica?alcance=clase3", enlaceTexto: "Seguridad eléctrica",
+  { clave: "seguridad_electrica", titulo: "Seguridad eléctrica (Clase III)", descripcion: `Equipos de clase de riesgo III (sin los equipos patrón) con prueba IEC 62353 vigente; aviso ${DIAS_AVISO.seguridadElectrica} días antes.`, enlace: "/seguridad-electrica?alcance=clase3", enlaceTexto: "Seguridad eléctrica",
     extras: [
       { texto: "Vencidas", enlace: "/seguridad-electrica?alcance=clase3&estado=vencida" },
       { texto: "Sin prueba", enlace: "/seguridad-electrica?alcance=clase3&estado=sin_prueba" },
@@ -187,13 +187,15 @@ export function armarCumplimiento(d: DatosCumplimiento): { indicadores: Indicado
     else if (estado === "por_vencer") deEquipo("registro_sanitario", "aviso", e, mayuscula(textoFecha(e.registroSanitarioVencimiento!, hoy)), e.registroSanitarioVencimiento);
   }
 
-  // Expediente técnico (regla de WP-D, 5 requisitos con «No aplica»).
+  // Expediente técnico (regla de WP-D, 5 requisitos con «No aplica»). Un equipo que el
+  // inventario marca «No requiere registro sanitario» no debe ese documento.
   anotar("expediente", U.length);
   for (const e of U) {
     const c = completitudExpediente({
       documentos: docsPorEquipo.get(e.id) ?? [],
       aceptacionFecha: e.aceptacionFecha,
       noAplica: naPorEquipo.get(e.id) ?? [],
+      registroSanitarioNoRequiere: e.registroSanitarioNoRequiere,
       hoy,
     });
     if (!c.completo) deEquipo("expediente", "falla", e, `Falta: ${c.faltan.join(", ")}`, null, `/activos/${e.id}#documentos`);
@@ -240,8 +242,10 @@ export function armarCumplimiento(d: DatosCumplimiento): { indicadores: Indicado
     else if (estado === "por_vencer") hallazgo({ ...base, nivel: "aviso", detalle: `Acreditación ${textoFecha(l.acreditacionVigencia!, hoy)}`, fecha: l.acreditacionVigencia });
   }
 
-  // Seguridad eléctrica: equipos de clase de riesgo III (regla de WP-F, última prueba válida).
-  const claseIII = U.filter((e) => e.claseRiesgo === "III");
+  // Seguridad eléctrica: equipos de clase de riesgo III (regla de WP-F, última prueba válida),
+  // sin los equipos patrón, igual que el tablero /seguridad-electrica?alcance=clase3 que abre
+  // el indicador (es_patron = 0): así el número coincide con la lista.
+  const claseIII = U.filter((e) => e.claseRiesgo === "III" && !e.esPatron);
   anotar("seguridad_electrica", claseIII.length);
   for (const e of claseIII) {
     const ultima = ultimaPrueba.get(e.id) ?? null;
@@ -351,8 +355,9 @@ export interface Vencimiento { tipo: TipoVencimiento; activoId: number | null; c
 /**
  * Lo que vence dentro de su ventana (de 0 a DIAS_AVISO días), de lo más cercano a lo
  * más lejano, y cuántos ya vencieron por tipo. Mismas reglas que los indicadores:
- * calibración por vencer, prueba eléctrica por vencer (biomédicos con prueba),
- * licencia activa, registro sanitario y acreditación.
+ * calibración por vencer, prueba eléctrica por vencer (biomédicos con prueba, sin los
+ * equipos patrón, como el tablero de seguridad eléctrica), licencia activa, registro
+ * sanitario y acreditación.
  */
 export function vencimientosProximos(d: DatosCumplimiento): { items: Vencimiento[]; vencidos: Record<TipoVencimiento, number> } {
   const { hoy } = d;
@@ -374,8 +379,10 @@ export function vencimientosProximos(d: DatosCumplimiento): { items: Vencimiento
     }
   }
   if (!sinDatos.has("seguridad_electrica")) {
+    // Biomédicos vigentes sin los patrones: el universo del tablero «Todos los biomédicos».
     const ultima = ultimaPorEquipo(d.pruebas);
     for (const e of U) {
+      if (e.esPatron) continue;
       const p = ultima.get(e.id);
       if (!p) continue;
       const estado = estadoSeguridadElectrica(p, hoy, DIAS_AVISO.seguridadElectrica);

@@ -82,6 +82,21 @@ const docs = ['manual_operacion', 'manual_servicio', 'ficha_tecnica', 'registro_
 r = C.armarCumplimiento(datos({ equipos: [ex1, ex2], documentos: docs, expedienteNa: [{ activoId: ex1.id, requisito: 'registro_sanitario', motivo: 'No aplica' }] }));
 es(hall(r, 'expediente').map((h) => [h.codigo, h.detalle]), [[ex1.codigo, 'Falta: Manual de operación, Manual de mantenimiento o servicio, Ficha técnica o especificaciones, Acta de instalación o aceptación']], 'expediente incompleto con «No aplica»');
 es(ind(r, 'expediente').pct, 50, 'pct de completos');
+// «No requiere registro sanitario» en el inventario: ese requisito no es falla del
+// expediente (prueba local, paso 47). Sin la marca, el mismo expediente sí falla.
+const sinReg = (extra) => equipo({ registroSanitario: null, registroSanitarioNoRequiere: true, ...extra });
+const ex3 = sinReg();                                // completo sin el documento de registro
+const ex4 = sinReg({ aceptacionFecha: null });       // le falta otra cosa: no se nombra el registro
+const ex5 = equipo();                                // sí requiere registro: falta
+const tresDocs = (e) => ['manual_operacion', 'manual_mantenimiento', 'especificaciones'].map((categoria) => ({ activoId: e.id, categoria, fechaVencimiento: null }));
+r = C.armarCumplimiento(datos({ equipos: [ex3, ex4, ex5], documentos: [ex3, ex4, ex5].flatMap(tresDocs) }));
+es(hall(r, 'expediente').map((h) => [h.codigo, h.detalle]), [
+  [ex4.codigo, 'Falta: Acta de instalación o aceptación'],
+  [ex5.codigo, 'Falta: Registro sanitario'],
+], '«No requiere registro sanitario»: el expediente no lo pide');
+es([ind(r, 'expediente').universo, ind(r, 'expediente').fallas, ind(r, 'expediente').pct], [3, 2, 33], 'el equipo sin registro cuenta como completo');
+r = C.armarCumplimiento(datos({ equipos: [{ ...ex3, registroSanitarioNoRequiere: false }], documentos: tresDocs(ex3) }));
+es(hall(r, 'expediente').map((h) => h.detalle), ['Falta: Registro sanitario'], 'sin la marca del inventario, el registro falta');
 
 // ── Calibración = regla de WP-B (incluye no biomédicos con casilla y patrones) ─
 const c1 = equipo();                                                        // sin calibración
@@ -157,6 +172,16 @@ es(hall(r, 'seguridad_electrica').map((h) => [h.codigo, h.nivel, h.detalle]), [
   [s3.codigo, 'falla', 'No pasó · prueba del 10/03/2026'], [s1.codigo, 'falla', 'Sin prueba registrada'], [s2.codigo, 'aviso', 'Por vencer · vence el 30/11/2026 (en 18 días)'],
 ], 'Clase III sin prueba = falla; vale la última prueba; los de otra clase no cuentan');
 es(ind(r, 'seguridad_electrica').universo, 3, 'universo Clase III');
+// Los equipos patrón no entran, igual que en /seguridad-electrica?alcance=clase3 (es_patron = 0):
+// el número del indicador coincide con la lista que abre.
+const s5 = equipo({ claseRiesgo: 'III', esPatron: true });                    // patrón sin prueba
+const s6 = equipo({ claseRiesgo: 'III', esPatron: true });                    // patrón con la prueba vencida
+r = C.armarCumplimiento(datos({
+  equipos: [s1, s5, s6],
+  pruebas: [{ id: 4, activoId: s6.id, fecha: '2025-01-10', resultado: 'pasa', proximaFecha: '2026-01-10' }],
+}));
+es([ind(r, 'seguridad_electrica').universo, ind(r, 'seguridad_electrica').fallas, hall(r, 'seguridad_electrica').map((h) => h.codigo)], [1, 1, [s1.codigo]], 'Clase III sin los equipos patrón');
+es(hall(r, 'patron').map((h) => h.codigo).sort(), [s5.codigo, s6.codigo].sort(), 'los patrones siguen en su propio indicador');
 
 // ── Capacitación de equipos críticos ────────────────────────────────────────
 const k1 = equipo({ subcategoria: 'soporte_vida' });
@@ -213,6 +238,16 @@ es(v.items.map((x) => [x.tipo, x.dias]), [
 ].sort((a, b) => a[1] - b[1]), 'ordena por días y respeta 30 / 60 / 90');
 es(v.vencidos, { calibracion: 1, seguridad_electrica: 1, licencia: 1, registro_sanitario: 1, acreditacion: 0 }, 'vencidos por tipo');
 es(v.items.find((x) => x.tipo === 'calibracion').codigo, v4.codigo, 'la calibración a 31 días no entra');
+// Seguridad eléctrica en el aviso: biomédicos sin los equipos patrón (tablero «Todos los biomédicos»).
+const p1 = equipo({ esPatron: true });                                     // prueba por vencer
+const p2 = equipo({ esPatron: true });                                     // prueba vencida
+const pruebasPatron = [
+  { id: 11, activoId: p1.id, fecha: '2025-11-20', resultado: 'pasa', proximaFecha: '2026-11-20' },
+  { id: 12, activoId: p2.id, fecha: '2025-10-01', resultado: 'pasa', proximaFecha: '2026-10-01' },
+];
+const avisoSE = (equipos) => { const x = C.vencimientosProximos(datos({ equipos, pruebas: pruebasPatron })); return [x.items.filter((i) => i.tipo === 'seguridad_electrica').length, x.vencidos.seguridad_electrica]; };
+es(avisoSE([p1, p2]), [0, 0], 'el aviso no cuenta las pruebas de los equipos patrón');
+es(avisoSE([{ ...p1, esPatron: false }, { ...p2, esPatron: false }]), [1, 1], 'sin la marca de patrón, sí');
 es(C.TIPOS_VENCIMIENTO.map((t) => t.titulo), [
   'Calibraciones (próximos 30 días)', 'Seguridad eléctrica (30 días)', 'Licencias y permisos (90 días)',
   'Registros sanitarios (90 días)', 'Acreditación de laboratorios (60 días)',

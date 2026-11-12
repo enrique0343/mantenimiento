@@ -56,14 +56,16 @@ const leer = async (respuesta) => {
   return { status: respuesta.status, body, headers: respuesta.headers };
 };
 const llamar = async (ruta, url, opciones) => leer(await ruta(ctx(url, opciones)));
-/** POST multipart con la cookie del rol. */
+/** POST multipart con la cookie del rol (rol null = sin sesión). */
 const multipart = async (ruta, url, { id, rol, campos }) => {
   const c = ctx(url, { method: 'POST', id, rol });
   const datos = new FormData();
   for (const [k, v] of Object.entries(campos)) datos.set(k, v);
-  c.request = new Request(c.request.url, { method: 'POST', headers: { cookie: c.request.headers.get('cookie') }, body: datos });
+  const cookie = c.request.headers.get('cookie');
+  c.request = new Request(c.request.url, { method: 'POST', headers: cookie ? { cookie } : {}, body: datos });
   return leer(await ruta(c));
 };
+const esJson = (r) => /^application\/json\b/.test(r.headers.get('content-type') ?? '');
 const PDF = new TextEncoder().encode('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
 const HTML = new TextEncoder().encode('<html><body>no soy un pdf</body></html>');
@@ -101,6 +103,26 @@ try {
   es(r.status, 400, 'equipo no válido');
   r = await llamar(app.alertas.GET, '/api/alertas', { rol: 'solicitante' });
   es(r.status, 403, 'el solicitante no ve alertas');
+
+  // ── 401 y 403 en JSON { error } ───────────────────────────────────────────
+  // El visualizador (la cuenta del auditor) solo ve: registrar, editar, subir archivos y
+  // aprobar el plan le dan 403; sin sesión, 401. Antes de 7008559 salían en texto plano
+  // («Sin permisos») y la pantalla no podía mostrar j.error. Nada queda guardado.
+  const escrituras = [
+    ['POST /api/alertas', (rol) => llamar(app.alertas.POST, '/api/alertas', { method: 'POST', rol, data: nueva })],
+    ['PATCH /api/alertas/{id}', (rol) => llamar(app.alerta.PATCH, `/api/alertas/${id}`, { method: 'PATCH', id, rol, data: { aplicabilidad: 'no_aplica', aplicabilidadAnalisis: 'El lote no está en el hospital' } })],
+    ['POST /api/alertas/{id}/adjuntos', (rol) => multipart(app.adjuntos.POST, `/api/alertas/${id}/adjuntos`, { id, rol, campos: { categoria: 'boletin', archivo: new File([PDF], 'boletin.pdf') } })],
+    ['POST /api/planes/aprobaciones', (rol) => multipart(app.aprobaciones.POST, '/api/planes/aprobaciones', { rol, campos: { anio: hoy.slice(0, 4), area: 'biomedico', version: '09', aprobadoPor: 'Dra. Ruiz, Directora Médica', fechaAprobacion: hoy, archivo: new File([PDF], 'plan.pdf') } })],
+  ];
+  const guardado = () => [cuenta('SELECT count(*) AS n FROM alertas_equipo'), cuenta(`SELECT count(*) AS n FROM alertas_equipo WHERE id = ${id} AND aplicabilidad = 'pendiente'`), cuenta('SELECT count(*) AS n FROM alerta_adjuntos'), cuenta('SELECT count(*) AS n FROM plan_aprobaciones'), r2.size];
+  const antes = guardado();
+  for (const [ruta, pedir] of escrituras) {
+    r = await pedir('visualizador');
+    es([r.status, r.body, esJson(r)], [403, { error: 'Sin permisos' }, true], `${ruta}: el visualizador recibe 403 en JSON`);
+    r = await pedir(null);
+    es([r.status, r.body, esJson(r)], [401, { error: 'No autenticado' }, true], `${ruta}: sin sesión, 401 en JSON`);
+  }
+  es(guardado(), antes, 'el 401 y el 403 no guardan nada');
 
   // ── Análisis, cierre y reapertura ─────────────────────────────────────────
   const patch = (data, rol = 'jefe') => llamar(app.alerta.PATCH, `/api/alertas/${id}`, { method: 'PATCH', id, rol, data });
