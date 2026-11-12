@@ -99,6 +99,12 @@ es(codigos('estado=incompletos'), [2, 4], 'incompletos');
 es(codigos('falta=registro_sanitario'), [], 'registro: 1 vigente, 2 vigente, 4 no aplica');
 es(codigos('falta=aceptacion'), [2], 'acta: el 4 tiene inspección registrada');
 es(codigos('falta=limpieza_desinfeccion'), [2, 4], 'falta el protocolo de limpieza');
+// Las tarjetas abren con los demás filtros: cuentan con ellos (antes contaban todos los biomédicos).
+es(J.resumenExpedientes(filas, f('')), { total: 3, completos: 1, incompletos: 2, porcentaje: 33, porVencer: 1 }, 'tarjetas sin filtros (sin bajas)');
+es(J.resumenExpedientes(filas, f('sede=2&estado=completos&vence=90')), { total: 1, completos: 0, incompletos: 1, porcentaje: 0, porVencer: 1 },
+  'tarjetas con sede: cuentan lo que abre cada una («Expediente» y «vence» no las cambian)');
+es(J.resumenExpedientes(filas, f('sede=1&estado=incompletos')).incompletos, codigos('sede=1&estado=incompletos').length, '«Incompletos» = lo que muestra al abrirla');
+es([J.hayFiltrosDeLista(f('estado=incompletos&vence=90&bajas=1')), J.hayFiltrosDeLista(f('falta=garantia'))], [false, true], 'filtros de la lista');
 es(codigos('falta=garantia'), [1, 2, 4], 'falta la garantía');
 es(codigos('sede=2'), [2], 'por sede');
 es(codigos('subcategoria=soporte_vida'), [2], 'por subcategoría');

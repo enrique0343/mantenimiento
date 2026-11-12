@@ -116,6 +116,12 @@ es(ids('tipo=inscripcion'), [6], 'por tipo');
 es(ids('ambito=equipo'), [4], 'por ámbito');
 es(ids('activo=9&situacion=todas'), [4], 'por equipo');
 es(L.contarLicencias(todas, hoy), { vigentes: 5, vence90: 3, vence60: 2, vence30: 1, vencidas: 1, enTramite: 1, historial: 2, total: 9 }, 'tarjetas');
+// Las tarjetas y «Además hay N vencidas» abren con los demás filtros: cuentan con ellos (antes contaban todas).
+es(L.contarLicenciasFiltradas(todas, f(''), hoy), L.contarLicencias(todas, hoy), 'tarjetas sin filtros: las mismas');
+es(L.contarLicenciasFiltradas(todas, f('situacion=vence_90&entidad=cssp'), hoy).vencidas, ids('situacion=vencidas&entidad=cssp').length,
+  'con entidad CSSP: «Además hay N vencidas» cuenta lo que abre su enlace (0, no 1)');
+es(L.contarLicenciasFiltradas(todas, f('situacion=vencidas&activo=9'), hoy), { vigentes: 1, vence90: 1, vence60: 0, vence30: 0, vencidas: 0, enTramite: 0, historial: 0, total: 1 },
+  'tarjetas del equipo que viene de la ficha');
 es(L.paramsDeFiltrosLicencia(f('situacion=vence_90&entidad=srs&q=rx')).toString(), 'situacion=vence_90&entidad=srs&q=rx', 'parámetros para el CSV');
 es([L.aplicaA(todas[0]), L.aplicaA(todas[3]), L.aplicaA(todas[8]), L.aplicaA(todas[1])], ['Radiología · Central', 'BIO-009 — Tomógrafo', 'Dra. Ana López · Central', 'Establecimiento · Central'], 'aplica a');
 

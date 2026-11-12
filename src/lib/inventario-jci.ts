@@ -252,6 +252,27 @@ export function filtrarExpedientes(filas: readonly FilaExpediente[], f: FiltrosE
   });
 }
 
+/**
+ * Cifras de las tarjetas de /expedientes con los mismos filtros que la tabla, salvo «Expediente» y
+ * «vence», que son los que eligen las tarjetas: cada tarjeta abre con los demás filtros, así que
+ * cuenta lo mismo que muestra al abrirla.
+ */
+export function resumenExpedientes(filas: readonly FilaExpediente[], f: FiltrosExpediente) {
+  const base = filtrarExpedientes(filas, { ...f, estado: "todos", vence: false });
+  const completos = base.filter((r) => r.completitud.completo).length;
+  return {
+    total: base.length,
+    completos,
+    incompletos: base.length - completos,
+    porcentaje: base.length ? Math.round((completos / base.length) * 100) : 0,
+    porVencer: base.reduce((n, r) => n + r.porVencer90, 0),
+  };
+}
+
+/** ¿Hay algún filtro además de «Expediente», «vence» e «Incluir dados de baja»? */
+export const hayFiltrosDeLista = (f: FiltrosExpediente): boolean =>
+  f.sede !== null || f.subcategoria !== null || f.criticidad !== null || f.falta !== null || f.q !== "";
+
 /** Parámetros de la URL que reproducen estos filtros (para el CSV y la impresión). */
 export function paramsDeFiltrosExpediente(f: FiltrosExpediente): URLSearchParams {
   const p = new URLSearchParams();

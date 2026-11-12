@@ -8,7 +8,8 @@ import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import { expedientesBiomedicos, sedesActivas } from "@/lib/bio-consultas";
 import {
-  CRITICIDAD_LABEL, FALTAS_EXPEDIENTE, filtrarExpedientes, leerFiltrosExpediente, paramsDeFiltrosExpediente,
+  CRITICIDAD_LABEL, FALTAS_EXPEDIENTE, filtrarExpedientes, hayFiltrosDeLista, leerFiltrosExpediente, paramsDeFiltrosExpediente,
+  resumenExpedientes,
 } from "@/lib/inventario-jci";
 import { SUBCAT_KEYS, subcatLabel } from "@/lib/rubros";
 import { ESTADO_ACTIVO_LABEL, fechaCorta, hoySV, puedeVerBio, textoVence } from "@/lib/biomedico";
@@ -22,11 +23,11 @@ const hoy = hoySV();
 const area = Astro.locals.area ?? null;
 const filtros = leerFiltrosExpediente(Astro.url.searchParams, SUBCAT_KEYS);
 const [todas, sedes] = await Promise.all([expedientesBiomedicos(db, { hoy, incluirBajas: filtros.bajas }), sedesActivas(db)]);
-const universo = todas.filter((r) => filtros.bajas || r.estado !== "baja");
 const filas = filtrarExpedientes(todas, filtros);
-const completos = universo.filter((r) => r.completitud.completo).length;
-const pct = universo.length ? Math.round((completos / universo.length) * 100) : 0;
-const porVencer = universo.reduce((n, r) => n + r.porVencer90, 0);
+// Las tarjetas abren con los demás filtros (sede, falta, búsqueda…): cuentan con ellos.
+const resumen = resumenExpedientes(todas, filtros);
+const { completos, porVencer } = resumen;
+const pct = resumen.porcentaje;
 const enlace = (ruta: string) => areaHref(ruta, area);
 const qs = paramsDeFiltrosExpediente(filtros).toString();
 const conEstado = (estado: "todos" | "completos" | "incompletos", vence = false) => {
@@ -70,8 +71,8 @@ const vence = (r: (typeof filas)[number]) => {
   <div class="no-print mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
     <a href={conEstado("todos")} class="card block p-4 no-underline hover:bg-slate-50">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Equipos biomédicos</div>
-      <div class="mt-1 text-3xl font-bold text-slate-800">{universo.length}</div>
-      <div class="text-[11px] text-slate-500">{filtros.bajas ? "incluye dados de baja" : "sin los dados de baja"}</div>
+      <div class="mt-1 text-3xl font-bold text-slate-800">{resumen.total}</div>
+      <div class="text-[11px] text-slate-500">{hayFiltrosDeLista(filtros) ? "con los filtros elegidos" : filtros.bajas ? "incluye dados de baja" : "sin los dados de baja"}</div>
     </a>
     <a href={conEstado("completos")} class="card block p-4 no-underline hover:bg-slate-50">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Expediente completo</div>
@@ -80,7 +81,7 @@ const vence = (r: (typeof filas)[number]) => {
     </a>
     <a href={conEstado("incompletos")} class="card block p-4 no-underline hover:bg-slate-50">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Incompletos</div>
-      <div class={`mt-1 text-3xl font-bold ${universo.length - completos ? "text-red-600" : "text-emerald-700"}`}>{universo.length - completos}</div>
+      <div class={`mt-1 text-3xl font-bold ${resumen.incompletos ? "text-red-600" : "text-emerald-700"}`}>{resumen.incompletos}</div>
     </a>
     <a href={conEstado("todos", true)} class="card block p-4 no-underline hover:bg-slate-50">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Documentos vencidos o por vencer (≤ 90 días)</div>
