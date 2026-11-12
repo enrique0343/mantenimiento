@@ -6,7 +6,7 @@ import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { exigirRol } from "@/lib/seguridad-electrica";
 import { logAudit, calcularDiff } from "@/lib/audit";
-import { editarPlantillaSchema, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas, tieneVinculos } from "@/lib/plantillas-checklist";
+import { editarPlantillaSchema, errorRangoDePasos, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas, tieneVinculos } from "@/lib/plantillas-checklist";
 
 export const prerender = false;
 
@@ -70,13 +70,22 @@ export const PATCH: APIRoute = async (ctx) => {
       }, { status: 409 });
     }
     const filas = filasDeReemplazo(parsed.data.items, actuales, id);
+    // Lo que llega se completa con el paso guardado: el rango final también tiene que ser válido.
+    const errorRango = errorRangoDePasos(filas);
+    if (errorRango) return Response.json({ error: errorRango }, { status: 400 });
     lote.push(db.delete(checklistPlantillaItems).where(eq(checklistPlantillaItems.plantillaId, id)) as unknown as BatchItem<"sqlite">);
     for (const tanda of tandasDeFilas(filas)) lote.push(db.insert(checklistPlantillaItems).values(tanda) as unknown as BatchItem<"sqlite">);
     pasos = filas.length;
   }
 
   // Todo o nada: si una sentencia falla, la plantilla queda como estaba.
-  if (lote.length > 0) await db.batch(lote as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  if (lote.length > 0) {
+    try {
+      await db.batch(lote as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    } catch {
+      return Response.json({ error: "No se pudo guardar la plantilla. Intenta de nuevo." }, { status: 500 });
+    }
+  }
 
   const diff = calcularDiff(antes as unknown as Record<string, unknown>, data, ["nombre", "descripcion", "activa"]);
   const partes: string[] = [];

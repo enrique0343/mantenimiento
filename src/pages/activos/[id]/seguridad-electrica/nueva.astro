@@ -338,6 +338,7 @@ const radio = "flex items-start gap-2 rounded border border-slate-200 px-3 py-2 
     type ClaseProteccion, type Conformidad, type MetodoFuga, type ParteAplicada,
   } from "@/lib/biomedico";
   import { leerNumero } from "@/lib/numero";
+  import { MENSAJE_CAMBIAR_ORDEN, opcionAnalizador, type PatronDeLista } from "@/lib/seguridad-electrica-formulario";
 
   const form = document.getElementById("se-form") as HTMLFormElement | null;
   if (form) iniciar(form);
@@ -363,8 +364,24 @@ const radio = "flex items-start gap-2 rounded border border-slate-200 px-3 py-2 
     const ocultarError = () => errorBox?.classList.add("hidden");
 
     // ── Orden: al cambiarla se recarga con sus lecturas ──
-    $<HTMLSelectElement>("se-orden")?.addEventListener("change", (e) => {
-      const valor = (e.target as HTMLSelectElement).value;
+    // La recarga borra lo escrito (el tipo de prueba viaja en la URL): si ya se
+    // escribió algo, se pregunta antes.
+    const selOrden = $<HTMLSelectElement>("se-orden");
+    let ordenElegida = selOrden?.value ?? "";
+    let escrito = false;
+    const anotarEscrito = (e: Event) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t && t !== selOrden && t.name !== "tipo") escrito = true;
+    };
+    form.addEventListener("input", anotarEscrito, true);
+    form.addEventListener("change", anotarEscrito, true);
+    if (selOrden) selOrden.addEventListener("change", () => {
+      const valor = selOrden.value;
+      if (escrito && !confirm(MENSAJE_CAMBIAR_ORDEN)) {
+        selOrden.value = ordenElegida;
+        return;
+      }
+      ordenElegida = valor;
       const q = new URLSearchParams();
       const tipo = marcado("tipo");
       if (tipo) q.set("tipo", tipo);
@@ -520,35 +537,31 @@ const radio = "flex items-start gap-2 rounded border border-slate-200 px-3 py-2 
     function pintarManual() {
       manual?.classList.toggle("hidden", selAnalizador?.value !== "otro");
     }
-    type Patron = { id: number; codigo: string; nombre: string; marca: string | null; modelo: string | null; serial: string | null; proxima: string | null; vigenteEnFecha: boolean | null; hasta: string | null };
     async function cargarAnalizadores() {
       if (!selAnalizador) return;
-      const f = fecha();
+      const f = esFechaISO(fecha()) ? fecha() : hoy;
       const actual = selAnalizador.value && selAnalizador.value !== "otro" ? selAnalizador.value : previo;
       const mio = ++pedido;
-      let patrones: Patron[] | null = null;
+      let patrones: PatronDeLista[] | null = null;
       try {
-        const res = await fetch(`/api/calibraciones/patrones?fecha=${encodeURIComponent(esFechaISO(f) ? f : hoy)}`);
+        const res = await fetch(`/api/calibraciones/patrones?fecha=${encodeURIComponent(f)}`);
         if (res.ok) {
           const j = await res.json();
-          if (Array.isArray(j?.patrones)) patrones = j.patrones as Patron[];
+          if (Array.isArray(j?.patrones)) patrones = j.patrones as PatronDeLista[];
         }
       } catch { /* sin lista: solo «Otro analizador» */ }
       if (mio !== pedido) return;
       const eraOtro = selAnalizador.value === "otro";
       selAnalizador.innerHTML = "";
-      const vacia = new Option(patrones && patrones.length ? "— Elige el analizador —" : "— No hay equipos patrón en la lista —", "");
+      // Un equipo patrón no se prueba con él mismo (el servidor lo rechaza): no se ofrece.
+      const lista = (patrones ?? []).filter((p) => p.id !== activoId);
+      const vacia = new Option(lista.length ? "— Elige el analizador —" : "— No hay equipos patrón en la lista —", "");
       selAnalizador.add(vacia);
-      for (const p of patrones ?? []) {
-        const descripcion = [p.marca, p.modelo].filter(Boolean).join(" ") || p.nombre;
-        const vence = p.hasta ?? p.proxima;
-        const sinSerie = !p.serial;
-        const vencido = p.vigenteEnFecha === false;
-        const opt = new Option(
-          `${descripcion} · S/N ${p.serial ?? "—"} · cal. vence ${fechaCorta(vence)}${vencido ? " · calibración vencida" : sinSerie ? " · sin número de serie" : ""}`,
-          String(p.id),
-        );
-        opt.disabled = vencido || sinSerie;
+      for (const p of lista) {
+        // «cal. vence» = `hasta` (la calibración que valía en la fecha de la prueba), no la próxima de hoy.
+        const { texto, habilitado } = opcionAnalizador(p, f);
+        const opt = new Option(texto, String(p.id));
+        opt.disabled = !habilitado;
         selAnalizador.add(opt);
       }
       selAnalizador.add(new Option("Otro analizador (escribir datos)", "otro"));

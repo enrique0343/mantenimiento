@@ -262,7 +262,7 @@ export const POST: APIRoute = async (ctx) => {
     return errorJson(500, "No se pudo guardar la prueba. Intenta de nuevo.");
   }
 
-  const resumen = `Prueba de seguridad eléctrica (${TIPO_PRUEBA_ELECTRICA_LABEL[tipo]}) registrada en ${equipo.codigo}: ${RESULTADO_SE_LABEL[resultado]}`;
+  const resumen = `Prueba de seguridad eléctrica «${TIPO_PRUEBA_ELECTRICA_LABEL[tipo]}» registrada en ${equipo.codigo}: ${RESULTADO_SE_LABEL[resultado]}`;
   await logAuditLote(ctx, [
     { entidad: "prueba_electrica", entidadId: id, accion: "create", resumen },
     { entidad: "activo", entidadId: equipo.id, accion: "update", resumen },

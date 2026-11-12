@@ -49,6 +49,11 @@ es(filas.map((f) => [f.orden, f.texto, f.requiereValor, f.unidad, f.bloqueante])
 
 es([P.tieneVinculos([]), P.tieneVinculos([{ variableId: 3 }]), P.tieneVinculos([{ accionSiNoCumple: '  ' }]), P.tieneVinculos([{ accionSiNoCumple: 'Avisar' }]), P.tieneVinculos([{ aopProcedimientoId: null, activoId: 7 }])],
   [false, true, false, true, true], 'pasos ligados');
+// El rango final (lo que llega + lo guardado) también se revisa.
+const tierraMin = P.filasDeReemplazo(['Uno', { texto: 'Medir tierra', valorEsperadoMin: 1 }], [tierra], 9);
+es([tierraMin[1].valorEsperadoMin, tierraMin[1].valorEsperadoMax], [1, 0.3], 'el mínimo que llega se combina con el máximo guardado');
+es(P.errorRangoDePasos(tierraMin), 'Paso 2: El mínimo no puede ser mayor que el máximo.', 'ese rango al revés se detecta, con su paso');
+es([P.errorRangoDePasos([]), P.errorRangoDePasos([{ valorEsperadoMin: 0.3, valorEsperadoMax: 0.3 }, { valorEsperadoMin: null, valorEsperadoMax: 5 }])], [null, null], 'rangos válidos o abiertos');
 const veinte = Array.from({ length: 20 }, (_, i) => P.normalizarItemPlantilla(`Paso ${i + 1}`, i + 1, 1));
 es(P.tandasDeFilas(veinte).map((t) => t.length), [8, 8, 4], 'tandas de 8 pasos (11 parámetros cada uno ≤ 90)');
 es(P.tandasDeFilas([]), [], 'sin filas no hay tandas');
@@ -88,6 +93,23 @@ try {
   es((await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${iec}`, { method: 'PATCH', id: iec, rol: 'tecnico', data: { activa: false } })).status, 403, 'el técnico no edita plantillas');
   es((await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${iec}`, { method: 'PATCH', id: iec, rol: 'jefe', data: { items: [{ texto: 'X', valorEsperadoMin: 3, valorEsperadoMax: 1 }] } })).body,
     { error: 'Paso 1: El mínimo no puede ser mayor que el máximo.' }, 'rango al revés');
+  // Solo un mínimo de 1 Ω en el paso 3, que guarda máximo 0.3: el par queda al revés y no se guarda.
+  const antesMin = filasDe(iec);
+  const conMin = antesMin.map((p) => (p.texto === 'Medir resistencia de tierra de protección' ? { texto: p.texto, valorEsperadoMin: 1 } : p.texto));
+  es(await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${iec}`, { method: 'PATCH', id: iec, rol: 'jefe', data: { items: conMin } }),
+    { status: 400, body: { error: 'Paso 3: El mínimo no puede ser mayor que el máximo.' } }, 'mínimo que llega sobre el máximo guardado');
+  es(filasDe(iec), antesMin, 'la plantilla queda como estaba');
+
+  // Si la base falla: error en texto y nada a medias.
+  h.faults.beforeBatch = async () => { throw new Error('D1 sin servicio'); };
+  es(await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${iec}`, { method: 'PATCH', id: iec, rol: 'jefe', data: { nombre: 'Otro', items: ['Solo uno'] } }),
+    { status: 500, body: { error: 'No se pudo guardar la plantilla. Intenta de nuevo.' } }, 'reemplazo con la base caída: error en texto');
+  es([filasDe(iec), db.prepare('SELECT nombre FROM checklist_plantillas WHERE id = ?').get(iec).nombre], [antesMin, 'Seguridad eléctrica IEC 62353'], 'ni el nombre ni los pasos cambian');
+  const plantillasAntes = db.prepare('SELECT COUNT(*) AS c FROM checklist_plantillas').get().c;
+  h.faults.beforeBatch = async () => { throw new Error('D1 sin servicio'); };
+  es(await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'jefe', data: { nombre: 'Se cae', items: ['Uno', 'Dos'] } }),
+    { status: 500, body: { error: 'No se pudo guardar la plantilla. Intenta de nuevo.' } }, 'crear con la base caída: error en texto');
+  es(db.prepare('SELECT COUNT(*) AS c FROM checklist_plantillas').get().c, plantillasAntes, 'no queda una plantilla sin pasos');
 
   // Pasos ligados: 409 y nada cambia
   db.prepare("UPDATE checklist_plantilla_items SET accion_si_no_cumple = 'Avisar a la jefatura' WHERE plantilla_id = ? AND orden = 5").run(idNueva);

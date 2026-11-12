@@ -120,6 +120,16 @@ export function filasDeReemplazo(items: ReadonlyArray<ItemPlantilla | string>, a
   });
 }
 
+/**
+ * El rango de cada paso ya completado con el paso guardado: un mínimo que llega
+ * solo se combina con el máximo anterior (y al revés), y el par puede quedar al
+ * revés aunque lo que llegó sea válido. Devuelve el error del primero; si no, null.
+ */
+export function errorRangoDePasos(filas: ReadonlyArray<Pick<FilaPasoPlantilla, "valorEsperadoMin" | "valorEsperadoMax">>): string | null {
+  const i = filas.findIndex((f) => f.valorEsperadoMin != null && f.valorEsperadoMax != null && f.valorEsperadoMin > f.valorEsperadoMax);
+  return i < 0 ? null : `Paso ${i + 1}: ${MSG.rango}.`;
+}
+
 /** true si algún paso está ligado a una variable, un AOP, un equipo, una ubicación o una acción si no cumple. */
 export function tieneVinculos(items: ReadonlyArray<Partial<Pick<ChecklistPlantillaItem, "variableId" | "aopProcedimientoId" | "activoId" | "ubicacionId" | "accionSiNoCumple">>>): boolean {
   return items.some((p) =>
