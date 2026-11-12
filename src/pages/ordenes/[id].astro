@@ -2536,12 +2536,21 @@ const muestraIncidente = verIncidente && incidenteDisponible && (!!incidente || 
     // Eliminar OT (solo admin)
     $("deleteOtBtn")?.addEventListener("click", async () => {
       if (!confirm("¿Eliminar esta OT permanentemente?\n\nEsta acción borra la OT, sus comentarios y adjuntos. Si vino de un plan o actividad recurrente, el cron podrá generar otra en el siguiente ciclo. No se puede deshacer.")) return;
-      const r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
+      let r;
+      try {
+        r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
+      } catch {
+        alert("Sin señal: no se eliminó la OT. Vuelve a intentarlo cuando haya señal.");
+        return;
+      }
       if (r.ok) {
         location.href = `/ordenes?area=${encodeURIComponent(area || "")}`;
-      } else {
-        alert("Error al eliminar la OT");
+        return;
       }
+      // El servidor dice por qué no se borra (marcada como incidente, trazada en un
+      // conjunto o con historial de ejecución): se muestra su texto; si no llega, el genérico.
+      const j = await r.json().catch(() => ({}));
+      alert(typeof j?.error === "string" && j.error.trim() ? j.error : "Error al eliminar la OT");
     });
 
     // Sin señal, una transición o la verificación no salen: se dice, sin cambiar nada en pantalla.

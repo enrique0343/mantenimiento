@@ -40,8 +40,13 @@ async function scriptDe(archivo, marca) {
 /** Una página mínima: el HTML dado, la red simulada y el script corrido como lo corre el navegador. */
 function pagina(html, codigo, vars, { url = 'https://local.test/', red } = {}) {
   const errores = [];
+  // jsdom no navega: cada location.href = … queda como un intento de navegación.
+  const navegaciones = [];
   const consola = new VirtualConsole();
-  consola.on('jsdomError', (e) => { if (!/Not implemented/.test(e.message)) errores.push(e); });
+  consola.on('jsdomError', (e) => {
+    if (/Not implemented: navigation/.test(e.message)) navegaciones.push(e.message);
+    else if (!/Not implemented/.test(e.message)) errores.push(e);
+  });
   const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, { url, runScripts: 'outside-only', virtualConsole: consola });
   const w = dom.window;
   const llamadas = [];
@@ -52,7 +57,7 @@ function pagina(html, codigo, vars, { url = 'https://local.test/', red } = {}) {
   w.addEventListener('error', (e) => errores.push(e.error ?? e.message));
   w.eval(`(function(){${defineScriptVars({ __encodedScriptVars: encodeInlineScriptVars(vars) })}\n${codigo}\n})();`);
   const $ = (id) => w.document.getElementById(id);
-  return { w, $, llamadas, toasts, errores };
+  return { w, $, llamadas, toasts, errores, navegaciones };
 }
 const respuesta = (status, cuerpo) => ({ ok: status >= 200 && status < 300, status, json: async () => cuerpo });
 const sinRed = async () => { throw new TypeError('Failed to fetch'); };
@@ -137,6 +142,56 @@ const oculto = (el) => el.classList.contains('hidden');
   clic(p, 'incQuitarConfirmar');
   await pausa();
   es(p.toasts.at(-1), ['Marca quitada.', 'success'], 'quitada');
+  es(p.errores, [], 'sin errores de JavaScript');
+}
+
+// ═══ Ficha de la orden: «Eliminar OT» dice por qué no se borra (ronda 2) ════
+// Antes salía siempre «Error al eliminar la OT» y escondía los 409 de la API: orden
+// marcada como incidente, trazada en un conjunto o con historial de ejecución.
+{
+  const codigo = await scriptDe('src/pages/ordenes/[id].astro', 'deleteOtBtn');
+  const vars = {
+    id: 901, area: 'biomedico', estadoActual: 'abierta', checklistJson: null, itemsRepJson: '[]', ubicacionesData: [], activosData: [],
+    sucursalActualId: null, ubicacionActualId: null, activoActualId: null, usuarioId: 1, causaObligatoria: false, minCausa: 20, mensajePasoSinNumero: '',
+  };
+  let red = sinRed;
+  const p = pagina('<button id="deleteOtBtn" type="button">Eliminar OT</button>', codigo, vars,
+    { url: 'https://local.test/ordenes/901?area=biomedico', red: (...a) => red(...a) });
+  const alertas = [];
+  let confirma = false;
+  p.w.alert = (m) => alertas.push(m);
+  p.w.confirm = () => confirma;
+  const eliminar = async () => { clic(p, 'deleteOtBtn'); await pausa(); };
+
+  await eliminar();
+  es([p.llamadas.length, alertas], [0, []], 'si no confirma, no se borra nada');
+  confirma = true;
+  const MARCADA = 'La orden está marcada como incidente. Quita la marca en su ficha antes de borrarla.';
+  red = async () => respuesta(409, { error: MARCADA });
+  await eliminar();
+  es([p.llamadas[0].url, p.llamadas[0].opciones.method], ['/api/ordenes/901', 'DELETE'], 'DELETE de la orden');
+  es(alertas.at(-1), MARCADA, 'orden marcada como incidente: el texto del servidor');
+  const TRAZADA = 'Esta orden forma parte del historial de un conjunto y debe conservarse. Puedes cancelarla si ya no corresponde realizarla.';
+  red = async () => respuesta(409, { error: TRAZADA });
+  await eliminar();
+  es(alertas.at(-1), TRAZADA, 'orden trazada en un conjunto');
+  red = async () => respuesta(403, { error: 'Sin permisos' });
+  await eliminar();
+  es(alertas.at(-1), 'Sin permisos', 'el 403 en JSON de requireUser');
+  red = async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError('Unexpected token <'); } });
+  await eliminar();
+  es(alertas.at(-1), 'Error al eliminar la OT', 'sin JSON: el texto genérico');
+  red = async () => respuesta(400, { error: { issues: [] } });
+  await eliminar();
+  es(alertas.at(-1), 'Error al eliminar la OT', 'un error que no es texto no se muestra crudo');
+  red = sinRed;
+  await eliminar();
+  es(alertas.at(-1), 'Sin señal: no se eliminó la OT. Vuelve a intentarlo cuando haya señal.', 'sin red: lo dice (antes, un error sin atender)');
+  es(p.navegaciones.length, 0, 'mientras falla, la ficha no se va');
+  red = async () => respuesta(200, { ok: true });
+  const avisosAntes = alertas.length;
+  await eliminar();
+  es([alertas.length - avisosAntes, p.navegaciones.length], [0, 1], 'borrada: vuelve a la lista sin aviso');
   es(p.errores, [], 'sin errores de JavaScript');
 }
 
@@ -271,6 +326,32 @@ const htmlSoporte = (area = '') => `
     ['DELETE', 'Sin conexión: no se pudo quitar el PDF. Inténtalo de nuevo.', false], 'quitar sin red');
   es(p.errores, [], 'sin errores de JavaScript');
 }
+{
+  // Ronda 2: la API del documento responde 401 y 403 en JSON { error }; la ficha muestra la
+  // razón. Con el 403 en texto plano de antes solo quedaba «No se pudo guardar».
+  const codigo = await scriptDe('src/pages/procedimientos/[id].astro', 'pdfFile');
+  let red = async () => respuesta(403, { error: 'Sin permisos' });
+  const p = pagina('<button class="estado-btn" data-estado="en_revision">Pasar a revisión</button>', codigo,
+    { procId: 5, esAdmin: true, veredictoJson: JSON.stringify({ ok: true, motivos: [] }), tienePdf: false, maxPdf: 15 * 1024 * 1024 },
+    { url: 'https://local.test/procedimientos/5', red: (...a) => red(...a) });
+  const cambiarEstado = async () => { p.w.document.querySelector('.estado-btn').click(); await pausa(); };
+  await cambiarEstado();
+  es([p.llamadas[0].url, p.llamadas[0].opciones.method, JSON.parse(p.llamadas[0].opciones.body)], ['/api/procedimientos/5', 'PATCH', { estado: 'en_revision' }], 'PATCH del estado');
+  es(p.toasts.at(-1), ['Sin permisos', 'error'], '403 en JSON: la razón');
+  red = async () => respuesta(401, { error: 'No autenticado' });
+  await cambiarEstado();
+  es(p.toasts.at(-1), ['No autenticado', 'error'], '401 en JSON');
+  red = async () => respuesta(409, { error: 'No puede entrar en vigencia todavía.', motivos: ['Faltan 2 campos en azul.'] });
+  await cambiarEstado();
+  es(p.toasts.at(-1), ['No puede entrar en vigencia todavía.\n• Faltan 2 campos en azul.', 'error'], 'el 409 con sus motivos');
+  red = async () => ({ ok: false, status: 403, json: async () => { throw new SyntaxError('Unexpected token S'); } });
+  await cambiarEstado();
+  es(p.toasts.at(-1), ['No se pudo guardar', 'error'], 'sin JSON: el texto genérico');
+  red = async () => respuesta(400, { error: { formErrors: [] } });
+  await cambiarEstado();
+  es(p.toasts.at(-1), ['No se pudo guardar', 'error'], 'un error que no es texto no se muestra crudo');
+  es(p.errores, [], 'sin errores de JavaScript');
+}
 
 // ═══ Biblioteca: alta de un protocolo institucional ═════════════════════════
 {
@@ -315,6 +396,11 @@ const htmlSoporte = (area = '') => `
   clic(p, 'n_save');
   await pausa();
   es(p.$('n_err').textContent, 'El código corto PRT-LYD-01 ya existe. El índice de equivalencia admite un solo documento por código (cap. 2.4).', 'muestra j.error');
+  // Ronda 2: el 403 de la API sale en JSON y la ventana lo muestra.
+  red = async () => respuesta(403, { error: 'Sin permisos' });
+  clic(p, 'n_save');
+  await pausa();
+  es([p.$('n_err').textContent, p.$('n_save').disabled], ['Sin permisos', false], 'el 403 en JSON de la API');
   cambiar(p, 'n_tipo', 'sop');
   es(['n_sistemaBox', 'n_riesgoBox', 'n_semanaBox'].map((id) => oculto(p.$(id))), [false, false, false], 'otro tipo vuelve a pedir sistema, riesgo y semana');
   es(p.errores, [], 'sin errores de JavaScript');
