@@ -10,6 +10,7 @@ import { disparadorProyecto } from "@/lib/notificaciones";
 import { conCodigo, validarAreaTrabajo } from "@/lib/ordenes";
 import { parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -49,6 +50,9 @@ export const POST: APIRoute = async (ctx) => {
   const activoId = parsed.data.activoId !== undefined ? parsed.data.activoId : p.activoId;
   const areaResult = await validarAreaTrabajo(db, { rubro: inheritedArea ?? parsed.data.rubro, activoId, sucursalId: p.sucursalId, ubicacionId: p.ubicacionId });
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  // Fase 59 · requisito 13: equipo dado de baja → 409, antes de mover el proyecto a «en ejecución».
+  const rechazoBaja = await rechazoOrdenEquipoBaja(db, activoId);
+  if (rechazoBaja) return rechazoBaja;
 
   // Si el proyecto está aprobado y se genera primera OT, pasar a en_ejecucion
   const ahora = new Date().toISOString();

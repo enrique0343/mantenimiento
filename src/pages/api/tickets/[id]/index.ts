@@ -12,6 +12,7 @@ import { fmtFechaLarga } from "@/lib/datetime";
 
 import { conCodigo, validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { MENSAJE_ORDEN_EQUIPO_BAJA, equipoDeBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -117,6 +118,9 @@ export const PATCH: APIRoute = async (ctx) => {
   // automáticamente la OT con ese técnico, copiamos las fotos del ticket
   // como "antes" y enviamos el email de "Nueva orden para ti" al técnico.
   let nuevaOtId: number | null = null;
+  // Fase 59 · requisito 13: la orden automática no se crea para un equipo dado de baja;
+  // la asignación del ticket sigue y la respuesta lo dice en otOmitida.
+  let otOmitida: string | null = null;
   // Si el ticket está vinculado a un proyecto, NO auto-creamos OT. Las OTs
   // del proyecto se generan desde el detalle del proyecto.
   const debeCrearOT =
@@ -125,7 +129,21 @@ export const PATCH: APIRoute = async (ctx) => {
     parsed.data.asignadoA &&
     parsed.data.asignadoA !== actual.asignadoA;
 
-  if (debeCrearOT) {
+  let crearOT = !!debeCrearOT;
+  if (crearOT) {
+    try {
+      if (await equipoDeBaja(db, effective.activoId)) {
+        crearOT = false;
+        otOmitida = MENSAJE_ORDEN_EQUIPO_BAJA;
+      }
+    } catch (e) {
+      // Como cualquier falla de la creación automática: sin orden, el ticket se guarda igual.
+      crearOT = false;
+      console.error("auto-creacion OT desde ticket:", e);
+    }
+  }
+
+  if (crearOT) {
     try {
       const desc = `${actual.descripcion}\n\n— Ticket #${actual.id} de ${actual.solicitanteNombre} <${actual.solicitanteEmail}>`;
       const [fila] = await db
@@ -250,7 +268,7 @@ export const PATCH: APIRoute = async (ctx) => {
   }
 
   const [row] = await db.update(tickets).set(data).where(eq(tickets.id, id)).returning();
-  return Response.json({ ticket: row, otCreada: nuevaOtId });
+  return Response.json({ ticket: row, otCreada: nuevaOtId, ...(otOmitida ? { otOmitida } : {}) });
 };
 
 export const DELETE: APIRoute = async (ctx) => {

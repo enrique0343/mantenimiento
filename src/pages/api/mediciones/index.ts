@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { evaluarMedicion } from "@/lib/predictivo";
 import { rubroDeActivo } from "@/lib/rubros";
 import { conCodigo, validarContextoArea } from "@/lib/ordenes";
+import { MENSAJE_ORDEN_EQUIPO_BAJA } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -49,7 +50,10 @@ export const POST: APIRoute = async (ctx) => {
 
   // Si es critico, genera OT predictiva automatica
   let ordenAuto = null;
-  if (estado === "critico") {
+  // Fase 59 · requisito 13: a un equipo dado de baja no se le abre la orden; la medición
+  // queda guardada y la respuesta dice por qué no hay orden.
+  const ordenOmitida = estado === "critico" && act.estado === "baja" ? MENSAJE_ORDEN_EQUIPO_BAJA : null;
+  if (estado === "critico" && !ordenOmitida) {
     const titulo = `[Predictivo] ${v.nombre} fuera de rango - ${act?.codigo ?? `Activo #${v.activoId}`}`;
     const desc = `Medición de ${v.nombre} = ${parsed.data.valor}${v.unidad ? " " + v.unidad : ""} (rango crítico). Revisar.`;
     const [orden] = await db
@@ -68,5 +72,5 @@ export const POST: APIRoute = async (ctx) => {
     ordenAuto = await conCodigo(db, orden);
   }
 
-  return Response.json({ medicion: med, ordenAutomatica: ordenAuto }, { status: 201 });
+  return Response.json({ medicion: med, ordenAutomatica: ordenAuto, ...(ordenOmitida ? { ordenOmitida } : {}) }, { status: 201 });
 };

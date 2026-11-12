@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
 import { conCodigo, validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -31,6 +32,9 @@ export const POST: APIRoute = async (ctx) => {
   const areaResult = await validarAreaTrabajo(db, t);
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   if (t.otId) return Response.json({ error: "Ticket ya tiene OT asociada" }, { status: 400 });
+  // Fase 59 · requisito 13: el equipo de la solicitud está dado de baja → 409 y la solicitud no cambia.
+  const rechazoBaja = await rechazoOrdenEquipoBaja(db, t.activoId);
+  if (rechazoBaja) return rechazoBaja;
 
   const desc = `${t.descripcion}\n\n— Ticket #${t.id} de ${t.solicitanteNombre} <${t.solicitanteEmail}>`;
   const [orden] = await db
