@@ -131,6 +131,8 @@ try {
   const creada = await llamar(R.lista.POST, '/api/checklist-plantillas', { rol: 'jefe', json: { nombre: 'Revisión de cama', items: ['Frenos', 'Barandas'] } });
   const idP = creada.body.plantilla.id;
   es(lineas(), [{ entidad: 'checklist_plantilla', entidadId: idP, accion: 'create', cambios: null, resumen: 'Plantilla «Revisión de cama» creada con 2 pasos' }], 'crear plantilla');
+  es((await llamar(R.lista.POST, '/api/checklist-plantillas', { rol: 'jefe', json: { nombre: 'revision de cama', items: ['Frenos'] } })).status, 409, 'una con el mismo nombre…');
+  es(lineas(), [], '…no se crea ni deja línea');
   await llamar(R.una.PATCH, `/api/checklist-plantillas/${idP}`, { method: 'PATCH', id: idP, rol: 'admin', json: { nombre: 'Revisión de cama eléctrica', items: ['Frenos'] } });
   es(lineas(), [{ entidad: 'checklist_plantilla', entidadId: idP, accion: 'update', cambios: { nombre: { antes: 'Revisión de cama', despues: 'Revisión de cama eléctrica' } },
     resumen: 'Plantilla «Revisión de cama eléctrica»: nombre «Revisión de cama» → «Revisión de cama eléctrica» · pasos reemplazados (1)' }], 'editar plantilla');

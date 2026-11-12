@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { getDb } from "@/lib/db";
 import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { exigirRol } from "@/lib/seguridad-electrica";
 import { logAudit } from "@/lib/audit";
 import { crearPlantillaSchema, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas } from "@/lib/plantillas-checklist";
+import { ROLES_PLANTILLAS, mensajeNombreRepetido, plantillaConNombre } from "@/lib/plantillas-checklist-editor";
 
 export const prerender = false;
 
@@ -44,9 +45,11 @@ export const GET: APIRoute = async (ctx) => {
   });
 };
 
-// POST: crear plantilla (admin y jefe), con sus pasos y su constancia.
+// POST: crear plantilla (admin y jefe), con sus pasos y su constancia. Un nombre
+// por plantilla (sin contar tildes ni mayúsculas): así la plantilla sugerida del
+// editor se crea una sola vez y la lista de rutinas no ofrece dos iguales.
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, [...ROLES_PLANTILLAS]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
   const parsed = crearPlantillaSchema.safeParse(body);
@@ -54,15 +57,33 @@ export const POST: APIRoute = async (ctx) => {
 
   const db = getDb(ctx);
   const noSeGuardo = () => Response.json({ error: "No se pudo guardar la plantilla. Intenta de nuevo." }, { status: 500 });
-  let plantilla: typeof checklistPlantillas.$inferSelect;
+  const nombre = parsed.data.nombre;
+  const descripcion = parsed.data.descripcion?.trim() || null;
+  const repetida = async () => {
+    const todas = await db.select({ id: checklistPlantillas.id, nombre: checklistPlantillas.nombre }).from(checklistPlantillas);
+    return plantillaConNombre(todas, nombre);
+  };
+  const yaExiste = (p: { id: number; nombre: string }) =>
+    Response.json({ error: mensajeNombreRepetido(p.nombre), id: p.id }, { status: 409 });
+
+  let plantilla: typeof checklistPlantillas.$inferSelect | undefined;
   try {
-    [plantilla] = await db.insert(checklistPlantillas).values({
-      nombre: parsed.data.nombre,
-      descripcion: parsed.data.descripcion?.trim() || null,
-    }).returning();
+    const antes = await repetida();
+    if (antes) return yaExiste(antes);
+    // Dos envíos a la vez con el mismo nombre (doble clic, dos pestañas): la
+    // sentencia solo inserta si no hay otra con ese nombre, y la segunda no crea nada.
+    const r = await db.run(sql`INSERT INTO checklist_plantillas (nombre, descripcion)
+      SELECT ${nombre}, ${descripcion}
+      WHERE NOT EXISTS (SELECT 1 FROM checklist_plantillas WHERE nombre = ${nombre})`);
+    if (!Number(r.meta?.changes)) {
+      const otra = await repetida();
+      return otra ? yaExiste(otra) : noSeGuardo();
+    }
+    [plantilla] = await db.select().from(checklistPlantillas).where(eq(checklistPlantillas.id, Number(r.meta.last_row_id))).limit(1);
   } catch {
     return noSeGuardo();
   }
+  if (!plantilla) return noSeGuardo();
 
   const filas = filasDeReemplazo(parsed.data.items, [], plantilla.id);
   if (filas.length) {

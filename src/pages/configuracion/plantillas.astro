@@ -1,0 +1,727 @@
+---
+// Editor de plantillas de checklist (Fase 59 · ronda 2, WP-F). Crear plantillas,
+// cambiar su nombre, su descripción y sus pasos (texto, criterio de aceptación,
+// punto crítico, minutos, materiales y lectura con unidad y rango) y activarlas o
+// desactivarlas, sobre /api/checklist-plantillas. Para los mismos roles que la API
+// (admin y jefe). La plantilla sugerida «Preventivo biomédico general» apoya los
+// requisitos JCI 17 (alarmas) y 18 (limpieza y desinfección): es un punto de
+// partida que Ingeniería Biomédica ajusta.
+import Layout from "@/layouts/Layout.astro";
+import { asc, eq } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { checklistPlantillaItems, checklistPlantillas, procedimientos } from "@/lib/schema";
+import { tieneVinculos } from "@/lib/plantillas-checklist";
+import { PLANTILLA_SUGERIDA, puedeEditarPlantillas } from "@/lib/plantillas-checklist-editor";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeEditarPlantillas(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const cabeceras = await db
+  .select({
+    id: checklistPlantillas.id,
+    nombre: checklistPlantillas.nombre,
+    descripcion: checklistPlantillas.descripcion,
+    activa: checklistPlantillas.activa,
+    tipoDocumento: checklistPlantillas.tipoDocumento,
+    procedimientoId: checklistPlantillas.procedimientoId,
+    procedimientoVersion: checklistPlantillas.procedimientoVersion,
+    procedimientoCodigo: procedimientos.codigoCorto,
+  })
+  .from(checklistPlantillas)
+  .leftJoin(procedimientos, eq(procedimientos.id, checklistPlantillas.procedimientoId))
+  .orderBy(asc(checklistPlantillas.nombre), asc(checklistPlantillas.id));
+// Todos los pasos de una vez, repartidos aquí: una lista de ids en la consulta
+// pasaría el límite de 100 parámetros de D1 con muchas plantillas.
+const pasos = await db
+  .select()
+  .from(checklistPlantillaItems)
+  .orderBy(asc(checklistPlantillaItems.plantillaId), asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id));
+const pasosPorPlantilla = new Map<number, typeof pasos>();
+for (const p of pasos) {
+  const propios = pasosPorPlantilla.get(p.plantillaId);
+  if (propios) propios.push(p);
+  else pasosPorPlantilla.set(p.plantillaId, [p]);
+}
+
+const plantillas = cabeceras.map((p) => {
+  const propios = pasosPorPlantilla.get(p.id) ?? [];
+  return {
+    id: p.id,
+    nombre: p.nombre,
+    descripcion: p.descripcion ?? "",
+    activa: !!p.activa,
+    tipo: p.tipoDocumento,
+    documento: p.procedimientoId ? { id: p.procedimientoId, codigo: p.procedimientoCodigo ?? null, version: p.procedimientoVersion ?? null } : null,
+    conVinculos: tieneVinculos(propios),
+    items: propios.map((i) => ({
+      texto: i.texto,
+      criterioAceptacion: i.criterioAceptacion,
+      bloqueante: !!i.bloqueante,
+      minutosEstimados: i.minutosEstimados,
+      materiales: i.materiales,
+      requiereValor: !!i.requiereValor,
+      unidad: i.unidad,
+      valorEsperadoMin: i.valorEsperadoMin,
+      valorEsperadoMax: i.valorEsperadoMax,
+    })),
+  };
+});
+const abrir = Number(Astro.url.searchParams.get("plantilla")) || "";
+const volver = user.rol === "admin"
+  ? { href: "/configuracion#checklists", texto: "Configuración" }
+  : { href: "/administracion", texto: "Administración" };
+---
+
+<Layout title="Plantillas de checklist">
+  <div id="pl-app" class="space-y-4" data-plantillas={JSON.stringify(plantillas)} data-abrir={abrir}>
+    <div id="pl-cabecera" class="flex flex-wrap items-start justify-between gap-3">
+      <div class="max-w-3xl">
+        <p class="text-xs text-slate-500"><a href={volver.href} class="hover:underline">← {volver.texto}</a></p>
+        <h1 class="text-2xl font-bold">Plantillas de checklist</h1>
+        <p class="mt-1 text-sm text-slate-600">
+          Los pasos que copian la rutina y la orden de trabajo: qué se hace, el criterio de aceptación, si es punto
+          crítico, la lectura que se pide con su unidad y su rango, el tiempo estimado y los materiales. Sirven para
+          todas las áreas.
+        </p>
+        <p class="mt-1 text-xs text-slate-500">
+          Los cambios valen para las rutinas y órdenes que se creen desde ahora; las rutinas ya creadas conservan sus
+          pasos. Desactivar no borra: la plantilla deja de ofrecerse y se puede volver a activar.
+        </p>
+      </div>
+      <button type="button" id="pl-nueva" class="btn-primary">Nueva plantilla</button>
+    </div>
+
+    <div id="pl-aviso" role="status" class="hidden border-l-4 border-emerald-600 bg-emerald-50 px-4 py-2 text-sm text-emerald-800"></div>
+    <div id="pl-error" role="alert" class="hidden border-l-4 border-red-600 bg-red-50 px-4 py-2 text-sm text-red-700"></div>
+
+    <section id="pl-sugerida-caja" class="card p-4" aria-labelledby="pl-sugerida-titulo">
+      <h2 id="pl-sugerida-titulo" class="font-semibold text-slate-900">Plantilla sugerida: «{PLANTILLA_SUGERIDA.nombre}»</h2>
+      <p class="mt-1 text-sm text-slate-600">Pasos de partida para el preventivo de los equipos biomédicos:</p>
+      <ol class="mt-1 list-decimal pl-6 text-sm text-slate-700">
+        {PLANTILLA_SUGERIDA.items.map((p) => <li>{p.texto}{p.bloqueante ? " (punto crítico)" : ""}</li>)}
+      </ol>
+      <p class="mt-2 text-sm text-amber-800">
+        Es un punto de partida: Ingeniería Biomédica la revisa y ajusta los pasos, los criterios, los tiempos y las
+        lecturas a cada familia de equipos y a su manual.
+      </p>
+      <div class="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" id="pl-sugerida" class="btn-secondary">Crear plantilla sugerida</button>
+        <span id="pl-sugerida-estado" class="text-xs text-slate-500"></span>
+      </div>
+    </section>
+
+    <section id="pl-vista-lista" class="card p-0" aria-label="Plantillas">
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th class="px-3 py-2">Plantilla</th>
+              <th class="px-3 py-2">Tipo</th>
+              <th class="px-3 py-2">Pasos</th>
+              <th class="px-3 py-2">Con lectura</th>
+              <th class="px-3 py-2">Críticos</th>
+              <th class="px-3 py-2">Documento</th>
+              <th class="px-3 py-2">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="pl-lista" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+      <p id="pl-vacia" class="hidden p-4 text-sm text-slate-600">Todavía no hay plantillas. Crea una o empieza con la plantilla sugerida.</p>
+      <noscript><p class="p-4 text-sm text-amber-800">Esta pantalla necesita JavaScript para mostrar y editar las plantillas.</p></noscript>
+    </section>
+
+    <section id="pl-editor" class="card hidden p-4" aria-labelledby="pl-editor-titulo">
+      <h2 id="pl-editor-titulo" class="text-lg font-semibold text-slate-900"></h2>
+      <div id="pl-editor-notas" class="mt-2 space-y-2"></div>
+      <form id="pl-form" class="mt-3 space-y-4" novalidate>
+        <fieldset id="pl-campos" class="space-y-4">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label class="label" for="pl-nombre">Nombre</label>
+              <input id="pl-nombre" class="input" maxlength="120" autocomplete="off" />
+              <p id="pl-nombre-error" class="mt-1 hidden text-xs text-red-600"></p>
+            </div>
+            <div>
+              <label class="label" for="pl-descripcion">Descripción (opcional)</label>
+              <textarea id="pl-descripcion" class="input" rows="2"></textarea>
+            </div>
+          </div>
+          <div>
+            <h3 class="font-semibold text-slate-900">Pasos</h3>
+            <p id="pl-pasos-ayuda" class="text-xs text-slate-500">
+              En el orden en que se hacen. «Punto crítico»: una desviación no deja cerrar la orden y en el celular no
+              tiene «No aplica». «Pide lectura»: el técnico escribe el valor medido; fuera del rango, la orden lo marca.
+            </p>
+            <ol id="pl-pasos" class="mt-2 space-y-3"></ol>
+            <button type="button" id="pl-agregar-paso" class="btn-secondary btn-sm mt-3">Agregar paso</button>
+          </div>
+        </fieldset>
+        <div id="pl-editor-error" role="alert" class="hidden border-l-4 border-red-600 bg-red-50 px-4 py-2 text-sm text-red-700"></div>
+        <div class="flex flex-wrap gap-2">
+          <button type="submit" id="pl-guardar" class="btn-primary">Guardar cambios</button>
+          <button type="button" id="pl-cancelar" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    </section>
+  </div>
+</Layout>
+
+<script>
+  import {
+    MAX_PASOS, MENSAJE_PASOS_LIGADOS, MSG_EDITOR, PLANTILLA_SUGERIDA, UNIDAD_MAX, claveNombre, confirmacionDesactivar,
+    envioSugerida, errorNombre, esSugerida, leerPasos, mensajeDeRespuesta, mismosPasos, pasoEditorDesdeApi, pasoVacio,
+    plantillaConNombre, resumenPasos, type ErrorPaso, type PasoApi, type PasoEditor, type PasoEnvio,
+  } from "@/lib/plantillas-checklist-editor";
+  import { PLANTILLA_IEC62353 } from "@/lib/biomedico";
+
+  type Documento = { id: number; codigo: string | null; version: string | null };
+  type Plantilla = {
+    id: number; nombre: string; descripcion: string; activa: boolean; tipo: string;
+    documento: Documento | null; conVinculos: boolean; items: PasoApi[];
+  };
+  /** La plantilla como la devuelve la API (GET, POST y PATCH). */
+  type PlantillaApi = {
+    id: number; nombre: string; descripcion?: string | null; activa?: boolean | number; tipoDocumento?: string;
+    procedimientoId?: number | null; procedimientoVersion?: string | null; items?: PasoApi[];
+  };
+  type Foto = { nombre: string; descripcion: string; items: PasoEnvio[] };
+
+  const JSON_HEADERS = { "content-type": "application/json" };
+  const raiz = document.getElementById("pl-app");
+  if (raiz) iniciar(raiz);
+
+  function iniciar(raiz: HTMLElement) {
+    const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+    const lista = $("pl-lista");
+    const vacia = $("pl-vacia");
+    const vistaLista = $("pl-vista-lista");
+    const cajaSugerida = $("pl-sugerida-caja");
+    const botonSugerida = $<HTMLButtonElement>("pl-sugerida");
+    const estadoSugerida = $("pl-sugerida-estado");
+    const botonNueva = $<HTMLButtonElement>("pl-nueva");
+    const aviso = $("pl-aviso");
+    const error = $("pl-error");
+    const editor = $("pl-editor");
+    const tituloEditor = $("pl-editor-titulo");
+    const notas = $("pl-editor-notas");
+    const form = $<HTMLFormElement>("pl-form");
+    const campos = $<HTMLFieldSetElement>("pl-campos");
+    const inputNombre = $<HTMLInputElement>("pl-nombre");
+    const errorNombreEl = $("pl-nombre-error");
+    const inputDescripcion = $<HTMLTextAreaElement>("pl-descripcion");
+    const listaPasos = $("pl-pasos");
+    const botonAgregar = $<HTMLButtonElement>("pl-agregar-paso");
+    const errorEditor = $("pl-editor-error");
+    const botonGuardar = $<HTMLButtonElement>("pl-guardar");
+    const botonCancelar = $<HTMLButtonElement>("pl-cancelar");
+
+    let plantillas: Plantilla[] = leerDatos(raiz.dataset.plantillas);
+    /** Un envío a la vez: un segundo clic mientras responde la API no manda nada. */
+    let ocupado = false;
+    /** El editor abierto (id null = plantilla nueva) y cómo estaba al abrirlo. */
+    let edicion: { id: number | null; soloCabecera: boolean; inicial: Foto } | null = null;
+
+    // ── Utilidades de pantalla ────────────────────────────────────────────────
+    function el<K extends keyof HTMLElementTagNameMap>(tag: K, clase = "", texto?: string): HTMLElementTagNameMap[K] {
+      const nodo = document.createElement(tag);
+      if (clase) nodo.className = clase;
+      if (texto !== undefined) nodo.textContent = texto;
+      return nodo;
+    }
+    const insignia = (texto: string, clase = "bg-slate-100 text-slate-600") => el("span", `badge ${clase}`, texto);
+    function mostrar(caja: HTMLElement, texto: string) {
+      caja.textContent = texto;
+      caja.classList.toggle("hidden", !texto);
+    }
+    function avisar(texto: string) {
+      mostrar(error, "");
+      mostrar(aviso, texto);
+    }
+    function fallar(texto: string) {
+      mostrar(aviso, "");
+      mostrar(error, texto);
+      error.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+    function fallarEditor(texto: string) {
+      mostrar(errorEditor, texto);
+      errorEditor.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+    const ordenar = () => plantillas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || a.id - b.id);
+
+    function leerDatos(texto: string | undefined): Plantilla[] {
+      try {
+        const datos = JSON.parse(texto || "[]");
+        return Array.isArray(datos) ? datos : [];
+      } catch {
+        return [];
+      }
+    }
+
+    /** La plantilla que devolvió la API, con lo que la API no trae (documento, vínculos) tomado de la pantalla. */
+    function incorporar(api: PlantillaApi, items?: PasoApi[]) {
+      const previa = plantillas.find((p) => p.id === api.id);
+      const nueva: Plantilla = {
+        id: api.id,
+        nombre: api.nombre,
+        descripcion: api.descripcion ?? "",
+        activa: api.activa === undefined ? previa?.activa ?? true : !!api.activa,
+        tipo: api.tipoDocumento ?? previa?.tipo ?? "sop",
+        documento: previa?.documento ?? (api.procedimientoId ? { id: api.procedimientoId, codigo: null, version: api.procedimientoVersion ?? null } : null),
+        conVinculos: previa?.conVinculos ?? false,
+        items: api.items ?? items ?? previa?.items ?? [],
+      };
+      plantillas = [...plantillas.filter((p) => p.id !== api.id), nueva];
+      ordenar();
+      return nueva;
+    }
+
+    /** Vuelve a leer una plantilla con sus pasos (null si no se pudo). */
+    async function leerDeApi(id: number): Promise<Plantilla | null> {
+      try {
+        const res = await fetch(`/api/checklist-plantillas/${id}`);
+        const j = await res.json().catch(() => null);
+        return res.ok && j?.plantilla ? incorporar(j.plantilla) : null;
+      } catch {
+        return null;
+      }
+    }
+    /** Después de guardar: lo que quedó en la base o, sin red, lo que se mandó. */
+    async function releer(id: number, respaldo: PlantillaApi, items?: PasoApi[]) {
+      return (await leerDeApi(id)) ?? incorporar(respaldo, items);
+    }
+
+    // ── Lista ─────────────────────────────────────────────────────────────────
+    function fila(p: Plantilla) {
+      const tr = el("tr");
+      tr.dataset.plantillaId = String(p.id);
+      const tdNombre = el("td", "px-3 py-2");
+      tdNombre.append(el("span", "font-medium text-slate-900", p.nombre));
+      if (!p.activa) tdNombre.append(" ", insignia("Inactiva"));
+      if (esSugerida(p.nombre)) tdNombre.append(" ", insignia("Punto de partida", "bg-amber-100 text-amber-800"));
+      if (p.descripcion) tdNombre.append(el("div", "mt-0.5 text-xs text-slate-500", p.descripcion));
+      const r = resumenPasos(p.items);
+      const tdDoc = el("td", "px-3 py-2 text-xs");
+      if (p.documento) {
+        const a = el("a", "text-blue-700 hover:underline", `${p.documento.codigo ?? `Documento ${p.documento.id}`}${p.documento.version ? ` v${p.documento.version}` : ""}`);
+        a.href = `/procedimientos/${p.documento.id}`;
+        tdDoc.append(a);
+      } else tdDoc.textContent = "—";
+      const tdAcciones = el("td", "px-3 py-2");
+      const acciones = el("div", "flex flex-wrap gap-2");
+      const editar = el("button", "btn-secondary btn-sm", "Editar");
+      editar.type = "button";
+      editar.dataset.editar = String(p.id);
+      editar.setAttribute("aria-label", `Editar «${p.nombre}»`);
+      const estado = el("button", p.activa ? "btn-danger btn-sm" : "btn-secondary btn-sm", p.activa ? "Desactivar" : "Activar");
+      estado.type = "button";
+      estado.dataset.estado = String(p.id);
+      estado.setAttribute("aria-label", `${p.activa ? "Desactivar" : "Activar"} «${p.nombre}»`);
+      acciones.append(editar, estado);
+      tdAcciones.append(acciones);
+      tr.append(
+        tdNombre,
+        el("td", "px-3 py-2 text-xs uppercase text-slate-600", p.tipo),
+        el("td", "px-3 py-2", String(r.pasos)),
+        el("td", "px-3 py-2", String(r.conLectura)),
+        el("td", "px-3 py-2", String(r.criticos)),
+        tdDoc,
+        tdAcciones,
+      );
+      return tr;
+    }
+
+    function pintarLista() {
+      lista.replaceChildren(...plantillas.map(fila));
+      vacia.classList.toggle("hidden", plantillas.length > 0);
+      const sugerida = plantillaConNombre(plantillas, PLANTILLA_SUGERIDA.nombre);
+      botonSugerida.textContent = sugerida ? "Abrir plantilla sugerida" : "Crear plantilla sugerida";
+      estadoSugerida.textContent = sugerida ? `Ya está creada${sugerida.activa ? "" : " (inactiva)"}: ábrela para revisarla.` : "";
+    }
+
+    lista.addEventListener("click", (e) => {
+      const boton = (e.target as HTMLElement).closest("button");
+      if (!boton) return;
+      if (boton.dataset.editar) abrirEditor(Number(boton.dataset.editar));
+      else if (boton.dataset.estado) void cambiarEstado(Number(boton.dataset.estado), boton as HTMLButtonElement);
+    });
+
+    async function cambiarEstado(id: number, boton: HTMLButtonElement) {
+      if (ocupado) return;
+      const p = plantillas.find((x) => x.id === id);
+      if (!p) return;
+      const activar = !p.activa;
+      if (!activar && !window.confirm(confirmacionDesactivar(p.tipo))) return;
+      ocupado = true;
+      boton.disabled = true;
+      try {
+        const res = await fetch(`/api/checklist-plantillas/${id}`, { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify({ activa: activar }) });
+        const j = await res.json().catch(() => null);
+        if (!res.ok) return fallar(mensajeDeRespuesta(res.status, j, "No se pudo cambiar el estado de la plantilla. Intenta de nuevo."));
+        incorporar(j?.plantilla ?? { ...p, activa: activar });
+        avisar(activar
+          ? `Plantilla «${p.nombre}» activada: se ofrece otra vez al crear rutinas y órdenes.`
+          : `Plantilla «${p.nombre}» desactivada: ya no se ofrece al crear rutinas ni órdenes.`);
+      } catch {
+        fallar("Sin conexión. La plantilla quedó como estaba: intenta de nuevo.");
+      } finally {
+        ocupado = false;
+        pintarLista();
+      }
+    }
+
+    // ── Plantilla sugerida ──────────────────────────────────────────────────────
+    botonSugerida.addEventListener("click", async () => {
+      if (ocupado) return;
+      const ya = plantillaConNombre(plantillas, PLANTILLA_SUGERIDA.nombre);
+      if (ya) {
+        abrirEditor(ya.id);
+        return;
+      }
+      ocupado = true;
+      botonSugerida.disabled = true;
+      botonSugerida.textContent = "Creando…";
+      const envio = envioSugerida();
+      try {
+        const res = await fetch("/api/checklist-plantillas", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(envio) });
+        const j = await res.json().catch(() => null);
+        if (res.status === 409 && Number(j?.id) > 0) {
+          // Alguien la creó en otra pestaña o con un nombre que solo cambia en tildes: se abre esa.
+          const otra = await leerDeApi(Number(j.id));
+          if (!otra) return fallar("La plantilla sugerida ya existe. Recarga la página para verla.");
+          pintarLista();
+          abrirEditor(otra.id);
+          return avisar(`La plantilla «${otra.nombre}» ya existía: aquí la puedes revisar.`);
+        }
+        if (!res.ok || !j?.plantilla) return fallar(mensajeDeRespuesta(res.status, j, "No se pudo crear la plantilla sugerida. Intenta de nuevo."));
+        const creada = await releer(j.plantilla.id, j.plantilla, envio.items);
+        pintarLista();
+        abrirEditor(creada.id);
+        avisar(`Plantilla «${creada.nombre}» creada. Es un punto de partida: revisa los pasos con Ingeniería Biomédica.`);
+      } catch {
+        fallar("Sin conexión. La plantilla sugerida no se creó: intenta de nuevo.");
+      } finally {
+        ocupado = false;
+        botonSugerida.disabled = false;
+        pintarLista();
+      }
+    });
+
+    // ── Editor ────────────────────────────────────────────────────────────────
+    function campo(clave: keyof PasoEditor, etiqueta: string, valor: string, opciones: { ancho?: boolean; inputmode?: string; maxlength?: number; placeholder?: string } = {}) {
+      const label = el("label", opciones.ancho ? "block sm:col-span-2" : "block");
+      label.append(el("span", "label", etiqueta));
+      const input = el("input", "input");
+      input.value = valor;
+      input.dataset.campo = clave;
+      input.setAttribute("autocomplete", "off");
+      if (opciones.inputmode) input.setAttribute("inputmode", opciones.inputmode);
+      if (opciones.maxlength) input.setAttribute("maxlength", String(opciones.maxlength));
+      if (opciones.placeholder) input.placeholder = opciones.placeholder;
+      label.append(input);
+      return label;
+    }
+    function casilla(clave: keyof PasoEditor, etiqueta: string, marcada: boolean) {
+      const label = el("label", "flex items-start gap-2 text-sm text-slate-700");
+      const input = el("input");
+      input.type = "checkbox";
+      input.checked = marcada;
+      input.dataset.campo = clave;
+      input.className = "mt-1";
+      label.append(input, el("span", "", etiqueta));
+      return label;
+    }
+    function botonPaso(accion: string, texto: string, etiqueta: string) {
+      const b = el("button", "btn-secondary btn-sm", texto);
+      b.type = "button";
+      b.dataset.accion = accion;
+      b.setAttribute("aria-label", etiqueta);
+      return b;
+    }
+
+    function tarjetaPaso(p: PasoEditor, soloLectura: boolean) {
+      const li = el("li", "rounded border border-slate-200 p-3");
+      li.dataset.paso = "";
+      const cabecera = el("div", "flex flex-wrap items-center justify-between gap-2");
+      const numero = el("strong", "text-sm text-slate-900");
+      numero.dataset.numero = "";
+      cabecera.append(numero);
+      if (!soloLectura) {
+        const acciones = el("div", "flex flex-wrap gap-1");
+        acciones.append(botonPaso("subir", "↑", "Subir este paso"), botonPaso("bajar", "↓", "Bajar este paso"), botonPaso("quitar", "Quitar", "Quitar este paso"));
+        cabecera.append(acciones);
+      }
+      const rejilla = el("div", "mt-2 grid gap-3 sm:grid-cols-2");
+      // Con la clase «hidden» (no el atributo): «grid» le ganaría al atributo.
+      const lectura = el("div", "grid gap-3 sm:col-span-2 sm:grid-cols-3");
+      lectura.dataset.lectura = "";
+      lectura.classList.toggle("hidden", !p.pideLectura);
+      lectura.append(
+        campo("unidad", "Unidad", p.unidad, { maxlength: UNIDAD_MAX, placeholder: "Ω, µA, °C" }),
+        campo("minimo", "Mínimo", p.minimo, { inputmode: "decimal", placeholder: "vacío = sin límite" }),
+        campo("maximo", "Máximo", p.maximo, { inputmode: "decimal", placeholder: "vacío = sin límite" }),
+      );
+      rejilla.append(
+        campo("texto", "Qué se hace", p.texto, { ancho: true }),
+        campo("criterio", "Criterio de aceptación (opcional)", p.criterio, { ancho: true, placeholder: "Cómo se ve un resultado correcto" }),
+        campo("minutos", "Minutos estimados (opcional)", p.minutos, { inputmode: "numeric" }),
+        campo("materiales", "Materiales (opcional)", p.materiales),
+        casilla("critico", "Punto crítico: una desviación no deja cerrar la orden", p.critico),
+        casilla("pideLectura", "Pide lectura: el técnico escribe el valor medido", p.pideLectura),
+        lectura,
+      );
+      const errorPaso = el("p", "mt-2 hidden text-xs text-red-600");
+      errorPaso.dataset.errorPaso = "";
+      li.append(cabecera, rejilla, errorPaso);
+      if (soloLectura) li.querySelectorAll("input").forEach((i) => { i.disabled = true; });
+      return li;
+    }
+
+    const tarjetas = () => [...listaPasos.querySelectorAll<HTMLLIElement>("li[data-paso]")];
+    function renumerar() {
+      const todas = tarjetas();
+      todas.forEach((li, i) => {
+        const numero = li.querySelector("[data-numero]");
+        if (numero) numero.textContent = `Paso ${i + 1}`;
+        const subir = li.querySelector<HTMLButtonElement>('[data-accion="subir"]');
+        const bajar = li.querySelector<HTMLButtonElement>('[data-accion="bajar"]');
+        if (subir) subir.disabled = i === 0;
+        if (bajar) bajar.disabled = i === todas.length - 1;
+      });
+      botonAgregar.disabled = !!edicion?.soloCabecera || todas.length >= MAX_PASOS;
+    }
+    function leerTarjetas(): PasoEditor[] {
+      return tarjetas().map((li) => {
+        const valor = (c: keyof PasoEditor) => li.querySelector<HTMLInputElement>(`[data-campo="${c}"]`)?.value ?? "";
+        const marcado = (c: keyof PasoEditor) => !!li.querySelector<HTMLInputElement>(`[data-campo="${c}"]`)?.checked;
+        return {
+          texto: valor("texto"), criterio: valor("criterio"), critico: marcado("critico"), minutos: valor("minutos"), materiales: valor("materiales"),
+          pideLectura: marcado("pideLectura"), unidad: valor("unidad"), minimo: valor("minimo"), maximo: valor("maximo"),
+        };
+      });
+    }
+    function foto(): Foto {
+      return {
+        nombre: inputNombre.value.trim(),
+        descripcion: inputDescripcion.value.trim(),
+        items: edicion?.soloCabecera ? edicion.inicial.items : leerPasos(leerTarjetas()).items,
+      };
+    }
+    const hayCambios = () => !!edicion && JSON.stringify(foto()) !== JSON.stringify(edicion.inicial);
+
+    function limpiarErrores() {
+      mostrar(errorEditor, "");
+      mostrar(errorNombreEl, "");
+      inputNombre.removeAttribute("aria-invalid");
+      for (const li of tarjetas()) {
+        const p = li.querySelector<HTMLElement>("[data-error-paso]");
+        if (p) mostrar(p, "");
+        li.querySelectorAll("[aria-invalid]").forEach((x) => x.removeAttribute("aria-invalid"));
+      }
+    }
+    function marcarErrores(errores: ErrorPaso[]) {
+      const todas = tarjetas();
+      for (const [i, li] of todas.entries()) {
+        const propios = errores.filter((e) => e.indice === i);
+        const p = li.querySelector<HTMLElement>("[data-error-paso]");
+        if (p) mostrar(p, propios.map((e) => e.mensaje).join(" · "));
+        for (const e of propios) li.querySelector(`[data-campo="${e.campo}"]`)?.setAttribute("aria-invalid", "true");
+      }
+      const primero = errores[0] ? todas[errores[0].indice]?.querySelector<HTMLInputElement>(`[data-campo="${errores[0].campo}"]`) : null;
+      primero?.focus();
+    }
+
+    function nota(texto: string, clase: string, enlace?: { href: string; texto: string }) {
+      const p = el("p", `border-l-4 px-3 py-2 text-sm ${clase}`, texto);
+      if (enlace) {
+        const a = el("a", "ml-1 font-semibold underline", enlace.texto);
+        a.href = enlace.href;
+        p.append(a);
+      }
+      return p;
+    }
+    function pintarNotas(p: Plantilla | null) {
+      const lista: HTMLElement[] = [];
+      const ambar = "border-amber-500 bg-amber-50 text-amber-900";
+      const gris = "border-slate-300 bg-slate-50 text-slate-700";
+      if (p && esSugerida(p.nombre)) {
+        lista.push(nota("Es un punto de partida: Ingeniería Biomédica revisa los pasos, los criterios, los tiempos y las lecturas, y los ajusta a cada familia de equipos y a su manual.", ambar));
+      }
+      if (p && claveNombre(p.nombre) === claveNombre(PLANTILLA_IEC62353)) {
+        lista.push(nota("El registro de seguridad eléctrica trae las lecturas de la orden por el texto de sus pasos (inspección visual, tierra de protección, aislamiento, fuga del equipo, fuga de partes aplicadas y prueba funcional). Si cambias esos textos, las lecturas se escriben a mano.", gris));
+      }
+      if (p?.documento) {
+        const doc = `${p.documento.codigo ?? `documento ${p.documento.id}`}${p.documento.version ? ` v${p.documento.version}` : ""}`;
+        lista.push(nota(`Es la parte ejecutable del procedimiento ${doc}. Si cambias los pasos, actualiza también el documento firmado.`, gris, { href: `/procedimientos/${p.documento.id}`, texto: "Ver el documento" }));
+      }
+      if (p?.tipo === "mop" && p.items.length === 0) {
+        lista.push(nota("Es un MOP: sus prerrequisitos y sus lecturas de liberación se configuran en su procedimiento.", gris));
+      }
+      if (p?.conVinculos) {
+        lista.push(nota("Esta plantilla tiene pasos con vínculos (variable, procedimiento, equipo, ubicación o acción si no cumple). Para no perderlos, sus pasos no se cambian aquí: puedes cambiar el nombre y la descripción, o desactivarla.", ambar));
+      }
+      notas.replaceChildren(...lista);
+    }
+
+    function verEditor(abierto: boolean) {
+      editor.classList.toggle("hidden", !abierto);
+      vistaLista.classList.toggle("hidden", abierto);
+      cajaSugerida.classList.toggle("hidden", abierto);
+      botonNueva.classList.toggle("hidden", abierto);
+    }
+
+    function abrirEditor(id: number | null) {
+      const p = id === null ? null : plantillas.find((x) => x.id === id) ?? null;
+      if (id !== null && !p) return;
+      const soloCabecera = !!p?.conVinculos;
+      edicion = { id, soloCabecera, inicial: { nombre: "", descripcion: "", items: [] } };
+      inputNombre.value = p?.nombre ?? "";
+      inputDescripcion.value = p?.descripcion ?? "";
+      tituloEditor.textContent = p ? `Editar «${p.nombre}»` : "Nueva plantilla";
+      pintarNotas(p);
+      const pasosEditor = p ? p.items.map(pasoEditorDesdeApi) : [pasoVacio()];
+      listaPasos.replaceChildren(...pasosEditor.map((x) => tarjetaPaso(x, soloCabecera)));
+      botonAgregar.classList.toggle("hidden", soloCabecera);
+      botonGuardar.textContent = p ? "Guardar cambios" : "Crear plantilla";
+      // Cómo quedó al abrir: sirve para mandar solo lo que cambió y para avisar al salir.
+      edicion.inicial = { nombre: inputNombre.value.trim(), descripcion: inputDescripcion.value.trim(), items: leerPasos(leerTarjetas()).items };
+      renumerar();
+      limpiarErrores();
+      mostrar(aviso, "");
+      mostrar(error, "");
+      verEditor(true);
+      editor.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      inputNombre.focus();
+    }
+
+    function cerrarEditor() {
+      edicion = null;
+      listaPasos.replaceChildren();
+      verEditor(false);
+      pintarLista();
+    }
+
+    listaPasos.addEventListener("click", (e) => {
+      const boton = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-accion]");
+      const li = boton?.closest<HTMLLIElement>("li[data-paso]");
+      if (!boton || !li) return;
+      if (boton.dataset.accion === "subir" && li.previousElementSibling) li.parentElement?.insertBefore(li, li.previousElementSibling);
+      else if (boton.dataset.accion === "bajar" && li.nextElementSibling) li.parentElement?.insertBefore(li.nextElementSibling, li);
+      else if (boton.dataset.accion === "quitar") {
+        const siguiente = (li.nextElementSibling ?? li.previousElementSibling) as HTMLElement | null;
+        li.remove();
+        renumerar();
+        (siguiente?.querySelector<HTMLInputElement>('[data-campo="texto"]') ?? botonAgregar).focus();
+        return;
+      }
+      renumerar();
+      boton.focus();
+    });
+    listaPasos.addEventListener("change", (e) => {
+      const casillaLectura = e.target as HTMLInputElement;
+      if (casillaLectura.dataset.campo !== "pideLectura") return;
+      const bloque = casillaLectura.closest("li")?.querySelector<HTMLElement>("[data-lectura]");
+      bloque?.classList.toggle("hidden", !casillaLectura.checked);
+    });
+    botonAgregar.addEventListener("click", () => {
+      if (!edicion || edicion.soloCabecera || tarjetas().length >= MAX_PASOS) return;
+      const li = tarjetaPaso(pasoVacio(), false);
+      listaPasos.append(li);
+      renumerar();
+      li.querySelector<HTMLInputElement>('[data-campo="texto"]')?.focus();
+    });
+
+    botonNueva.addEventListener("click", () => abrirEditor(null));
+    botonCancelar.addEventListener("click", () => {
+      if (ocupado) return;
+      if (hayCambios() && !window.confirm(MSG_EDITOR.salir)) return;
+      cerrarEditor();
+    });
+    window.addEventListener("beforeunload", (e) => {
+      if (!hayCambios()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (ocupado || !edicion) return;
+      limpiarErrores();
+      const actual = edicion;
+      const nombre = inputNombre.value.trim();
+      const descripcion = inputDescripcion.value.trim();
+      const errNombre = errorNombre(nombre, plantillas, actual.id);
+      const pasosEditor = actual.soloCabecera ? [] : leerTarjetas();
+      const leidos = actual.soloCabecera ? { items: actual.inicial.items, errores: [] as ErrorPaso[] } : leerPasos(pasosEditor);
+      const items = leidos.items;
+      // Los pasos solo se revisan (y se mandan) si cambiaron: cambiar el nombre de una
+      // plantilla vieja no se traba por algo de sus pasos que nadie tocó.
+      const pasosCambiaron = actual.id === null || (!actual.soloCabecera && !mismosPasos(items, actual.inicial.items));
+      const errores = pasosCambiaron ? leidos.errores : [];
+      let errorPasos: string | null = null;
+      if (pasosCambiaron && pasosEditor.length === 0) errorPasos = actual.id === null ? MSG_EDITOR.sinPasos : MSG_EDITOR.quitarTodos;
+      if (pasosEditor.length > MAX_PASOS) errorPasos = MSG_EDITOR.muchos;
+      if (errNombre) {
+        mostrar(errorNombreEl, errNombre);
+        inputNombre.setAttribute("aria-invalid", "true");
+      }
+      marcarErrores(errores);
+      if (errNombre || errorPasos || errores.length) {
+        if (errNombre) inputNombre.focus();
+        return fallarEditor(errNombre ?? errorPasos ?? MSG_EDITOR.revisa);
+      }
+
+      // Plantilla nueva: todo. Una que ya existe: solo lo que cambió (los pasos se
+      // reemplazan solo si cambiaron, y nunca los de una plantilla con vínculos).
+      const cuerpo: { nombre?: string; descripcion?: string | null; items?: PasoEnvio[] } = {};
+      if (actual.id === null) Object.assign(cuerpo, { nombre, descripcion: descripcion || null, items });
+      else {
+        if (nombre !== actual.inicial.nombre) cuerpo.nombre = nombre;
+        if (descripcion !== actual.inicial.descripcion) cuerpo.descripcion = descripcion || null;
+        if (pasosCambiaron) cuerpo.items = items;
+        if (Object.keys(cuerpo).length === 0) return fallarEditor(MSG_EDITOR.sinCambios);
+      }
+
+      // Mientras responde la API no se envía otra vez ni se cambia lo que ya salió.
+      ocupado = true;
+      campos.disabled = true;
+      botonGuardar.disabled = true;
+      botonCancelar.disabled = true;
+      const textoBoton = botonGuardar.textContent;
+      botonGuardar.textContent = "Guardando…";
+      try {
+        const url = actual.id === null ? "/api/checklist-plantillas" : `/api/checklist-plantillas/${actual.id}`;
+        const res = await fetch(url, { method: actual.id === null ? "POST" : "PATCH", headers: JSON_HEADERS, body: JSON.stringify(cuerpo) });
+        const j = await res.json().catch(() => null);
+        if (!res.ok || !j?.plantilla) {
+          if (res.status === 409 && j?.error === MENSAJE_PASOS_LIGADOS && actual.id !== null) {
+            // Alguien ligó sus pasos mientras se editaba: desde ahora solo cabecera.
+            const p = plantillas.find((x) => x.id === actual.id);
+            if (p) p.conVinculos = true;
+          }
+          return fallarEditor(mensajeDeRespuesta(res.status, j));
+        }
+        const id = Number(j.plantilla.id);
+        const guardada = await releer(id, j.plantilla, cuerpo.items ?? plantillas.find((x) => x.id === id)?.items);
+        edicion = null;
+        cerrarEditor();
+        avisar(actual.id === null ? `Plantilla «${guardada.nombre}» creada.` : `Plantilla «${guardada.nombre}» guardada.`);
+      } catch {
+        fallarEditor(MSG_EDITOR.sinConexion);
+      } finally {
+        ocupado = false;
+        campos.disabled = false;
+        botonGuardar.disabled = false;
+        botonCancelar.disabled = false;
+        if (edicion) botonGuardar.textContent = textoBoton;
+      }
+    });
+
+    ordenar();
+    pintarLista();
+    const abrir = Number(raiz.dataset.abrir);
+    if (abrir > 0) abrirEditor(abrir);
+  }
+</script>

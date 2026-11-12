@@ -34,6 +34,7 @@ const operationalTabs = area ? [
   {href: areaHref("/seguridad-electrica", "biomedico"), label: "Seguridad eléctrica", show: area === "biomedico" && verBio},
   {href: areaHref("/expedientes", "biomedico"), label: "Expedientes", show: area === "biomedico" && verBio},
   {href: areaHref("/capacitaciones", "biomedico"), label: "Capacitaciones", show: area === "biomedico" && verBio},
+  {href: areaHref("/configuracion/plantillas", "biomedico"), label: "Plantillas de checklist", show: area === "biomedico" && isAdminOrJefe},
 ].filter(x=>x.show) : [];
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",

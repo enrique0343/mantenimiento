@@ -9,6 +9,9 @@ import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 
 const out = await build({ entryPoints: ['src/lib/plantillas-checklist.ts'], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' });
 const P = await import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
+// Ronda 2: lo que comparten el editor (/configuracion/plantillas) y la API.
+const outEditor = await build({ entryPoints: ['src/lib/plantillas-checklist-editor.ts'], bundle: true, format: 'esm', platform: 'neutral', write: false, logLevel: 'silent' });
+const E = await import(`data:text/javascript;base64,${Buffer.from(outEditor.outputFiles[0].text).toString('base64')}`);
 
 let n = 0;
 const es = (r, esperado, nota) => { n++; assert.deepEqual(r, esperado, nota); };
@@ -81,6 +84,34 @@ try {
   const inserts = h.queries.slice(antesQ).filter((q) => /insert into "checklist_plantilla_items"/i.test(q.sql));
   es(inserts.length, 3, 'tres INSERT de pasos');
   si(inserts.every((q) => (q.sql.match(/\?/g) ?? []).length <= 100), 'ningún INSERT pasa de 100 parámetros (límite de D1)');
+  es(creada.body.plantilla.descripcion, 'Para la prueba', 'la cabecera vuelve completa');
+
+  // Ronda 2 · un nombre por plantilla: la sugerida del editor se crea una sola vez.
+  const cuantas = (nombre) => db.prepare('SELECT COUNT(*) AS c FROM checklist_plantillas WHERE nombre = ?').get(nombre).c;
+  const sugerida = await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'jefe', data: E.envioSugerida() });
+  es(sugerida.status, 201, 'crear la plantilla sugerida');
+  const idSugerida = sugerida.body.plantilla.id;
+  es(filasDe(idSugerida).map((p) => [p.orden, p.bloqueante, p.requiere_valor, p.unidad]), [[1, 1, 0, null], [2, 1, 0, null], [3, 0, 0, null], [4, 1, 0, null], [5, 0, 0, null]],
+    'sus cinco pasos, críticos 1, 2 y 4, sin lecturas');
+  es(filasDe(idSugerida).map((p) => p.texto), E.PLANTILLA_SUGERIDA.items.map((p) => p.texto), 'los textos de partida');
+  es(await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'admin', data: E.envioSugerida() }),
+    { status: 409, body: { error: E.mensajeNombreRepetido('Preventivo biomédico general'), id: idSugerida } }, 'otra vez: 409 con el id de la que ya existe');
+  es((await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'jefe', data: { nombre: '  PREVENTIVO biomedico   general ', items: ['Uno'] } })).body.id,
+    idSugerida, 'sin tildes, con mayúsculas o espacios de más también es la misma');
+  es(cuantas('Preventivo biomédico general'), 1, 'la sugerida existe una sola vez');
+  // Dos envíos a la vez: el otro gana entre la revisión y el INSERT; este no crea nada.
+  h.faults.beforeStatement = {
+    matches: (sql) => /INSERT INTO checklist_plantillas \(nombre, descripcion\)/.test(sql),
+    run: async () => { db.prepare("INSERT INTO checklist_plantillas (nombre) VALUES ('Plantilla en carrera')").run(); },
+  };
+  const carrera = await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'jefe', data: { nombre: 'Plantilla en carrera', items: ['Uno'] } });
+  es([carrera.status, carrera.body.id === db.prepare("SELECT id FROM checklist_plantillas WHERE nombre = 'Plantilla en carrera'").get().id, cuantas('Plantilla en carrera')],
+    [409, true, 1], 'dos envíos a la vez con el mismo nombre dejan una sola plantilla');
+  // Renombrar: no a un nombre de otra; sí corregir tildes o mayúsculas del propio.
+  es(await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${idNueva}`, { method: 'PATCH', id: idNueva, rol: 'jefe', data: { nombre: 'Preventivo Biomedico General' } }),
+    { status: 409, body: { error: E.mensajeNombreRepetido('Preventivo biomédico general'), id: idSugerida } }, 'renombrar a un nombre que ya tiene otra: 409');
+  es((await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${idSugerida}`, { method: 'PATCH', id: idSugerida, rol: 'jefe', data: { nombre: 'Preventivo Biomédico General' } })).body.plantilla.nombre,
+    'Preventivo Biomédico General', 'corregir mayúsculas del propio nombre sí se puede');
 
   // Reemplazar pasos: conservan lectura, unidad y rango
   es(await h.call(h.app.una.PATCH, '/api/checklist-plantillas/99999', { method: 'PATCH', id: 99999, rol: 'admin', data: { activa: false } }), { status: 404, body: { error: 'Plantilla no encontrada' } }, 'plantilla que no existe');
@@ -116,7 +147,8 @@ try {
   const antesLigada = filasDe(idNueva);
   const ligada = await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${idNueva}`, { method: 'PATCH', id: idNueva, rol: 'admin', data: { nombre: 'Otro nombre', items: ['Solo uno'] } });
   es(ligada.status, 409, 'pasos con acción si no cumple: no se reemplazan');
-  si(typeof ligada.body.error === 'string' && ligada.body.error.includes('vínculos'), 'explica por qué');
+  es(ligada.body, { error: E.MENSAJE_PASOS_LIGADOS }, 'explica por qué y lleva al editor');
+  si(ligada.body.error.includes('vínculos') && ligada.body.error.includes('«Plantillas de checklist» (/configuracion/plantillas)'), 'el texto nombra el editor nuevo y su ruta');
   es(filasDe(idNueva), antesLigada, 'los pasos quedan como estaban');
   es(db.prepare('SELECT nombre FROM checklist_plantillas WHERE id = ?').get(idNueva).nombre, 'Prueba de 20 pasos', 'el nombre tampoco cambia');
   es((await h.call(h.app.una.PATCH, `/api/checklist-plantillas/${idNueva}`, { method: 'PATCH', id: idNueva, rol: 'admin', data: { nombre: 'Prueba renombrada' } })).body.plantilla.nombre, 'Prueba renombrada', 'sin pasos sí se puede renombrar');
