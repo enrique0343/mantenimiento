@@ -1,0 +1,20 @@
+---
+// Atajo: /seguridad-electrica/nueva?activo=ID[&tipo=…&orden=…] abre el formulario
+// del equipo conservando el tipo y la orden. Sin equipo, al tablero.
+import { puedeVerBio } from "@/lib/biomedico";
+import { idPositivo } from "@/lib/seguridad-electrica";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const params = Astro.url.searchParams;
+const activo = idPositivo(params.get("activo"));
+if (!activo) return Astro.redirect("/seguridad-electrica");
+const destino = new URLSearchParams();
+for (const clave of ["tipo", "orden"]) {
+  const valor = params.get(clave);
+  if (valor) destino.set(clave, valor);
+}
+const q = destino.toString();
+return Astro.redirect(`/activos/${activo}/seguridad-electrica/nueva${q ? `?${q}` : ""}`);
+---

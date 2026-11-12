@@ -1,9 +1,12 @@
 import type { APIRoute } from "astro";
-import { z } from "zod";
-import { eq, asc, desc, inArray } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { getDb } from "@/lib/db";
 import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { exigirRol } from "@/lib/seguridad-electrica";
+import { logAudit } from "@/lib/audit";
+import { crearPlantillaSchema, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas } from "@/lib/plantillas-checklist";
 
 export const prerender = false;
 
@@ -20,75 +23,57 @@ export const GET: APIRoute = async (ctx) => {
   const plantillas = await db
     .select()
     .from(checklistPlantillas)
+    .where(soloActivas ? eq(checklistPlantillas.activa, true) : undefined)
     .orderBy(asc(checklistPlantillas.nombre));
 
-  const filtradas = soloActivas ? plantillas.filter((p) => p.activa) : plantillas;
-
-  // Cargar items por plantilla
-  if (filtradas.length === 0) return Response.json({ plantillas: [] });
-  const items = await db
+  if (plantillas.length === 0) return Response.json({ plantillas: [] });
+  // Todos los pasos de una vez y se reparten aquí: una lista de ids en la consulta
+  // pasaría el límite de 100 parámetros de D1 con muchas plantillas.
+  const ids = new Set(plantillas.map((p) => p.id));
+  const items = (await db
     .select()
     .from(checklistPlantillaItems)
-    .where(inArray(checklistPlantillaItems.plantillaId, filtradas.map((p) => p.id)))
-    .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id));
+    .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id)))
+    .filter((it) => ids.has(it.plantillaId));
 
   return Response.json({
-    plantillas: filtradas.map((p) => ({
+    plantillas: plantillas.map((p) => ({
       ...p,
       items: items.filter((it) => it.plantillaId === p.id),
     })),
   });
 };
 
-// Un item puede venir como string simple (compat) o como objeto enriquecido.
-const itemSchema = z.union([
-  z.string().min(1),
-  z.object({
-    texto: z.string().min(1),
-    criterioAceptacion: z.string().nullable().optional(),
-    bloqueante: z.boolean().optional(),
-    minutosEstimados: z.number().int().positive().nullable().optional(),
-    materiales: z.string().nullable().optional(),
-  }),
-]);
-
-function normalizarItem(raw: z.infer<typeof itemSchema>, orden: number, plantillaId: number) {
-  const it = typeof raw === "string" ? { texto: raw } : raw;
-  return {
-    plantillaId,
-    texto: it.texto,
-    criterioAceptacion: ("criterioAceptacion" in it ? it.criterioAceptacion : null) ?? null,
-    bloqueante: ("bloqueante" in it ? it.bloqueante : false) ?? false,
-    minutosEstimados: ("minutosEstimados" in it ? it.minutosEstimados : null) ?? null,
-    materiales: ("materiales" in it ? it.materiales : null) ?? null,
-    orden,
-  };
-}
-
-const createSchema = z.object({
-  nombre: z.string().min(1),
-  descripcion: z.string().nullable().optional(),
-  items: z.array(itemSchema).default([]),
-});
-
-// POST: crear plantilla (solo admin)
+// POST: crear plantilla (admin y jefe), con sus pasos y su constancia.
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
-  const parsed = createSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  const parsed = crearPlantillaSchema.safeParse(body);
+  if (!parsed.success) return Response.json({ error: mensajeErrorPlantilla(parsed.error) }, { status: 400 });
 
   const db = getDb(ctx);
   const [plantilla] = await db.insert(checklistPlantillas).values({
     nombre: parsed.data.nombre,
-    descripcion: parsed.data.descripcion ?? null,
+    descripcion: parsed.data.descripcion?.trim() || null,
   }).returning();
 
-  if (parsed.data.items.length) {
-    await db.insert(checklistPlantillaItems).values(
-      parsed.data.items.map((raw, orden) => normalizarItem(raw, orden, plantilla.id))
-    );
+  const filas = filasDeReemplazo(parsed.data.items, [], plantilla.id);
+  if (filas.length) {
+    const inserts = tandasDeFilas(filas).map((t) => db.insert(checklistPlantillaItems).values(t));
+    try {
+      await db.batch(inserts as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    } catch (e) {
+      // Sin pasos la plantilla no sirve: se quita la cabecera recién creada.
+      await db.delete(checklistPlantillas).where(eq(checklistPlantillas.id, plantilla.id)).catch(() => {});
+      throw e;
+    }
   }
+  await logAudit(ctx, {
+    entidad: "checklist_plantilla",
+    entidadId: plantilla.id,
+    accion: "create",
+    resumen: `Plantilla «${plantilla.nombre}» creada con ${filas.length} ${filas.length === 1 ? "paso" : "pasos"}`,
+  });
   return Response.json({ plantilla }, { status: 201 });
 };
