@@ -16,6 +16,7 @@ import {
 import { leerNumero, textoDeNumero } from "./numero";
 import { datosTecnicosValidosParaArea, leerDatosTecnicos, serializarDatosTecnicos } from "./activo-area";
 import { errorCodigoActivo, normalizarSerie, MENSAJE_SOLO_BIOMEDICOS } from "./registro-activos";
+import { sinFormula } from "./csv";
 
 /** Filas de datos como máximo por archivo. */
 export const MAX_FILAS_IMPORTACION = 3000;
@@ -79,6 +80,16 @@ export function parsearCsv(texto: string, separadorFijo?: Separador): { separado
   }
   if (campo !== "" || fila.length > 0 || !inicioCampo) { fila.push(campo); registros.push(fila); }
   return { separador, registros };
+}
+
+/**
+ * toCsv (src/lib/csv.ts) antepone «'» al texto que Excel abriría como fórmula («=…», «+…»,
+ * «-…», «@…»). Al volver a cargar un CSV descargado de la app, ese apóstrofo no es parte
+ * del dato y se quita. Solo cuando el resto es justo lo que toCsv protege: un apóstrofo
+ * que escribió la persona («'T HOOFT», «'123») se conserva.
+ */
+export function sinApostrofoDeCsv(celda: string): string {
+  return celda.startsWith("'") && sinFormula(celda.slice(1)) === celda ? celda.slice(1) : celda;
 }
 
 /** 'Vida útil (años)' → 'vida_util_anos'; 'N.º de serie' → 'n_de_serie'. */
@@ -482,7 +493,8 @@ export function planificarImportacion(texto: string, ctx: ContextoImportacion): 
     const dato = (clave: string): string | undefined => {
       const i = indice[clave];
       if (i === undefined) return undefined;
-      const v = (celdas[i] ?? "").trim();
+      // El apóstrofo que puso la descarga contra fórmulas de Excel no se guarda.
+      const v = sinApostrofoDeCsv((celdas[i] ?? "").trim()).trim();
       return v ? v : undefined;
     };
     const resultado = (codigo: string, accion: ResultadoFila["accion"], detalle: string[], avisos: string[] = []): ResultadoFila =>

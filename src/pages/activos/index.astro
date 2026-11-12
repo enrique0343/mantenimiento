@@ -142,6 +142,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
       {gestiona && <a href={areaHref("/activos/importar", area)} class="btn-secondary text-sm">Carga masiva</a>}
       {puedeDescargar && <a href={`/api/reportes/equipos?${consultaActual}`} class="btn-secondary text-sm" data-con-busqueda>Descargar CSV</a>}
       {puedeDescargar && <a href={`/activos/imprimir?${consultaActual}`} class="btn-secondary text-sm" data-con-busqueda>Imprimir</a>}
+      {puedeDescargar && <a href={`/activos/imprimir?${consultaActual}&agrupar=centro`} class="btn-secondary text-sm" data-con-busqueda title="Inventario desglosado por centro de costo, con subtotal por centro">Imprimir por centro de costo</a>}
       {canCreate && <a href={areaHref("/activos/nuevo", area)} class="btn-primary">+ {area ? AREAS[area].createLabel : "Registrar activo"}</a>}
     </div>
   </div>

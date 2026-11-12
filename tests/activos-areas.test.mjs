@@ -40,7 +40,8 @@ async function expect(route, context, status) {const r=await route(context);asse
 const fields={aires:{tipoUnidad:'Mini split',capacidadBtuH:12000,refrigerante:'R-410A'},infraestructura:{tipoInstalacion:'Cubierta',sector:'Edificio A'},equipo_general:{servicio:'Oficina'},biomedico:{servicio:'Consulta'}};
 const ids={};
 for(const [idx,area] of AREA_KEYS.entries()){
- const out=await expect(collection.POST,ctx('POST','/api/activos',{codigo:'TEST-'+area,nombre:'Prueba '+area,rubro:area,datosTecnicos:fields[area],criticidadOperacional:['alta','media','baja'][idx%3]}),201);
+ // Fase 59 · requisito 16: un biomédico se registra con su clase de riesgo.
+ const out=await expect(collection.POST,ctx('POST','/api/activos',{codigo:'TEST-'+area,nombre:'Prueba '+area,rubro:area,datosTecnicos:fields[area],criticidadOperacional:['alta','media','baja'][idx%3],...(area==='biomedico'?{claseRiesgo:'IIa'}:{})}),201);
  ids[area]=out.activo.id;assert.equal(out.activo.rubro,area);assert.deepEqual(JSON.parse(out.activo.datosTecnicos),Object.fromEntries(Object.entries(fields[area]).map(([key,value])=>[key,typeof value==='string'?value.toUpperCase():value])));assert.equal(out.activo.tipo,area==='biomedico'?'biomedico':'general');
 }
 for(const area of AREA_KEYS){const out=await expect(collection.GET,ctx('GET','/api/activos?area='+area),200);assert.deepEqual(out.activos.map(a=>a.id),[ids[area]]);}

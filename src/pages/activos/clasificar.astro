@@ -388,38 +388,85 @@ const CRIT = [
       return false;
     }
 
+    // Lo guardado de cada selector va en data-guardado: el área y la clase se guardan
+    // juntas cuando un equipo pasa a biomédicos, así que los dos selectores lo comparten.
+    const AVISO_CLASE = "Elige la clase de riesgo: el equipo pasa a biomédicos al guardarla.";
+
+    /** Nota bajo el área de la fila (null la quita). */
+    function notaArea(fila: HTMLTableRowElement, texto: string | null) {
+      let nota = fila.querySelector<HTMLElement>(".area-nota");
+      if (!texto) { nota?.remove(); return; }
+      if (!nota) {
+        nota = document.createElement("div");
+        nota.className = "area-nota mt-0.5 text-[10px] text-red-600";
+        fila.querySelector(".dominio-sel")!.insertAdjacentElement("afterend", nota);
+      }
+      nota.textContent = texto;
+    }
+
+    /** Olvida un paso a biomédicos que esperaba la clase: la fila vuelve a lo guardado. */
+    function cancelarPendiente(fila: HTMLTableRowElement) {
+      delete fila.dataset.areaPendiente;
+      notaArea(fila, null);
+      const dominio = fila.querySelector<HTMLSelectElement>(".dominio-sel")!;
+      const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
+      clase.value = clase.dataset.guardado ?? "";
+      clase.disabled = (dominio.dataset.guardado ?? "") !== "biomedico";
+      pintarClase(clase);
+    }
+
+    /** Deja la fila como quedó guardada el área: subcategoría, clase, avisos y filtros. */
+    async function trasGuardarArea(sel: HTMLSelectElement) {
+      const fila = sel.closest("tr")!;
+      const sub = fila.querySelector<HTMLSelectElement>(".subcat-sel")!;
+      const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
+      const esBio = sel.value === "biomedico";
+      // La subcategoría y la clase de riesgo solo aplican a biomédicos: si deja
+      // de serlo, se limpian. Se espera a que se guarden antes de recargar.
+      const limpiezas: Promise<boolean>[] = [];
+      if (!esBio && sub.value) {
+        sub.value = "";
+        limpiezas.push(patchActivo(sub, { subcategoria: null }, ""));
+      }
+      if (!esBio && clase.value) {
+        clase.value = "";
+        limpiezas.push(patchActivo(clase, { claseRiesgo: null }, ""));
+      }
+      await Promise.all(limpiezas);
+      clase.dataset.guardado = clase.value;
+      sub.disabled = !esBio;
+      clase.disabled = !esBio;
+      fila.dataset.clase = esBio ? (clase.value || "__sin__") : "";
+      pintarClase(clase);
+      recontarClase();
+      fila.dataset.dominio = sel.value || "__sin__";
+      const areaActual = new URL(location.href).searchParams.get("area");
+      if (areaActual && sel.value !== areaActual) { location.reload(); return; }
+      sel.className = sel.className.replace("border-amber-300 bg-amber-50 text-amber-800", "border-slate-200 bg-white text-slate-700");
+    }
+
     document.querySelectorAll<HTMLSelectElement>(".dominio-sel").forEach((sel) => {
-      let prev = sel.value;
+      sel.dataset.guardado = sel.value;
       sel.addEventListener("change", async () => {
-        const ok = await patchActivo(sel, { rubro: sel.value || null }, prev);
-        if (ok) {
-          prev = sel.value;
-          // Habilita/deshabilita la subcategoría según el dominio elegido
-          const fila = sel.closest("tr")!;
-          const sub = fila.querySelector<HTMLSelectElement>(".subcat-sel")!;
-          const esBio = sel.value === "biomedico";
-          // La subcategoría y la clase de riesgo solo aplican a biomédicos: si deja
-          // de serlo, se limpian. Se espera a que se guarden antes de recargar.
-          const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
-          const limpiezas: Promise<boolean>[] = [];
-          if (!esBio && sub.value) {
-            sub.value = "";
-            limpiezas.push(patchActivo(sub, { subcategoria: null }, ""));
-          }
-          if (!esBio && clase.value) {
-            clase.value = "";
-            limpiezas.push(patchActivo(clase, { claseRiesgo: null }, ""));
-          }
-          await Promise.all(limpiezas);
-          sub.disabled = !esBio;
-          clase.disabled = !esBio;
-          fila.dataset.clase = esBio ? (clase.value || "__sin__") : "";
+        const fila = sel.closest("tr")!;
+        const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
+        const guardado = sel.dataset.guardado ?? "";
+        if (fila.dataset.areaPendiente) cancelarPendiente(fila);
+        if (sel.value === guardado) return;
+        // Requisito 16: un equipo no pasa a biomédicos sin clase de riesgo (el servidor
+        // responde 400). Se pide en la misma fila y el área se guarda junto con la clase.
+        if (sel.value === "biomedico" && !clase.value) {
+          fila.dataset.areaPendiente = "biomedico";
+          clase.disabled = false;
           pintarClase(clase);
-          recontarClase();
-          fila.dataset.dominio = sel.value || "__sin__";
-          const areaActual = new URL(location.href).searchParams.get("area");
-          if (areaActual && sel.value !== areaActual) { location.reload(); return; }
-          sel.className = sel.className.replace("border-amber-300 bg-amber-50 text-amber-800", "border-slate-200 bg-white text-slate-700");
+          notaArea(fila, "Falta la clase de riesgo: el cambio de área no se ha guardado.");
+          clase.focus();
+          window.showToast?.(AVISO_CLASE, "warning");
+          return;
+        }
+        if (await patchActivo(sel, { rubro: sel.value || null }, guardado)) {
+          sel.dataset.guardado = sel.value;
+          await trasGuardarArea(sel);
         }
       });
     });
@@ -446,11 +493,31 @@ const CRIT = [
       if (completa) completa.classList.toggle("hidden", n > 0 || Number(completa.dataset.otrosPendientes ?? 0) > 0);
     }
     document.querySelectorAll<HTMLSelectElement>(".clase-sel").forEach((sel) => {
-      let prev = sel.value;
+      sel.dataset.guardado = sel.value;
       sel.addEventListener("change", async () => {
-        if (await patchActivo(sel, { claseRiesgo: sel.value || null }, prev)) {
-          prev = sel.value;
-          sel.closest("tr")!.dataset.clase = sel.value || "__sin__";
+        const fila = sel.closest("tr")!;
+        const pendiente = fila.dataset.areaPendiente;
+        if (pendiente) {
+          // Paso a biomédicos que esperaba la clase: área y clase en un solo guardado.
+          const dominio = fila.querySelector<HTMLSelectElement>(".dominio-sel")!;
+          dominio.disabled = true;
+          const ok = await patchActivo(sel, { rubro: pendiente, claseRiesgo: sel.value }, sel.dataset.guardado ?? "");
+          dominio.disabled = false;
+          if (!ok) {
+            dominio.value = dominio.dataset.guardado ?? "";
+            cancelarPendiente(fila);
+            return;
+          }
+          delete fila.dataset.areaPendiente;
+          notaArea(fila, null);
+          sel.dataset.guardado = sel.value;
+          dominio.dataset.guardado = pendiente;
+          await trasGuardarArea(dominio);
+          return;
+        }
+        if (await patchActivo(sel, { claseRiesgo: sel.value || null }, sel.dataset.guardado ?? "")) {
+          sel.dataset.guardado = sel.value;
+          fila.dataset.clase = sel.value || "__sin__";
           pintarClase(sel);
           recontarClase();
         }

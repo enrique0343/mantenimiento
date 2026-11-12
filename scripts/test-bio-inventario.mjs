@@ -79,6 +79,23 @@ es(F.describirFiltros(filtros('clase=III&centro=5&sucursal=2'), { centro: 'CC-05
 es(F.describirFiltros(filtros('estado=baja&clase=sin&centro=sin&registro=vencido&q=x')), 'Dados de baja · Sin clase de riesgo · Sin centro de costo · Registro sanitario: vencido · Búsqueda «x»', 'describir sin valores');
 es(F.describirFiltros(filtros('', 'todos')), 'Todos', 'describir todos');
 
+// ── Ronda 2 · A4: inventario desglosado por centro de costo (requisito 1) ──────
+es([F.leerAgrupacion(p('agrupar=centro')), F.leerAgrupacion(p('')), F.leerAgrupacion(p('agrupar=sede'))], ['centro', null, null], 'solo agrupar=centro agrupa');
+const enCentro = (codigo, centroCostoId, cc = null) => ({ codigo, fila: F.aFilaInventario({
+  a: { id: 1, codigo, nombre: 'X', tipo: 'biomedico', rubro: 'biomedico', estado: 'operativo', centroCostoId }, cc,
+}) });
+const cc = (id, codigo, nombre) => ({ id, codigo, nombre });
+const porCentro = F.agruparPorCentro([
+  enCentro('A-1', null), enCentro('A-2', 10, cc(10, 'CC-10', 'PEDIATRÍA')), enCentro('A-3', 2, cc(2, 'CC-2', 'UCI')),
+  enCentro('A-4', 10, cc(10, 'CC-10', 'PEDIATRÍA')), enCentro('A-5', null), enCentro('A-6', 1, cc(1, 'CC-1', 'EMERGENCIA')),
+]);
+es(porCentro.map((g) => [g.centroId, g.etiqueta, g.filas.map((x) => x.codigo)]), [
+  [1, 'CC-1 · EMERGENCIA', ['A-6']], [2, 'CC-2 · UCI', ['A-3']], [10, 'CC-10 · PEDIATRÍA', ['A-2', 'A-4']], [null, 'Sin centro de costo', ['A-1', 'A-5']],
+], 'por código del centro (CC-2 antes que CC-10), «Sin centro de costo» al final y el orden de llegada en cada grupo');
+es(porCentro.reduce((s, g) => s + g.filas.length, 0), 6, 'los subtotales suman el total');
+es(F.agruparPorCentro([]), [], 'sin equipos, sin grupos');
+es(F.agruparPorCentro([enCentro('A-1', null)]).map((g) => [g.etiqueta, g.filas.length]), [['Sin centro de costo', 1]], 'todos sin centro');
+
 // ── Código y serie (registro-activos.ts) ────────────────────────────────────
 es(R.errorCodigoActivo('BIO-001'), null, 'código válido');
 es(R.errorCodigoActivo('X'.repeat(60)), null, '60 caracteres');
@@ -330,7 +347,7 @@ const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelabl
         <td><input type="checkbox" class="row-chk" data-id="1"></td>
         <td><select class="fam-sel" data-id="1" data-sugerido="otro"><option value=""></option><option value="electrico">Eléctrico</option></select>
           <span class="fam-nota"></span><button type="button" class="fam-ok hidden"></button></td>
-        <td><select class="dominio-sel" data-id="1"><option value="biomedico" selected>Bio</option><option value="equipo_general">General</option></select></td>
+        <td><select class="dominio-sel" data-id="1"><option value="biomedico" selected>Bio</option><option value="equipo_general">General</option><option value="aires">Aires</option></select></td>
         <td><select class="subcat-sel" data-id="1"><option value="">—</option><option value="diagnostico">Diagnóstico</option></select></td>
         <td><select class="clase-sel" data-id="1"><option value="" disabled selected>— Elegir —</option><option value="I">Clase I</option><option value="III">Clase III</option></select></td>
         <td><select class="crit-sel" data-id="1"><option value="media" selected>Media</option></select></td>
@@ -347,10 +364,36 @@ const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelabl
   await elegir(fila.querySelector('.dominio-sel'), 'equipo_general');
   es(pedidos.slice(-2).map((x) => x[1]), [{ rubro: 'equipo_general' }, { claseRiesgo: null }], 'al dejar de ser biomédico se limpia la clase');
   es([fila.querySelector('.clase-sel').disabled, fila.dataset.clase], [true, ''], 'la clase queda deshabilitada');
-  responder = async () => { throw new TypeError('Failed to fetch'); };
+
+  // Ronda 2 · A2: el servidor responde 400 a un biomédico sin clase. Pasar a biomédicos pide la
+  // clase en la fila y manda área y clase en un solo guardado (antes mandaba {rubro} solo).
   const dominio = fila.querySelector('.dominio-sel');
+  const clase = fila.querySelector('.clase-sel');
+  const enviados = pedidos.length;
   await elegir(dominio, 'biomedico');
-  es([dominio.value, dominio.disabled, p.avisos.at(-1)], ['equipo_general', false, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'sin conexión: vuelve a lo guardado y avisa');
+  es([pedidos.length - enviados, dominio.value, clase.disabled, fila.dataset.areaPendiente, p.avisos.at(-1)?.[1]], [0, 'biomedico', false, 'biomedico', 'warning'],
+    'sin clase: no guarda todavía y pide la clase');
+  n++; assert.match(fila.querySelector('.area-nota')?.textContent ?? '', /^Falta la clase de riesgo/);
+  await elegir(dominio, 'equipo_general');
+  es([pedidos.length - enviados, clase.disabled, fila.dataset.areaPendiente, fila.querySelector('.area-nota')], [0, true, undefined, null], 'volver al área guardada: nada que mandar');
+  responder = async () => { throw new TypeError('Failed to fetch'); };
+  await elegir(dominio, 'biomedico');
+  await elegir(clase, 'I');
+  es(pedidos.at(-1), ['/api/activos/1', { rubro: 'biomedico', claseRiesgo: 'I' }], 'área y clase en un solo guardado');
+  es([dominio.value, dominio.disabled, clase.value, clase.disabled, fila.dataset.areaPendiente, p.avisos.at(-1)],
+    ['equipo_general', false, '', true, undefined, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'sin conexión: vuelve a lo guardado y avisa');
+  responder = async () => respuesta(200, { activo: { id: 1 } });
+  await elegir(dominio, 'biomedico');
+  await elegir(clase, 'III');
+  es(pedidos.at(-1)[1], { rubro: 'biomedico', claseRiesgo: 'III' }, 'con conexión: área y clase juntas');
+  es([fila.dataset.dominio, fila.dataset.clase, clase.disabled, fila.querySelector('.subcat-sel').disabled, fila.dataset.areaPendiente, fila.querySelector('.area-nota'), p.$('cSinClase').textContent],
+    ['biomedico', 'III', false, false, undefined, null, '0'], 'la fila queda biomédica con su clase');
+  await elegir(clase, 'I');
+  es(pedidos.at(-1)[1], { claseRiesgo: 'I' }, 'después, la clase sola');
+  await elegir(dominio, 'equipo_general');
+  responder = async () => { throw new TypeError('Failed to fetch'); };
+  await elegir(dominio, 'aires');
+  es([dominio.value, dominio.disabled, p.avisos.at(-1)], ['equipo_general', false, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'otra área sin conexión: vuelve a lo guardado y avisa');
   const familia = fila.querySelector('.fam-sel');
   await elegir(familia, 'electrico');
   es([familia.value, familia.disabled, p.avisos.at(-1)], ['', false, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'la familia tampoco queda trabada');

@@ -4,8 +4,12 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 
-const out = await build({ entryPoints: ['src/lib/importar-equipos.ts'], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' });
-const I = await import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
+const cargar = async (archivo) => {
+  const out = await build({ entryPoints: [archivo], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' });
+  return import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
+};
+const I = await cargar('src/lib/importar-equipos.ts');
+const C = await cargar('src/lib/csv.ts');
 
 let n = 0;
 const es = (r, esperado, nota) => { n++; assert.deepEqual(r, esperado, nota); };
@@ -214,6 +218,26 @@ es(['subcategoria', 'clase_riesgo', 'registro_sanitario', 'registro_entidad', 'r
 const csvGeneral = [exportado.map((c) => `"${c.label}"`).join(','), exportado.map((c) => `"${filaGeneral[c.key]}"`).join(',')].join('\r\n');
 const reimportadoGeneral = I.planificarImportacion(csvGeneral, ctx('actualizar', 'equipo_general')).resultados[0];
 es([reimportadoGeneral.accion, reimportadoGeneral.detalle], ['sin_cambios', ['Sin cambios']], 'el CSV del equipo general vuelve a cargarse sin error');
+
+// Ronda 2 · A5: toCsv antepone «'» al texto que Excel abriría como fórmula (=, +, -, @). Al
+// volver a cargar el CSV descargado, ese apóstrofo no se guarda (antes quedaba en el dato y la
+// fila salía «actualizar» con «'=…» en vez de «sin cambios»).
+const textos = ['=SUMA(A1)', '+503 2537 6161', '-ABC', '@MARCA', '-2.5', '+5', 'MONITOR', "'T HOOFT", "'123", "'", ''];
+es(textos.map((s) => I.sinApostrofoDeCsv(C.sinFormula(s))), textos, 'quitar el apóstrofo deshace lo que puso toCsv, nada más');
+es([C.sinFormula('=SUMA(A1)'), C.sinFormula('-ABC'), C.sinFormula('-2.5')], ["'=SUMA(A1)", "'-ABC", '-2.5'], 'toCsv protege las fórmulas y no los números');
+const conFormulas = { ...vacio, id: 9, codigo: 'BIO-FX', nombre: '=HYPERLINK("HTTP://X","VER")', rubro: 'biomedico', tipo: 'biomedico', claseRiesgo: 'IIb',
+  marca: '+MARCA', modelo: '-X1', serial: '@SN-77', numeroActivo: '-AF-1', ubicacion: '=CAMA 3', datosTecnicos: '{"servicio":"-UCI"}' };
+const ctxFx = (modo) => ({ ...ctx(modo, 'biomedico'), activos: [conFormulas] });
+const filaFx = I.filaExportacion({ ...conFormulas, centroCodigo: null, centroNombre: null, sucursal: null, ubicacionNombre: null, ubicacionDetalle: conFormulas.ubicacion,
+  proveedor: null, ultimaCalibracion: null, proximaCalibracion: null, bajaId: null, bajaFecha: null, bajaMotivo: null, bajaDestino: null,
+  slaUrgenteHoras: null, slaAltaHoras: null, slaMediaHoras: null, slaBajaHoras: null }, '2026-11-12');
+const csvFx = C.toCsv([filaFx], I.columnasExportacion());
+si(csvFx.includes(`"'=HYPERLINK(""HTTP://X"",""VER"")"`) && csvFx.includes("'+MARCA") && csvFx.includes("'-X1") && csvFx.includes("'@SN-77"), 'la descarga lleva el apóstrofo');
+const recargaFx = I.planificarImportacion(csvFx, ctxFx('actualizar'));
+es([recargaFx.error, recargaFx.resultados[0].accion, recargaFx.resultados[0].cambios], [undefined, 'sin_cambios', undefined], 'el CSV descargado vuelve a cargarse sin cambios');
+const altaFx = fila(`codigo,nombre,clase_riesgo,marca,serie\n'+BIO-91,'=CMD|' /C CALC,I,'T HOOFT,'@123`);
+es([altaFx.accion, altaFx.nuevo.codigo, altaFx.nuevo.nombre, altaFx.nuevo.marca, altaFx.nuevo.serial],
+  ['crear', '+BIO-91', "=CMD|' /C CALC", "'T HOOFT", '@123'], 'al agregar: sin el apóstrofo de la descarga y con el que escribió la persona');
 
 es(I.resumenAltaCarga('inventario.csv'), 'Alta por carga masiva (archivo «inventario.csv»)', 'resumen de alta');
 es(I.resumenActualizacionCarga(['Clase de riesgo', 'Serie']), 'Actualizado por carga masiva: Clase de riesgo, Serie', 'resumen de cambio');

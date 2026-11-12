@@ -11,7 +11,7 @@ import { activoAreaCondition } from "@/lib/areas";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
 import {
   textoRegistro, nombrePendienteActivo, esCodigoDuplicado, errorCodigoActivo, mensajeCodigoDuplicado, errorDeDatos,
-  errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS,
+  errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS, MENSAJE_CLASE_OBLIGATORIA,
 } from "@/lib/registro-activos";
 import { errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
 import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, HISTORIAL_ACTIVO, esFechaISO, etiquetaCentroCosto } from "@/lib/biomedico";
@@ -168,19 +168,20 @@ export const PATCH: APIRoute = async (ctx) => {
   }
 
   // ── Clase de riesgo y datos biomédicos, sobre el registro final ──
-  // Clasificar cambia el área mandando solo {rubro}; después limpia la clase y la
-  // subcategoría por separado. Ese cambio no se valida aquí.
-  const soloArea = Object.keys(llega).length === 1 && "rubro" in llega;
-  if (!soloArea) {
-    if (rubro === "biomedico") {
-      if (llega.claseRiesgo === null && actual.claseRiesgo) {
-        return Response.json({ error: "La clase de riesgo es obligatoria en equipos biomédicos: elige una." }, { status: 400 });
-      }
-    } else {
-      const traeDatoBio = CAMPOS_BIOMEDICOS.some((k) => k in llega && conDato(llega[k]));
-      const conservaDatoBio = cambiaArea && CAMPOS_BIOMEDICOS.some((k) => !(k in llega) && conDato(actual[k]));
-      if (traeDatoBio || conservaDatoBio) return Response.json({ error: MENSAJE_SOLO_BIOMEDICOS }, { status: 400 });
+  if (rubro === "biomedico") {
+    // Requisito 16: un biomédico no queda sin clase, ni al pasar a biomédico (Clasificar
+    // manda el área y la clase juntas) ni al borrarla. Un biomédico viejo sin clase puede
+    // seguir cambiando otros datos (estado, aceptación, jerarquía): sale en «Sin clase».
+    const claseFinal = "claseRiesgo" in llega ? llega.claseRiesgo ?? null : actual.claseRiesgo;
+    if (!claseFinal && (cambiaArea || "claseRiesgo" in llega)) {
+      return Response.json({ error: MENSAJE_CLASE_OBLIGATORIA }, { status: 400 });
     }
+  } else if (!(Object.keys(llega).length === 1 && "rubro" in llega)) {
+    // Clasificar saca un equipo de biomédicos mandando solo {rubro}; después limpia la
+    // clase y la subcategoría por separado. Ese paso no se valida aquí.
+    const traeDatoBio = CAMPOS_BIOMEDICOS.some((k) => k in llega && conDato(llega[k]));
+    const conservaDatoBio = cambiaArea && CAMPOS_BIOMEDICOS.some((k) => !(k in llega) && conDato(actual[k]));
+    if (traeDatoBio || conservaDatoBio) return Response.json({ error: MENSAJE_SOLO_BIOMEDICOS }, { status: 400 });
   }
   if (llega.registroSanitarioNoRequiere === true) {
     data.registroSanitario = null;
@@ -260,26 +261,16 @@ export const PATCH: APIRoute = async (ctx) => {
   return Response.json({ activo: row });
 };
 
-// Llaves foráneas sin cascada hacia activos que HISTORIAL_ACTIVO todavía no nombra
-// (pedido a BASE). Sin revisarlas, el DELETE choca con la base y responde 500 en vez
-// del 409 con el motivo (K-A3): por ejemplo, un equipo con equipos que dependen de él.
-const VINCULOS_SIN_CASCADA = [
-  { tabla: "activos", columna: "padre_id", etiqueta: "equipos que dependen de él" },
-  { tabla: "orden_conjuntos", columna: "activo_id", etiqueta: "órdenes de conjuntos donde se usó" },
-  { tabla: "checklist_plantilla_items", columna: "activo_id", etiqueta: "pasos de plantillas de checklist" },
-  { tabla: "rondas_proposals", columna: "asset_id", etiqueta: "propuestas de ronda" },
-] as const;
-const VINCULOS_AL_ELIMINAR = [
-  ...HISTORIAL_ACTIVO,
-  ...VINCULOS_SIN_CASCADA.filter((v) => !HISTORIAL_ACTIVO.some((h) => h.tabla === v.tabla && h.columna === v.columna)),
-];
-
-/** Etiquetas de lo que el equipo tiene en su historial (una sola consulta). */
+/**
+ * Etiquetas de lo que el equipo tiene en su historial (una sola consulta). Desde la ronda 2,
+ * HISTORIAL_ACTIVO también nombra las llaves foráneas sin cascada (activos.padre_id,
+ * orden_conjuntos, checklist_plantilla_items, rondas_proposals): el DELETE responde 409.
+ */
 async function historialDelActivo(db: ReturnType<typeof getDb>, id: number): Promise<string[]> {
-  const columnas = VINCULOS_AL_ELIMINAR.map((h, i) =>
+  const columnas = HISTORIAL_ACTIVO.map((h, i) =>
     sql`EXISTS(SELECT 1 FROM ${sql.raw(h.tabla)} WHERE ${sql.raw(h.columna)} = ${id}) AS ${sql.raw(`h${i}`)}`);
   const fila = await db.get<Record<string, number>>(sql`SELECT ${sql.join(columnas, sql`, `)}`);
-  return VINCULOS_AL_ELIMINAR.filter((_, i) => Number(fila?.[`h${i}`] ?? 0) > 0).map((h) => h.etiqueta);
+  return HISTORIAL_ACTIVO.filter((_, i) => Number(fila?.[`h${i}`] ?? 0) > 0).map((h) => h.etiqueta);
 }
 
 const mensajeHistorial = (etiquetas: string[]) =>
