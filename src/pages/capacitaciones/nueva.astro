@@ -1,0 +1,45 @@
+---
+// Fase 59 · WP-D: registrar una capacitación. ?activo={id} deja el equipo marcado.
+// Admin, jefe y técnico.
+import { asc, eq } from "drizzle-orm";
+import Layout from "@/layouts/Layout.astro";
+import CapacitacionForm from "@/components/bio/CapacitacionForm.astro";
+import { getDb } from "@/lib/db";
+import { proveedores } from "@/lib/schema";
+import { equiposParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
+import { hoySV, puedeRegistrarBio } from "@/lib/biomedico";
+import { idPositivo } from "@/lib/bio-archivos";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+const area = Astro.locals.area ?? null;
+if (!puedeRegistrarBio(user.rol)) return Astro.redirect(user.rol === "visualizador" ? areaHref("/capacitaciones", area) : "/");
+const db = getDb(Astro);
+const activoId = idPositivo(Astro.url.searchParams.get("activo"));
+const [equipos, provs, sedes, servicios] = await Promise.all([
+  equiposParaElegir(db, { soloBiomedicos: true, activoId }),
+  db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre)),
+  sedesActivas(db),
+  sugerenciasServicio(db),
+]);
+const preelegido = activoId && equipos.some((e) => e.id === activoId) ? [activoId] : [];
+const volver = activoId ? areaHref(`/activos/${activoId}#capacitaciones`, area) : areaHref("/capacitaciones", area);
+---
+
+<Layout title="Registrar capacitación">
+  <div>
+    <a href={volver} class="text-xs text-slate-500 hover:text-slate-700">← Volver</a>
+    <h1 class="mt-1 text-2xl font-bold">Registrar capacitación</h1>
+    <p class="mt-1 text-sm text-slate-500">Tema, instructor, equipos y asistentes. Puedes imprimir la hoja de asistencia y subir la lista firmada después.</p>
+  </div>
+  <CapacitacionForm
+    modo="nueva"
+    inicial={{ fecha: hoySV(), tipo: "uso_seguro", instructorTipo: "interno", equipoIds: preelegido }}
+    equipos={equipos}
+    proveedores={provs}
+    sucursales={sedes}
+    sugerenciasServicio={servicios}
+    cancelarHref={volver}
+  />
+</Layout>

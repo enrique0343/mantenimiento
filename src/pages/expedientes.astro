@@ -1,0 +1,204 @@
+---
+// Fase 59 · WP-D: expedientes técnicos de los equipos biomédicos (requisito 3; apoyo al
+// 18 con el filtro «Falta: protocolo de limpieza»). Qué tiene cada equipo y qué le falta,
+// con impresión como evidencia y CSV (por equipo y por documento).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { expedientesBiomedicos, sedesActivas } from "@/lib/bio-consultas";
+import {
+  CRITICIDAD_LABEL, FALTAS_EXPEDIENTE, filtrarExpedientes, leerFiltrosExpediente, paramsDeFiltrosExpediente,
+} from "@/lib/inventario-jci";
+import { SUBCAT_KEYS, subcatLabel } from "@/lib/rubros";
+import { ESTADO_ACTIVO_LABEL, fechaCorta, hoySV, puedeVerBio, textoVence } from "@/lib/biomedico";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const hoy = hoySV();
+const area = Astro.locals.area ?? null;
+const filtros = leerFiltrosExpediente(Astro.url.searchParams, SUBCAT_KEYS);
+const [todas, sedes] = await Promise.all([expedientesBiomedicos(db, { hoy, incluirBajas: filtros.bajas }), sedesActivas(db)]);
+const universo = todas.filter((r) => filtros.bajas || r.estado !== "baja");
+const filas = filtrarExpedientes(todas, filtros);
+const completos = universo.filter((r) => r.completitud.completo).length;
+const pct = universo.length ? Math.round((completos / universo.length) * 100) : 0;
+const porVencer = universo.reduce((n, r) => n + r.porVencer90, 0);
+const enlace = (ruta: string) => areaHref(ruta, area);
+const qs = paramsDeFiltrosExpediente(filtros).toString();
+const conEstado = (estado: "todos" | "completos" | "incompletos", vence = false) => {
+  const p = paramsDeFiltrosExpediente({ ...filtros, estado, vence });
+  if (area) p.set("area", area);
+  return `/expedientes?${p}`;
+};
+const hayFiltros = qs !== "";
+const describir = [
+  filtros.estado === "completos" ? "Completos" : filtros.estado === "incompletos" ? "Incompletos" : "Todos",
+  filtros.sede !== null && sedes.find((s) => s.id === filtros.sede)?.nombre,
+  filtros.subcategoria && (filtros.subcategoria === "sin" ? "Sin subcategoría" : subcatLabel(filtros.subcategoria)),
+  filtros.criticidad && `Criticidad ${filtros.criticidad === "sin" ? "sin definir" : CRITICIDAD_LABEL[filtros.criticidad as keyof typeof CRITICIDAD_LABEL].toLowerCase()}`,
+  filtros.falta && `Falta: ${FALTAS_EXPEDIENTE.find((f) => f.clave === filtros.falta)?.etiqueta}`,
+  filtros.vence && "Con documentos vencidos o por vencer (≤ 90 días)",
+  filtros.q && `«${filtros.q}»`,
+  filtros.bajas && "Incluye dados de baja",
+].filter(Boolean).join(" · ");
+const colorAvance = (p: number, completo: boolean) => (completo ? "bg-emerald-500" : p >= 60 ? "bg-amber-500" : "bg-red-500");
+const limpieza = (r: (typeof filas)[number]) => r.completitud.recomendados.find((x) => x.categoria === "limpieza_desinfeccion")?.tiene ?? false;
+const vence = (r: (typeof filas)[number]) => {
+  const v = r.proximoVencimiento;
+  if (!v) return null;
+  return { fecha: fechaCorta(v.fecha), texto: textoVence(v.dias), doc: v.etiquetaCategoria, rojo: v.dias < 0, ambar: v.dias >= 0 && v.dias <= 90 };
+};
+---
+
+<Layout title="Expedientes técnicos">
+  <div class="no-print flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Expedientes técnicos</h1>
+      <p class="mt-1 text-sm text-slate-500">Qué documentos tiene cada equipo biomédico y qué le falta.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a href={`/api/expedientes/exportar?${qs}`} class="btn-secondary">Descargar CSV</a>
+      <a href={`/api/expedientes/exportar?${qs}${qs ? "&" : ""}detalle=documentos`} class="btn-secondary">CSV de documentos</a>
+      <button type="button" class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <div class="no-print mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <a href={conEstado("todos")} class="card block p-4 no-underline hover:bg-slate-50">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Equipos biomédicos</div>
+      <div class="mt-1 text-3xl font-bold text-slate-800">{universo.length}</div>
+      <div class="text-[11px] text-slate-500">{filtros.bajas ? "incluye dados de baja" : "sin los dados de baja"}</div>
+    </a>
+    <a href={conEstado("completos")} class="card block p-4 no-underline hover:bg-slate-50">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Expediente completo</div>
+      <div class={`mt-1 text-3xl font-bold ${pct >= 95 ? "text-emerald-700" : pct >= 80 ? "text-amber-700" : "text-red-600"}`}>{completos} <span class="text-lg">· {pct}%</span></div>
+      <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100"><div class={`h-full rounded-full ${colorAvance(pct, pct === 100)}`} style={`width:${pct}%`}></div></div>
+    </a>
+    <a href={conEstado("incompletos")} class="card block p-4 no-underline hover:bg-slate-50">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Incompletos</div>
+      <div class={`mt-1 text-3xl font-bold ${universo.length - completos ? "text-red-600" : "text-emerald-700"}`}>{universo.length - completos}</div>
+    </a>
+    <a href={conEstado("todos", true)} class="card block p-4 no-underline hover:bg-slate-50">
+      <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Documentos vencidos o por vencer (≤ 90 días)</div>
+      <div class={`mt-1 text-3xl font-bold ${porVencer ? "text-amber-700" : "text-emerald-700"}`}>{porVencer}</div>
+    </a>
+  </div>
+
+  <form method="get" class="no-print card mt-4 grid grid-cols-1 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
+    {area && <input type="hidden" name="area" value={area} />}
+    {filtros.vence && <input type="hidden" name="vence" value="90" />}
+    <div>
+      <label class="label" for="expSede">Sede</label>
+      <select id="expSede" name="sede" class="input">
+        <option value="">Todas</option>
+        {sedes.map((s) => <option value={s.id} selected={filtros.sede === s.id}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="expSubcat">Subcategoría</label>
+      <select id="expSubcat" name="subcategoria" class="input">
+        <option value="">Todas</option>
+        {SUBCAT_KEYS.map((k) => <option value={k} selected={filtros.subcategoria === k}>{subcatLabel(k)}</option>)}
+        <option value="sin" selected={filtros.subcategoria === "sin"}>Sin subcategoría</option>
+      </select>
+    </div>
+    <div>
+      <label class="label" for="expCriticidad">Criticidad</label>
+      <select id="expCriticidad" name="criticidad" class="input">
+        <option value="">Todas</option>
+        {Object.entries(CRITICIDAD_LABEL).map(([v, t]) => <option value={v} selected={filtros.criticidad === v}>{t}</option>)}
+        <option value="sin" selected={filtros.criticidad === "sin"}>Sin definir</option>
+      </select>
+    </div>
+    <div>
+      <label class="label" for="expEstado">Expediente</label>
+      <select id="expEstado" name="estado" class="input">
+        <option value="todos" selected={filtros.estado === "todos"}>Todos</option>
+        <option value="completos" selected={filtros.estado === "completos"}>Completos</option>
+        <option value="incompletos" selected={filtros.estado === "incompletos"}>Incompletos</option>
+      </select>
+    </div>
+    <div>
+      <label class="label" for="expFalta">Falta</label>
+      <select id="expFalta" name="falta" class="input">
+        <option value="">Cualquiera</option>
+        {FALTAS_EXPEDIENTE.map((f) => <option value={f.clave} selected={filtros.falta === f.clave}>{f.etiqueta}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="expBuscar">Buscar</label>
+      <input id="expBuscar" name="q" type="search" class="input" value={filtros.q} placeholder="Código, nombre, marca, modelo o serie" />
+    </div>
+    <label class="flex items-center gap-2 text-sm sm:col-span-2">
+      <input type="checkbox" name="bajas" value="1" checked={filtros.bajas} /> Incluir dados de baja
+    </label>
+    <div class="flex items-end gap-2 sm:col-span-1 lg:col-span-4">
+      <button type="submit" class="btn-primary">Filtrar</button>
+      {hayFiltros && <a href={enlace("/expedientes")} class="btn-secondary">Limpiar</a>}
+    </div>
+  </form>
+
+  <article class="print-doc doc-hoja doc-ancha mt-4 hidden sm:block print:block">
+    <DocCabecera soloImpresion titulo="Expedientes técnicos de equipos biomédicos" subtitulo={describir} />
+    {filas.length === 0 ? (
+      <p class="doc-texto">{todas.length === 0 ? "No hay equipos biomédicos registrados." : "No hay equipos con esos filtros."}</p>
+    ) : (
+      <table class="doc-tabla">
+        <thead>
+          <tr><th>Código</th><th style="min-width:170px">Equipo</th><th>Sede · Ubicación</th><th style="min-width:90px">Avance</th><th>Falta</th><th class="c">Limpieza</th><th class="n">Documentos</th><th>Próximo vencimiento</th></tr>
+        </thead>
+        <tbody>
+          {filas.map((r) => {
+            const v = vence(r);
+            return (
+              <tr>
+                <td class="tn"><a href={areaHref(`/activos/${r.activoId}#documentos`, "biomedico")}>{r.codigo}</a></td>
+                <td>{r.nombre}<span class="doc-nota-celda">{[r.marca, r.modelo].filter(Boolean).join(" ") || "Sin marca ni modelo"}{r.estado === "baja" ? ` · ${ESTADO_ACTIVO_LABEL.baja}` : ""}</span></td>
+                <td>{[r.sede, r.ubicacion].filter(Boolean).join(" · ") || "—"}</td>
+                <td>
+                  <span class="tn">{r.completitud.cumplidos}/{r.completitud.total}</span>
+                  <span class="mt-1 block h-1.5 w-20 overflow-hidden rounded-full bg-slate-100"><span class={`block h-full rounded-full ${colorAvance(r.completitud.porcentaje, r.completitud.completo)}`} style={`width:${r.completitud.porcentaje}%`}></span></span>
+                </td>
+                <td>{r.completitud.faltan.length ? r.completitud.faltan.join(" · ") : <span class="text-emerald-700">Completo</span>}</td>
+                <td class="c">{limpieza(r) ? "✓" : "—"}</td>
+                <td class="n">{r.documentos}</td>
+                <td>{v ? <span class={v.rojo ? "text-red-600" : v.ambar ? "text-amber-700" : ""}>{v.fecha}<span class="doc-nota-celda">{v.doc} · {v.texto}</span></span> : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+    <p class="doc-nota">
+      Expediente completo = manual de operación; manual de mantenimiento o de servicio técnico; ficha técnica o especificaciones del fabricante;
+      registro sanitario o inscripción; y acta de instalación o aceptación (también vale la inspección de aceptación registrada en la ficha).
+      Un documento vencido no cuenta; el día del vencimiento todavía vale. «No aplica» se marca por requisito y con motivo.
+      El protocolo de limpieza y la garantía son recomendados: se muestran, pero no restan.
+    </p>
+    <p class="doc-nota">{filas.length} equipo{filas.length === 1 ? "" : "s"} · {describir} · Corte: {fechaCorta(hoy)}.</p>
+    <DocFolio soloImpresion codigo="Expedientes técnicos" />
+  </article>
+
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden print:hidden">
+    {filas.length === 0 && <div class="card p-6 text-center text-sm text-slate-500">{todas.length === 0 ? "No hay equipos biomédicos registrados." : "No hay equipos con esos filtros."}</div>}
+    {filas.map((r) => {
+      const v = vence(r);
+      return (
+        <a href={areaHref(`/activos/${r.activoId}#documentos`, "biomedico")} class="card block p-4 no-underline hover:bg-slate-50">
+          <div class="flex items-start justify-between gap-2">
+            <span class="text-xs text-slate-500">{r.codigo}</span>
+            <span class={`badge text-[10px] ${r.completitud.completo ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{r.completitud.cumplidos}/{r.completitud.total}</span>
+          </div>
+          <div class="mt-1 font-semibold text-slate-900">{r.nombre}</div>
+          <div class="mt-1 text-xs text-slate-500">{[r.sede, r.ubicacion].filter(Boolean).join(" · ") || "Sin ubicación"}</div>
+          {r.completitud.faltan.length > 0 && <div class="mt-1 text-xs text-red-600">Falta: {r.completitud.faltan.join(" · ")}</div>}
+          {v && <div class="mt-1 text-xs text-slate-600">{v.doc}: {v.texto}</div>}
+        </a>
+      );
+    })}
+  </div>
+</Layout>

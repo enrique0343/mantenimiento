@@ -1,0 +1,184 @@
+---
+// Fase 59 · WP-D: licencias y permisos (requisito 11). Lista por situación con tarjetas
+// que filtran, impresión como evidencia y CSV con los mismos filtros.
+import { eq } from "drizzle-orm";
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import { listarLicencias, sedesActivas } from "@/lib/bio-consultas";
+import {
+  AMBITOS_LICENCIA, ENTIDADES_LICENCIA, SITUACIONES_FILTRO, TIPOS_LICENCIA, aplicaA, codigoLicencia, contarLicencias,
+  etiquetaEntidad, etiquetaTipoLicencia, filtrarLicencias, leerFiltrosLicencia, paramsDeFiltrosLicencia,
+  type FiltrosLicencia,
+} from "@/lib/licencias";
+import { fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, situacionLicencia } from "@/lib/biomedico";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const hoy = hoySV();
+const area = Astro.locals.area ?? null;
+const filtros = leerFiltrosLicencia(Astro.url.searchParams);
+const [todas, sedes] = await Promise.all([listarLicencias(db), sedesActivas(db)]);
+const [equipoFiltro] = filtros.activo
+  ? await db.select({ codigo: activos.codigo, nombre: activos.nombre }).from(activos).where(eq(activos.id, filtros.activo)).limit(1)
+  : [];
+const conteo = contarLicencias(todas, hoy);
+const filas = filtrarLicencias(todas, filtros, hoy).map((l) => ({ ...l, s: situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite }) }));
+const enlace = (ruta: string) => areaHref(ruta, area);
+const conFiltro = (cambios: Partial<FiltrosLicencia>) => {
+  const p = paramsDeFiltrosLicencia({ ...filtros, ...cambios });
+  if (area) p.set("area", area);
+  const q = p.toString();
+  return `/licencias${q ? `?${q}` : ""}`;
+};
+const csvHref = `/api/licencias/exportar?${paramsDeFiltrosLicencia(filtros).toString()}`;
+const hayFiltros = filtros.situacion !== "actuales" || !!filtros.entidad || !!filtros.tipo || !!filtros.ambito || filtros.sede !== null || filtros.activo !== null || !!filtros.q;
+const tarjetas: Array<{ clave: FiltrosLicencia["situacion"]; etiqueta: string; n: number; color: string }> = [
+  { clave: "vigentes", etiqueta: "Vigentes", n: conteo.vigentes, color: "text-emerald-700" },
+  { clave: "vence_90", etiqueta: "Vencen en ≤ 90 días", n: conteo.vence90, color: conteo.vence90 ? "text-amber-700" : "text-slate-700" },
+  { clave: "vence_60", etiqueta: "Vencen en ≤ 60 días", n: conteo.vence60, color: conteo.vence60 ? "text-amber-700" : "text-slate-700" },
+  { clave: "vence_30", etiqueta: "Vencen en ≤ 30 días", n: conteo.vence30, color: conteo.vence30 ? "text-red-600" : "text-slate-700" },
+  { clave: "vencidas", etiqueta: "Vencidas", n: conteo.vencidas, color: conteo.vencidas ? "text-red-600" : "text-slate-700" },
+  { clave: "en_tramite", etiqueta: "En trámite", n: conteo.enTramite, color: "text-sky-700" },
+];
+const describirFiltros = [
+  SITUACIONES_FILTRO[filtros.situacion],
+  filtros.entidad && ENTIDADES_LICENCIA[filtros.entidad],
+  filtros.tipo && TIPOS_LICENCIA[filtros.tipo],
+  filtros.ambito && AMBITOS_LICENCIA[filtros.ambito],
+  filtros.sede !== null && sedes.find((s) => s.id === filtros.sede)?.nombre,
+  equipoFiltro && `${equipoFiltro.codigo} — ${equipoFiltro.nombre}`,
+  filtros.q && `«${filtros.q}»`,
+].filter(Boolean).join(" · ");
+const vencidasAparte = ["vence_90", "vence_60", "vence_30"].includes(filtros.situacion) && conteo.vencidas > 0;
+---
+
+<Layout title="Licencias y permisos">
+  <div class="no-print flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Licencias y permisos</h1>
+      <p class="mt-1 text-sm text-slate-500">Licencias del establecimiento, de servicios, de equipos y del personal, con su vencimiento.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {puedeGestionarBio(user.rol) && <a href={enlace("/licencias/nueva")} class="btn-primary">+ Registrar licencia</a>}
+      <a href={csvHref} class="btn-secondary">Descargar CSV</a>
+      <button type="button" class="btn-secondary" onclick="window.print()">Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <div class="no-print mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    {tarjetas.map((t) => (
+      <a href={conFiltro({ situacion: t.clave })} class:list={["card block p-4 no-underline hover:bg-slate-50", { "ring-2 ring-brand-400": filtros.situacion === t.clave }]}>
+        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{t.etiqueta}</div>
+        <div class={`mt-1 text-3xl font-bold ${t.color}`}>{t.n}</div>
+      </a>
+    ))}
+  </div>
+
+  <form method="get" class="no-print card mt-4 grid grid-cols-1 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-7">
+    {area && <input type="hidden" name="area" value={area} />}
+    {filtros.activo !== null && <input type="hidden" name="activo" value={filtros.activo} />}
+    <div>
+      <label class="label" for="licSituacion">Situación</label>
+      <select id="licSituacion" name="situacion" class="input">
+        {Object.entries(SITUACIONES_FILTRO).map(([v, t]) => <option value={v} selected={filtros.situacion === v}>{t}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="licEntidad">Entidad</label>
+      <select id="licEntidad" name="entidad" class="input">
+        <option value="">Todas</option>
+        {Object.entries(ENTIDADES_LICENCIA).map(([v, t]) => <option value={v} selected={filtros.entidad === v}>{t}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="licTipo">Tipo</label>
+      <select id="licTipo" name="tipo" class="input">
+        <option value="">Todos</option>
+        {Object.entries(TIPOS_LICENCIA).map(([v, t]) => <option value={v} selected={filtros.tipo === v}>{t}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="licAmbito">Ámbito</label>
+      <select id="licAmbito" name="ambito" class="input">
+        <option value="">Todos</option>
+        {Object.entries(AMBITOS_LICENCIA).map(([v, t]) => <option value={v} selected={filtros.ambito === v}>{t}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="licSede">Sede</label>
+      <select id="licSede" name="sede" class="input">
+        <option value="">Todas</option>
+        {sedes.map((s) => <option value={s.id} selected={filtros.sede === s.id}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="licBuscar">Buscar</label>
+      <input id="licBuscar" name="q" type="search" class="input" value={filtros.q} placeholder="Nombre, número, equipo…" />
+    </div>
+    <div class="flex items-end gap-2">
+      <button type="submit" class="btn-primary">Filtrar</button>
+      {hayFiltros && <a href={enlace("/licencias")} class="btn-secondary">Limpiar</a>}
+    </div>
+  </form>
+
+  {equipoFiltro && (
+    <p class="no-print mt-3 text-sm text-slate-600">
+      Mostrando las licencias de {equipoFiltro.codigo} — {equipoFiltro.nombre}. <a class="text-brand-700 underline" href={conFiltro({ activo: null })}>Quitar filtro</a>
+    </p>
+  )}
+  {vencidasAparte && (
+    <p class="no-print mt-3 text-sm text-red-600">
+      Además hay {conteo.vencidas} vencida{conteo.vencidas === 1 ? "" : "s"}. <a class="underline" href={conFiltro({ situacion: "vencidas" })}>Ver las vencidas</a>
+    </p>
+  )}
+
+  <article class="print-doc doc-hoja doc-ancha mt-4 hidden sm:block print:block">
+    <DocCabecera soloImpresion titulo="Licencias y permisos" subtitulo={describirFiltros} />
+    {filas.length === 0 ? (
+      <p class="doc-texto">{todas.length === 0 ? "Todavía no hay licencias registradas." : "No hay licencias con esos filtros."}</p>
+    ) : (
+      <table class="doc-tabla">
+        <thead>
+          <tr><th>Situación</th><th>Licencia</th><th>Entidad · Número</th><th>Aplica a</th><th class="c">Emisión</th><th class="c">Vence</th><th>Responsable</th><th class="c">Archivo</th></tr>
+        </thead>
+        <tbody>
+          {filas.map((l) => (
+            <tr>
+              <td><span class={`badge text-[10px] ${l.s.color}`}>{l.s.etiqueta}</span><span class="block text-[11px] text-slate-500">{l.s.texto !== l.s.etiqueta ? l.s.texto : ""}</span></td>
+              <td><a href={enlace(`/licencias/${l.id}`)}>{l.nombre}</a><span class="block text-[11px] text-slate-500">{codigoLicencia(l.id)} · {etiquetaTipoLicencia(l.tipo)}</span></td>
+              <td>{etiquetaEntidad(l.entidad, l.entidadOtra)}<span class="block text-[11px] text-slate-500">{l.numero ? `N.º ${l.numero}` : "Sin número"}</span></td>
+              <td>{aplicaA(l)}</td>
+              <td class="c tn">{fechaCorta(l.fechaEmision)}</td>
+              <td class="c tn">{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td>
+              <td>{l.responsable ?? "—"}</td>
+              <td class="c">{l.archivos > 0 ? "✓" : <span class="text-red-600">Falta</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+    <p class="doc-nota">{filas.length} licencia{filas.length === 1 ? "" : "s"} · {describirFiltros} · Corte: {fechaCorta(hoy)}. Las ventanas se acumulan: «≤ 90 días» incluye las de ≤ 60 y ≤ 30.</p>
+    <DocFolio soloImpresion codigo="Licencias y permisos" />
+  </article>
+
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden print:hidden">
+    {filas.length === 0 && <div class="card p-6 text-center text-sm text-slate-500">{todas.length === 0 ? "Todavía no hay licencias registradas." : "No hay licencias con esos filtros."}</div>}
+    {filas.map((l) => (
+      <a href={enlace(`/licencias/${l.id}`)} class="card block p-4 no-underline hover:bg-slate-50">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-xs text-slate-500">{codigoLicencia(l.id)}</span>
+          <span class={`badge text-[10px] ${l.s.color}`}>{l.s.texto}</span>
+        </div>
+        <div class="mt-1 font-semibold text-slate-900">{l.nombre}</div>
+        <div class="mt-1 text-sm text-slate-600">{etiquetaEntidad(l.entidad, l.entidadOtra)}{l.numero ? ` · N.º ${l.numero}` : ""}</div>
+        <div class="mt-1 text-xs text-slate-500">{aplicaA(l)} · {l.fechaVencimiento ? `Vence ${fechaCorta(l.fechaVencimiento)}` : l.estado === "activa" ? "No vence" : "Sin vencimiento"}{l.archivos ? "" : " · Falta el archivo"}</div>
+      </a>
+    ))}
+  </div>
+</Layout>

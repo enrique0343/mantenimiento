@@ -1,8 +1,17 @@
 ---
-// Fase 59 · Esqueleto que deja BASE para que la ficha y la hoja de vida (WP-C) lo
-// coloquen desde ya. Lo reemplaza WP-D, su dueño, manteniendo estas props y el id
-// del contenedor (#licencias). Mientras tanto no muestra nada.
-// Licencias y permisos del equipo.
+// Fase 59 · WP-D: licencias y permisos del equipo (requisito 11). En la ficha muestra
+// las activas y en trámite con su situación; en la hoja de vida (variante «hoja», sin
+// botones ni scripts) todas. Siempre en biomédicos; en otras áreas, solo si hay alguna.
+// Solo admin, jefe, técnico y visualizador.
+import { eq } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import { licenciasDeActivo } from "@/lib/bio-consultas";
+import { codigoLicencia, etiquetaEntidad, etiquetaTipoLicencia } from "@/lib/licencias";
+import { fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, situacionLicencia } from "@/lib/biomedico";
+import { rubroDeActivo } from "@/lib/rubros";
+import { areaHref } from "@/lib/areas";
+
 interface Props {
   activoId: number;
   /** "ficha" (con botones y formulario) u "hoja" (hoja de vida impresa, sin scripts). */
@@ -10,5 +19,85 @@ interface Props {
   /** Título de la sección en la hoja de vida, por ejemplo «6. Expediente técnico». */
   titulo?: string;
 }
-const { activoId: _activoId, variante: _variante = "ficha", titulo: _titulo } = Astro.props;
+const { activoId, variante = "ficha", titulo } = Astro.props;
+const user = Astro.locals.user;
+const ver = !!user && puedeVerBio(user.rol);
+const ficha = variante !== "hoja";
+const hoy = hoySV();
+const db = ver ? getDb(Astro) : null;
+const [equipo] = db ? await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
+const area = equipo ? rubroDeActivo(equipo.rubro, equipo.tipo) : null;
+const todas = db && equipo ? await licenciasDeActivo(db, activoId) : [];
+const conSituacion = todas.map((l) => ({ ...l, s: situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite }) }));
+const actuales = conSituacion.filter((l) => l.estado === "activa" || l.estado === "en_tramite");
+const mostrar = !!equipo && (area === "biomedico" || todas.length > 0);
+const puedeRegistrar = !!user && puedeGestionarBio(user.rol) && ficha;
+const enlace = (ruta: string) => areaHref(ruta, area);
 ---
+
+{mostrar && ficha && (
+  <section id="licencias" class="card mt-6 p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="font-semibold">Licencias y permisos</h2>
+        <p class="text-xs text-slate-500">Licencias del equipo ante SRS, CSSP, MINSAL u otra entidad, con su vencimiento.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {todas.length > 0 && <a class="btn-secondary text-sm" href={enlace(`/licencias?activo=${activoId}&situacion=todas`)}>Ver historial</a>}
+        {puedeRegistrar && <a class="btn-primary text-sm" href={enlace(`/licencias/nueva?activo=${activoId}`)}>+ Registrar licencia</a>}
+      </div>
+    </div>
+    {actuales.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">{todas.length ? "No tiene licencias activas ni en trámite." : "Sin licencias registradas para este equipo."}</p>
+    ) : (
+      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+        {actuales.map((l) => (
+          <li class="flex flex-wrap items-start justify-between gap-3 py-2">
+            <div class="min-w-0 flex-1">
+              <a href={enlace(`/licencias/${l.id}`)} class="font-medium text-brand-700 hover:underline">{l.nombre}</a>
+              <div class="text-xs text-slate-500">
+                {codigoLicencia(l.id)} · {etiquetaEntidad(l.entidad, l.entidadOtra)}{l.numero ? ` · N.º ${l.numero}` : ""} · {etiquetaTipoLicencia(l.tipo)}
+              </div>
+              <div class="text-xs text-slate-500">{l.fechaVencimiento ? `Vence el ${fechaCorta(l.fechaVencimiento)}` : l.estado === "activa" ? "No vence" : "Sin fecha de vencimiento"}</div>
+            </div>
+            <span class={`badge shrink-0 text-[10px] ${l.s.color}`} title={l.s.etiqueta}>{l.s.texto}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
+)}
+
+{mostrar && !ficha && (
+  <section id="licencias">
+    <h3 class="mt-6 text-base font-bold text-slate-900">{titulo ?? "Licencias y permisos"}</h3>
+    {todas.length === 0 ? (
+      <p class="mt-2 text-sm text-slate-400">Sin licencias registradas.</p>
+    ) : (
+      <table class="mt-2 w-full text-left text-xs">
+        <thead class="border-b border-slate-200 text-slate-500">
+          <tr>
+            <th class="px-2 py-1.5 font-medium">Entidad</th>
+            <th class="px-2 py-1.5 font-medium">Tipo</th>
+            <th class="px-2 py-1.5 font-medium">Número</th>
+            <th class="px-2 py-1.5 font-medium">Emisión</th>
+            <th class="px-2 py-1.5 font-medium">Vence</th>
+            <th class="px-2 py-1.5 font-medium">Situación</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {conSituacion.map((l) => (
+            <tr>
+              <td class="px-2 py-1.5">{etiquetaEntidad(l.entidad, l.entidadOtra)}</td>
+              <td class="px-2 py-1.5">{etiquetaTipoLicencia(l.tipo)}<span class="block text-[10px] text-slate-500">{l.nombre}</span></td>
+              <td class="px-2 py-1.5">{l.numero ?? "—"}</td>
+              <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(l.fechaEmision)}</td>
+              <td class="px-2 py-1.5 whitespace-nowrap">{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td>
+              <td class="px-2 py-1.5">{l.s.texto}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </section>
+)}
