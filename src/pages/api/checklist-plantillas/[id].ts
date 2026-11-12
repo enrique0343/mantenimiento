@@ -66,7 +66,7 @@ export const PATCH: APIRoute = async (ctx) => {
       .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id));
     if (tieneVinculos(actuales)) {
       return Response.json({
-        error: "Esta plantilla tiene pasos ligados a variables, procedimientos, equipos o ubicaciones. Para no perder esos vínculos, sus pasos no se reemplazan por esta vía.",
+        error: "Esta plantilla tiene pasos con vínculos (variable, procedimiento, equipo, ubicación o acción si no cumple). Para no perderlos, sus pasos no se reemplazan por esta vía.",
       }, { status: 409 });
     }
     const filas = filasDeReemplazo(parsed.data.items, actuales, id);
