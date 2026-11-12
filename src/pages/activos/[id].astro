@@ -301,6 +301,8 @@ const calMin: CalMin[] = calibracionesRows.map((r) => ({
 }));
 const infoCal = infoCalibracion(equipoCal, calMin, hoy);
 const ultimaCalRow = calibracionesRows.find((r) => r.c.id === infoCal.calibracionId) ?? null;
+// Días para la próxima: no se cuentan en un equipo de baja.
+const diasCal = a.estado === "baja" ? null : infoCal.dias;
 const mostrarCal = verBio && (llevaCal || calibracionesRows.length > 0);
 const puedeRegistrarCal = mostrarCal && registraBio && a.estado !== "baja" && !a.calibracionNoAplica;
 const puedeCorregirCal = mostrarCal && gestionaBio;
@@ -602,7 +604,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       {verBio && <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>}
       {verBio && <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>}
       {canEdit && <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>}
-      {verBio && registraBio && calibracionesRows.length > 0 && (
+      {verBio && registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && (
         <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary">Imprimir viñeta</a>
       )}
       {gestionaBio && a.estado !== "baja" && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="btn-secondary">Dar de baja</a>}
@@ -1006,7 +1008,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             )}
             {verBio && calMin.length > 0 && <>
               <div><div class="text-xs uppercase text-slate-500">Última calibración</div><div>{fmt(infoCal.ultima)}</div></div>
-              <div><div class="text-xs uppercase text-slate-500">Próxima calibración</div><div>{fmt(infoCal.proxima)}{infoCal.dias != null && <span class="text-xs text-slate-500"> · {textoVence(infoCal.dias)}</span>}</div></div>
+              <div><div class="text-xs uppercase text-slate-500">Próxima calibración</div><div>{fmt(infoCal.proxima)}{diasCal != null && <span class="text-xs text-slate-500"> · {textoVence(diasCal)}</span>}</div></div>
             </>}
             {verBio && calMin.length === 0 && (a.ultimaCalibracion || a.proximaCalibracion) && <>
               <div><div class="text-xs uppercase text-slate-500">Última calibración</div><div>{fmt(a.ultimaCalibracion)}</div></div>
@@ -1099,7 +1101,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             </div>
             <div class="mt-2 space-y-1 text-sm text-slate-700">
               {a.calibracionNoAplica && <p>No requiere calibración{a.calibracionNoAplicaMotivo ? `: ${a.calibracionNoAplicaMotivo}` : "."}</p>}
-              {!a.calibracionNoAplica && infoCal.proxima && <p>Próxima: {fmt(infoCal.proxima)}{infoCal.dias != null && <span class="text-xs text-slate-500"> · {textoVence(infoCal.dias)}</span>}</p>}
+              {!a.calibracionNoAplica && infoCal.proxima && <p>Próxima: {fmt(infoCal.proxima)}{diasCal != null && <span class="text-xs text-slate-500"> · {textoVence(diasCal)}</span>}</p>}
               {ultimaCalRow && <p class="text-xs text-slate-500">Última: {fmt(ultimaCalRow.c.fechaCalibracion)}{(ultimaCalRow.labNombre || ultimaCalRow.c.laboratorioExterno) ? ` · ${ultimaCalRow.labNombre ?? ultimaCalRow.c.laboratorioExterno}` : ""}</p>}
               {!ultimaCalRow && !a.calibracionNoAplica && <p class="text-xs text-slate-500">Sin calibraciones registradas.</p>}
               {infoCal.estado === "no_conforme" && <p class="text-xs font-semibold text-red-700">La última calibración salió no conforme. Revisa el equipo antes de usarlo.</p>}
@@ -1681,7 +1683,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           <p class="text-xs text-slate-500">Trazabilidad metrológica (JCI FMS.8 / MINSAL): certificado, laboratorio acreditado, patrón y resultado.</p>
           {infoCal.ultima && (
             <p class="mt-1 text-xs text-slate-600">
-              Última {fmt(infoCal.ultima)}{infoCal.proxima ? ` · Próxima ${fmt(infoCal.proxima)}` : ""}{infoCal.dias != null ? ` · ${textoVence(infoCal.dias)}` : ""}
+              Última {fmt(infoCal.ultima)}{infoCal.proxima ? ` · Próxima ${fmt(infoCal.proxima)}` : ""}{diasCal != null ? ` · ${textoVence(diasCal)}` : ""}
             </p>
           )}
           {a.calibracionNoAplica && (
@@ -1689,7 +1691,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           )}
         </div>
         <div class="flex flex-wrap gap-2">
-          {registraBio && calibracionesRows.length > 0 && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary text-sm">Imprimir viñeta</a>}
+          {registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary text-sm">Imprimir viñeta</a>}
           {puedeRegistrarCal && <button id="calNewBtn" type="button" class="btn-primary text-sm">+ Registrar calibración</button>}
         </div>
       </div>

@@ -145,7 +145,7 @@ const csvHref = `/api/activos/${a.id}/historial${qsFiltros ? `?${qsFiltros}` : "
         <p class="text-sm text-slate-500">{a.nombre} · {AREAS[area].label}</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <a href={areaHref(`/activos/${a.id}/hoja-vida${qsFiltros ? `?${qsFiltros}` : ""}`, area)} class="btn-secondary">Hoja de vida</a>
         <button type="button" onclick="window.print()" class="btn-secondary">Imprimir</button>
         <a href={csvHref} class="btn-primary" download>Descargar CSV</a>
       </div>

@@ -108,14 +108,16 @@ function textoRegistro(): string {
 }
 function textoCalibracion(): string {
   if (a.calibracionNoAplica) return `No requiere calibración${a.calibracionNoAplicaMotivo ? `: ${a.calibracionNoAplicaMotivo}` : ""}`;
+  // De baja la regla dice «no aplica»: aquí se dice que está de baja, no que «no requiere».
+  const estado = a.estado === "baja" ? "Equipo dado de baja" : ESTADO_CALIBRACION_LABEL[infoCal.estado];
   if (!calMin.length) {
     const aMano = [a.ultimaCalibracion && `última ${fechaCorta(a.ultimaCalibracion)}`, a.proximaCalibracion && `próxima ${fechaCorta(a.proximaCalibracion)}`].filter(Boolean);
-    return `${ESTADO_CALIBRACION_LABEL[infoCal.estado]}${aMano.length ? ` (fechas escritas a mano, sin calibración registrada: ${aMano.join(", ")})` : ""}`;
+    return `${estado}${aMano.length ? ` (fechas escritas a mano, sin calibración registrada: ${aMano.join(", ")})` : ""}`;
   }
   return [
-    ESTADO_CALIBRACION_LABEL[infoCal.estado],
+    estado,
     `última ${fechaCorta(infoCal.ultima)}`,
-    infoCal.proxima ? `próxima ${fechaCorta(infoCal.proxima)}${infoCal.dias != null ? ` (${textoVence(infoCal.dias)})` : ""}` : null,
+    infoCal.proxima ? `próxima ${fechaCorta(infoCal.proxima)}${infoCal.dias != null && a.estado !== "baja" ? ` (${textoVence(infoCal.dias)})` : ""}` : null,
   ].filter(Boolean).join(" · ");
 }
 const finVida = a.vidaUtilAnios && esFechaISO(a.fechaAdquisicion) ? sumarMeses(a.fechaAdquisicion, 12 * a.vidaUtilAnios) : null;
