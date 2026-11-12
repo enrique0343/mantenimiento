@@ -124,9 +124,10 @@ function montar(html, codigo, { fetch: pedir, confirm = () => true } = {}) {
   const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, { url: 'https://test.invalid/', runScripts: 'outside-only', virtualConsole: consola });
   const w = dom.window;
   const alertas = [];
-  Object.assign(w, { fetch: pedir, confirm, alert: (m) => alertas.push(String(m)), TextDecoder });
+  const avisos = [];
+  Object.assign(w, { fetch: pedir, confirm, alert: (m) => alertas.push(String(m)), showToast: (m, tono) => avisos.push([String(m), tono]), TextDecoder });
   w.eval(codigo);
-  return { w, $: (id) => w.document.getElementById(id), errores, alertas };
+  return { w, $: (id) => w.document.getElementById(id), errores, alertas, avisos };
 }
 const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelable: true, bubbles: true }));
 
@@ -175,6 +176,17 @@ const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelabl
   es(cuerpos.filter((c) => !c.dryRun).map((c) => [c.modo, c.desde, c.hasta]), [['crear', 0, 200], ['crear', 200, 400], ['crear', 400, 450]],
     'todas las tandas van con la opción que se simuló');
   es([radios.map((r) => r.disabled), p.$('msg').textContent], [[false, false], 'Listo: 450 creados, 0 actualizados, 0 con error.'], 'al terminar se puede elegir otra vez');
+
+  // Si se cambia la opción mientras se simula, «Grabar» no queda habilitado con la otra.
+  radios[0].checked = true; evento(p, radios[0], 'change');
+  primera = false; soltar = null;
+  const pedirLento = pedir;
+  p.w.fetch = async (url, init) => { const c = JSON.parse(init.body); if (c.dryRun) await new Promise((r) => { soltar = r; }); return pedirLento(url, init); };
+  p.$('simBtn').disabled = false; p.$('simBtn').click(); await esperar();
+  radios[1].checked = true; evento(p, radios[1], 'change'); // pasa a «Actualizar» con la simulación en curso
+  soltar(); await esperar();
+  es([cuerpos.at(-1).modo, p.$('goBtn').disabled, p.$('goBtn').textContent], ['crear', true, 'Grabar'], 'una simulación en «Agregar» no habilita grabar en «Actualizar»');
+  p.w.fetch = pedir;
 
   // Un Excel o un archivo enorme se avisa al elegirlo y no se manda (antes: «Falta la columna «codigo»»).
   const enviados = cuerpos.length;
@@ -296,6 +308,53 @@ const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelabl
   p.$('progSave').click(); await esperar();
   es([p.$('progMsg').textContent, p.$('progSave').disabled], ['Sin conexión: el plan no se guardó. Vuelve a intentarlo.', false], 'sin conexión al programar');
   es(p.errores, [], 'lista sin errores del script');
+}
+
+// ── Clasificar: la clase de riesgo se guarda y se cuenta; sin conexión, el selector
+//    vuelve a lo que tenía y avisa (antes quedaba deshabilitado y con un error sin atender) ──
+{
+  const html = `
+    <span id="sinClaseBadge" class="badge"><span id="cSinClase">1</span> biomédicos sin clase de riesgo</span>
+    <span id="completaBadge" class="badge hidden" data-otros-pendientes="0">✓ Clasificación completa</span>
+    <span id="famOkBadge"></span><span id="cDecl"></span><span id="cInf"></span><span id="cSin"></span>
+    <input id="buscar"><select id="fSede"><option value=""></option></select><select id="fFamilia"><option value=""></option></select>
+    <select id="fDominio"><option value=""></option></select><select id="fCrit"><option value=""></option></select>
+    <select id="fClase"><option value=""></option><option value="__sin__"></option><option value="III"></option></select>
+    <button id="marcarVisible" type="button"></button><button id="aceptarSug" type="button"></button><input type="checkbox" id="selAll">
+    <div id="bulkBar" class="hidden"><span id="bulkCount"></span><select id="bulkSistema"><option value=""></option></select>
+      <button id="bulkAsignar" type="button"><span id="bulkCount2"></span></button><div id="bulkNota"></div></div>
+    <span id="visibles"></span>
+    <table><tbody>
+      <tr class="fila" data-search="bio-1 monitor" data-sede="" data-dominio="biomedico" data-crit="media" data-clase="__sin__"
+        data-fam="" data-fam-res="otro" data-fam-estado="sinresolver">
+        <td><input type="checkbox" class="row-chk" data-id="1"></td>
+        <td><select class="fam-sel" data-id="1" data-sugerido="otro"><option value=""></option><option value="electrico">Eléctrico</option></select>
+          <span class="fam-nota"></span><button type="button" class="fam-ok hidden"></button></td>
+        <td><select class="dominio-sel" data-id="1"><option value="biomedico" selected>Bio</option><option value="equipo_general">General</option></select></td>
+        <td><select class="subcat-sel" data-id="1"><option value="">—</option><option value="diagnostico">Diagnóstico</option></select></td>
+        <td><select class="clase-sel" data-id="1"><option value="" disabled selected>— Elegir —</option><option value="I">Clase I</option><option value="III">Clase III</option></select></td>
+        <td><select class="crit-sel" data-id="1"><option value="media" selected>Media</option></select></td>
+      </tr>
+    </tbody></table>`;
+  const pedidos = [];
+  let responder = async () => respuesta(200, { activo: { id: 1 } });
+  const p = montar(html, await scriptDe('src/pages/activos/clasificar.astro'), { fetch: async (url, init) => { pedidos.push([url, JSON.parse(init.body)]); return responder(); } });
+  const fila = p.w.document.querySelector('.fila');
+  const elegir = async (sel, valor) => { sel.value = valor; evento(p, sel, 'change'); await esperar(); };
+  await elegir(fila.querySelector('.clase-sel'), 'III');
+  es([pedidos.at(-1), fila.dataset.clase, p.$('cSinClase').textContent, p.$('sinClaseBadge').classList.contains('hidden'), p.$('completaBadge').classList.contains('hidden')],
+    [['/api/activos/1', { claseRiesgo: 'III' }], 'III', '0', true, false], 'la clase se guarda y el aviso baja a 0');
+  await elegir(fila.querySelector('.dominio-sel'), 'equipo_general');
+  es(pedidos.slice(-2).map((x) => x[1]), [{ rubro: 'equipo_general' }, { claseRiesgo: null }], 'al dejar de ser biomédico se limpia la clase');
+  es([fila.querySelector('.clase-sel').disabled, fila.dataset.clase], [true, ''], 'la clase queda deshabilitada');
+  responder = async () => { throw new TypeError('Failed to fetch'); };
+  const dominio = fila.querySelector('.dominio-sel');
+  await elegir(dominio, 'biomedico');
+  es([dominio.value, dominio.disabled, p.avisos.at(-1)], ['equipo_general', false, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'sin conexión: vuelve a lo guardado y avisa');
+  const familia = fila.querySelector('.fam-sel');
+  await elegir(familia, 'electrico');
+  es([familia.value, familia.disabled, p.avisos.at(-1)], ['', false, ['Sin conexión: no se guardó. Vuelve a intentarlo.', 'error']], 'la familia tampoco queda trabada');
+  es(p.errores, [], 'clasificar sin errores del script');
 }
 
 es(rechazos.map(String), [], 'ningún error sin atender en los scripts de las pantallas');

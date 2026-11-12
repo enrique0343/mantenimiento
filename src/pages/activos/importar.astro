@@ -296,9 +296,13 @@ const inventarioHref = areaHref("/activos", area);
       simBtn.disabled = true; goBtn.disabled = true;
       grabadas = false; verInventario.classList.add("hidden");
       aviso("Simulando…");
-      const r = await enviar({ dryRun: true });
+      // La clave y la opción son las del envío: si se cambia la opción mientras se
+      // simula, «Grabar» no se habilita con una simulación hecha con la otra.
+      const clave = claveActual();
+      const modoSimulado = modo();
+      const r = await enviar({ dryRun: true, modo: modoSimulado });
       if (!r.ok) { simulado = null; resultado.classList.add("hidden"); aviso(r.error, "error"); actualizarBotones(); return; }
-      simulado = { clave: claveActual(), modo: modo(), datos: r.datos };
+      simulado = { clave, modo: modoSimulado, datos: r.datos };
       const d = r.datos;
       const conError = d.resultados.filter((f) => f.accion === "error").length;
       aviso(`Simulación lista: ${d.filas} filas. ${d.aInsertar} a crear, ${d.aActualizar} a actualizar, ${conError} con error. Nada se grabó todavía.`, conError ? "info" : "ok");
