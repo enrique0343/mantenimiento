@@ -122,6 +122,11 @@ const activos = centros.filter((c) => c.activo).length;
     const j = await r.json().catch(() => ({}));
     return typeof j.error === "string" ? j.error : porDefecto;
   };
+  const SIN_CONEXION = "Sin conexión: no se guardó. Revisa la conexión y vuelve a intentarlo.";
+  /** fetch que no lanza: sin conexión devuelve null. */
+  const pedir = async (url: string, init?: RequestInit): Promise<Response | null> => {
+    try { return await fetch(url, init); } catch { return null; }
+  };
 
   function abrirForm(datos: { id?: string; codigo?: string; nombre?: string; sede?: string; activo?: boolean }) {
     $<HTMLInputElement>("f_id").value = datos.id ?? "";
@@ -145,7 +150,10 @@ const activos = centros.filter((c) => c.activo).length;
     id: b.dataset.id, codigo: b.dataset.codigo, nombre: b.dataset.nombre, sede: b.dataset.sede, activo: b.dataset.activo === "1",
   })));
 
-  $("saveBtn").addEventListener("click", async () => {
+  const saveBtn = $<HTMLButtonElement>("saveBtn");
+  saveBtn.addEventListener("click", async () => {
+    // Un doble clic no crea el centro dos veces (el segundo respondería «ya existe»).
+    if (saveBtn.disabled) return;
     formErr.classList.add("hidden");
     const id = $<HTMLInputElement>("f_id").value;
     const sede = $<HTMLSelectElement>("f_sede").value;
@@ -155,34 +163,33 @@ const activos = centros.filter((c) => c.activo).length;
       sucursalId: sede ? Number(sede) : null,
     };
     if (id) payload.activo = $<HTMLInputElement>("f_activo").checked;
-    const r = await fetch(id ? `/api/centros-costo/${id}` : "/api/centros-costo", {
+    saveBtn.disabled = true;
+    const r = await pedir(id ? `/api/centros-costo/${id}` : "/api/centros-costo", {
       method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
     });
-    if (!r.ok) {
-      formErr.textContent = await textoError(r, "No se pudo guardar el centro.");
-      formErr.classList.remove("hidden");
-      return;
-    }
-    location.reload();
+    if (r?.ok) { location.reload(); return; }
+    saveBtn.disabled = false;
+    formErr.textContent = r ? await textoError(r, "No se pudo guardar el centro.") : SIN_CONEXION;
+    formErr.classList.remove("hidden");
   });
 
   document.querySelectorAll<HTMLButtonElement>(".toggle-btn").forEach((b) => b.addEventListener("click", async () => {
     b.disabled = true;
-    const r = await fetch(`/api/centros-costo/${b.dataset.id}`, {
+    const r = await pedir(`/api/centros-costo/${b.dataset.id}`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ activo: b.dataset.activo !== "1" }),
     });
-    if (r.ok) { location.reload(); return; }
+    if (r?.ok) { location.reload(); return; }
     b.disabled = false;
-    alert(await textoError(r, "No se pudo cambiar el estado del centro."));
+    alert(r ? await textoError(r, "No se pudo cambiar el estado del centro.") : SIN_CONEXION);
   }));
 
   document.querySelectorAll<HTMLButtonElement>(".del-btn").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm(`¿Eliminar el centro ${b.dataset.codigo}? Solo se elimina un centro sin equipos.`)) return;
     b.disabled = true;
-    const r = await fetch(`/api/centros-costo/${b.dataset.id}`, { method: "DELETE" });
-    if (r.ok) { location.reload(); return; }
+    const r = await pedir(`/api/centros-costo/${b.dataset.id}`, { method: "DELETE" });
+    if (r?.ok) { location.reload(); return; }
     b.disabled = false;
-    alert(await textoError(r, "No se pudo eliminar el centro."));
+    alert(r ? await textoError(r, "No se pudo eliminar el centro.") : SIN_CONEXION);
   }));
 
   // ── Pegar lista ──
@@ -208,10 +215,10 @@ const activos = centros.filter((c) => c.activo).length;
     }
     const boton = $<HTMLButtonElement>("listaGuardar");
     boton.disabled = true;
-    const r = await fetch("/api/centros-costo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lista: texto }) });
+    const r = await pedir("/api/centros-costo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lista: texto }) });
     boton.disabled = false;
-    if (!r.ok) {
-      listaMsg.textContent = await textoError(r, "No se pudo leer la lista.");
+    if (!r?.ok) {
+      listaMsg.textContent = r ? await textoError(r, "No se pudo leer la lista.") : SIN_CONEXION;
       listaMsg.className = "mt-2 text-sm text-red-600";
       return;
     }

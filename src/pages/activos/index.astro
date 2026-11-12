@@ -10,7 +10,7 @@ import { AREAS, AREA_KEYS, areaHref, parseArea, activoAreaCondition } from "@/li
 import { rubroDeActivo } from "@/lib/rubros";
 import { CRITICIDAD_LABEL, CRITICIDAD_COLOR } from "@/lib/inventario-jci";
 import {
-  CLASES_RIESGO, ESTADO_ACTIVO_COLOR, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, hoySV, puedeVerBio,
+  CLASES_RIESGO, ESTADO_ACTIVO_COLOR, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, FRECUENCIAS_RUTINA_EQUIPO, etiquetaFrecuencia, hoySV, puedeVerBio,
   type EstadoActivo,
 } from "@/lib/biomedico";
 import {
@@ -371,14 +371,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
           <div>
             <label class="label text-xs">Frecuencia</label>
             <select id="progFreq" class="input w-full">
-              <option value="diaria">Diaria</option>
-              <option value="semanal">Semanal</option>
-              <option value="quincenal">Quincenal</option>
-              <option value="mensual" selected>Mensual</option>
-              <option value="bimestral">Bimestral</option>
-              <option value="trimestral">Trimestral</option>
-              <option value="semestral">Semestral</option>
-              <option value="anual">Anual</option>
+              {FRECUENCIAS_RUTINA_EQUIPO.map((f) => <option value={f} selected={f === "mensual"}>{etiquetaFrecuencia(f)}</option>)}
             </select>
             <p class="mt-1 text-xs text-slate-400">Tras cerrar la OT, el cron calcula la siguiente fecha con esta frecuencia.</p>
           </div>
@@ -443,11 +436,18 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
         const fecha = progFecha.value;
         if (!fecha) { showMsg("Selecciona la próxima fecha."); return; }
         progSave.disabled = true;
-        const r = await fetch(`/api/activos/${progActivoId}/planes`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ titulo: "Mantenimiento preventivo", frecuencia: progFreq.value, proximaFecha: fecha }),
-        });
+        let r: Response;
+        try {
+          r = await fetch(`/api/activos/${progActivoId}/planes`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ titulo: "Mantenimiento preventivo", frecuencia: progFreq.value, proximaFecha: fecha }),
+          });
+        } catch {
+          progSave.disabled = false;
+          showMsg("Sin conexión: el plan no se guardó. Vuelve a intentarlo.");
+          return;
+        }
         if (r.ok) { showMsg("Programado.", true); location.reload(); return; }
         progSave.disabled = false;
         const j = await r.json().catch(() => ({}));

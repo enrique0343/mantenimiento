@@ -4,6 +4,7 @@
 // repetida, centros de costo, carga masiva por tandas con bitácora y CSV de equipos.
 import assert from 'node:assert/strict';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error('Sin red en las pruebas de inventario'); };
@@ -48,6 +49,22 @@ try {
   const conFechas = status(await crear({ rubro: 'biomedico', ultimaCalibracion: '2026-01-01', proximaCalibracion: '2027-01-01', esPatron: true }), 201, 'las fechas de calibración se ignoran').activo;
   es([conFechas.ultimaCalibracion, conFechas.proximaCalibracion, conFechas.esPatron], [null, null, false], 'POST no escribe calibración ni patrón');
   status(await crear({ rubro: 'biomedico' }, 'visualizador'), 403, 'el visualizador no registra');
+
+  // Revisión: el plan automático del alta cuenta «desde hoy» en El Salvador. A las
+  // 19:30 de SV ya es el día siguiente en UTC: con new Date() el plan arrancaba un día tarde.
+  const RelojReal = Date;
+  fijarReloj('2026-11-12T19:30:00-06:00');
+  try {
+    const conPlan = status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'mensual' }), 201, 'alta con plan mensual de noche').activo;
+    es(one('SELECT proxima_fecha f FROM planes_mantenimiento WHERE activo_id=?', conPlan.id).f, '2026-12-12', 'un mes desde hoy en SV, no desde la fecha UTC');
+    const cuatri = status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'cuatrimestral' }), 201, 'rutina cuatrimestral (§h.20)').activo;
+    es(one('SELECT frecuencia, proxima_fecha f FROM planes_mantenimiento WHERE activo_id=?', cuatri.id), { frecuencia: 'cuatrimestral', f: '2027-03-12' }, 'cuatro meses');
+  } finally {
+    globalThis.Date = RelojReal;
+  }
+  es(status(await crear({ rubro: 'biomedico', mantenimientoFrecuencia: 'mensual', mantenimientoProximaFecha: '31/12/2026' }), 400, 'fecha del plan mal escrita').error,
+    'La fecha del primer mantenimiento no es válida.', 'la primera fecha del plan se valida');
+  status(await crear({ rubro: 'biomedico', mantenimientoFrecuencia: 'turno' }), 400, '«Por turno» no es una rutina de equipo');
 
   // ── Cambio de código ──
   es(status(await editar(escrito.id, { codigo: 'BIO-777' }, 'tecnico'), 403, 'el técnico no cambia el código').error,
@@ -96,6 +113,21 @@ try {
   status(await borrar(delJefe.id, 'jefe'), 403, 'solo el administrador elimina');
   status(await borrar(delJefe.id), 200, 'sin historial se elimina');
   es(one('SELECT count(*) n FROM activos WHERE id=?', delJefe.id).n, 0, 'eliminado');
+
+  // Revisión: vínculos que la base protege y HISTORIAL_ACTIVO no nombra. Antes el
+  // DELETE chocaba con la llave foránea y respondía 500 sin motivo (K-A3 pide 409).
+  run(`INSERT INTO activos(id,codigo,nombre,qr_code,rubro,tipo) VALUES
+    (60,'INF-PADRE','TABLERO GENERAL','QR-INF-PADRE','infraestructura','general'),
+    (61,'INF-HIJO','INTERRUPTOR','QR-INF-HIJO','infraestructura','general'),
+    (62,'EQ-PASO','BALANZA','QR-EQ-PASO','equipo_general','general')`);
+  run('UPDATE activos SET padre_id=60 WHERE id=61');
+  es(status(await borrar(60), 409, 'un equipo con equipos que dependen de él').error,
+    'No se puede eliminar: el equipo tiene equipos que dependen de él. Para retirarlo del servicio usa «Dar de baja».', 'motivo: la jerarquía');
+  es(one('SELECT count(*) n FROM activos WHERE id=60').n, 1, 'el equipo padre sigue');
+  run("INSERT INTO checklist_plantillas(id,nombre) VALUES(900,'PLANTILLA DE PRUEBA')");
+  run("INSERT INTO checklist_plantilla_items(plantilla_id,texto,activo_id) VALUES(900,'Pesar el patrón',62)");
+  n++; assert.match(status(await borrar(62), 409, 'un equipo citado en un paso de plantilla').error, /pasos de plantillas de checklist/);
+  status(await borrar(61), 200, 'el equipo hijo, sin historial, sí se elimina');
 
   // ── Centros de costo ──
   const nuevoCentro = status(await call(app.centros.POST, '/api/centros-costo', { method: 'POST', data: { codigo: ' cc-10 ', nombre: ' pediatría ', sucursalId: 1 }, rol: 'jefe' }), 201, 'crear centro').centro;

@@ -10,7 +10,7 @@ let fixture;
 let n = 0;
 try {
   fixture = await setupConjuntos({ modules: { baja: 'pages/api/activos/[id]/baja', revertir: 'pages/api/activos/[id]/baja-revertir' } });
-  const { app, sqlite, call } = fixture;
+  const { app, sqlite, call, faults } = fixture;
   const one = (q, ...a) => { const r = sqlite.prepare(q).get(...a); return r ? { ...r } : r; };
   const all = (q, ...a) => sqlite.prepare(q).all(...a).map((r) => ({ ...r }));
   const run = (q, ...a) => sqlite.prepare(q).run(...a);
@@ -97,6 +97,38 @@ try {
 
   // ── Un equipo vivo sin planes también se da de baja ──
   es(status(await darBaja(2, { ...base, destinoFinal: 'venta', destinoDetalle: 'Subasta' }), 201, 'baja por venta').planesDesactivados, 0, 'sin planes');
+
+  // ── Revisión: un plan creado mientras se llenaba la baja queda en el acta ──
+  // Antes, la lista de planes y el estado anterior se leían antes del lote: el plan
+  // nuevo quedaba desactivado pero fuera de planes_desactivados y del conteo.
+  run("INSERT INTO activos(id,codigo,nombre,qr_code,rubro,tipo,estado,clase_riesgo) VALUES(5,'BIO-5','VENTILADOR','QR-BIO-5','biomedico','biomedico','mantenimiento','III')");
+  run("INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,activo) VALUES(10,5,'PLAN A','mensual','2030-01-01',1)");
+  faults.beforeBatch = async () => {
+    run("INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,activo) VALUES(11,5,'PLAN NUEVO','anual','2030-02-01',1)");
+  };
+  const carrera = status(await darBaja(5, base), 201, 'baja con un plan agregado a última hora');
+  es(carrera.planesDesactivados, 2, 'cuenta también el plan nuevo');
+  const filaCarrera = one('SELECT estado_anterior, planes_desactivados FROM activo_bajas WHERE id=?', carrera.baja.id);
+  es([filaCarrera.estado_anterior, JSON.parse(filaCarrera.planes_desactivados)], ['mantenimiento', [10, 11]], 'el acta lista los dos planes');
+  es(all('SELECT activo FROM planes_mantenimiento WHERE activo_id=5 ORDER BY id').map((p) => p.activo), [0, 0], 'los dos quedan desactivados');
+
+  // ── Revisión: un equipo que figura de baja sin registro completa aquí sus datos ──
+  // La ficha («Completar datos de baja») y Cumplimiento («Falta registro de baja»)
+  // enlazan a /activos/{id}/baja; antes la API respondía 409 y no había cómo hacerlo.
+  run("INSERT INTO activos(id,codigo,nombre,qr_code,rubro,tipo,estado,clase_riesgo) VALUES(6,'BIO-6','RAYOS X VIEJO','QR-BIO-6','biomedico','biomedico','baja','III')");
+  run("INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,activo) VALUES(12,6,'PLAN OLVIDADO','anual','2030-01-01',1)");
+  run("INSERT INTO ordenes(id,titulo,activo_id,creado_por,rubro,estado) VALUES(600,'Pendiente del equipo viejo',6,1,'biomedico','abierta')");
+  n++; assert.match(status(await darBaja(6, base), 409, 'completar también exige cerrar las órdenes').error, /^Tiene 1 orden sin cerrar: /);
+  run("UPDATE ordenes SET estado='cancelada' WHERE id=600");
+  status(await darBaja(6, base, 'tecnico'), 403, 'el técnico no completa una baja');
+  const completada = status(await darBaja(6, base, 'jefe'), 201, 'completar el registro de una baja sin acta');
+  es(completada.planesDesactivados, 1, 'desactiva el plan que seguía activo');
+  const filaCompletada = one('SELECT estado, estado_anterior, planes_desactivados FROM activo_bajas WHERE id=?', completada.baja.id);
+  es([filaCompletada.estado, filaCompletada.estado_anterior, JSON.parse(filaCompletada.planes_desactivados), one('SELECT estado FROM activos WHERE id=6').estado],
+    ['vigente', 'baja', [12], 'baja'], 'fila vigente; el equipo sigue de baja');
+  es(status(await darBaja(6, base), 409, 'con el registro hecho').error, 'El equipo ya está dado de baja.', 'una sola vez');
+  status(await revertir(6, 'No debía estar de baja: se usa en emergencia'), 200, 'revertir la baja completada');
+  es(one('SELECT estado FROM activos WHERE id=6').estado, 'operativo', 'sin un estado anterior real, vuelve a operativo');
 
   es(all('PRAGMA foreign_key_check'), [], 'llaves foráneas en orden');
   console.log(`PASS test-bio-baja: ${n} casos`);

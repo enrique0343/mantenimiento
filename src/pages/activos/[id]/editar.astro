@@ -33,8 +33,14 @@ if (a.ubicacionId) {
   sucursalActualId = u?.sucursalId ?? null;
 }
 
-const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(sucursales.nombre);
-const ubRows = await db.select().from(ubicaciones).where(eq(ubicaciones.activa, true));
+// Las sedes y ubicaciones activas, más las del equipo aunque estén desactivadas: sin
+// ellas, la ubicación quedaba en «— Seleccionar —» y guardar cualquier cambio (por
+// ejemplo, la clase de riesgo) dejaba al equipo sin ubicación.
+const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre, activa: sucursales.activa }).from(sucursales)
+  .where(sucursalActualId != null ? or(eq(sucursales.activa, true), eq(sucursales.id, sucursalActualId)) : eq(sucursales.activa, true))
+  .orderBy(sucursales.nombre);
+const ubRows = await db.select().from(ubicaciones)
+  .where(a.ubicacionId != null ? or(eq(ubicaciones.activa, true), eq(ubicaciones.id, a.ubicacionId)) : eq(ubicaciones.activa, true));
 const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
 const userRows = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
@@ -124,7 +130,7 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
             <label class="label">Sucursal</label>
             <select class="input" id="sucursalSel">
               <option value="">— Seleccionar —</option>
-              {sucRows.map((s) => <option value={s.id} selected={s.id === sucursalActualId}>{s.nombre}</option>)}
+              {sucRows.map((s) => <option value={s.id} selected={s.id === sucursalActualId}>{s.nombre}{s.activa ? "" : " · desactivada"}</option>)}
             </select>
           </div>
           <div>
@@ -349,7 +355,7 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
       filtered.forEach((u) => {
         const o = document.createElement("option");
         o.value = u.id;
-        o.textContent = `${u.nombre} (${u.tipo})`;
+        o.textContent = `${u.nombre} (${u.tipo})${u.activa === false ? " · desactivada" : ""}`;
         if (u.id === selectId) o.selected = true;
         ubEl.appendChild(o);
       });
@@ -366,11 +372,17 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
       }
     }
 
+    // Si no se tocan sede ni ubicación, se guarda la ubicación que ya tiene el equipo
+    // aunque no esté en la lista (desactivada o sin sede activa): guardar otro dato no
+    // la borra.
+    let ubicacionTocada = false;
+    ubEl?.addEventListener("change", () => { ubicacionTocada = true; });
     if (sucEl) {
       // Inicializa con la sucursal actual y selecciona la ubicación actual
       poblarUbicaciones(sucursalActualId, ubicacionActualId);
       filtrarCentros(true);
       sucEl.addEventListener("change", () => {
+        ubicacionTocada = true;
         poblarUbicaciones(Number(sucEl.value) || null, null);
         filtrarCentros(false);
       });
@@ -408,9 +420,13 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
     });
 
     const err = document.getElementById("err");
+    const saveBtn = document.getElementById("saveBtn");
     const mostrarError = (texto) => { err.textContent = texto; err.classList.remove("hidden"); err.focus(); };
+    // Un solo guardado a la vez: un doble clic no manda dos PATCH.
+    let guardando = false;
     document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (guardando) return;
       err.classList.add("hidden");
       const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
       const sv = (id) => document.getElementById(id)?.value ?? "";
@@ -435,7 +451,7 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
         modelo: v("modelo") || null,
         serial: v("serial") || null,
         anio: num("anio"),
-        ubicacionId: ubVal ? Number(ubVal) : null,
+        ubicacionId: ubicacionTocada ? (ubVal ? Number(ubVal) : null) : (ubicacionActualId ?? null),
         centroCostoId: sv("centroCostoSel") ? Number(sv("centroCostoSel")) : null,
         proveedorId: provVal ? Number(provVal) : null,
         slaUrgenteHoras: Number(sv("slaUrgenteHoras") || 4),
@@ -485,17 +501,27 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
         payload.codigo = codigoEl.value.trim();
       }
 
-      const res = await fetch(`/api/activos/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        mostrarError(typeof j.error === "string" ? j.error : "No se pudo guardar.");
-        return;
+      guardando = true;
+      if (saveBtn) saveBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/activos/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          mostrarError(typeof j.error === "string" ? j.error : "No se pudo guardar.");
+          return;
+        }
+        location.href = `/activos/${id}?area=${encodeURIComponent(sv("rubro"))}`;
+      } catch {
+        // Sin conexión: lo escrito sigue en el formulario para volver a intentarlo.
+        mostrarError("Sin conexión: los cambios no se guardaron. Revisa la conexión y vuelve a guardar.");
+      } finally {
+        guardando = false;
+        if (saveBtn) saveBtn.disabled = false;
       }
-      location.href = `/activos/${id}?area=${encodeURIComponent(sv("rubro"))}`;
     });
   </script>
 </Layout>

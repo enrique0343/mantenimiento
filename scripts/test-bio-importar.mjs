@@ -200,6 +200,21 @@ es(reimportado.resultados[0].accion, 'actualizar', 'solo cambian subcategoría y
 es(Object.keys(reimportado.resultados[0].cambios).sort(), ['subcategoria', 'valorAdquisicion'], 'lo demás queda igual');
 es(reimportado.notas, [I.NOTA_CALIBRACION], 'avisa que las fechas de calibración no se cargan');
 
+// Revisión: lo biomédico de un equipo de otra área no sale en la descarga. Un dato viejo
+// (Clasificar cambia el área y no borra el registro) hacía fallar esa fila al volver a
+// cargar el CSV: «La clase de riesgo, la subcategoría y el registro sanitario solo aplican…».
+const filaGeneral = I.filaExportacion({ codigo: 'EQ-1', numeroActivo: null, nombre: 'IMPRESORA', rubro: 'equipo_general', tipo: 'general', categoria: null,
+  subcategoria: 'diagnostico', marca: null, modelo: null, serial: null, anio: null, centroCodigo: null, centroNombre: null, sucursal: null,
+  ubicacionNombre: null, ubicacionDetalle: null, datosTecnicos: null, claseRiesgo: 'III', criticidadOperacional: 'media', registroSanitario: 'DNM-9',
+  registroSanitarioEntidad: 'DNM', registroSanitarioEmision: '2024-01-15', registroSanitarioVencimiento: '2029-01-15', registroSanitarioNoRequiere: false,
+  estado: 'operativo', fechaAdquisicion: null, vidaUtilAnios: null, valorAdquisicion: null, proveedor: null, ultimaCalibracion: null, proximaCalibracion: null,
+  bajaId: null, bajaFecha: null, bajaMotivo: null, bajaDestino: null, slaUrgenteHoras: 4, slaAltaHoras: 24, slaMediaHoras: 72, slaBajaHoras: 168 }, '2026-11-12');
+es(['subcategoria', 'clase_riesgo', 'registro_sanitario', 'registro_entidad', 'registro_emision', 'registro_vencimiento', 'registro_no_requiere', 'registro_estado'].map((k) => filaGeneral[k]),
+  ['', '', '', '', '', '', '', ''], 'un equipo general no lleva datos biomédicos en el CSV');
+const csvGeneral = [exportado.map((c) => `"${c.label}"`).join(','), exportado.map((c) => `"${filaGeneral[c.key]}"`).join(',')].join('\r\n');
+const reimportadoGeneral = I.planificarImportacion(csvGeneral, ctx('actualizar', 'equipo_general')).resultados[0];
+es([reimportadoGeneral.accion, reimportadoGeneral.detalle], ['sin_cambios', ['Sin cambios']], 'el CSV del equipo general vuelve a cargarse sin error');
+
 es(I.resumenAltaCarga('inventario.csv'), 'Alta por carga masiva (archivo «inventario.csv»)', 'resumen de alta');
 es(I.resumenActualizacionCarga(['Clase de riesgo', 'Serie']), 'Actualizado por carga masiva: Clase de riesgo, Serie', 'resumen de cambio');
 

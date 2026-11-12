@@ -234,18 +234,24 @@ export interface EquipoExportacion {
 
 const soloFecha = (v: string | null | undefined) => (esFechaISO(v) ? v : v ?? "");
 
-/** Una fila del CSV de equipos: etiquetas en español, fechas AAAA-MM-DD y Sí/No. */
+/**
+ * Una fila del CSV de equipos: etiquetas en español, fechas AAAA-MM-DD y Sí/No.
+ * Subcategoría, clase y registro sanitario solo van en biomédicos (como en la
+ * impresión): un dato viejo en un equipo que pasó a otra área (Clasificar no borra el
+ * registro) haría fallar esa fila al volver a cargar el CSV en «Actualizar».
+ */
 export function filaExportacion(e: EquipoExportacion, hoy: string): Record<string, string | number> {
   const area = rubroDeActivo(e.rubro, e.tipo);
   const bio = area === "biomedico";
   const tecnicos = leerDatosTecnicos(e.datosTecnicos);
+  const soloBio = (v: string | number): string | number => (bio ? v : "");
   return {
     codigo: e.codigo,
     numero_activo: e.numeroActivo ?? "",
     nombre: e.nombre,
     rubro: AREAS[area].label,
     categoria: e.categoria ?? "",
-    subcategoria: e.subcategoria ? (SUBCATS_BIOMEDICO[e.subcategoria as SubcatKey]?.label ?? e.subcategoria) : "",
+    subcategoria: soloBio(e.subcategoria ? (SUBCATS_BIOMEDICO[e.subcategoria as SubcatKey]?.label ?? e.subcategoria) : ""),
     marca: e.marca ?? "",
     modelo: e.modelo ?? "",
     serial: e.serial ?? "",
@@ -256,12 +262,12 @@ export function filaExportacion(e: EquipoExportacion, hoy: string): Record<strin
     ubicacion: e.ubicacionNombre ?? "",
     ubicacion_detalle: e.ubicacionDetalle ?? "",
     servicio: tecnicos.servicio ?? "",
-    clase_riesgo: e.claseRiesgo ?? "",
+    clase_riesgo: soloBio(e.claseRiesgo ?? ""),
     criticidad: e.criticidadOperacional ? conMayuscula(e.criticidadOperacional) : "",
-    registro_sanitario: e.registroSanitario ?? "",
-    registro_entidad: e.registroSanitarioEntidad ?? "",
-    registro_emision: soloFecha(e.registroSanitarioEmision),
-    registro_vencimiento: soloFecha(e.registroSanitarioVencimiento),
+    registro_sanitario: soloBio(e.registroSanitario ?? ""),
+    registro_entidad: soloBio(e.registroSanitarioEntidad ?? ""),
+    registro_emision: soloBio(soloFecha(e.registroSanitarioEmision)),
+    registro_vencimiento: soloBio(soloFecha(e.registroSanitarioVencimiento)),
     registro_no_requiere: bio ? (e.registroSanitarioNoRequiere ? "Sí" : "No") : "",
     registro_estado: bio ? ESTADO_REGISTRO_LABEL[estadoRegistroSanitario(e, hoy)] : "",
     estado: ESTADO_ACTIVO_LABEL[e.estado as EstadoActivo] ?? e.estado,
