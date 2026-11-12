@@ -374,14 +374,15 @@ export interface DatosProveedor {
   acreditacionAlcance: string | null;
   acreditacionVigencia: string | null;
 }
-const TEXTOS_PROVEEDOR: ReadonlyArray<{ clave: keyof DatosProveedor; etiqueta: string; max: number }> = [
-  { clave: "nit", etiqueta: "El NIT", max: 40 },
-  { clave: "contacto", etiqueta: "El contacto", max: 200 },
-  { clave: "telefono", etiqueta: "El teléfono", max: 60 },
-  { clave: "notas", etiqueta: "Las notas", max: 2000 },
-  { clave: "acreditacionOrgano", etiqueta: "El órgano acreditador", max: 200 },
-  { clave: "acreditacionNumero", etiqueta: "El número de acreditación", max: 500 },
-  { clave: "acreditacionAlcance", etiqueta: "El alcance", max: 500 },
+// `largo`: la frase completa del error (concuerda en género y número: «Las notas son muy largas»).
+const TEXTOS_PROVEEDOR: ReadonlyArray<{ clave: keyof DatosProveedor; largo: string; max: number }> = [
+  { clave: "nit", largo: "El NIT es muy largo", max: 40 },
+  { clave: "contacto", largo: "El contacto es muy largo", max: 200 },
+  { clave: "telefono", largo: "El teléfono es muy largo", max: 60 },
+  { clave: "notas", largo: "Las notas son muy largas", max: 2000 },
+  { clave: "acreditacionOrgano", largo: "El órgano acreditador es muy largo", max: 200 },
+  { clave: "acreditacionNumero", largo: "El número de acreditación es muy largo", max: 500 },
+  { clave: "acreditacionAlcance", largo: "El alcance es muy largo", max: 500 },
 ];
 const RE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const booleano = (v: unknown): boolean | null =>
@@ -405,7 +406,7 @@ export function leerDatosProveedor(body: Record<string, unknown>, parcial: boole
   for (const c of TEXTOS_PROVEEDOR) {
     if (parcial && !tiene(c.clave)) continue;
     const t = textoLimpio(body[c.clave]);
-    if (t && t.length > c.max) return { ok: false, error: `${c.etiqueta} es muy largo (máx. ${c.max} caracteres).` };
+    if (t && t.length > c.max) return { ok: false, error: `${c.largo} (máx. ${c.max} caracteres).` };
     (datos as Record<string, unknown>)[c.clave] = t;
   }
   if (!parcial || tiene("email")) {
@@ -452,6 +453,31 @@ export function tituloVineta(e: EstadoCalibracion): string {
   if (e === "no_conforme") return "No conforme";
   if (e === "sin_certificado") return "Certificado pendiente";
   return "";
+}
+
+/**
+ * Opciones del filtro «Ubicación» de las viñetas: las ubicaciones con equipos con viñeta, de
+ * la sede elegida si hay una («UCI · Central» si no se eligió sede), por nombre.
+ */
+export function opcionesUbicacionVinetas(
+  filas: ReadonlyArray<Pick<FilaCal, "ubicacionId" | "ubicacion" | "sedeId" | "sede">>, sede: number | null,
+): Array<[number, string]> {
+  const m = new Map<number, string>();
+  for (const f of filas) {
+    if (f.ubicacionId === null || (sede !== null && f.sedeId !== sede) || m.has(f.ubicacionId)) continue;
+    const nombre = f.ubicacion ?? `Ubicación ${f.ubicacionId}`;
+    m.set(f.ubicacionId, sede === null && f.sede ? `${nombre} · ${f.sede}` : nombre);
+  }
+  return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "es", { numeric: true }));
+}
+
+/**
+ * La ubicación pedida solo filtra si está entre las opciones. Al cambiar de sede, el formulario
+ * reenvía la ubicación anterior: si es de otra sede se descarta (si no, la hoja saldría vacía
+ * con «Todas» a la vista).
+ */
+export function ubicacionVinetas(opciones: ReadonlyArray<readonly [number, string]>, pedida: number | null): number | null {
+  return pedida !== null && opciones.some(([id]) => id === pedida) ? pedida : null;
 }
 
 // ═══ Textos comunes ══════════════════════════════════════════════════════════

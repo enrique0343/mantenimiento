@@ -68,7 +68,7 @@ const marcaModelo = (p: { marca: string | null; modelo: string | null }) => [p.m
   </div>
 
   <article class="print-doc doc-hoja doc-ancha mt-4">
-    <DocCabecera titulo="Equipos patrón y su calibración" subtitulo="Instrumentos de medición y prueba" fecha={hoy} />
+    <DocCabecera soloImpresion titulo="Equipos patrón y su calibración" subtitulo="Instrumentos de medición y prueba" fecha={hoy} />
     <section class="doc-seccion">
       {patrones.length === 0 ? <p class="doc-texto">No hay equipos marcados como patrón.</p> : (
         <div class="overflow-x-auto">
@@ -125,7 +125,7 @@ const marcaModelo = (p: { marca: string | null; modelo: string | null }) => [p.m
       )}
     </section>
     <p class="doc-nota">Corte: {fechaCorta(hoy)}. «Usado en» = calibraciones registradas con ese patrón. No incluye equipos dados de baja.</p>
-    <DocFolio codigo="Equipos patrón" />
+    <DocFolio soloImpresion codigo="Equipos patrón" />
   </article>
 </Layout>
 

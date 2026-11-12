@@ -153,7 +153,7 @@ const marcaModelo = (f: { marca: string | null; modelo: string | null; serial: s
   </div>
 
   <article class="print-doc doc-hoja doc-ancha mt-4">
-    <DocCabecera titulo={titulo} subtitulo={subtitulo} fecha={hoy} />
+    <DocCabecera soloImpresion titulo={titulo} subtitulo={subtitulo} fecha={hoy} />
     <section class="doc-seccion">
       <div class="doc-cifras">
         <div><span class="doc-etq">Equipos</span><b>{resumen.total}</b></div>
@@ -233,7 +233,7 @@ const marcaModelo = (f: { marca: string | null; modelo: string | null; serial: s
       )}
     </section>
     <p class="doc-nota">Corte: {fechaCorta(hoy)}. No incluye equipos dados de baja.</p>
-    <DocFolio codigo={filtros.criticos ? "Equipos críticos · calibración" : "Calibraciones de equipos"} />
+    <DocFolio soloImpresion codigo={filtros.criticos ? "Equipos críticos · calibración" : "Calibraciones de equipos"} />
   </article>
 
   {puedeGestionar && (
