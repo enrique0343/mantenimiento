@@ -1,56 +1,85 @@
 ---
+// Proveedores (admin y jefe). Fase 59 (WP-B · requisito 8): laboratorio acreditado con
+// órgano, número, alcance, vigencia y certificado; estado de la acreditación con aviso a
+// 60 días; filtro «Laboratorios» (?lab=1) y ?editar={id} para abrir uno desde Laboratorios.
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { proveedores } from "@/lib/schema";
-import { eq } from "drizzle-orm";
+import { ARCHIVO_ACCEPT, hoySV, puedeGestionarBio } from "@/lib/biomedico";
+import { textoVigenciaAcreditacion } from "@/lib/metrologia";
+import { cargarProveedoresCal } from "@/lib/metrologia-db";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+if (!puedeGestionarBio(user.rol)) return Astro.redirect("/");
 
-const db = getDb(Astro);
-const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
+const hoy = hoySV();
+const soloLabs = Astro.url.searchParams.get("lab") === "1";
+const editar = Astro.url.searchParams.get("editar") ?? "";
+const todos = await cargarProveedoresCal(getDb(Astro), hoy);
+const rows = soloLabs ? todos.filter((p) => p.esLaboratorioAcreditado || p.calibraciones > 0) : todos;
+const COLOR_ACRED: Record<string, string> = {
+  vigente: "text-emerald-700", por_vencer: "text-amber-700", vencida: "text-red-700", sin_vigencia: "text-amber-700", no_acreditado: "text-slate-400",
+};
 ---
 
 <Layout title="Proveedores">
-  <div class="flex items-center justify-between">
+  <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Proveedores</h1>
-      <p class="text-sm text-slate-500">{rows.filter((r) => r.activo).length} activos</p>
+      <p class="text-sm text-slate-500">{todos.filter((r) => r.activo).length} activos · {todos.filter((r) => r.esLaboratorioAcreditado).length} laboratorios acreditados</p>
     </div>
-    <button id="newBtn" class="btn-primary">+ Nuevo proveedor</button>
+    <button id="newBtn" type="button" class="btn-primary">+ Nuevo proveedor</button>
   </div>
+
+  <nav class="mt-4 flex flex-wrap gap-2" aria-label="Filtro de proveedores">
+    <a href="/proveedores" aria-current={!soloLabs ? "page" : undefined} class:list={["rounded-lg border px-3 py-2 text-sm", !soloLabs ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}>Todos</a>
+    <a href="/proveedores?lab=1" aria-current={soloLabs ? "page" : undefined} class:list={["rounded-lg border px-3 py-2 text-sm", soloLabs ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}>Laboratorios</a>
+    <a href="/calibraciones/laboratorios" class="px-3 py-2 text-sm text-brand-600 hover:underline">Ver laboratorios de calibración →</a>
+  </nav>
 
   <div id="form" class="card mt-4 hidden p-5">
     <h2 class="mb-3 font-semibold" id="formTitle">Nuevo proveedor</h2>
     <input type="hidden" id="f_id" value="" />
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <div><label class="label">Nombre *</label><input class="input" id="f_nombre" /></div>
-      <div><label class="label">NIT</label><input class="input" id="f_nit" placeholder="0000-000000-000-0" /></div>
-      <div><label class="label">Persona de contacto</label><input class="input" id="f_contacto" /></div>
-      <div><label class="label">Teléfono</label><input class="input" id="f_telefono" /></div>
-      <div><label class="label">Email</label><input class="input" id="f_email" type="email" /></div>
-      <div class="sm:col-span-2"><label class="label">Notas</label><textarea class="input" id="f_notas" rows="2"></textarea></div>
+      <div><label class="label" for="f_nombre">Nombre *</label><input class="input" id="f_nombre" maxlength="200" /></div>
+      <div><label class="label" for="f_nit">NIT</label><input class="input" id="f_nit" placeholder="0000-000000-000-0" maxlength="40" /></div>
+      <div><label class="label" for="f_contacto">Persona de contacto</label><input class="input" id="f_contacto" maxlength="200" /></div>
+      <div><label class="label" for="f_telefono">Teléfono</label><input class="input" id="f_telefono" maxlength="60" /></div>
+      <div><label class="label" for="f_email">Email</label><input class="input" id="f_email" type="email" maxlength="200" /></div>
+      <div class="sm:col-span-2"><label class="label" for="f_notas">Notas</label><textarea class="input" id="f_notas" rows="2" maxlength="2000"></textarea></div>
     </div>
     <div class="mt-4 border-t border-slate-200 pt-4">
       <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
         <input type="checkbox" id="f_acred" class="h-4 w-4" />
         Es laboratorio de calibración acreditado
       </label>
-      <p class="mt-1 text-xs text-slate-500">Marca proveedores que pueden emitir certificados de calibración trazables (JCI FMS.8).</p>
+      <p class="mt-1 text-xs text-slate-500">Marca los laboratorios que emiten certificados de calibración trazables. Cada calibración guarda la acreditación que tenía el laboratorio en su fecha.</p>
       <div id="acredFields" class="mt-3 hidden grid-cols-1 gap-4 sm:grid-cols-2">
-        <div><label class="label">Órgano acreditador</label><input class="input" id="f_acredOrgano" placeholder="Ej: OSA / CNB El Salvador" /></div>
-        <div><label class="label">Vigencia de la acreditación</label><input class="input" id="f_acredVigencia" type="date" /></div>
+        <div><label class="label" for="f_acredOrgano">Órgano acreditador *</label><input class="input" id="f_acredOrgano" placeholder="Ej.: OSA (El Salvador)" maxlength="200" /></div>
+        <div><label class="label" for="f_acredNumero">N.º de acreditación *</label><input class="input" id="f_acredNumero" placeholder="Ej.: LC-012" maxlength="500" /></div>
+        <div><label class="label" for="f_acredVigencia">Vigencia de la acreditación *</label><input class="input" id="f_acredVigencia" type="date" /></div>
+        <div class="sm:col-span-2">
+          <label class="label" for="f_acredAlcance">Alcance</label>
+          <textarea class="input" id="f_acredAlcance" rows="2" maxlength="500" placeholder="Magnitudes o equipos que cubre: presión, temperatura, seguridad eléctrica…"></textarea>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="label" for="f_acredFile">Certificado de acreditación (PDF, JPG, PNG o WEBP; máx. 15 MB)</label>
+          <input class="input" id="f_acredFile" type="file" accept={ARCHIVO_ACCEPT} />
+          <p id="f_acredActual" class="mt-1 hidden text-xs text-slate-500">
+            <a id="f_acredActualLink" href="#" target="_blank" rel="noopener" class="text-brand-600 hover:underline">Ver certificado actual</a>.
+            Si subes otro, reemplaza al actual.
+          </p>
+        </div>
       </div>
     </div>
-    <p id="formErr" class="mt-2 hidden text-sm text-red-600"></p>
+    <p id="formErr" class="mt-2 hidden text-sm text-red-700" role="alert"></p>
     <div class="mt-3 flex gap-2">
-      <button id="saveBtn" class="btn-primary">Guardar</button>
-      <button id="cancelBtn" class="btn-secondary">Cancelar</button>
+      <button id="saveBtn" type="button" class="btn-primary">Guardar</button>
+      <button id="cancelBtn" type="button" class="btn-secondary">Cancelar</button>
     </div>
   </div>
 
-  <div class="card mt-4 overflow-hidden">
+  <div class="card mt-4 overflow-x-auto">
     <table class="w-full text-left text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
@@ -59,6 +88,7 @@ const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
           <th class="px-4 py-2">Contacto</th>
           <th class="px-4 py-2">Teléfono</th>
           <th class="px-4 py-2">Email</th>
+          <th class="px-4 py-2">Acreditación</th>
           <th class="px-4 py-2">Estado</th>
           <th class="px-4 py-2"></th>
         </tr>
@@ -66,19 +96,27 @@ const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
       <tbody class="divide-y divide-slate-100">
         {rows.length === 0 && (
           <tr>
-            <td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin proveedores aún.</td>
+            <td colspan="8" class="px-4 py-6 text-center text-slate-400">{soloLabs ? "No hay laboratorios todavía." : "Sin proveedores aún."}</td>
           </tr>
         )}
         {rows.map((p) => (
           <tr class:list={[!p.activo && "opacity-50"]} id={`row-${p.id}`}>
             <td class="px-4 py-2 font-medium">
               {p.nombre}
-              {p.esLaboratorioAcreditado && <span class="badge ml-2 bg-blue-100 text-blue-700 text-[10px]">Lab acreditado</span>}
+              {p.calibraciones > 0 && <span class="block text-xs font-normal text-slate-500">{p.calibraciones === 1 ? "1 calibración" : `${p.calibraciones} calibraciones`}</span>}
             </td>
             <td class="px-4 py-2 text-slate-600">{p.nit ?? "—"}</td>
             <td class="px-4 py-2">{p.contacto ?? "—"}</td>
             <td class="px-4 py-2">{p.telefono ?? "—"}</td>
             <td class="px-4 py-2">{p.email ?? "—"}</td>
+            <td class="px-4 py-2 text-xs">
+              <span class:list={["font-semibold", COLOR_ACRED[p.estado]]}>{textoVigenciaAcreditacion(p.estado, p.acreditacionVigencia)}</span>
+              {p.esLaboratorioAcreditado && (
+                p.tieneCertificado
+                  ? <a class="block text-brand-600 hover:underline" href={`/api/proveedores/${p.id}/acreditacion`} target="_blank" rel="noopener">Certificado</a>
+                  : <span class="block font-semibold text-amber-700">Falta certificado</span>
+              )}
+            </td>
             <td class="px-4 py-2">
               <span class:list={["badge", p.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"]}>
                 {p.activo ? "Activo" : "Inactivo"}
@@ -86,6 +124,7 @@ const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
             </td>
             <td class="px-4 py-2">
               <button
+                type="button"
                 class="edit-btn text-xs text-brand-600 hover:underline"
                 data-id={p.id}
                 data-nombre={p.nombre}
@@ -96,7 +135,10 @@ const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
                 data-notas={p.notas ?? ""}
                 data-acred={p.esLaboratorioAcreditado ? "1" : ""}
                 data-acredorgano={p.acreditacionOrgano ?? ""}
+                data-acrednumero={p.acreditacionNumero ?? ""}
+                data-acredalcance={p.acreditacionAlcance ?? ""}
                 data-acredvigencia={p.acreditacionVigencia ?? ""}
+                data-acredcert={p.tieneCertificado ? `/api/proveedores/${p.id}/acreditacion` : ""}
               >Editar</button>
             </td>
           </tr>
@@ -104,61 +146,101 @@ const rows = await db.select().from(proveedores).orderBy(proveedores.nombre);
       </tbody>
     </table>
   </div>
+  <div id="editarInicial" data-id={editar} hidden></div>
 </Layout>
 
 <script>
-  const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
-  const s = (id: string, v: string) => { (document.getElementById(id) as HTMLInputElement).value = v; };
-  const form = document.getElementById("form")!;
-  const formTitle = document.getElementById("formTitle")!;
-  const acredChk = document.getElementById("f_acred") as HTMLInputElement;
-  const acredFields = document.getElementById("acredFields")!;
-  const toggleAcred = () => acredFields.classList.toggle("hidden", !acredChk.checked);
+  import { ARCHIVO_MAX_BYTES } from "@/lib/biomedico";
+  import { validarAcreditacion } from "@/lib/metrologia";
+
+  const $ = <T extends HTMLElement = HTMLInputElement>(id: string) => document.getElementById(id) as T;
+  const g = (id: string) => $(id).value.trim();
+  const s = (id: string, v: string) => { $(id).value = v; };
+  const form = $<HTMLDivElement>("form");
+  const formTitle = $<HTMLHeadingElement>("formTitle");
+  const acredChk = $("f_acred");
+  const acredFields = $<HTMLDivElement>("acredFields");
+  const archivo = $("f_acredFile");
+  const actual = $<HTMLParagraphElement>("f_acredActual");
+  const actualLink = $<HTMLAnchorElement>("f_acredActualLink");
+  const err = $<HTMLParagraphElement>("formErr");
+  const saveBtn = $<HTMLButtonElement>("saveBtn");
+  const toggleAcred = () => { acredFields.classList.toggle("hidden", !acredChk.checked); acredFields.classList.toggle("grid", acredChk.checked); };
   acredChk.addEventListener("change", toggleAcred);
+  const mostrarError = (t: string) => { err.textContent = t; err.classList.toggle("hidden", !t); };
 
-  document.getElementById("newBtn")?.addEventListener("click", () => {
-    s("f_id", ""); s("f_nombre", ""); s("f_nit", ""); s("f_contacto", ""); s("f_telefono", ""); s("f_email", ""); s("f_notas", "");
-    acredChk.checked = false; s("f_acredOrgano", ""); s("f_acredVigencia", ""); toggleAcred();
-    formTitle.textContent = "Nuevo proveedor";
+  function abrir(datos: Record<string, string | undefined>, titulo: string) {
+    s("f_id", datos.id ?? ""); s("f_nombre", datos.nombre ?? ""); s("f_nit", datos.nit ?? "");
+    s("f_contacto", datos.contacto ?? ""); s("f_telefono", datos.telefono ?? ""); s("f_email", datos.email ?? "");
+    s("f_notas", datos.notas ?? "");
+    acredChk.checked = datos.acred === "1";
+    s("f_acredOrgano", datos.acredorgano ?? ""); s("f_acredNumero", datos.acrednumero ?? "");
+    s("f_acredVigencia", datos.acredvigencia ?? ""); s("f_acredAlcance", datos.acredalcance ?? "");
+    archivo.value = "";
+    actual.classList.toggle("hidden", !datos.acredcert);
+    actualLink.href = datos.acredcert || "#";
+    toggleAcred();
+    mostrarError("");
+    formTitle.textContent = titulo;
     form.classList.remove("hidden");
-  });
+    form.scrollIntoView({ behavior: "smooth" });
+  }
 
+  document.getElementById("newBtn")?.addEventListener("click", () => abrir({}, "Nuevo proveedor"));
   document.getElementById("cancelBtn")?.addEventListener("click", () => form.classList.add("hidden"));
+  const botones = document.querySelectorAll<HTMLButtonElement>(".edit-btn");
+  botones.forEach((btn) => btn.addEventListener("click", () => abrir({ ...btn.dataset }, "Editar proveedor")));
 
-  document.querySelectorAll<HTMLButtonElement>(".edit-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      s("f_id", btn.dataset.id!); s("f_nombre", btn.dataset.nombre!); s("f_nit", btn.dataset.nit!);
-      s("f_contacto", btn.dataset.contacto!); s("f_telefono", btn.dataset.telefono!);
-      s("f_email", btn.dataset.email!); s("f_notas", btn.dataset.notas!);
-      acredChk.checked = btn.dataset.acred === "1";
-      s("f_acredOrgano", btn.dataset.acredorgano!); s("f_acredVigencia", btn.dataset.acredvigencia!);
-      toggleAcred();
-      formTitle.textContent = "Editar proveedor";
-      form.classList.remove("hidden");
-      form.scrollIntoView({ behavior: "smooth" });
-    });
-  });
+  // ?editar={id}: abre ese proveedor al cargar (enlace «Editar» de Laboratorios).
+  const editarId = document.getElementById("editarInicial")?.dataset.id;
+  if (editarId) {
+    const btn = Array.from(botones).find((b) => b.dataset.id === editarId);
+    if (btn) abrir({ ...btn.dataset }, "Editar proveedor");
+  }
 
-  document.getElementById("saveBtn")?.addEventListener("click", async () => {
-    const err = document.getElementById("formErr")!;
-    err.classList.add("hidden");
+  saveBtn.addEventListener("click", async () => {
+    mostrarError("");
     const id = g("f_id");
+    const acreditado = acredChk.checked;
     const payload = {
       nombre: g("f_nombre"), nit: g("f_nit") || null, contacto: g("f_contacto") || null,
       telefono: g("f_telefono") || null, email: g("f_email") || null, notas: g("f_notas") || null,
-      esLaboratorioAcreditado: acredChk.checked,
+      esLaboratorioAcreditado: acreditado,
       acreditacionOrgano: g("f_acredOrgano") || null,
+      acreditacionNumero: g("f_acredNumero") || null,
+      acreditacionAlcance: g("f_acredAlcance") || null,
       acreditacionVigencia: g("f_acredVigencia") || null,
     };
-    const url = id ? `/api/proveedores/${id}` : "/api/proveedores";
-    const method = id ? "PATCH" : "POST";
-    const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) {
+    if (!payload.nombre) { mostrarError("Escribe el nombre del proveedor."); return; }
+    const errorAcred = validarAcreditacion(payload);
+    if (errorAcred) { mostrarError(errorAcred); return; }
+    const file = acreditado ? archivo.files?.[0] ?? null : null;
+    if (file && file.size > ARCHIVO_MAX_BYTES) { mostrarError("El archivo pesa más de 15 MB. Comprímelo o divídelo en partes."); return; }
+
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch(id ? `/api/proveedores/${id}` : "/api/proveedores", {
+        method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
       const j = await res.json().catch(() => ({}));
-      err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
-      err.classList.remove("hidden");
-      return;
+      if (!res.ok) { mostrarError(typeof j.error === "string" ? j.error : "No se pudo guardar el proveedor."); return; }
+      const proveedorId = id || String(j.proveedor?.id ?? "");
+      if (file && proveedorId) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r2 = await fetch(`/api/proveedores/${proveedorId}/acreditacion`, { method: "POST", body: fd });
+        if (!r2.ok) {
+          const j2 = await r2.json().catch(() => ({}));
+          mostrarError(`Se guardó el proveedor, pero el certificado no se subió: ${typeof j2.error === "string" ? j2.error : "error desconocido"}`);
+          s("f_id", proveedorId);
+          return;
+        }
+      }
+      location.reload();
+    } catch {
+      mostrarError("No hay conexión. Vuelve a intentarlo.");
+    } finally {
+      saveBtn.disabled = false;
     }
-    location.reload();
   });
 </script>

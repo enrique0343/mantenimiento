@@ -1,53 +1,66 @@
+// Un proveedor. GET: quien ve lo biomédico. PATCH: admin y jefe (la acreditación se revisa
+// con lo guardado más lo nuevo). DELETE: admin; desactiva, no borra.
 import type { APIRoute } from "astro";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { proveedores } from "@/lib/schema";
-import { requireUser } from "@/lib/auth";
+import { calcularDiff, logAudit, resumenCambios } from "@/lib/audit";
+import { ROLES_BIO_GESTIONAR, ROLES_BIO_VER } from "@/lib/biomedico";
+import { leerDatosProveedor, validarAcreditacion } from "@/lib/metrologia";
+import { errorJson, exigirRol, idDeRuta } from "@/lib/metrologia-db";
 
 export const prerender = false;
 
-export const GET: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx);
-  if (!user) return response;
-  const id = Number(ctx.params.id);
-  const db = getDb(ctx);
+async function proveedorPorId(db: ReturnType<typeof getDb>, valor: string | undefined) {
+  const id = idDeRuta(valor);
+  if (!id) return null;
   const [row] = await db.select().from(proveedores).where(eq(proveedores.id, id)).limit(1);
-  if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
+  return row ?? null;
+}
+
+export const GET: APIRoute = async (ctx) => {
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_VER);
+  if (!user) return response;
+  const row = await proveedorPorId(getDb(ctx), ctx.params.id);
+  if (!row) return errorJson("Proveedor no encontrado", 404);
   return Response.json({ proveedor: row });
 };
 
-const updateSchema = z.object({
-  nombre: z.string().min(1).optional(),
-  nit: z.string().nullable().optional(),
-  contacto: z.string().nullable().optional(),
-  telefono: z.string().nullable().optional(),
-  email: z.string().email().nullable().optional(),
-  notas: z.string().nullable().optional(),
-  activo: z.boolean().optional(),
-  esLaboratorioAcreditado: z.boolean().optional(),
-  acreditacionOrgano: z.string().nullable().optional(),
-  acreditacionVigencia: z.string().nullable().optional(),
-});
-
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_GESTIONAR, "Solo el jefe o el administrador editan proveedores.");
   if (!user) return response;
-  const id = Number(ctx.params.id);
-  const body = await ctx.request.json().catch(() => null);
-  const parsed = updateSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
-  const [row] = await db.update(proveedores).set(parsed.data).where(eq(proveedores.id, id)).returning();
-  if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
+  const actual = await proveedorPorId(db, ctx.params.id);
+  if (!actual) return errorJson("Proveedor no encontrado", 404);
+  const body = await ctx.request.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return errorJson("Datos no válidos.", 400);
+  const leido = leerDatosProveedor(body as Record<string, unknown>, true);
+  if (!leido.ok) return errorJson(leido.error, 400);
+  const error = validarAcreditacion({ ...actual, ...leido.datos });
+  if (error) return errorJson(error, 400);
+
+  const diff = calcularDiff(actual as unknown as Record<string, unknown>, leido.datos as Record<string, unknown>);
+  if (Object.keys(diff).length === 0) return Response.json({ proveedor: actual });
+  const [row] = await db.update(proveedores).set(leido.datos).where(eq(proveedores.id, actual.id)).returning();
+  await logAudit(ctx, {
+    entidad: "proveedor", entidadId: actual.id, accion: "update", cambios: diff,
+    resumen: `Proveedor «${row.nombre}»: ${resumenCambios(diff)}`,
+  });
   return Response.json({ proveedor: row });
 };
 
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  const { user, response } = await exigirRol(ctx, ["admin"], "Solo el administrador desactiva proveedores.");
   if (!user) return response;
-  const id = Number(ctx.params.id);
   const db = getDb(ctx);
-  await db.update(proveedores).set({ activo: false }).where(eq(proveedores.id, id));
+  const actual = await proveedorPorId(db, ctx.params.id);
+  if (!actual) return errorJson("Proveedor no encontrado", 404);
+  if (actual.activo) {
+    await db.update(proveedores).set({ activo: false }).where(eq(proveedores.id, actual.id));
+    await logAudit(ctx, {
+      entidad: "proveedor", entidadId: actual.id, accion: "estado",
+      cambios: { activo: { antes: true, despues: false } }, resumen: `Proveedor desactivado: ${actual.nombre}`,
+    });
+  }
   return Response.json({ ok: true });
 };
