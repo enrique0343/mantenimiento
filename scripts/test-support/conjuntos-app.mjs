@@ -36,6 +36,7 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
         export const sendMail=async()=>{}; export const emailLayout=()=>'';
         export const sendTelegram=async()=>{}; export const crearNotificacion=async()=>{};
         export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b;
+        export const logAuditLote=async()=>{}; export const labelCampo=(c)=>c; export const resumenCambios=()=>'';
         export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{};
         export const disparadorProyecto=async()=>{};
       `, loader: 'js' }));

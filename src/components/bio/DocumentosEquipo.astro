@@ -1,0 +1,14 @@
+---
+// Fase 59 · Esqueleto que deja BASE para que la ficha y la hoja de vida (WP-C) lo
+// coloquen desde ya. Lo reemplaza WP-D, su dueño, manteniendo estas props y el id
+// del contenedor (#documentos). Mientras tanto no muestra nada.
+// Documentos del equipo y expediente técnico.
+interface Props {
+  activoId: number;
+  /** "ficha" (con botones y formulario) u "hoja" (hoja de vida impresa, sin scripts). */
+  variante?: "ficha" | "hoja";
+  /** Título de la sección en la hoja de vida, por ejemplo «6. Expediente técnico». */
+  titulo?: string;
+}
+const { activoId: _activoId, variante: _variante = "ficha", titulo: _titulo } = Astro.props;
+---

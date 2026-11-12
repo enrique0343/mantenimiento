@@ -17,7 +17,8 @@ const fFrecuencia = url.searchParams.get("frecuencia");
 const fEstado = url.searchParams.get("estado") ?? "activos";
 
 const rows = await db
-  .select({ p: planesMantenimiento, a: activos, u: usuarios, ub: ubicaciones, s: sucursales })
+  // D1 corta el resultado a 100 columnas: del técnico solo se usa el nombre.
+  .select({ p: planesMantenimiento, a: activos, u: { id: usuarios.id, nombre: usuarios.nombre }, ub: ubicaciones, s: sucursales })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))

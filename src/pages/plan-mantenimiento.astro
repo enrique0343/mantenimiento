@@ -59,7 +59,8 @@ const txtRecursos = C("recursos",
 
 // ── Datos: planes por equipo ─────────────────────────────────────────────────
 const planRowsAll = await db
-  .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
+  // D1 corta el resultado a 100 columnas: del técnico solo se usa el nombre.
+  .select({ p: planesMantenimiento, a: activos, u: { id: usuarios.id, nombre: usuarios.nombre }, s: sucursales, ub: ubicaciones })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))

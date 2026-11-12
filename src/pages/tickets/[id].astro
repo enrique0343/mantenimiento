@@ -21,7 +21,8 @@ const user = Astro.locals.user!;
 const db = getDb(Astro);
 
 const [r] = await db
-  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: activos })
+  // D1 corta el resultado a 100 columnas: del equipo solo se muestran código y nombre.
+  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
   .from(tickets)
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))

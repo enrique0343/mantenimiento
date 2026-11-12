@@ -29,7 +29,7 @@ export async function setup({ modules, pages = [] }) {
       builder.onResolve({ filter: /^@\/lib\/(auth|audit|daily-digest|encuestas-recordatorio)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'test' }));
       builder.onLoad({ filter: /.*/, namespace: 'test' }, ({ path: name }) => ({ contents: {
         auth: `export async function requireUser(ctx, roles) { const user=ctx.testUser; return !user ? {user:null,response:new Response('Unauthorized',{status:401})} : roles && !roles.includes(user.rol) ? {user:null,response:new Response('Forbidden',{status:403})} : {user}; }`,
-        audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; }',
+        audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; } export async function logAuditLote() {} export function labelCampo(c) { return c; } export function resumenCambios() { return ""; }',
         'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; }',
         'encuestas-recordatorio': 'export async function enviarRecordatoriosEncuestas() { return {enviados:0}; }',
       }[name], loader: 'js' }));

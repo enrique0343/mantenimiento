@@ -3,6 +3,7 @@ import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import "@/styles/globals.css";
 import AppIcon from "@/components/AppIcon.astro";
 import { AREA_KEYS, AREAS, parseArea, areaHref } from "@/lib/areas";
+import { puedeVerBio } from "@/lib/biomedico";
 
 interface Props {
   title?: string;
@@ -16,6 +17,8 @@ const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
 const isOperativo = isAdminOrJefe || user?.rol === "tecnico";
 const esTecnico = user?.rol === "tecnico";
+// Fase 59: lo biomédico lo ven admin, jefe, técnico y visualizador.
+const verBio = puedeVerBio(user?.rol);
 const area = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
 const info = area ? AREAS[area] : null;
 const operationalTabs = area ? [
@@ -26,6 +29,11 @@ const operationalTabs = area ? [
   {href: areaHref("/catalogo-aires", "aires"), label: "Catálogo de aires", show: area === "aires" && user?.rol !== "motorista"},
   {href: areaHref("/conjuntos", area), label: "Conjuntos", show: isOperativo || user?.rol === "visualizador"},
   {href: areaHref("/planes", area), label: "Planes", show: isOperativo || user?.rol === "visualizador"},
+  // Fase 59: evidencia JCI del área biomédica.
+  {href: areaHref("/calibraciones", "biomedico"), label: "Calibraciones", show: area === "biomedico" && verBio},
+  {href: areaHref("/seguridad-electrica", "biomedico"), label: "Seguridad eléctrica", show: area === "biomedico" && verBio},
+  {href: areaHref("/expedientes", "biomedico"), label: "Expedientes", show: area === "biomedico" && verBio},
+  {href: areaHref("/capacitaciones", "biomedico"), label: "Capacitaciones", show: area === "biomedico" && verBio},
 ].filter(x=>x.show) : [];
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",
@@ -89,6 +97,7 @@ const isActive = (href: string) =>
             {isOperativo && <a href="/aop" class:list={["app-nav-link", {active:isActive("/aop")}]} aria-current={isActive("/aop") ? "page" : undefined}><AppIcon name="clock"/><span>Desviaciones (AOP)</span></a>}
             {isOperativo && <a href="/eop" class:list={["app-nav-link", {active:isActive("/eop")}]} aria-current={isActive("/eop") ? "page" : undefined}><AppIcon name="alert"/><span>Emergencias (EOP)</span></a>}
             <a href="/recursos" class:list={["app-nav-link", {active:path === "/recursos"}]}><AppIcon name="box"/><span>Recursos</span></a>
+            {(isAdminOrJefe || user.rol === "visualizador") && <a href="/cumplimiento" class:list={["app-nav-link", {active:isActive("/cumplimiento")}]} aria-current={isActive("/cumplimiento") ? "page" : undefined}><AppIcon name="clipboard"/><span>Cumplimiento JCI</span></a>}
             {isAdminOrJefe && <a href="/indicadores" class:list={["app-nav-link", {active:path === "/indicadores"}]}><AppIcon name="report"/><span>Indicadores y reportes</span></a>}
             {isAdminOrJefe && <a href="/administracion" class:list={["app-nav-link", {active:path === "/administracion"}]}><AppIcon name="settings"/><span>Administración</span></a>}
             {user.rol !== "motorista" && <a href="/mi-panel" class="app-nav-link"><AppIcon name="equipment"/><span>Mi trabajo</span></a>}
