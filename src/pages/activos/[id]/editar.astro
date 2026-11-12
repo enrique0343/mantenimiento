@@ -2,14 +2,16 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { activos, sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
-import { eq, and, inArray, asc } from "drizzle-orm";
+import { activos, centrosCosto, sucursales, ubicaciones, proveedores, usuarios } from "@/lib/schema";
+import { eq, and, inArray, asc, or } from "drizzle-orm";
 import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
 import UppercaseFields from "@/components/UppercaseFields.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
-import { rubroDeActivo } from "@/lib/rubros";
+import { rubroDeActivo, SUBCAT_KEYS, SUBCATS_BIOMEDICO } from "@/lib/rubros";
+import { CLASES_RIESGO, ENTIDADES_REGISTRO, fechaCorta } from "@/lib/biomedico";
+import { CODIGO_MAX } from "@/lib/registro-activos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -39,8 +41,20 @@ const userRows = await db
   .from(usuarios)
   .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "admin"])))
   .orderBy(asc(usuarios.nombre));
+// Centros activos y el que ya tiene el equipo, aunque esté desactivado.
+const centros = await db
+  .select({ id: centrosCosto.id, codigo: centrosCosto.codigo, nombre: centrosCosto.nombre, sucursalId: centrosCosto.sucursalId, activo: centrosCosto.activo, sede: sucursales.nombre })
+  .from(centrosCosto)
+  .leftJoin(sucursales, eq(sucursales.id, centrosCosto.sucursalId))
+  .where(a.centroCostoId != null ? or(eq(centrosCosto.activo, true), eq(centrosCosto.id, a.centroCostoId)) : eq(centrosCosto.activo, true))
+  .orderBy(asc(centrosCosto.codigo));
 
 const ubJson = JSON.stringify(ubRows);
+const gestiona = user.rol === "admin" || user.rol === "jefe";
+const deBaja = a.estado === "baja";
+const llevaCalibracion = area === "biomedico" || a.requiereCalibracion || a.esPatron;
+const entidadFija = (ENTIDADES_REGISTRO as readonly string[]).includes(a.registroSanitarioEntidad ?? "");
+const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitarioEntidad ? "__otra__" : "";
 ---
 
 <Layout title={`Editar · ${a.nombre}`}>
@@ -60,9 +74,18 @@ const ubJson = JSON.stringify(ubRows);
         <p class="mt-1 text-xs text-slate-500">Las sugerencias corresponden al área seleccionada.</p>
       </div>
       <div>
-        <label class="label" for="codigo">Código</label>
-        <input class="input bg-slate-50" id="codigo" readonly value={a.codigo} />
-        <p class="mt-1 text-xs text-slate-500">El código asignado se conserva.</p>
+        <label class="label" for="codigo">Código institucional</label>
+        {gestiona ? (
+          <>
+            <input class="input" id="codigo" data-uppercase autocapitalize="characters" maxlength={CODIGO_MAX} value={a.codigo} data-original={a.codigo} autocomplete="off" />
+            <p class="mt-1 text-xs text-slate-500">Corrígelo solo si está mal. Las etiquetas impresas quedan con el código anterior.</p>
+          </>
+        ) : (
+          <>
+            <input class="input bg-slate-50" id="codigo" readonly value={a.codigo} />
+            <p class="mt-1 text-xs text-slate-500">Solo la jefatura o el administrador pueden corregir el código.</p>
+          </>
+        )}
       </div>
       <div>
         <label class="label">Número de activo</label>
@@ -86,8 +109,9 @@ const ubJson = JSON.stringify(ubRows);
         <input class="input" id="modelo" data-uppercase autocapitalize="characters" value={a.modelo ?? ""} />
       </div>
       <div>
-        <label class="label">Número de serie</label>
-        <input class="input" id="serial" data-uppercase autocapitalize="characters" value={a.serial ?? ""} />
+        <label class="label" for="serial">Número de serie</label>
+        <input class="input" id="serial" data-uppercase autocapitalize="characters" value={a.serial ?? ""} aria-describedby="serieAviso" />
+        <p id="serieAviso" class="mt-1 hidden rounded bg-amber-50 p-2 text-xs text-amber-800" role="status"></p>
       </div>
       <div>
         <label class="label">Año</label>
@@ -112,6 +136,15 @@ const ubJson = JSON.stringify(ubRows);
         </>
       )}
 
+      <div>
+        <label class="label" for="centroCostoSel">Centro de costo</label>
+        <select class="input" id="centroCostoSel">
+          <option value="">— Sin centro de costo —</option>
+          {centros.map((c) => <option value={c.id} data-sucursal={c.sucursalId ?? ""} selected={c.id === a.centroCostoId}>{c.codigo} · {c.nombre}{c.sede ? ` (${c.sede})` : ""}{c.activo ? "" : " · desactivado"}</option>)}
+        </select>
+        <p class="mt-1 text-xs text-slate-500">Opcional. Aparecen los centros sin sede o de la sede elegida.</p>
+      </div>
+
       <div class="sm:col-span-2">
         <label class="label">Detalle de ubicación / texto libre</label>
         <input class="input" id="ubicacion" data-uppercase autocapitalize="characters" value={a.ubicacion ?? ""} />
@@ -119,12 +152,17 @@ const ubJson = JSON.stringify(ubRows);
 
       <div>
         <label class="label">Estado</label>
-        <select class="input" id="estado">
-          <option value="operativo" selected={a.estado === "operativo"}>Operativo</option>
-          <option value="averiado" selected={a.estado === "averiado"}>Averiado</option>
-          <option value="mantenimiento" selected={a.estado === "mantenimiento"}>En mantenimiento</option>
-          <option value="baja" selected={a.estado === "baja"}>Dado de baja</option>
-        </select>
+        {deBaja ? (
+          <p class="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
+            Dado de baja · <a href={areaHref(`/activos/${id}/baja`, area)} class="font-medium text-brand-700 hover:underline">Ver o revertir la baja</a>
+          </p>
+        ) : (
+          <select class="input" id="estado">
+            <option value="operativo" selected={a.estado === "operativo"}>Operativo</option>
+            <option value="averiado" selected={a.estado === "averiado"}>Averiado</option>
+            <option value="mantenimiento" selected={a.estado === "mantenimiento"}>En mantenimiento</option>
+          </select>
+        )}
       </div>
 
       {provRows.length > 0 && (
@@ -136,6 +174,58 @@ const ubJson = JSON.stringify(ubRows);
           </select>
         </div>
       )}
+    </div>
+
+    <div id="bioFields" class:list={["border-t border-slate-200 pt-5", area !== "biomedico" && "hidden"]}>
+      <h2 class="mb-3 font-semibold text-purple-700">Datos biomédicos</h2>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label class="label" for="claseRiesgo">Clase de riesgo *</label>
+          <select class="input" id="claseRiesgo">
+            <option value="" disabled selected={!a.claseRiesgo}>— Elegir —</option>
+            {CLASES_RIESGO.map((c) => <option value={c.valor} selected={a.claseRiesgo === c.valor}>{c.etiqueta} ({c.descripcion})</option>)}
+          </select>
+          <p class="mt-1 text-xs text-slate-500">Obligatoria en equipos biomédicos.</p>
+        </div>
+        <div>
+          <label class="label" for="subcategoria">Subcategoría clínica</label>
+          <select class="input" id="subcategoria">
+            <option value="">— Sin segmentar —</option>
+            {SUBCAT_KEYS.map((k) => <option value={k} selected={a.subcategoria === k}>{SUBCATS_BIOMEDICO[k].label}</option>)}
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <h3 class="text-sm font-semibold text-slate-700">Registro sanitario</h3>
+          <label class="mt-2 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" id="registroNoRequiere" class="h-4 w-4" checked={a.registroSanitarioNoRequiere} />
+            No requiere registro sanitario
+          </label>
+        </div>
+        <div class="registro-campo">
+          <label class="label" for="registroEntidad">Entidad</label>
+          <select class="input" id="registroEntidad">
+            <option value="">— Elegir —</option>
+            {ENTIDADES_REGISTRO.map((e) => <option value={e} selected={entidadSel === e}>{e}</option>)}
+            <option value="__otra__" selected={entidadSel === "__otra__"}>Otra</option>
+          </select>
+        </div>
+        <div class="registro-campo hidden" id="registroEntidadOtraBox">
+          <label class="label" for="registroEntidadOtra">¿Cuál?</label>
+          <input class="input" id="registroEntidadOtra" data-uppercase autocapitalize="characters" maxlength="60" value={entidadFija ? "" : a.registroSanitarioEntidad ?? ""} />
+        </div>
+        <div class="registro-campo">
+          <label class="label" for="registroSanitario">Número de registro</label>
+          <input class="input" id="registroSanitario" data-uppercase autocapitalize="characters" value={a.registroSanitario ?? ""} />
+        </div>
+        <div class="registro-campo">
+          <label class="label" for="registroEmision">Fecha de emisión</label>
+          <input class="input" id="registroEmision" type="date" value={a.registroSanitarioEmision ?? ""} />
+        </div>
+        <div class="registro-campo">
+          <label class="label" for="registroVencimiento">Fecha de vencimiento</label>
+          <input class="input" id="registroVencimiento" type="date" value={a.registroSanitarioVencimiento ?? ""} />
+        </div>
+      </div>
     </div>
 
     <div class="border-t border-slate-200 pt-5">
@@ -197,51 +287,31 @@ const ubJson = JSON.stringify(ubRows);
           </select>
           <p class="mt-1 text-xs text-slate-500" id="critDesc">{CRITICIDAD_DESC[(a.criticidadOperacional ?? "media") as "alta" | "media" | "baja"]}</p>
         </div>
-        <div class="flex items-center gap-2 pt-6">
-          <input type="checkbox" id="requiereCalibracion" class="h-4 w-4" checked={a.requiereCalibracion} />
-          <label for="requiereCalibracion" class="text-sm text-slate-700">Requiere calibración (aunque no sea biomédico)</label>
+        <div class="pt-6">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="requiereCalibracion" class="h-4 w-4" checked={a.requiereCalibracion || a.esPatron} disabled={a.esPatron} />
+            <label for="requiereCalibracion" class="text-sm text-slate-700">Requiere calibración (aunque no sea biomédico)</label>
+          </div>
+          {a.esPatron && <p class="mt-1 text-xs text-slate-500">Equipo patrón: siempre requiere calibración.</p>}
         </div>
+        {llevaCalibracion && (
+          <p class="text-xs text-slate-500 sm:col-span-2">
+            Última calibración: {fechaCorta(a.ultimaCalibracion)} · Próxima: {fechaCorta(a.proximaCalibracion)}. Se actualizan al registrar una calibración.
+          </p>
+        )}
       </div>
     </div>
 
-    <div id="bioFields" class:list={["border-t border-slate-200 pt-5", a.tipo !== "biomedico" && "hidden"]}>
-      <h2 class="mb-3 font-semibold text-purple-700">Datos biomédicos</h2>
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <label class="label">Registro sanitario (DNM)</label>
-          <input class="input" id="registroSanitario" data-uppercase autocapitalize="characters" value={a.registroSanitario ?? ""} />
-        </div>
-        <div>
-          <label class="label">Clase de riesgo</label>
-          <select class="input" id="claseRiesgo">
-            <option value="">- Sin clasificar -</option>
-            <option value="I" selected={a.claseRiesgo === "I"}>Clase I</option>
-            <option value="IIa" selected={a.claseRiesgo === "IIa"}>Clase IIa</option>
-            <option value="IIb" selected={a.claseRiesgo === "IIb"}>Clase IIb</option>
-            <option value="III" selected={a.claseRiesgo === "III"}>Clase III</option>
-          </select>
-        </div>
-        <div>
-          <label class="label">Última calibración</label>
-          <input class="input" id="ultimaCalibracion" type="date" value={a.ultimaCalibracion ?? ""} />
-        </div>
-        <div>
-          <label class="label">Próxima calibración</label>
-          <input class="input" id="proximaCalibracion" type="date" value={a.proximaCalibracion ?? ""} />
-        </div>
-      </div>
-    </div>
-
-    <p id="err" class="hidden text-sm text-red-600"></p>
+    <p id="err" class="hidden text-sm text-red-600" role="alert" tabindex="-1"></p>
     <div class="flex gap-2">
-      <button class="btn-primary" type="submit">Guardar cambios</button>
+      <button class="btn-primary" type="submit" id="saveBtn">Guardar cambios</button>
       <a class="btn-secondary" href={areaHref(`/activos/${id}`, area)}>Cancelar</a>
     </div>
   </form>
   <UppercaseFields />
 
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC }) }}>
-    const { id, ubJson, sucursalActualId, ubicacionActualId, categoriasPorArea, critDescJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC, gestiona, deBaja, esPatron: a.esPatron }) }}>
+    const { id, ubJson, sucursalActualId, ubicacionActualId, categoriasPorArea, critDescJson, gestiona, deBaja, esPatron } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const allUbs = JSON.parse(ubJson);
 
     // Descripción de criticidad operacional
@@ -267,9 +337,10 @@ const ubJson = JSON.stringify(ubRows);
     areaSel.addEventListener("change", actualizarArea);
     actualizarArea();
 
-    // Sucursal → ubicación
+    // Sucursal → ubicación y centros de costo de esa sede (o sin sede)
     const sucEl = document.getElementById("sucursalSel");
     const ubEl = document.getElementById("ubicacionSel");
+    const centroSel = document.getElementById("centroCostoSel");
 
     function poblarUbicaciones(sucId, selectId) {
       if (!ubEl) return;
@@ -283,18 +354,63 @@ const ubJson = JSON.stringify(ubRows);
         ubEl.appendChild(o);
       });
     }
+    // Al abrir se conserva el centro que ya tiene; al cambiar de sede, uno de otra sede se quita.
+    function filtrarCentros(conservar) {
+      const sid = sucEl?.value ?? "";
+      for (const o of centroSel.options) {
+        if (!o.value) continue;
+        const visible = !sid || !o.dataset.sucursal || o.dataset.sucursal === sid || (conservar && o.selected);
+        o.hidden = !visible;
+        o.disabled = !visible;
+        if (!visible && o.selected) centroSel.value = "";
+      }
+    }
 
     if (sucEl) {
       // Inicializa con la sucursal actual y selecciona la ubicación actual
       poblarUbicaciones(sucursalActualId, ubicacionActualId);
+      filtrarCentros(true);
       sucEl.addEventListener("change", () => {
         poblarUbicaciones(Number(sucEl.value) || null, null);
+        filtrarCentros(false);
       });
     }
 
+    // Registro sanitario: «no requiere» oculta los demás campos; «Otra» pide cuál.
+    const noRequiere = document.getElementById("registroNoRequiere");
+    const entidadSel = document.getElementById("registroEntidad");
+    const otraBox = document.getElementById("registroEntidadOtraBox");
+    function pintarRegistro() {
+      for (const el of document.querySelectorAll(".registro-campo")) el.classList.toggle("hidden", noRequiere.checked);
+      otraBox.classList.toggle("hidden", noRequiere.checked || entidadSel.value !== "__otra__");
+    }
+    noRequiere.addEventListener("change", pintarRegistro);
+    entidadSel.addEventListener("change", pintarRegistro);
+    pintarRegistro();
+
+    // Serie repetida (sin contar este equipo): solo avisa.
+    const serialEl = document.getElementById("serial");
+    const serieAviso = document.getElementById("serieAviso");
+    const ESTADO = { operativo: "Operativo", averiado: "Averiado", mantenimiento: "En mantenimiento", baja: "Dado de baja" };
+    serialEl.addEventListener("blur", async () => {
+      serieAviso.classList.add("hidden");
+      const valor = serialEl.value.trim();
+      if (!valor) return;
+      try {
+        const r = await fetch(`/api/activos/serie?valor=${encodeURIComponent(valor)}&excluir=${id}`);
+        if (!r.ok) return;
+        const { coincidencias } = await r.json();
+        if (!coincidencias?.length) return;
+        const lista = coincidencias.map((c) => `${c.codigo} · ${c.nombre} (${ESTADO[c.estado] ?? c.estado})`).join("; ");
+        serieAviso.textContent = `Esta serie ya está registrada en ${lista}. Revisa que no sea el mismo equipo.`;
+        serieAviso.classList.remove("hidden");
+      } catch { /* sin conexión: no se avisa */ }
+    });
+
+    const err = document.getElementById("err");
+    const mostrarError = (texto) => { err.textContent = texto; err.classList.remove("hidden"); err.focus(); };
     document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const err = document.getElementById("err");
       err.classList.add("hidden");
       const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
       const sv = (id) => document.getElementById(id)?.value ?? "";
@@ -303,11 +419,11 @@ const ubJson = JSON.stringify(ubRows);
       const ubVal = ubEl?.value;
       const provVal = document.getElementById("proveedorSel")?.value;
 
+      // Fase 59: nunca se mandan las fechas de calibración (las escribe Calibraciones).
       const payload = {
         nombre: v("nombre"),
         descripcion: v("descripcion") || null,
         ubicacion: v("ubicacion") || null,
-        estado: sv("estado"),
         tipo: sv("tipo"),
         rubro: sv("rubro"),
         datosTecnicos: sv("rubro") === "aires" ? { tipoUnidad: v("tipoUnidad") || null, capacidadBtuH: v("capacidadBtuH") ? Number(v("capacidadBtuH")) : null, refrigerante: v("refrigerante") || null }
@@ -320,6 +436,7 @@ const ubJson = JSON.stringify(ubRows);
         serial: v("serial") || null,
         anio: num("anio"),
         ubicacionId: ubVal ? Number(ubVal) : null,
+        centroCostoId: sv("centroCostoSel") ? Number(sv("centroCostoSel")) : null,
         proveedorId: provVal ? Number(provVal) : null,
         slaUrgenteHoras: Number(sv("slaUrgenteHoras") || 4),
         slaAltaHoras: Number(sv("slaAltaHoras") || 24),
@@ -330,18 +447,42 @@ const ubJson = JSON.stringify(ubRows);
         valorAdquisicion: num("valorAdquisicion"),
         responsableId: document.getElementById("responsableSel")?.value ? Number(document.getElementById("responsableSel").value) : null,
         criticidadOperacional: sv("criticidadOperacional") || "media",
-        requiereCalibracion: document.getElementById("requiereCalibracion")?.checked ?? false,
       };
+      // Un equipo patrón siempre requiere calibración: la casilla no se manda.
+      if (!esPatron) payload.requiereCalibracion = document.getElementById("requiereCalibracion")?.checked ?? false;
+      // Un equipo de baja no cambia de estado aquí: se revierte en su pantalla de baja.
+      if (!deBaja) payload.estado = sv("estado");
       if (isBio) {
-        payload.registroSanitario = v("registroSanitario") || null;
-        payload.claseRiesgo = sv("claseRiesgo") || null;
-        payload.ultimaCalibracion = v("ultimaCalibracion") || null;
-        payload.proximaCalibracion = v("proximaCalibracion") || null;
+        if (!sv("claseRiesgo")) { mostrarError("Elige la clase de riesgo."); document.getElementById("claseRiesgo")?.focus(); return; }
+        payload.claseRiesgo = sv("claseRiesgo");
+        payload.subcategoria = sv("subcategoria") || null;
+        if (noRequiere.checked) {
+          payload.registroSanitarioNoRequiere = true;
+        } else {
+          const emision = v("registroEmision"), vence = v("registroVencimiento");
+          if (emision && vence && vence < emision) { mostrarError("El vencimiento no puede ser anterior a la emisión."); return; }
+          const entidad = sv("registroEntidad") === "__otra__" ? v("registroEntidadOtra") : sv("registroEntidad");
+          payload.registroSanitarioNoRequiere = false;
+          payload.registroSanitario = v("registroSanitario") || null;
+          payload.registroSanitarioEntidad = entidad || null;
+          payload.registroSanitarioEmision = emision || null;
+          payload.registroSanitarioVencimiento = vence || null;
+        }
       } else {
-        payload.registroSanitario = null;
         payload.claseRiesgo = null;
-        payload.ultimaCalibracion = null;
-        payload.proximaCalibracion = null;
+        payload.subcategoria = null;
+        payload.registroSanitario = null;
+        payload.registroSanitarioEntidad = null;
+        payload.registroSanitarioEmision = null;
+        payload.registroSanitarioVencimiento = null;
+        payload.registroSanitarioNoRequiere = false;
+      }
+      // El código se manda solo si la jefatura o el administrador lo cambiaron.
+      const codigoEl = document.getElementById("codigo");
+      if (gestiona && codigoEl && codigoEl.value.trim().toUpperCase() !== String(codigoEl.dataset.original ?? "").trim().toUpperCase()) {
+        if (!codigoEl.value.trim()) { mostrarError("El código no puede quedar vacío."); codigoEl.focus(); return; }
+        if (!confirm("Cambiar el código no cambia el historial. Las etiquetas, viñetas y certificados impresos quedan con el código anterior. ¿Continuar?")) return;
+        payload.codigo = codigoEl.value.trim();
       }
 
       const res = await fetch(`/api/activos/${id}`, {
@@ -351,8 +492,7 @@ const ubJson = JSON.stringify(ubRows);
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
-        err.classList.remove("hidden");
+        mostrarError(typeof j.error === "string" ? j.error : "No se pudo guardar.");
         return;
       }
       location.href = `/activos/${id}?area=${encodeURIComponent(sv("rubro"))}`;

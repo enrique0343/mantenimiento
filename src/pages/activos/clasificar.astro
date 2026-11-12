@@ -13,6 +13,7 @@ import {
   type Sistema,
 } from "@/lib/resolver";
 import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
+import { CLASES_RIESGO } from "@/lib/biomedico";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area"));
 
@@ -84,6 +85,8 @@ const famSinResolver = filas.filter((f) => f.estadoFam === "sinresolver").length
 const sinDominio = rows.filter((r) => !r.a.rubro).length;
 const bioSinSubcat = rows.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico" && !r.a.subcategoria).length;
 const sinCriticidad = rows.filter((r) => !r.a.criticidadOperacional).length;
+// Fase 59: la clase de riesgo es obligatoria en biomédicos.
+const bioSinClase = rows.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico" && !r.a.claseRiesgo).length;
 
 const CRIT = [
   { v: "alta", label: "Alta" },
@@ -98,7 +101,7 @@ const CRIT = [
       <a href={areaHref("/activos", area)} class="text-xs text-slate-400 hover:text-slate-600">← Equipos</a>
       <h1 class="mt-1 text-2xl font-bold">Clasificación {area ? `· ${AREAS[area].label}` : "de activos"}</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Área de mantenimiento, familia (sistema crítico), subcategoría biomédica y criticidad Alta, Media o Baja.
+        Área de mantenimiento, familia (sistema crítico), subcategoría biomédica, clase de riesgo y criticidad Alta, Media o Baja.
         Cada cambio se guarda al instante.
       </p>
     </div>
@@ -106,9 +109,8 @@ const CRIT = [
       {sinDominio > 0 && <span class="badge bg-amber-100 text-amber-700">{sinDominio} sin dominio</span>}
       {bioSinSubcat > 0 && <span class="badge bg-violet-100 text-violet-700">{bioSinSubcat} biomédicos sin segmentar</span>}
       {sinCriticidad > 0 && <span class="badge bg-red-100 text-red-700">{sinCriticidad} sin criticidad</span>}
-      {sinDominio === 0 && bioSinSubcat === 0 && sinCriticidad === 0 && (
-        <span class="badge bg-emerald-100 text-emerald-700">✓ Clasificación completa</span>
-      )}
+      <span id="sinClaseBadge" class:list={["badge bg-red-100 text-red-700", bioSinClase === 0 && "hidden"]}><span id="cSinClase">{bioSinClase}</span> biomédicos sin clase de riesgo</span>
+      <span id="completaBadge" class:list={["badge bg-emerald-100 text-emerald-700", (sinDominio > 0 || bioSinSubcat > 0 || sinCriticidad > 0 || bioSinClase > 0) && "hidden"]} data-otros-pendientes={sinDominio + bioSinSubcat + sinCriticidad}>✓ Clasificación completa</span>
     </div>
   </div>
 
@@ -205,6 +207,14 @@ const CRIT = [
         <option value="__sin__">Sin asignar</option>
       </select>
     </div>
+    <div>
+      <label class="label text-xs" for="fClase">Clase de riesgo</label>
+      <select id="fClase" class="input text-sm">
+        <option value="">Todas</option>
+        <option value="__sin__">Biomédicos sin clase</option>
+        {CLASES_RIESGO.map((c) => <option value={c.valor}>{c.etiqueta}</option>)}
+      </select>
+    </div>
     <div class="flex flex-wrap items-center gap-2">
       <button id="marcarVisible" type="button" class="btn-secondary btn-sm">Marcar todo lo visible</button>
       <button id="aceptarSug" type="button" class="btn-secondary btn-sm">✓ Aceptar todas las sugerencias visibles</button>
@@ -245,6 +255,7 @@ const CRIT = [
             <th class="px-3 py-2">Familia (sistema)</th>
             <th class="px-3 py-2">Área de mantenimiento</th>
             <th class="px-3 py-2">Subcategoría biomédica</th>
+            <th class="px-3 py-2">Clase de riesgo</th>
             <th class="px-3 py-2">Criticidad</th>
           </tr>
         </thead>
@@ -259,6 +270,7 @@ const CRIT = [
                 data-sede={r.s?.nombre ?? ""}
                 data-dominio={dominio || "__sin__"}
                 data-crit={r.a.criticidadOperacional ?? "__sin__"}
+                data-clase={esBio ? (r.a.claseRiesgo ?? "__sin__") : ""}
                 data-fam={r.declarado}
                 data-fam-res={r.famRes}
                 data-fam-estado={r.estadoFam}
@@ -312,6 +324,14 @@ const CRIT = [
                     <option value="">—</option>
                     {SUBCAT_KEYS.map((k) => (
                       <option value={k} selected={r.a.subcategoria === k}>{SUBCATS_BIOMEDICO[k].icono} {SUBCATS_BIOMEDICO[k].label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td class="px-3 py-2">
+                  <select class:list={["clase-sel rounded border px-1.5 py-1 text-xs disabled:opacity-30", esBio && !r.a.claseRiesgo ? "border-red-300 bg-red-50 text-red-800" : "border-slate-200 bg-white text-slate-700"]} data-id={r.a.id} disabled={!esBio}>
+                    <option value="" disabled selected={!r.a.claseRiesgo}>— Elegir —</option>
+                    {CLASES_RIESGO.map((c) => (
+                      <option value={c.valor} selected={r.a.claseRiesgo === c.valor}>{c.etiqueta}</option>
                     ))}
                   </select>
                 </td>
@@ -379,6 +399,16 @@ const CRIT = [
             patchActivo(sub, { subcategoria: null }, "");
             sub.disabled = true;
           }
+          // La clase de riesgo solo aplica a biomédicos: si deja de serlo, se limpia.
+          const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
+          if (!esBio && clase.value) {
+            clase.value = "";
+            patchActivo(clase, { claseRiesgo: null }, "").then(() => { clase.disabled = true; });
+          }
+          clase.disabled = !esBio;
+          fila.dataset.clase = esBio ? (clase.value || "__sin__") : "";
+          pintarClase(clase);
+          recontarClase();
           fila.dataset.dominio = sel.value || "__sin__";
           const areaActual = new URL(location.href).searchParams.get("area");
           if (areaActual && sel.value !== areaActual) { location.reload(); return; }
@@ -391,6 +421,32 @@ const CRIT = [
       let prev = sel.value;
       sel.addEventListener("change", async () => {
         if (await patchActivo(sel, { subcategoria: sel.value || null }, prev)) prev = sel.value;
+      });
+    });
+
+    // ── Clase de riesgo (obligatoria en biomédicos) ──
+    function pintarClase(sel: HTMLSelectElement) {
+      const falta = !sel.disabled && !sel.value;
+      for (const c of ["border-red-300", "bg-red-50", "text-red-800"]) sel.classList.toggle(c, falta);
+      for (const c of ["border-slate-200", "bg-white", "text-slate-700"]) sel.classList.toggle(c, !falta);
+    }
+    function recontarClase() {
+      const n = Array.from(document.querySelectorAll<HTMLTableRowElement>(".fila")).filter((tr) => tr.dataset.clase === "__sin__").length;
+      const el = document.getElementById("cSinClase");
+      if (el) el.textContent = String(n);
+      document.getElementById("sinClaseBadge")?.classList.toggle("hidden", n === 0);
+      const completa = document.getElementById("completaBadge");
+      if (completa) completa.classList.toggle("hidden", n > 0 || Number(completa.dataset.otrosPendientes ?? 0) > 0);
+    }
+    document.querySelectorAll<HTMLSelectElement>(".clase-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        if (await patchActivo(sel, { claseRiesgo: sel.value || null }, prev)) {
+          prev = sel.value;
+          sel.closest("tr")!.dataset.clase = sel.value || "__sin__";
+          pintarClase(sel);
+          recontarClase();
+        }
       });
     });
 
@@ -639,6 +695,7 @@ const CRIT = [
     const fFamilia = document.getElementById("fFamilia") as HTMLSelectElement;
     const fDominio = document.getElementById("fDominio") as HTMLSelectElement;
     const fCrit = document.getElementById("fCrit") as HTMLSelectElement;
+    const fClase = document.getElementById("fClase") as HTMLSelectElement;
 
     function filtrar() {
       const q = buscar.value.trim().toLowerCase();
@@ -649,6 +706,7 @@ const CRIT = [
         const okS = !fSede.value || tr.dataset.sede === fSede.value;
         const okD = !fDominio.value || tr.dataset.dominio === fDominio.value;
         const okC = !fCrit.value || tr.dataset.crit === fCrit.value;
+        const okK = !fClase.value || tr.dataset.clase === fClase.value;
         const okF =
           !fam ||
           (fam === "__pendiente__"
@@ -656,7 +714,7 @@ const CRIT = [
             : fam === "__sinresolver__"
               ? tr.dataset.famEstado === "sinresolver"
               : tr.dataset.famRes === fam);
-        const visible = okQ && okS && okD && okC && okF;
+        const visible = okQ && okS && okD && okC && okK && okF;
         tr.style.display = visible ? "" : "none";
         if (visible) n++;
         // Nada oculto queda marcado: la asignación masiva no debe tocar lo
@@ -674,6 +732,7 @@ const CRIT = [
     fFamilia.addEventListener("change", filtrar);
     fDominio.addEventListener("change", filtrar);
     fCrit.addEventListener("change", filtrar);
+    fClase.addEventListener("change", filtrar);
 
     // Los chips de familia son un filtro más
     document.querySelectorAll<HTMLButtonElement>(".fam-chip").forEach((chip) => {
