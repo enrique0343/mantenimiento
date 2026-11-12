@@ -1,0 +1,185 @@
+---
+// Fase 59 · WP-D: formulario de licencia o permiso (registrar, editar o renovar).
+// Corre validarLicencia en el navegador antes de enviar; el servidor vuelve a revisar.
+import {
+  AMBITOS_LICENCIA, ENTIDADES_LICENCIA, ESTADOS_LICENCIA, TIPOS_LICENCIA,
+} from "@/lib/licencias";
+import { ARCHIVO_ACCEPT, fechaCorta } from "@/lib/biomedico";
+
+interface InicialLicencia {
+  id?: number | null;
+  entidad?: string | null; entidadOtra?: string | null; tipo?: string | null; nombre?: string | null; numero?: string | null;
+  ambito?: string | null; sucursalId?: number | null; servicio?: string | null; activoId?: number | null; titular?: string | null;
+  fechaEmision?: string | null; fechaVencimiento?: string | null; responsableId?: number | null; estado?: string | null;
+  notas?: string | null; reemplazaAId?: number | null;
+}
+interface Props {
+  modo: "nueva" | "editar" | "renovar";
+  inicial: InicialLicencia;
+  /** La licencia que se renueva (modo «renovar»). */
+  renueva?: { id: number; nombre: string; numero: string | null; fechaVencimiento: string | null } | null;
+  sucursales: ReadonlyArray<{ id: number; nombre: string }>;
+  equipos: ReadonlyArray<{ id: number; codigo: string; nombre: string }>;
+  responsables: ReadonlyArray<{ id: number; nombre: string }>;
+  sugerenciasServicio: readonly string[];
+  cancelarHref: string;
+  /** Formulario oculto hasta que se pulse «Editar» (página de la licencia). */
+  oculto?: boolean;
+}
+const { modo, inicial, renueva = null, sucursales, equipos, responsables, sugerenciasServicio, cancelarHref, oculto = false } = Astro.props;
+const area = Astro.locals.area ?? "";
+const pre = `lic${modo}`;
+const estadoInicial = inicial.estado ?? (modo === "renovar" ? "en_tramite" : "activa");
+const ofrecerTramite = !(modo === "editar" && inicial.estado === "activa");
+const equipoInicial = equipos.find((e) => e.id === inicial.activoId);
+const textoEquipo = (e: { codigo: string; nombre: string }) => `${e.codigo} — ${e.nombre}`;
+const noVence = modo === "editar" && inicial.estado === "activa" && !inicial.fechaVencimiento;
+---
+
+<form
+  id={`${pre}Form`}
+  class:list={["card mt-4 space-y-5 p-5", { hidden: oculto }]}
+  data-licencia-form
+  data-modo={modo}
+  data-id={inicial.id ?? ""}
+  data-estado-actual={modo === "editar" ? inicial.estado ?? "" : ""}
+  data-reemplaza={inicial.reemplazaAId ?? ""}
+  data-area={area}
+  novalidate
+>
+  {modo === "renovar" && renueva && (
+    <p class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+      Renovación de {renueva.nombre}{renueva.numero ? ` N.º ${renueva.numero}` : ""}{renueva.fechaVencimiento ? ` (vence ${fechaCorta(renueva.fechaVencimiento)})` : ""}.
+      Cuando la guardes como «Activa», la anterior quedará como «Reemplazada».
+    </p>
+  )}
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Licencia</legend>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div>
+        <label class="label" for={`${pre}Entidad`}>Entidad que la emite *</label>
+        <select id={`${pre}Entidad`} name="entidad" class="input">
+          <option value="">Elige…</option>
+          {Object.entries(ENTIDADES_LICENCIA).map(([v, t]) => <option value={v} selected={inicial.entidad === v}>{t}</option>)}
+        </select>
+      </div>
+      <div data-solo-entidad-otra class:list={{ hidden: inicial.entidad !== "otra" }}>
+        <label class="label" for={`${pre}EntidadOtra`}>Nombre de la otra entidad *</label>
+        <input id={`${pre}EntidadOtra`} name="entidadOtra" class="input" maxlength="120" value={inicial.entidadOtra ?? ""} />
+      </div>
+      <div>
+        <label class="label" for={`${pre}Tipo`}>Tipo *</label>
+        <select id={`${pre}Tipo`} name="tipo" class="input">
+          <option value="">Elige…</option>
+          {Object.entries(TIPOS_LICENCIA).map(([v, t]) => <option value={v} selected={inicial.tipo === v}>{t}</option>)}
+        </select>
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label" for={`${pre}Nombre`}>Nombre o descripción *</label>
+        <input id={`${pre}Nombre`} name="nombre" class="input" maxlength="150" value={inicial.nombre ?? ""} placeholder="Ej.: Licencia de funcionamiento del servicio de Rayos X" />
+      </div>
+      <div>
+        <label class="label" for={`${pre}Numero`}>Número</label>
+        <input id={`${pre}Numero`} name="numero" class="input" maxlength="60" value={inicial.numero ?? ""} />
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">A qué aplica</legend>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div>
+        <label class="label" for={`${pre}Ambito`}>Ámbito *</label>
+        <select id={`${pre}Ambito`} name="ambito" class="input">
+          <option value="">Elige…</option>
+          {Object.entries(AMBITOS_LICENCIA).map(([v, t]) => <option value={v} selected={inicial.ambito === v}>{t}</option>)}
+        </select>
+      </div>
+      <div data-ambitos="establecimiento servicio persona" class="hidden">
+        <label class="label" for={`${pre}Sede`}>Sede <span data-sede-obligatoria>*</span></label>
+        <select id={`${pre}Sede`} name="sucursalId" class="input">
+          <option value="">Elige…</option>
+          {sucursales.map((s) => <option value={s.id} selected={inicial.sucursalId === s.id}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div data-ambitos="servicio" class="hidden">
+        <label class="label" for={`${pre}Servicio`}>Servicio *</label>
+        <input id={`${pre}Servicio`} name="servicio" class="input" maxlength="80" list={`${pre}Servicios`} value={inicial.servicio ?? ""} placeholder="Ej.: Radiología" />
+        <datalist id={`${pre}Servicios`}>{sugerenciasServicio.map((s) => <option value={s} />)}</datalist>
+      </div>
+      <div data-ambitos="equipo" class="hidden sm:col-span-2">
+        <label class="label" for={`${pre}Equipo`}>Equipo * <span class="font-normal text-slate-500">(escribe el código o el nombre y elige de la lista)</span></label>
+        <input id={`${pre}Equipo`} name="equipoTexto" class="input" list={`${pre}Equipos`} autocomplete="off" value={equipoInicial ? textoEquipo(equipoInicial) : ""} />
+        <datalist id={`${pre}Equipos`} data-equipos>{equipos.map((e) => <option value={textoEquipo(e)} data-id={e.id} />)}</datalist>
+        <p class="mt-1 text-xs text-slate-500">La sede se toma de la ubicación del equipo.</p>
+      </div>
+      <div data-ambitos="persona" class="hidden">
+        <label class="label" for={`${pre}Titular`}>Titular *</label>
+        <input id={`${pre}Titular`} name="titular" class="input" maxlength="120" value={inicial.titular ?? ""} />
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Vigencia</legend>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div>
+        <label class="label" for={`${pre}Emision`}>Fecha de emisión</label>
+        <input id={`${pre}Emision`} name="fechaEmision" type="date" class="input" value={inicial.fechaEmision ?? ""} />
+      </div>
+      <div>
+        <label class="label" for={`${pre}Vence`}>Vence</label>
+        <input id={`${pre}Vence`} name="fechaVencimiento" type="date" class="input" value={inicial.fechaVencimiento ?? ""} disabled={noVence} />
+      </div>
+      <label class="flex items-center gap-2 self-end pb-3 text-sm">
+        <input type="checkbox" name="noVence" checked={noVence} /> No vence
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Seguimiento</legend>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div>
+        <label class="label" for={`${pre}Responsable`}>Responsable</label>
+        <select id={`${pre}Responsable`} name="responsableId" class="input">
+          <option value="">Sin responsable</option>
+          {responsables.map((u) => <option value={u.id} selected={inicial.responsableId === u.id}>{u.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for={`${pre}Estado`}>Estado *</label>
+        <select id={`${pre}Estado`} name="estado" class="input">
+          <option value="activa" selected={estadoInicial === "activa"}>{ESTADOS_LICENCIA.activa}</option>
+          {ofrecerTramite && <option value="en_tramite" selected={estadoInicial === "en_tramite"}>{ESTADOS_LICENCIA.en_tramite}</option>}
+        </select>
+        {ofrecerTramite && <p class="mt-1 text-xs text-slate-500">En trámite: todavía no la emiten; puedes subir la constancia.</p>}
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label" for={`${pre}Notas`}>Notas</label>
+        <textarea id={`${pre}Notas`} name="notas" class="input" rows="2" maxlength="1000">{inicial.notas ?? ""}</textarea>
+      </div>
+    </div>
+  </fieldset>
+
+  {modo !== "editar" && (
+    <fieldset class="space-y-2">
+      <legend class="font-semibold text-slate-800">Archivo</legend>
+      <label class="label" for={`${pre}Archivo`}>Archivo de la licencia (PDF o foto, máx. 15 MB)</label>
+      <input id={`${pre}Archivo`} name="file" type="file" accept={ARCHIVO_ACCEPT} class="input" />
+      <p class="text-xs text-slate-500">Si está en trámite, sube la constancia de trámite.</p>
+    </fieldset>
+  )}
+
+  <p class="hidden text-sm" data-msg role="alert"></p>
+  <div class="flex flex-wrap gap-2">
+    <button type="submit" class="btn-primary" data-guardar>Guardar</button>
+    {oculto ? <button type="button" class="btn-secondary" data-cancelar>Cancelar</button> : <a href={cancelarHref} class="btn-secondary">Cancelar</a>}
+  </div>
+</form>
+
+<script>
+  import { instalarLicenciaForm } from "./licencia-form";
+  instalarLicenciaForm();
+</script>

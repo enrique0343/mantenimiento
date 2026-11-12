@@ -1,8 +1,16 @@
 ---
-// Fase 59 · Esqueleto que deja BASE para que la ficha y la hoja de vida (WP-C) lo
-// coloquen desde ya. Lo reemplaza WP-D, su dueño, manteniendo estas props y el id
-// del contenedor (#documentos). Mientras tanto no muestra nada.
-// Documentos del equipo y expediente técnico.
+// Fase 59 · WP-D: documentos del equipo y expediente técnico (requisito 3; apoya el 18
+// con el protocolo de limpieza). La ficha lo coloca con variante «ficha» (con botones y
+// formulario) y la hoja de vida con variante «hoja» (sin botones ni scripts). Consulta la
+// base por su cuenta y solo se muestra a admin, jefe, técnico y visualizador.
+import { getDb } from "@/lib/db";
+import { expedienteDeActivo } from "@/lib/bio-consultas";
+import { vencimientosVigentes } from "@/lib/inventario-jci";
+import {
+  ARCHIVO_ACCEPT, CATEGORIAS_DOCUMENTO, REQUISITOS_EXPEDIENTE, TRAMO_VIGENCIA, categoriasDocumentoPara, fechaCorta, hoySV,
+  puedeGestionarBio, puedeRegistrarBio, puedeVerBio, vigenciaDe,
+} from "@/lib/biomedico";
+
 interface Props {
   activoId: number;
   /** "ficha" (con botones y formulario) u "hoja" (hoja de vida impresa, sin scripts). */
@@ -10,5 +18,251 @@ interface Props {
   /** Título de la sección en la hoja de vida, por ejemplo «6. Expediente técnico». */
   titulo?: string;
 }
-const { activoId: _activoId, variante: _variante = "ficha", titulo: _titulo } = Astro.props;
+const { activoId, variante = "ficha", titulo } = Astro.props;
+const user = Astro.locals.user;
+const ver = !!user && puedeVerBio(user.rol);
+const hoy = hoySV();
+const exp = ver ? await expedienteDeActivo(getDb(Astro), activoId, hoy) : null;
+const ficha = variante !== "hoja";
+const puedeSubir = !!user && puedeRegistrarBio(user.rol) && ficha;
+const puedeGestionar = !!user && puedeGestionarBio(user.rol) && ficha;
+
+const docs = exp?.documentos ?? [];
+const c = exp?.completitud ?? null;
+const categorias = categoriasDocumentoPara(exp?.activo.area);
+const naPorRequisito = new Map((exp?.noAplica ?? []).map((n) => [n.requisito, n]));
+// Los que mandan para los vencimientos; un documento con vencimiento que no está aquí ya fue reemplazado.
+const mandan = new Set(vencimientosVigentes(docs).map((v) => v.documento.id));
+
+const grupos = CATEGORIAS_DOCUMENTO
+  .map((cat) => ({ clave: cat.clave, etiqueta: cat.etiqueta, docs: docs.filter((d) => (d.categoria ?? "otro") === cat.clave) }))
+  .filter((g) => g.docs.length > 0);
+const sueltos = docs.filter((d) => !CATEGORIAS_DOCUMENTO.some((cat) => cat.clave === (d.categoria ?? "otro")));
+if (sueltos.length) grupos.push({ clave: "otro", etiqueta: "Otras categorías", docs: sueltos });
+
+const primeraCategoria = (clave: string) => REQUISITOS_EXPEDIENTE.find((r) => r.clave === clave)?.categorias[0] ?? "";
+type Req = NonNullable<typeof c>["requisitos"][number];
+const textoRequisito = (r: Req): string => {
+  switch (r.estado) {
+    case "con_documento": return `✓ ${r.documentos} documento${r.documentos === 1 ? "" : "s"}`;
+    case "aceptacion_registrada": return `✓ Inspección de aceptación registrada el ${fechaCorta(exp?.activo.aceptacionFecha)}`;
+    case "no_aplica": return `No aplica: ${r.motivoNoAplica ?? ""}`;
+    case "vencido": {
+      const cats: readonly string[] = REQUISITOS_EXPEDIENTE.find((x) => x.clave === r.clave)?.categorias ?? [];
+      const fechas = docs.filter((d) => cats.includes(d.categoria ?? "") && d.fechaVencimiento).map((d) => d.fechaVencimiento!).sort();
+      return `Vencido el ${fechaCorta(fechas[fechas.length - 1])}`;
+    }
+    default: return "Falta";
+  }
+};
+const colorRequisito = (r: Req): string =>
+  r.estado === "con_documento" || r.estado === "aceptacion_registrada" ? "text-emerald-700"
+    : r.estado === "no_aplica" ? "text-slate-600" : "text-red-600";
+const cumple = (r: Req) => r.estado === "con_documento" || r.estado === "aceptacion_registrada" || r.estado === "no_aplica";
+const kb = (n: number) => `${Math.max(1, Math.round(n / 1024)).toLocaleString("es-SV")} KB`;
+const subtitulo = exp?.esBio
+  ? "Expediente técnico: manuales, ficha técnica, registro sanitario y actas. PDF o fotos (JPG, PNG o WEBP) de hasta 15 MB."
+  : "Planos, unifilares y diagramas de válvulas se adjuntan al activo; los as-built son la configuración vigente del SCP. PDF o fotos (JPG, PNG o WEBP) de hasta 15 MB.";
+const vigenciaDoc = (d: (typeof docs)[number]) => {
+  if (!d.fechaVencimiento) return null;
+  if (!mandan.has(d.id)) return { texto: `Vencía el ${fechaCorta(d.fechaVencimiento)} · reemplazado`, color: "bg-slate-100 text-slate-600" };
+  const v = vigenciaDe(d.fechaVencimiento, hoy);
+  return { texto: v.texto, color: TRAMO_VIGENCIA[v.tramo].color };
+};
 ---
+
+{exp && ficha && (
+  <section id="documentos" class="card mt-6 p-5" data-bio-documentos data-activo-id={activoId}>
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="font-semibold">Documentos del equipo</h2>
+        <p class="text-xs text-slate-500">{subtitulo}</p>
+      </div>
+      {puedeSubir && <button type="button" class="btn-primary text-sm" data-doc-abrir>+ Subir documento</button>}
+    </div>
+
+    {c && (
+      <div class="mt-4 rounded-md border border-slate-200 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-medium text-slate-800">Expediente técnico: {c.cumplidos} de {c.total}</div>
+          <span class={`badge ${c.completo ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{c.completo ? "Completo" : "Incompleto"}</span>
+        </div>
+        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+          <div class={`h-full rounded-full ${c.completo ? "bg-emerald-500" : c.porcentaje >= 60 ? "bg-amber-500" : "bg-red-500"}`} style={`width:${c.porcentaje}%`}></div>
+        </div>
+        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+          {c.requisitos.map((r) => {
+            const na = naPorRequisito.get(r.clave);
+            return (
+              <li class="py-2">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-slate-700">{r.etiqueta}</span>
+                  <span class={`text-xs font-medium ${colorRequisito(r)}`}>{textoRequisito(r)}</span>
+                </div>
+                {(puedeSubir || puedeGestionar) && (
+                  <div class="mt-1 flex flex-wrap gap-3 text-xs">
+                    {puedeSubir && !cumple(r) && <button type="button" class="text-brand-700 hover:underline" data-doc-subir data-categoria={primeraCategoria(r.clave)}>Subir</button>}
+                    {puedeGestionar && !na && !cumple(r) && <button type="button" class="text-slate-600 hover:underline" data-na-abrir data-requisito={r.clave}>No aplica</button>}
+                    {puedeGestionar && na && <button type="button" class="text-slate-600 hover:underline" data-na-quitar data-requisito={r.clave} data-etiqueta={r.corta}>Quitar «No aplica»</button>}
+                  </div>
+                )}
+                {puedeGestionar && !na && !cumple(r) && (
+                  <form class="mt-2 hidden rounded-md border border-slate-200 bg-slate-50 p-3" data-na-form={r.clave} novalidate>
+                    <label class="label" for={`bioNaMotivo-${activoId}-${r.clave}`}>Motivo *</label>
+                    <input id={`bioNaMotivo-${activoId}-${r.clave}`} name="motivo" class="input" maxlength="300" placeholder="Por qué este equipo no lo necesita" />
+                    <p class="mt-1 hidden text-xs" data-na-msg role="alert"></p>
+                    <div class="mt-2 flex gap-2">
+                      <button type="submit" class="btn-primary btn-sm">Guardar</button>
+                      <button type="button" class="btn-secondary btn-sm" data-na-cancelar>Cancelar</button>
+                    </div>
+                  </form>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <p class="mt-2 text-xs text-slate-500">
+          Recomendados: {c.recomendados.map((x, i) => <span>{i > 0 ? " · " : ""}{x.etiqueta} <span class={x.tiene ? "text-emerald-700" : "text-amber-700"}>{x.tiene ? "✓" : "falta"}</span></span>)}
+        </p>
+        {c.sinClasificar > 0 && (
+          <p class="mt-2 text-xs text-amber-700">Hay {c.sinClasificar} manual{c.sinClasificar === 1 ? "" : "es"} sin clasificar. Usa «Editar» para indicar si es de operación, de mantenimiento o de servicio técnico.</p>
+        )}
+      </div>
+    )}
+
+    {puedeSubir && (
+      <form class="mt-4 hidden rounded-md border border-slate-200 bg-slate-50 p-4" data-doc-form novalidate>
+        <h3 class="text-sm font-semibold text-slate-800" data-doc-form-titulo>Subir documento</h3>
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="sm:col-span-2" data-doc-campo-archivo>
+            <label class="label" for={`bioDocArchivo-${activoId}`}>Archivo (PDF o foto, máx. 15 MB) *</label>
+            <input id={`bioDocArchivo-${activoId}`} name="file" type="file" accept={ARCHIVO_ACCEPT} class="input" />
+          </div>
+          <div>
+            <label class="label" for={`bioDocCategoria-${activoId}`}>Categoría *</label>
+            <select id={`bioDocCategoria-${activoId}`} name="categoria" class="input">
+              <option value="">Elige la categoría…</option>
+              {categorias.map((cat) => <option value={cat.clave}>{cat.etiqueta}</option>)}
+              <option value="manual" data-heredada hidden disabled>Manual (sin clasificar)</option>
+            </select>
+            <p class="mt-1 hidden text-xs text-slate-500" data-doc-ayuda></p>
+          </div>
+          <div>
+            <label class="label" for={`bioDocVersion-${activoId}`}>Versión o edición</label>
+            <input id={`bioDocVersion-${activoId}`} name="version" class="input" maxlength="40" placeholder="Ej.: 3.2 o 2024" />
+          </div>
+          <div>
+            <label class="label" for={`bioDocFecha-${activoId}`}>Fecha del documento</label>
+            <input id={`bioDocFecha-${activoId}`} name="fechaDocumento" type="date" class="input" />
+          </div>
+          <div>
+            <label class="label" for={`bioDocVence-${activoId}`}>Vence (opcional)</label>
+            <input id={`bioDocVence-${activoId}`} name="fechaVencimiento" type="date" class="input" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label" for={`bioDocNota-${activoId}`}>Nota (opcional)</label>
+            <input id={`bioDocNota-${activoId}`} name="nota" class="input" maxlength="300" />
+          </div>
+        </div>
+        <p class="mt-2 hidden text-sm" data-doc-msg role="alert"></p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button type="submit" class="btn-primary text-sm" data-doc-guardar>Subir documento</button>
+          <button type="button" class="btn-secondary text-sm" data-doc-cancelar>Cancelar</button>
+        </div>
+      </form>
+    )}
+
+    {docs.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Sin documentos cargados.{puedeSubir && " Empieza por el manual de operación y la ficha técnica."}</p>
+    ) : (
+      grupos.map((g) => (
+        <div class="mt-4">
+          <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500">{g.etiqueta}</h3>
+          <ul class="mt-1 divide-y divide-slate-100 text-sm">
+            {g.docs.map((d) => {
+              const vig = vigenciaDoc(d);
+              return (
+                <li class="flex flex-wrap items-start justify-between gap-3 py-2">
+                  <div class="min-w-0 flex-1">
+                    <a href={`/api/activos/documento/${d.id}`} target="_blank" rel="noopener" class="break-words font-medium text-brand-700 hover:underline">{d.nombre}</a>
+                    {d.asBuilt && <span class="badge ml-2 bg-indigo-100 text-[10px] text-indigo-700" title="Plano o esquema as-built: refleja la instalación tal como está construida (SCP)">As-built</span>}
+                    {vig && <span class={`badge ml-2 text-[10px] ${vig.color}`}>{vig.texto}</span>}
+                    <div class="text-xs text-slate-500">
+                      {d.version && <span class="mr-2">v{d.version}</span>}
+                      {d.fechaDocumento && <span class="mr-2">Fecha {fechaCorta(d.fechaDocumento)}</span>}
+                      <span>{kb(d.tamano)} · subido el {fechaCorta(d.subidoEn)}{d.subidoPor ? ` por ${d.subidoPor}` : ""}</span>
+                    </div>
+                    {d.nota && <div class="mt-0.5 text-xs text-slate-600">{d.nota}</div>}
+                  </div>
+                  {(puedeSubir || puedeGestionar) && (
+                    <div class="flex shrink-0 gap-3 text-xs">
+                      {puedeSubir && (
+                        <button type="button" class="text-brand-700 hover:underline" data-doc-editar data-id={d.id} data-categoria={d.categoria ?? ""}
+                          data-version={d.version ?? ""} data-fecha={d.fechaDocumento ?? ""} data-vence={d.fechaVencimiento ?? ""}
+                          data-nota={d.nota ?? ""} data-nombre={d.nombre}>Editar</button>
+                      )}
+                      {puedeGestionar && <button type="button" class="text-red-600 hover:underline" data-doc-eliminar data-id={d.id} data-nombre={d.nombre}>Eliminar</button>}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))
+    )}
+  </section>
+)}
+
+{exp && ficha && (puedeSubir || puedeGestionar) && (
+  <script>
+    import { instalarDocumentosEquipo } from "./documentos-equipo";
+    instalarDocumentosEquipo();
+  </script>
+)}
+
+{exp && !ficha && (
+  <section id="documentos">
+    <h3 class="mt-6 text-base font-bold text-slate-900">{titulo ?? "Documentos del equipo"}</h3>
+    {c && (
+      <>
+        <p class="mt-1 text-xs text-slate-600">Expediente técnico: {c.cumplidos} de {c.total} requisitos · {c.completo ? "Completo" : "Incompleto"}</p>
+        <ul class="mt-1 grid grid-cols-1 gap-x-6 text-xs sm:grid-cols-2">
+          {c.requisitos.map((r) => <li><span class={colorRequisito(r)}>{cumple(r) ? "✓" : "✗"}</span> {r.etiqueta}: {textoRequisito(r).replace(/^✓ /, "")}</li>)}
+          {c.recomendados.map((x) => <li class="text-slate-500">{x.tiene ? "✓" : "—"} {x.etiqueta} (recomendado)</li>)}
+        </ul>
+      </>
+    )}
+    {docs.length === 0 ? (
+      <p class="mt-2 text-sm text-slate-400">Sin documentos cargados.</p>
+    ) : (
+      <table class="mt-2 w-full text-left text-xs">
+        <thead class="border-b border-slate-200 text-slate-500">
+          <tr>
+            <th class="px-2 py-1.5 font-medium">Categoría</th>
+            <th class="px-2 py-1.5 font-medium">Documento</th>
+            <th class="px-2 py-1.5 font-medium">Versión</th>
+            <th class="px-2 py-1.5 font-medium">Fecha</th>
+            <th class="px-2 py-1.5 font-medium">Vence</th>
+            <th class="px-2 py-1.5 font-medium">Subido</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {docs.map((d) => {
+            const vig = vigenciaDoc(d);
+            return (
+              <tr>
+                <td class="px-2 py-1.5">{d.etiquetaCategoria}</td>
+                <td class="px-2 py-1.5 break-words">{d.nombre}{d.nota && <span class="block text-[10px] text-slate-500">{d.nota}</span>}</td>
+                <td class="px-2 py-1.5">{d.version ?? "—"}</td>
+                <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(d.fechaDocumento)}</td>
+                <td class="px-2 py-1.5 whitespace-nowrap">{d.fechaVencimiento ? <>{fechaCorta(d.fechaVencimiento)}<span class="block text-[10px] text-slate-500">{vig?.texto}</span></> : "—"}</td>
+                <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(d.subidoEn)}{d.subidoPor && <span class="block text-[10px] text-slate-500">{d.subidoPor}</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+  </section>
+)}
