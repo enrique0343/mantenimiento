@@ -26,8 +26,8 @@ import {
   etiquetaFrecuencia, fechaCorta, folioActaBaja, horaSV, hoySV, infoCalibracion, puedeVerBio, sumarMeses, textoVence,
 } from "@/lib/biomedico";
 import {
-  PRIORIDAD_LABEL, RESULTADO_CALIBRACION_LABEL, enPeriodo, otsDelPeriodo, periodoValido, quienEjecuto, resumenOts,
-  textoIncidente, textoLabAcreditado, textoPeriodo, textoRepuestos,
+  PRIORIDAD_LABEL, RESULTADO_CALIBRACION_LABEL, enPeriodo, otsDelPeriodo, periodoValido, puedeVerIncidentes, quienEjecuto, resumenOts,
+  seccionesHojaVida, textoIncidente, textoLabAcreditado, textoPeriodo, textoRepuestos,
 } from "@/lib/historial-equipo";
 import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
 export const prerender = false;
@@ -180,17 +180,14 @@ const alertas = historial.alertas.filter((x) => enPeriodo(x.fechaAlerta, desde, 
 const etq = (mapa: Record<string, string>, clave: string | null | undefined) => (clave ? mapa[clave] ?? clave : "—");
 
 // ─── Secciones presentes y su número (sin huecos) ────────────────────────────
-const presentes = {
-  cal: llevaCal || historial.calibraciones.length > 0,
-  se: esBio || historial.pruebasSE.length > 0,
-  docs: esBio || historial.documentos.length > 0,
-  lic: esBio || nLicencias > 0,
-  cap: esBio || historial.capacitaciones.length > 0,
-  alertas: historial.alertas.length > 0,
-  baja: a.estado === "baja" || historial.bajas.length > 0,
-};
-const secciones = ["ident", "planes", "ots", ...(Object.entries(presentes).filter(([, v]) => v).map(([k]) => k))];
-const num: Record<string, number> = Object.fromEntries(secciones.map((k, i) => [k, i + 1]));
+// Capacitaciones solo en biomédicos: su componente (WP-D) no se dibuja en otras áreas.
+const { presentes, num } = seccionesHojaVida({
+  esBio, llevaCal: !!llevaCal, deBaja: a.estado === "baja",
+  calibraciones: historial.calibraciones.length, pruebas: historial.pruebasSE.length, documentos: historial.documentos.length,
+  licencias: nLicencias, alertas: historial.alertas.length, bajas: historial.bajas.length,
+});
+// Incidentes no es del técnico (K-G2): para él, el texto sin enlace.
+const verIncidentes = puedeVerIncidentes(user.rol);
 
 const ahora = new Date().toISOString();
 const qs = new URLSearchParams();
@@ -325,7 +322,9 @@ if (hasta) qs.set("hasta", hasta);
                     <td colspan="8">
                       {detalle.length === 0 && !inc && <span class="doc-nota-celda">Sin detalle registrado.</span>}
                       {detalle.map((d) => <span class="doc-nota-celda" style="white-space: pre-wrap">{d}</span>)}
-                      {inc && <a href={`/incidentes?activo=${a.id}`} class="doc-nota-celda doc-critico">{textoIncidente(inc)}</a>}
+                      {inc && (verIncidentes
+                        ? <a href={`/incidentes?activo=${a.id}`} class="doc-nota-celda doc-critico">{textoIncidente(inc)}</a>
+                        : <span class="doc-nota-celda doc-critico">{textoIncidente(inc)}</span>)}
                     </td>
                   </tr>
                 </>
