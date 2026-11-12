@@ -1,142 +1,163 @@
 ---
+// Registro de alertas y retiros de equipo (requisito 14, JCI FMS.07.1). Cada alerta
+// se gestiona en su hoja /alertas/{id}; aquí se listan, se filtran, se imprimen y se
+// descargan.
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
-import { alertasEquipo, alertasEquipoActivos, activos, usuarios } from "@/lib/schema";
-import { eq, desc, inArray, asc, ne } from "drizzle-orm";
-import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { activos } from "@/lib/schema";
+import { asc, ne } from "drizzle-orm";
+import {
+  ALERTA_BADGE, APLICABILIDAD_LABEL, ESTADO_ALERTA_LABEL, FUENTE_ALERTA_LABEL, TIPO_ALERTA_LABEL,
+  fechaCorta, hoySV, puedeGestionarBio, puedeVerBio,
+} from "@/lib/biomedico";
+import {
+  diasDesdeEmision, folioAlerta, leerFiltrosAlertas, pasaFiltrosAlertas, queryFiltrosAlertas, textoReabierta,
+} from "@/lib/alertas";
+import { cargarListaAlertas, mapaUsuarios } from "@/lib/alertas-datos";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (!["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)) return Astro.redirect("/");
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
 const db = getDb(Astro);
-const puedeGestionar = user.rol === "admin" || user.rol === "jefe";
+const puedeGestionar = puedeGestionarBio(user.rol);
+const hoy = hoySV();
 
-const alertas = await db
-  .select({ al: alertasEquipo, u: usuarios })
-  .from(alertasEquipo)
-  .leftJoin(usuarios, eq(usuarios.id, alertasEquipo.cerradaPor))
-  .orderBy(desc(alertasEquipo.id));
+const filtros = leerFiltrosAlertas(Astro.url.searchParams);
+const [{ alertas, equipos, archivos }, nombres] = await Promise.all([cargarListaAlertas(db), mapaUsuarios(db)]);
+const nombre = (id: number | null) => (id ? nombres.get(id) ?? "—" : "—");
+const visibles = alertas.filter((a) => pasaFiltrosAlertas(a, filtros));
+const abiertas = visibles.filter((a) => a.estado !== "cerrada");
+const cerradas = visibles.filter((a) => a.estado === "cerrada");
+const totalAbiertas = alertas.filter((a) => a.estado !== "cerrada").length;
+const totalSinAnalisis = alertas.filter((a) => a.aplicabilidad === "pendiente").length;
+const anios = [...new Set([Number(hoy.slice(0, 4)), ...alertas.map((a) => Number(a.fechaAlerta.slice(0, 4)))])]
+  .filter((n) => Number.isInteger(n)).sort((a, b) => b - a);
+const hayFiltros = filtros.estado !== "todas" || filtros.analisis !== "todos" || filtros.anio !== null;
+const csvHref = `/api/alertas/exportar${queryFiltrosAlertas(filtros)}`;
 
-// Equipos afectados por alerta
-const alertaIds = alertas.map((a) => a.al.id);
-const vinculos = alertaIds.length
-  ? await db
-      .select({ v: alertasEquipoActivos, a: activos })
-      .from(alertasEquipoActivos)
-      .leftJoin(activos, eq(activos.id, alertasEquipoActivos.activoId))
-      .where(inArray(alertasEquipoActivos.alertaId, alertaIds))
-  : [];
-const equiposPorAlerta = new Map<number, { id: number; codigo: string; nombre: string }[]>();
-for (const { v, a } of vinculos) {
-  if (!a) continue;
-  const arr = equiposPorAlerta.get(v.alertaId) ?? [];
-  arr.push({ id: a.id, codigo: a.codigo, nombre: a.nombre });
-  equiposPorAlerta.set(v.alertaId, arr);
-}
-
-// Lista de equipos para el selector (todos los no dados de baja)
+// Para registrar: todos los equipos no dados de baja.
 const equiposLista = puedeGestionar
-  ? await db
-      .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo })
-      .from(activos)
-      .where(ne(activos.estado, "baja"))
-      .orderBy(asc(activos.codigo))
+  ? await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo })
+      .from(activos).where(ne(activos.estado, "baja")).orderBy(asc(activos.codigo))
   : [];
 
-const abiertas = alertas.filter((a) => a.al.estado !== "cerrada");
-const cerradas = alertas.filter((a) => a.al.estado === "cerrada");
-
-const TIPO_META: Record<string, { label: string; badge: string }> = {
-  retiro: { label: "Retiro (recall)", badge: "bg-red-100 text-red-700" },
-  alerta: { label: "Alerta de seguridad", badge: "bg-amber-100 text-amber-700" },
-  aviso: { label: "Aviso", badge: "bg-blue-100 text-blue-700" },
-};
-const FUENTE_LABEL: Record<string, string> = {
-  fabricante: "Fabricante", regulador: "Regulador", proveedor: "Proveedor", interna: "Interna",
-};
-const ESTADO_META: Record<string, { label: string; badge: string }> = {
-  abierta: { label: "Abierta", badge: "bg-red-100 text-red-700" },
-  en_proceso: { label: "En proceso", badge: "bg-amber-100 text-amber-700" },
-  cerrada: { label: "Cerrada", badge: "bg-emerald-100 text-emerald-700" },
-};
-const fmt = (s: string) => fmtFechaSoloCompacta(s);
-const hoy = new Date().toISOString().slice(0, 10);
+const describirFiltros = [
+  filtros.estado === "abiertas" ? "Abiertas y en proceso" : filtros.estado === "cerradas" ? "Cerradas" : "",
+  filtros.analisis !== "todos" ? `Análisis: ${APLICABILIDAD_LABEL[filtros.analisis]}` : "",
+  filtros.anio ? `Emitidas en ${filtros.anio}` : "",
+].filter(Boolean).join(" · ") || "Todas las alertas";
 ---
 
 <Layout title="Alertas y retiros de equipo">
-  <div class="flex flex-wrap items-center justify-between gap-3">
+  <DocCabecera soloImpresion titulo="Registro de alertas y retiros de equipo" subtitulo="JCI FMS.07.1" />
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Alertas y retiros de equipo</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Registro JCI FMS.07.1 — alertas de fabricantes, retiros del mercado y avisos de seguridad, con la acción documentada.
+        Registro JCI FMS.07.1: alertas de fabricantes, retiros del mercado y avisos de seguridad, con el análisis y la acción documentados.
       </p>
     </div>
-    <div class="flex items-center gap-2">
-      {abiertas.length > 0 && <span class="badge bg-red-100 text-red-700">{abiertas.length} abierta(s)</span>}
-      {puedeGestionar && <button id="nuevaBtn" class="btn-primary">+ Registrar alerta</button>}
+    <div class="flex flex-wrap items-center gap-2">
+      {totalAbiertas > 0 && <span class="badge bg-red-100 text-red-700">{totalAbiertas} abierta(s)</span>}
+      {totalSinAnalisis > 0 && <span class="badge bg-slate-100 text-slate-700">{totalSinAnalisis} sin análisis</span>}
+      {puedeGestionar && <button id="nuevaBtn" class="btn-primary" type="button">+ Registrar alerta</button>}
+      <button class="btn-secondary" type="button" onclick="window.print()">Imprimir lista</button>
+      <a href={csvHref} class="btn-secondary">Descargar CSV</a>
     </div>
   </div>
 
+  <form method="get" class="no-print card mt-4 flex flex-wrap items-end gap-3 p-3">
+    <div>
+      <label class="label text-xs" for="f_estado">Estado</label>
+      <select id="f_estado" name="estado" class="input text-sm">
+        <option value="todas" selected={filtros.estado === "todas"}>Todas</option>
+        <option value="abiertas" selected={filtros.estado === "abiertas"}>Abiertas y en proceso</option>
+        <option value="cerradas" selected={filtros.estado === "cerradas"}>Cerradas</option>
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs" for="f_analisis">Análisis</label>
+      <select id="f_analisis" name="analisis" class="input text-sm">
+        <option value="todos" selected={filtros.analisis === "todos"}>Todos</option>
+        <option value="pendiente" selected={filtros.analisis === "pendiente"}>Sin análisis</option>
+        <option value="aplica" selected={filtros.analisis === "aplica"}>Aplica</option>
+        <option value="no_aplica" selected={filtros.analisis === "no_aplica"}>No aplica</option>
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs" for="f_anio">Año de emisión</label>
+      <select id="f_anio" name="anio" class="input text-sm">
+        <option value="">Todos</option>
+        {anios.map((a) => <option value={a} selected={a === filtros.anio}>{a}</option>)}
+      </select>
+    </div>
+    <button class="btn-primary text-sm">Filtrar</button>
+    {hayFiltros && <a href="/alertas" class="btn-secondary text-sm">Limpiar</a>}
+  </form>
+  <p class="hidden print:block mt-2 text-xs text-slate-500">{describirFiltros} · {visibles.length} alerta(s) · generado el {fechaCorta(hoy)}</p>
+
   {alertas.length === 0 && (
     <div class="card mt-6 p-10 text-center">
-      <h2 class="mt-3 font-semibold text-slate-800">Sin alertas registradas</h2>
+      <h2 class="font-semibold text-slate-800">Sin alertas registradas</h2>
       <p class="mt-1 text-sm text-slate-500 max-w-lg mx-auto">
-        Cuando un fabricante, regulador o proveedor emita una alerta o retiro que afecte a tus equipos,
-        regístrala aquí con los equipos afectados y la acción tomada. Este registro es la evidencia del estándar FMS.07.1.
+        Cuando un fabricante, regulador o proveedor emita una alerta o un retiro, regístralo aquí: sube el boletín,
+        analiza si afecta a tus equipos y documenta la acción. Este registro es la evidencia del estándar FMS.07.1.
       </p>
-      {puedeGestionar && <button id="nuevaBtn2" class="btn-primary mt-4">+ Registrar la primera</button>}
+      {puedeGestionar && <button id="nuevaBtn2" class="btn-primary mt-4 no-print" type="button">+ Registrar la primera</button>}
     </div>
+  )}
+  {alertas.length > 0 && visibles.length === 0 && (
+    <p class="mt-6 text-sm text-slate-500">Ninguna alerta cumple esos filtros.</p>
   )}
 
   {[
-    { titulo: "Abiertas y en proceso", items: abiertas, vacio: "Sin alertas pendientes — todo atendido. ✓" },
+    { titulo: "Abiertas y en proceso", items: abiertas, vacio: "Sin alertas pendientes con estos filtros. ✓" },
     { titulo: "Cerradas", items: cerradas, vacio: "" },
-  ].map((seccion) => (alertas.length > 0 && (seccion.items.length > 0 || seccion.titulo.startsWith("Abiertas"))) && (
-    <div class="mt-6">
+  ].map((seccion) => visibles.length > 0 && (seccion.items.length > 0 || (seccion.titulo.startsWith("Abiertas") && filtros.estado !== "cerradas")) && (
+    <section class="mt-6">
       <h2 class="font-semibold text-slate-700">{seccion.titulo} ({seccion.items.length})</h2>
       {seccion.items.length === 0 ? (
         <p class="mt-2 text-sm text-emerald-700">{seccion.vacio}</p>
       ) : (
         <div class="mt-3 space-y-3">
-          {seccion.items.map(({ al, u }) => {
-            const equipos = equiposPorAlerta.get(al.id) ?? [];
-            const tm = TIPO_META[al.tipo] ?? TIPO_META.aviso;
-            const em = ESTADO_META[al.estado] ?? ESTADO_META.abierta;
-            const diasAbierta = Math.floor((new Date(hoy).getTime() - new Date(al.fechaAlerta).getTime()) / 86400_000);
+          {seccion.items.map((al) => {
+            const eqs = equipos.get(al.id) ?? [];
+            const dias = diasDesdeEmision(al.fechaAlerta, hoy);
+            const nArchivos = archivos.get(al.id) ?? 0;
+            const reabierta = textoReabierta(al.vecesReabierta);
             return (
-              <div class="card p-4">
+              <article id={`alerta-${al.id}`} class="card p-4">
                 <div class="flex flex-wrap items-start justify-between gap-2">
                   <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
-                      <span class={`badge ${tm.badge}`}>{tm.label}</span>
-                      <span class={`badge ${em.badge}`}>{em.label}</span>
-                      {al.estado !== "cerrada" && diasAbierta >= 0 && (
-                        <span class="text-[11px] text-slate-400">{diasAbierta === 0 ? "hoy" : `${diasAbierta} día(s) desde emisión`}</span>
+                      <span class="font-mono text-[11px] text-slate-400">{folioAlerta(al.id)}</span>
+                      <span class={`badge ${ALERTA_BADGE[al.tipo] ?? ""}`}>{TIPO_ALERTA_LABEL[al.tipo] ?? al.tipo}</span>
+                      <span class={`badge ${ALERTA_BADGE[al.estado] ?? ""}`}>{ESTADO_ALERTA_LABEL[al.estado] ?? al.estado}</span>
+                      <span class={`badge ${ALERTA_BADGE[al.aplicabilidad] ?? ""}`}>{APLICABILIDAD_LABEL[al.aplicabilidad] ?? al.aplicabilidad}</span>
+                      {al.estado !== "cerrada" && dias !== null && dias >= 0 && (
+                        <span class="text-[11px] text-slate-400">{dias === 0 ? "emitida hoy" : `${dias} día(s) desde la emisión`}</span>
                       )}
                     </div>
-                    <h3 class="mt-1.5 font-semibold text-slate-800">{al.titulo}</h3>
+                    <h3 class="mt-1.5 font-semibold text-slate-800">
+                      <a href={`/alertas/${al.id}`} class="hover:text-brand-700 hover:underline">{al.titulo}</a>
+                    </h3>
                     <div class="mt-0.5 text-xs text-slate-500">
-                      {FUENTE_LABEL[al.fuente] ?? al.fuente} · Emitida: {fmt(al.fechaAlerta)}
-                      {al.referencia && <span class="ml-1 font-mono border border-slate-200 rounded px-1 py-0.5">{al.referencia}</span>}
+                      {FUENTE_ALERTA_LABEL[al.fuente] ?? al.fuente} · Emitida el {fechaCorta(al.fechaAlerta)}
+                      {al.referencia && <span class="ml-1 rounded border border-slate-200 px-1 py-0.5 font-mono">{al.referencia}</span>}
                     </div>
+                    <div class="mt-0.5 text-[11px] text-slate-400">Registrada por {nombre(al.creadoPor)} el {fechaCorta(al.createdAt)}</div>
                   </div>
-                  {puedeGestionar && (
-                    <button
-                      class="gestionar-btn btn-secondary btn-sm shrink-0"
-                      data-id={al.id}
-                      data-titulo={al.titulo}
-                      data-estado={al.estado}
-                      data-accion={al.accionTomada ?? ""}
-                    >Gestionar</button>
-                  )}
+                  <a href={`/alertas/${al.id}`} class="no-print btn-secondary btn-sm shrink-0">Abrir</a>
                 </div>
 
-                {al.descripcion && <p class="mt-2 text-sm text-slate-600">{al.descripcion}</p>}
+                {al.descripcion && <p class="mt-2 text-sm text-slate-600 whitespace-pre-line">{al.descripcion}</p>}
 
-                {equipos.length > 0 && (
+                {eqs.length > 0 && (
                   <div class="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
-                    <span class="text-slate-400 font-medium">Equipos afectados ({equipos.length}):</span>
-                    {equipos.map((e) => (
+                    <span class="font-medium text-slate-400">Equipos afectados ({eqs.length}):</span>
+                    {eqs.map((e) => (
                       <a href={`/activos/${e.id}`} class="rounded-md bg-slate-100 px-2 py-0.5 text-slate-700 hover:bg-brand-50 hover:text-brand-700">
                         <span class="font-mono text-[10px]">{e.codigo}</span> {e.nombre}
                       </a>
@@ -146,205 +167,138 @@ const hoy = new Date().toISOString().slice(0, 10);
 
                 {al.accionTomada && (
                   <div class="mt-2.5 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    <span class="text-xs font-semibold uppercase text-slate-400 block">Acción tomada</span>
-                    {al.accionTomada}
-                    {al.estado === "cerrada" && al.cerradaEn && (
-                      <div class="mt-1 text-[11px] text-slate-400">
-                        Cerrada el {fmt(al.cerradaEn.slice(0, 10))}{u ? ` por ${u.nombre}` : ""}
-                      </div>
-                    )}
+                    <span class="block text-xs font-semibold uppercase text-slate-400">Acción tomada</span>
+                    <span class="whitespace-pre-line">{al.accionTomada}</span>
                   </div>
                 )}
-              </div>
+
+                <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                  {al.estado === "cerrada" && <span>Cerrada el {fechaCorta(al.fechaCierre ?? al.cerradaEn)} por {nombre(al.cerradaPor)}</span>}
+                  {reabierta && <span class="text-amber-700">{reabierta}</span>}
+                  <span>{nArchivos === 0 ? "Sin archivos" : nArchivos === 1 ? "1 archivo" : `${nArchivos} archivos`}</span>
+                </div>
+              </article>
             );
           })}
         </div>
       )}
-    </div>
+    </section>
   ))}
 
-  {puedeGestionar && (
-    <>
-      <!-- Modal nueva alerta -->
-      <div id="nuevaModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
-        <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-semibold text-slate-900">Registrar alerta / retiro</h3>
-          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label class="label text-xs">Tipo *</label>
-              <select id="n_tipo" class="input">
-                <option value="alerta">Alerta de seguridad</option>
-                <option value="retiro">Retiro (recall)</option>
-                <option value="aviso">Aviso</option>
-              </select>
-            </div>
-            <div>
-              <label class="label text-xs">Fuente *</label>
-              <select id="n_fuente" class="input">
-                <option value="fabricante">Fabricante</option>
-                <option value="regulador">Regulador</option>
-                <option value="proveedor">Proveedor</option>
-                <option value="interna">Interna</option>
-              </select>
-            </div>
-            <div class="sm:col-span-2">
-              <label class="label text-xs">Título *</label>
-              <input id="n_titulo" class="input" placeholder="Ej. Retiro de lote de bombas de infusión modelo X" />
-            </div>
-            <div class="sm:col-span-2">
-              <label class="label text-xs">Descripción</label>
-              <textarea id="n_desc" class="input" rows="2" placeholder="Detalle de la alerta, lotes/series afectados…"></textarea>
-            </div>
-            <div>
-              <label class="label text-xs">Fecha de emisión *</label>
-              <input id="n_fecha" type="date" class="input" value={hoy} />
-            </div>
-            <div>
-              <label class="label text-xs">Referencia (nº aviso)</label>
-              <input id="n_ref" class="input" placeholder="Ej. FSN-2026-014" />
-            </div>
-            <div class="sm:col-span-2">
-              <label class="label text-xs">Equipos afectados</label>
-              <input id="n_buscar" class="input mb-1.5" placeholder="Filtrar equipos…" />
-              <div id="n_equipos" class="max-h-40 overflow-y-auto rounded-lg border border-slate-200 p-2 space-y-1">
-                {equiposLista.map((e) => (
-                  <label class="eq-item flex items-center gap-2 text-xs text-slate-700 rounded px-1.5 py-1 hover:bg-slate-50 cursor-pointer" data-search={`${e.codigo} ${e.nombre}`.toLowerCase()}>
-                    <input type="checkbox" class="eq-cb" value={e.id} />
-                    <span class="font-mono text-[10px] text-slate-400">{e.codigo}</span>
-                    <span class="truncate">{e.nombre}</span>
-                    {e.tipo === "biomedico" && <span class="text-[9px] text-violet-500">bio</span>}
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-          <p id="n_err" class="hidden mt-2 text-sm text-red-600"></p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button id="n_cancel" class="btn-secondary">Cancelar</button>
-            <button id="n_save" class="btn-primary">Registrar alerta</button>
-          </div>
-        </div>
-      </div>
+  <DocFolio soloImpresion codigo="Alertas FMS.07.1" />
 
-      <!-- Modal gestionar (estado + acción) -->
-      <div id="gesModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
-        <div class="card w-full max-w-md p-5">
-          <h3 class="text-lg font-semibold text-slate-900">Gestionar alerta</h3>
-          <p id="g_titulo" class="mt-1 text-sm text-slate-500"></p>
-          <input type="hidden" id="g_id" />
-          <div class="mt-4 space-y-3">
-            <div>
-              <label class="label text-xs">Estado</label>
-              <select id="g_estado" class="input">
-                <option value="abierta">Abierta</option>
-                <option value="en_proceso">En proceso</option>
-                <option value="cerrada">Cerrada</option>
-              </select>
-            </div>
-            <div>
-              <label class="label text-xs">Acción tomada (obligatoria para cerrar)</label>
-              <textarea id="g_accion" class="input" rows="3" placeholder="Ej. Se retiraron de servicio las 3 bombas del lote afectado y se coordinó el reemplazo con el proveedor."></textarea>
-            </div>
+  {puedeGestionar && (
+    <div id="nuevaModal" class="no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <div class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold text-slate-900">Registrar alerta o retiro</h3>
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label class="label text-xs" for="n_tipo">Tipo *</label>
+            <select id="n_tipo" class="input">
+              <option value="alerta">Alerta de seguridad</option>
+              <option value="retiro">Retiro (recall)</option>
+              <option value="aviso">Aviso</option>
+            </select>
           </div>
-          <p id="g_err" class="hidden mt-2 text-sm text-red-600"></p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button id="g_cancel" class="btn-secondary">Cancelar</button>
-            <button id="g_save" class="btn-primary">Guardar</button>
+          <div>
+            <label class="label text-xs" for="n_fuente">Fuente *</label>
+            <select id="n_fuente" class="input">
+              <option value="fabricante">Fabricante</option>
+              <option value="regulador">Regulador</option>
+              <option value="proveedor">Proveedor</option>
+              <option value="interna">Interna</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_titulo">Título *</label>
+            <input id="n_titulo" class="input" maxlength="200" placeholder="Ej. Retiro de lote de bombas de infusión modelo X" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_desc">Descripción</label>
+            <textarea id="n_desc" class="input" rows="2" placeholder="Detalle de la alerta, lotes o series afectados…"></textarea>
+          </div>
+          <div>
+            <label class="label text-xs" for="n_fecha">Fecha de emisión *</label>
+            <input id="n_fecha" type="date" class="input" max={hoy} value={hoy} />
+          </div>
+          <div>
+            <label class="label text-xs" for="n_ref">Referencia (n.º de aviso)</label>
+            <input id="n_ref" class="input" maxlength="120" placeholder="Ej. FSN-2026-014" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label text-xs" for="n_buscar">Equipos afectados (si ya los conoces)</label>
+            <input id="n_buscar" class="input mb-1.5" placeholder="Filtrar equipos…" />
+            <div class="max-h-40 overflow-y-auto rounded-lg border border-slate-200 p-2 space-y-1">
+              {equiposLista.map((e) => (
+                <label class="eq-item flex items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer" data-search={`${e.codigo} ${e.nombre}`.toLowerCase()}>
+                  <input type="checkbox" class="eq-cb" value={e.id} />
+                  <span class="font-mono text-[10px] text-slate-400">{e.codigo}</span>
+                  <span class="truncate">{e.nombre}</span>
+                  {e.tipo === "biomedico" && <span class="text-[9px] text-violet-500">bio</span>}
+                </label>
+              ))}
+            </div>
           </div>
         </div>
+        <p id="n_err" class="hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="n_cancel" class="btn-secondary" type="button">Cancelar</button>
+          <button id="n_save" class="btn-primary" type="button">Registrar alerta</button>
+        </div>
       </div>
-    </>
+    </div>
   )}
 
   {puedeGestionar && (
     <script>
-      const $ = (i: string) => document.getElementById(i) as HTMLInputElement;
-      const show = (m: HTMLElement) => { m.classList.remove("hidden"); m.classList.add("flex"); };
-      const hide = (m: HTMLElement) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+      const campo = (i: string) => document.getElementById(i) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+      const modal = document.getElementById("nuevaModal");
+      const mostrar = () => { modal?.classList.remove("hidden"); modal?.classList.add("flex"); };
+      const ocultar = () => { modal?.classList.add("hidden"); modal?.classList.remove("flex"); };
+      document.getElementById("nuevaBtn")?.addEventListener("click", mostrar);
+      document.getElementById("nuevaBtn2")?.addEventListener("click", mostrar);
+      document.getElementById("n_cancel")?.addEventListener("click", ocultar);
+      modal?.addEventListener("click", (e) => { if (e.target === modal) ocultar(); });
 
-      // ── Nueva alerta ──
-      const nuevaModal = document.getElementById("nuevaModal")!;
-      const abrirNueva = () => show(nuevaModal);
-      document.getElementById("nuevaBtn")?.addEventListener("click", abrirNueva);
-      document.getElementById("nuevaBtn2")?.addEventListener("click", abrirNueva);
-      document.getElementById("n_cancel")?.addEventListener("click", () => hide(nuevaModal));
-      nuevaModal.addEventListener("click", (e) => { if (e.target === nuevaModal) hide(nuevaModal); });
-
-      // Filtro de equipos en el selector
-      $("n_buscar")?.addEventListener("input", () => {
-        const q = $("n_buscar").value.trim().toLowerCase();
+      campo("n_buscar")?.addEventListener("input", () => {
+        const q = (campo("n_buscar")?.value ?? "").trim().toLowerCase();
         document.querySelectorAll<HTMLElement>(".eq-item").forEach((el) => {
           el.style.display = !q || (el.dataset.search ?? "").includes(q) ? "" : "none";
         });
       });
 
-      document.getElementById("n_save")?.addEventListener("click", async () => {
-        const err = document.getElementById("n_err")!;
-        err.classList.add("hidden");
-        const titulo = $("n_titulo").value.trim();
-        const fecha = $("n_fecha").value;
-        if (!titulo || !fecha) {
-          err.textContent = "Título y fecha son obligatorios.";
-          err.classList.remove("hidden");
-          return;
-        }
+      const boton = document.getElementById("n_save") as HTMLButtonElement | null;
+      boton?.addEventListener("click", async () => {
+        const err = document.getElementById("n_err");
+        const fallo = (msg: string) => { if (err) { err.textContent = msg; err.classList.remove("hidden"); } };
+        err?.classList.add("hidden");
+        const titulo = (campo("n_titulo")?.value ?? "").trim();
+        const fecha = campo("n_fecha")?.value ?? "";
+        if (titulo.length < 3) return fallo("Escribe un título (mínimo 3 caracteres).");
+        if (!fecha) return fallo("Escribe la fecha de emisión.");
         const activoIds = Array.from(document.querySelectorAll<HTMLInputElement>(".eq-cb:checked")).map((c) => Number(c.value));
-        const res = await fetch("/api/alertas", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            tipo: ($("n_tipo") as unknown as HTMLSelectElement).value,
-            fuente: ($("n_fuente") as unknown as HTMLSelectElement).value,
-            titulo,
-            descripcion: ($("n_desc") as unknown as HTMLTextAreaElement).value.trim() || null,
-            referencia: $("n_ref").value.trim() || null,
-            fechaAlerta: fecha,
-            activoIds,
-          }),
-        });
-        if (res.ok) { window.showToast?.("Alerta registrada", "success"); location.reload(); }
-        else {
-          err.textContent = "Error al registrar";
-          err.classList.remove("hidden");
+        boton.disabled = true;
+        try {
+          const res = await fetch("/api/alertas", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              tipo: campo("n_tipo")?.value,
+              fuente: campo("n_fuente")?.value,
+              titulo,
+              descripcion: (campo("n_desc")?.value ?? "").trim() || null,
+              referencia: (campo("n_ref")?.value ?? "").trim() || null,
+              fechaAlerta: fecha,
+              activoIds,
+            }),
+          });
+          const j = await res.json().catch(() => null) as { alerta?: { id: number }; error?: unknown } | null;
+          if (res.ok && j?.alerta) { location.href = `/alertas/${j.alerta.id}?registrada=1`; return; }
+          fallo(typeof j?.error === "string" ? j.error : "No se pudo registrar la alerta.");
+        } catch {
+          fallo("No hay conexión. Intenta de nuevo.");
         }
-      });
-
-      // ── Gestionar ──
-      const gesModal = document.getElementById("gesModal")!;
-      document.querySelectorAll<HTMLButtonElement>(".gestionar-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          $("g_id").value = btn.dataset.id!;
-          document.getElementById("g_titulo")!.textContent = btn.dataset.titulo ?? "";
-          ($("g_estado") as unknown as HTMLSelectElement).value = btn.dataset.estado ?? "abierta";
-          ($("g_accion") as unknown as HTMLTextAreaElement).value = btn.dataset.accion ?? "";
-          document.getElementById("g_err")!.classList.add("hidden");
-          show(gesModal);
-        });
-      });
-      document.getElementById("g_cancel")?.addEventListener("click", () => hide(gesModal));
-      gesModal.addEventListener("click", (e) => { if (e.target === gesModal) hide(gesModal); });
-
-      document.getElementById("g_save")?.addEventListener("click", async () => {
-        const err = document.getElementById("g_err")!;
-        err.classList.add("hidden");
-        const estado = ($("g_estado") as unknown as HTMLSelectElement).value;
-        const accion = ($("g_accion") as unknown as HTMLTextAreaElement).value.trim();
-        if (estado === "cerrada" && !accion) {
-          err.textContent = "Para cerrar la alerta documenta la acción tomada.";
-          err.classList.remove("hidden");
-          return;
-        }
-        const res = await fetch(`/api/alertas/${$("g_id").value}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ estado, accionTomada: accion || null }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (res.ok) { window.showToast?.("Alerta actualizada", "success"); location.reload(); }
-        else {
-          err.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
-          err.classList.remove("hidden");
-        }
+        boton.disabled = false;
       });
     </script>
   )}

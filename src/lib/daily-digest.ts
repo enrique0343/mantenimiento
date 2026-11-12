@@ -5,7 +5,7 @@
 // a cualquier hora del día sin riesgo de duplicar y sin depender de UTC.
 
 import type { APIContext } from "astro";
-import { and, eq, lte, gte, isNotNull, isNull, inArray, desc, sql, like } from "drizzle-orm";
+import { and, eq, lte, gte, isNotNull, isNull, inArray, desc, sql, like, ne, or } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   ordenes, tickets, usuarios, activos, ubicaciones, sucursales,
@@ -16,6 +16,9 @@ import { sendMail, emailLayout } from "./email";
 import { fmtFechaLarga, fmtFechaSimple } from "./datetime";
 import { procesarContratosVencimiento } from "./contratos-alertas";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { fechaCorta, sumarDias } from "./biomedico";
+import { cargarDatosCumplimiento } from "./cumplimiento-bio";
+import { TIPOS_VENCIMIENTO, vencimientosProximos } from "./cumplimiento-reglas";
 
 function appUrl(ctx: APIContext): string {
   const env = (ctx.locals as any)?.runtime?.env ?? {};
@@ -97,7 +100,8 @@ export async function enviarDigestDiario(
   // ── Rangos de tiempo ──────────────────────────────────────────────────────
   const { inicio: ayerIni, fin: ayerFin } = ayerEnSV();
   const inicioMes = inicioMesEnSV();
-  const en3 = new Date(Date.now() + 3 * 24 * 3600_000).toISOString().slice(0, 10);
+  // Tres días a partir de hoy en El Salvador (no en UTC).
+  const en3 = sumarDias(hoy, 3);
   const ahoraIso = new Date().toISOString();
 
   // ── Datos para el resumen ejecutivo ───────────────────────────────────────
@@ -246,14 +250,15 @@ export async function enviarDigestDiario(
   const costoTotalMes = costoManoObraMes + costoRepuestosMes;
 
   // ── Próximos preventivos (3 días) ─────────────────────────────────────────
+  // Sin las rutinas de equipos dados de baja (requisito 13).
   const proximosPlanes = await db
     .select({
       p: planesMantenimiento,
-      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre },
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado },
     })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-    .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en3)))
+    .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en3), ne(activos.estado, "baja")))
     .orderBy(planesMantenimiento.proximaFecha);
 
   const proximasActividades = await db
@@ -281,7 +286,7 @@ export async function enviarDigestDiario(
     timeZone: "America/El_Salvador",
   });
 
-  const numCard = (n: number, label: string, color: string) =>
+  const numCard = (n: number, label: string, color: { bg: string; text: string }) =>
     `<td style="padding:14px;text-align:center;background:${color.bg};border-radius:2px;width:20%">
        <div style="font-size:28px;font-weight:700;color:${color.text}">${n}</div>
        <div style="font-size:11px;color:${color.text};margin-top:4px;line-height:1.3">${label}</div>
@@ -478,12 +483,13 @@ export async function enviarDigestDiario(
   if (proximosPlanes.length > 0 || proximasActividades.length > 0) {
     html += `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Próximos 3 días</h3>
     <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
+    // Fechas sin hora: fechaCorta no las pasa por new Date (que restaba un día).
     for (const r of proximosPlanes) {
-      const venc = r.p.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fmtFechaSimple(r.p.proximaFecha);
+      const venc = r.p.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fechaCorta(r.p.proximaFecha);
       html += `<li><strong>${r.p.titulo}</strong>${r.a ? ` (${r.a.codigo})` : ""} — ${venc}</li>`;
     }
     for (const r of proximasActividades) {
-      const venc = r.a.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fmtFechaSimple(r.a.proximaFecha);
+      const venc = r.a.proximaFecha <= hoy ? `<strong style="color:#C03435">vencido</strong>` : fechaCorta(r.a.proximaFecha);
       html += `<li><strong>${r.a.titulo}</strong> (${r.a.codigo}) — ${venc}</li>`;
     }
     html += `</ul>`;
@@ -502,6 +508,11 @@ export async function enviarDigestDiario(
     }
     html += `</ul>`;
   }
+
+  // ── Equipo biomédico: vencimientos (Fase 59) ─────────────────────────────
+  try {
+    html += await seccionVencimientosBio(ctx, hoy);
+  } catch (e) { console.error("vencimientos biomédicos:", e); }
 
   // ── Compras pendientes ────────────────────────────────────────────────────
   if (comprasPendientes.length > 0) {
@@ -523,18 +534,110 @@ export async function enviarDigestDiario(
   let enviados = 0;
   for (const dest of destinatarios) {
     try {
-      await sendMail(ctx, {
+      // sendMail no lanza: devuelve ok=false (y lo anota en email_log) si no pudo enviar.
+      const r = await sendMail(ctx, {
         to: dest.email,
         subject: `Resumen diario de Mantenimiento — ${new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/El_Salvador" })}`,
         html: emailLayout("Resumen diario de operaciones", html),
         tipo: "digest_diario",
         referencia: `digest:${hoy}`,
       });
-      enviados++;
+      if (r.ok) enviados++;
     } catch (e) {
       console.error("digest a", dest.email, e);
     }
   }
 
   return { enviados };
+}
+
+// ─── Fase 59 · Avisos de vencimiento del equipo biomédico ───────────────────
+// Lo que vence dentro de las ventanas de DIAS_AVISO (calibración y seguridad
+// eléctrica 30 días; acreditación 60; licencias y registros sanitarios 90) y lo
+// que ya venció. Mismas reglas que el panel de cumplimiento (cumplimiento-reglas.ts).
+
+/** Texto que viene de la base, escapado para el HTML del correo. */
+const esc = (s: unknown) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+const MAX_POR_BLOQUE = 10;
+
+/** Sección «Equipo biomédico: vencimientos» del resumen; '' si no vence nada ni hay vencidos. */
+export async function seccionVencimientosBio(ctx: APIContext, hoy: string): Promise<string> {
+  const baseUrl = appUrl(ctx);
+  const { items, vencidos } = vencimientosProximos(await cargarDatosCumplimiento(getDb(ctx), hoy));
+  const totalVencidos = Object.values(vencidos).reduce((a, b) => a + b, 0);
+  if (items.length === 0 && totalVencidos === 0) return "";
+
+  let html = `<h3 style="margin:24px 0 10px 0;color:#23417D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em">Equipo biomédico: vencimientos</h3>`;
+  for (const t of TIPOS_VENCIMIENTO) {
+    const lista = items.filter((i) => i.tipo === t.tipo);
+    if (lista.length === 0) continue;
+    html += `<p style="margin:0 0 6px 0"><strong>${esc(t.titulo)}:</strong></p>
+    <ul style="margin:0 0 14px 0;padding-left:20px;font-size:13px;line-height:1.6">`;
+    for (const v of lista.slice(0, MAX_POR_BLOQUE)) {
+      const cuando = v.dias === 0 ? "hoy" : v.dias === 1 ? "mañana" : `en ${v.dias} días`;
+      const color = v.dias <= 7 ? "#C03435" : "#23417D";
+      html += `<li><a href="${baseUrl}${v.enlace}" style="color:#23417D;text-decoration:none">${esc(v.codigo)} — ${esc(v.nombre)}</a> · vence ${fechaCorta(v.vence)} <strong style="color:${color}">(${cuando})</strong></li>`;
+    }
+    if (lista.length > MAX_POR_BLOQUE) html += `<li style="color:#6B7280">… y ${lista.length - MAX_POR_BLOQUE} más</li>`;
+    html += `</ul>`;
+  }
+  const partes = TIPOS_VENCIMIENTO.map((t) => `${vencidos[t.tipo]} ${vencidos[t.tipo] === 1 ? t.vencidos[0] : t.vencidos[1]}`);
+  html += `<p style="margin:0 0 14px 0;font-size:13px">Ya vencidos: <strong style="color:${totalVencidos ? "#C03435" : "#1F5740"}">${partes.join(" · ")}</strong>. <a href="${baseUrl}/cumplimiento" style="color:#23417D">Ver el panel de cumplimiento</a></p>`;
+  return html;
+}
+
+/**
+ * Correo corto, una vez al día y solo si hay algo, a los jefes activos con correo y
+ * especialidad biomédico, ambos o sin especialidad. Un registro de email_log por jefe
+ * (tipo aviso_vencimientos_bio, referencia venc-bio:{hoy}): un jefe que ya lo recibió
+ * hoy no lo vuelve a recibir y a quien le falló se le reintenta en la siguiente corrida.
+ */
+export async function enviarAvisoVencimientosBio(
+  ctx: APIContext,
+  opts: { force?: boolean } = {},
+): Promise<{ enviados: number; razon?: string }> {
+  const db = getDb(ctx);
+  const hoy = hoyDateSV();
+  const referencia = `venc-bio:${hoy}`;
+  const jefes = await db
+    .select({ email: usuarios.email, nombre: usuarios.nombre })
+    .from(usuarios)
+    .where(and(
+      eq(usuarios.rol, "jefe"),
+      eq(usuarios.activo, true),
+      or(isNull(usuarios.especialidad), inArray(usuarios.especialidad, ["biomedico", "ambos"])),
+    ));
+  let destinatarios = jefes.filter((j) => !!j.email?.trim());
+  if (destinatarios.length === 0) return { enviados: 0, razon: "Sin jefes de biomédica con correo" };
+  if (!opts.force) {
+    const ya = await db
+      .select({ destinatario: emailLog.destinatario })
+      .from(emailLog)
+      .where(and(eq(emailLog.tipo, "aviso_vencimientos_bio"), eq(emailLog.referencia, referencia), eq(emailLog.estado, "enviado")));
+    const recibieron = new Set(ya.map((y) => y.destinatario));
+    destinatarios = destinatarios.filter((d) => !recibieron.has(d.email));
+    if (destinatarios.length === 0) return { enviados: 0, razon: `Ya se envió el aviso de hoy (${hoy}).` };
+  }
+
+  const seccion = await seccionVencimientosBio(ctx, hoy);
+  if (!seccion) return { enviados: 0, razon: "Sin vencimientos" };
+  const html = `<p>Buenos días,</p>
+  <p>Esto vence pronto o ya venció en el equipo biomédico. Cada línea lleva a la ficha o al registro donde se actualiza.</p>
+  ${seccion}
+  <p style="margin-top:24px;font-size:12px;color:#6B7280">Este aviso llega una vez al día a la jefatura de equipo biomédico, solo cuando hay algo que vence.</p>`;
+
+  let enviados = 0;
+  for (const d of destinatarios) {
+    const r = await sendMail(ctx, {
+      to: d.email,
+      subject: `Vencimientos de equipo biomédico — ${fechaCorta(hoy)}`,
+      html: emailLayout("Vencimientos de equipo biomédico", html),
+      tipo: "aviso_vencimientos_bio",
+      referencia,
+    });
+    if (r.ok) enviados++;
+  }
+  return enviados > 0 ? { enviados } : { enviados, razon: "No se pudo enviar el correo (ver email_log)." };
 }

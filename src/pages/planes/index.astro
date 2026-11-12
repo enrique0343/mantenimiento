@@ -1,9 +1,10 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contratosMantenimiento } from "@/lib/schema";
+import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contratosMantenimiento, proveedores } from "@/lib/schema";
 import { eq, desc, inArray } from "drizzle-orm";
 import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
+import { FRECUENCIAS_RUTINA_EQUIPO, etiquetaFrecuencia, fechaCorta } from "@/lib/biomedico";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -17,8 +18,14 @@ const fFrecuencia = url.searchParams.get("frecuencia");
 const fEstado = url.searchParams.get("estado") ?? "activos";
 
 const rows = await db
-  // D1 corta el resultado a 100 columnas: del técnico solo se usa el nombre.
-  .select({ p: planesMantenimiento, a: activos, u: { id: usuarios.id, nombre: usuarios.nombre }, ub: ubicaciones, s: sucursales })
+  // D1 corta el resultado a 100 columnas: del equipo y del técnico, solo lo que se muestra.
+  .select({
+    p: planesMantenimiento,
+    a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, estado: activos.estado },
+    u: { id: usuarios.id, nombre: usuarios.nombre },
+    ub: { id: ubicaciones.id, nombre: ubicaciones.nombre },
+    s: { id: sucursales.id, nombre: sucursales.nombre },
+  })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
@@ -46,12 +53,16 @@ const contratosList = await db
   .where(inArray(contratosMantenimiento.estado, ["vigente", "por_vencer"]))
   .orderBy(contratosMantenimiento.codigo);
 
-const fmt = (s: string) => new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" });
-const FREC_LABEL: Record<string, string> = {
-  diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal",
-  mensual: "Mensual", bimestral: "Bimestral", trimestral: "Trimestral",
-  semestral: "Semestral", anual: "Anual",
-};
+// Proveedor del servicio externo (plan anual): los activos, más el ya elegido aunque se haya desactivado.
+const proveedoresList = await db
+  .select({ id: proveedores.id, nombre: proveedores.nombre, activo: proveedores.activo })
+  .from(proveedores)
+  .orderBy(proveedores.nombre);
+const proveedoresActivos = proveedoresList.filter((p) => p.activo);
+const proveedorPorId = new Map(proveedoresList.map((p) => [p.id, p]));
+
+// Fecha sin hora: fechaCorta no la pasa por new Date (que mostraba el día anterior).
+const fmt = (s: string) => fechaCorta(s);
 ---
 
 <Layout title="Planes de mantenimiento">
@@ -80,7 +91,7 @@ const FREC_LABEL: Record<string, string> = {
       <label class="label text-xs">Frecuencia</label>
       <select name="frecuencia" class="input text-sm">
         <option value="">Todas</option>
-        {Object.entries(FREC_LABEL).map(([k, v]) => <option value={k} selected={k === fFrecuencia}>{v}</option>)}
+        {FRECUENCIAS_RUTINA_EQUIPO.map((k) => <option value={k} selected={k === fFrecuencia}>{etiquetaFrecuencia(k)}</option>)}
       </select>
     </div>
     <div>
@@ -118,11 +129,12 @@ const FREC_LABEL: Record<string, string> = {
           <th class="px-3 py-2">Asignado</th>
           <th class="px-3 py-2">Modalidad</th>
           <th class="px-3 py-2">Contrato</th>
+          <th class="px-3 py-2">Proveedor</th>
           <th class="px-3 py-2">Estado</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
-        {filtered.length === 0 && <tr><td colspan="10" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
+        {filtered.length === 0 && <tr><td colspan="11" class="px-4 py-6 text-center text-slate-400">Sin planes con esos filtros.</td></tr>}
         {filtered.map((r) => (
           <tr class:list={["hover:bg-slate-50", !r.p.activo && "opacity-60"]}>
             <td class="px-3 py-2"><input type="checkbox" class="row-chk" data-id={r.p.id} /></td>
@@ -132,9 +144,10 @@ const FREC_LABEL: Record<string, string> = {
             </td>
             <td class="px-3 py-2 text-xs">
               {r.a ? <a href={areaHref(`/activos/${r.a.id}`, area ?? r.a.rubro)} class="text-brand-700 hover:underline">{r.a.codigo} · {r.a.nombre}</a> : "—"}
+              {r.a?.estado === "baja" && <span class="ml-1 badge bg-slate-200 text-slate-600">Equipo de baja</span>}
             </td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
-            <td class="px-3 py-2 capitalize text-xs">{FREC_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
+            <td class="px-3 py-2 text-xs">{etiquetaFrecuencia(r.p.frecuencia)}</td>
             <td class="px-3 py-2 text-xs">{fmt(r.p.proximaFecha)}</td>
             <td class="px-3 py-2 text-xs text-slate-600">{r.u?.nombre ?? <span class="text-slate-400">Sin asignar</span>}</td>
             <td class="px-3 py-2">
@@ -150,6 +163,17 @@ const FREC_LABEL: Record<string, string> = {
                 {contratosList.map((c) => (
                   <option value={c.id} selected={r.p.contratoId === c.id}>{c.codigo}</option>
                 ))}
+              </select>
+            </td>
+            <td class="px-3 py-2">
+              <select class="proveedor-sel rounded border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-700 hover:border-slate-300 max-w-[160px]" data-id={r.p.id} title="Proveedor del servicio externo">
+                <option value="">—</option>
+                {proveedoresActivos.map((p) => (
+                  <option value={p.id} selected={r.p.proveedorId === p.id}>{p.nombre}</option>
+                ))}
+                {r.p.proveedorId && !proveedorPorId.get(r.p.proveedorId)?.activo && (
+                  <option value={r.p.proveedorId} selected disabled>{proveedorPorId.get(r.p.proveedorId)?.nombre ?? "Proveedor"} (inactivo)</option>
+                )}
               </select>
             </td>
             <td class="px-3 py-2">
@@ -204,10 +228,13 @@ const FREC_LABEL: Record<string, string> = {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ accion, ids }),
       });
-      if (r.ok) location.reload();
-      else {
-        const j = await r.json().catch(() => ({}));
-        alert("Error: " + (j.error ?? "no se pudo completar la acción"));
+      const j = await r.json().catch(() => null) as { error?: unknown; aviso?: unknown } | null;
+      if (r.ok) {
+        // Las rutinas de equipos dados de baja no se activan: el aviso lo dice.
+        if (typeof j?.aviso === "string") alert(j.aviso);
+        location.reload();
+      } else {
+        alert(typeof j?.error === "string" ? j.error : "No se pudo completar la acción.");
       }
     }
 
@@ -227,10 +254,12 @@ const FREC_LABEL: Record<string, string> = {
       if (r.ok) {
         sel.classList.add("ring-2", "ring-emerald-300");
         setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
-      } else {
-        sel.value = prev;
-        window.showToast?.("No se pudo guardar", "error");
+        return true;
       }
+      sel.value = prev;
+      const j = await r.json().catch(() => null) as { error?: unknown } | null;
+      window.showToast?.(typeof j?.error === "string" ? j.error : "No se pudo guardar", "error");
+      return false;
     }
     document.querySelectorAll<HTMLSelectElement>(".modalidad-sel").forEach((sel) => {
       let prev = sel.value;
@@ -243,6 +272,14 @@ const FREC_LABEL: Record<string, string> = {
       let prev = sel.value;
       sel.addEventListener("change", async () => {
         await patchPlan(sel, { contratoId: sel.value ? Number(sel.value) : null }, prev);
+        prev = sel.value;
+      });
+    });
+    // Proveedor del servicio externo: el plan anual lo imprime en «Modalidad y proveedor».
+    document.querySelectorAll<HTMLSelectElement>(".proveedor-sel").forEach((sel) => {
+      let prev = sel.value;
+      sel.addEventListener("change", async () => {
+        await patchPlan(sel, { proveedorId: sel.value ? Number(sel.value) : null }, prev);
         prev = sel.value;
       });
     });
