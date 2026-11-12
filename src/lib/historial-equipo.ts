@@ -166,7 +166,11 @@ function textoCantidad(n: number): string {
 }
 
 /** Opciones: cómo se escriben las fechas dentro de los textos (pantalla DD/MM/AAAA; CSV AAAA-MM-DD). */
-export interface OpcionesEventos { fecha?: (valor: string | null | undefined) => string }
+export interface OpcionesEventos {
+  fecha?: (valor: string | null | undefined) => string;
+  /** Hoy en El Salvador ('AAAA-MM-DD'): una capacitación con fecha posterior está programada, todavía no pasó. */
+  hoy?: string;
+}
 
 /** Formato de fechas para el CSV: AAAA-MM-DD (día de El Salvador). */
 export const fechaCsv = (valor: string | null | undefined): string => diaSV(valor) ?? "";
@@ -307,15 +311,18 @@ export function construirEventos(h: HistorialEquipo, opciones: OpcionesEventos =
   }
 
   for (const c of h.capacitaciones) {
+    // Una sesión con fecha futura está programada: no se presenta como hecha ni «sin lista firmada».
+    const programada = !!opciones.hoy && esFechaISO(c.fecha) && c.fecha > opciones.hoy;
     ev.push({
       ...base, fecha: c.fecha, tipo: "capacitacion", subtipo: c.tipo,
-      titulo: `Capacitación: ${c.tema}`,
+      titulo: `${programada ? "Capacitación programada" : "Capacitación"}: ${c.tema}`,
       detalle: unir([
         etiquetaDe(TIPO_CAPACITACION_LABEL, c.tipo),
         `${c.asistentes} asistente${c.asistentes === 1 ? "" : "s"}`,
-        c.listaFirmada ? "lista firmada adjunta" : "sin lista firmada",
+        !programada && (c.listaFirmada ? "lista firmada adjunta" : "sin lista firmada"),
       ]),
       responsable: unir([c.instructorNombre, c.instructorEntidad && `(${c.instructorEntidad})`], " "),
+      resultado: programada ? "Programada" : null,
       link: `/capacitaciones/${c.id}`,
     });
   }
@@ -353,11 +360,12 @@ export function construirEventos(h: HistorialEquipo, opciones: OpcionesEventos =
       link: `/activos/${h.activoId}/acta-baja?baja=${b.id}`, anulado: b.estado === "revertida",
     });
     if (b.revertidaEn) {
+      // El acta (la ven todos los que ven el historial) marca la reversión; /baja es solo de admin y jefe.
       ev.push({
         ...base, fecha: b.revertidaEn, tipo: "baja_revertida", subtipo: "revertida",
         titulo: `Baja revertida (${folio})`,
         detalle: b.reversionMotivo ? `Motivo: ${b.reversionMotivo}` : "",
-        responsable: b.revertidaPorNombre, resultado: "Revertida", link: `/activos/${h.activoId}/baja`,
+        responsable: b.revertidaPorNombre, resultado: "Revertida", link: `/activos/${h.activoId}/acta-baja?baja=${b.id}`,
       });
     }
   }
@@ -427,11 +435,16 @@ export function textoPeriodo(desde: string | null, hasta: string | null): string
 
 // ═══ CSV ═════════════════════════════════════════════════════════════════════
 
-/** Para que Excel no tome la celda por fórmula: antepone ' si empieza con = + @ (o tabulador) o con «-» seguido de algo que no es cifra. */
+/**
+ * Para que Excel no tome la celda por fórmula: antepone ' si empieza con = + @, tabulador o retorno,
+ * o con «-» salvo que la celda entera sea un número («-5», «-2.5»). «-2+3+cmd|…» o «-1+HYPERLINK(…)»
+ * empiezan con cifra y también son fórmulas.
+ */
 export function celdaSegura(v: unknown): string {
   if (v === null || v === undefined) return "";
   const s = String(v);
-  return /^[=+@\t\r]/.test(s) || /^-(?!\d)/.test(s) ? `'${s}` : s;
+  const numero = /^-\d+(?:[.,]\d+)?$/.test(s);
+  return /^[=+@\t\r]/.test(s) || (s.startsWith("-") && !numero) ? `'${s}` : s;
 }
 
 export const COLUMNAS_CSV_HISTORIAL: { key: string; label: string }[] = [
@@ -508,6 +521,59 @@ export function otsDelPeriodo<T extends { id: number; createdAt: string }>(ots: 
   const dentro = ots.filter((o) => enPeriodo(o.createdAt, desde, hasta));
   const orden = [...dentro].sort((a, b) => claveTiempo(b.createdAt) - claveTiempo(a.createdAt) || b.id - a.id);
   return { filas: orden.slice(0, tope), total: dentro.length, recortado: dentro.length > tope };
+}
+
+// ═══ Ficha y hoja de vida ════════════════════════════════════════════════════
+
+/** K-G2: /incidentes lo abren admin, jefe y visualizador. El técnico no: la página lo devuelve al inicio. */
+export const ROLES_INCIDENTES: readonly string[] = ["admin", "jefe", "visualizador"];
+export const puedeVerIncidentes = (rol: string | null | undefined): boolean => !!rol && ROLES_INCIDENTES.includes(rol);
+
+/** Enlace de un evento para este rol: ninguno si lleva a una página que el rol no puede abrir. */
+export function enlaceEvento(link: string | null, rol: string | null | undefined): string | null {
+  if (!link) return null;
+  if (link.startsWith("/incidentes") && !puedeVerIncidentes(rol)) return null;
+  return link;
+}
+
+/**
+ * Tarjeta «Expediente técnico» de la ficha: los requisitos que faltan y los vencidos. Un requisito
+ * vencido es el que solo tiene documentos vencidos; si se subió la versión renovada, ya no cuenta
+ * (el documento viejo queda como reemplazado, igual que en la sección de documentos).
+ */
+export function lineasExpediente(c: { requisitos: ReadonlyArray<{ corta: string; estado: string }> }): { faltan: string[]; vencidos: string[] } {
+  return {
+    faltan: c.requisitos.filter((r) => r.estado === "falta").map((r) => r.corta),
+    vencidos: c.requisitos.filter((r) => r.estado === "vencido").map((r) => r.corta),
+  };
+}
+
+export type SeccionHoja = "ident" | "planes" | "ots" | "cal" | "se" | "docs" | "lic" | "cap" | "alertas" | "baja";
+
+/**
+ * Secciones de la hoja de vida, en orden, y su número sin huecos. Las tres primeras van siempre.
+ * Expediente, licencias y capacitaciones las pintan los componentes de WP-D: cada una se cuenta con
+ * la misma condición con que su componente se dibuja (capacitaciones, solo en biomédicos), así
+ * ningún número se queda sin su sección.
+ */
+export function seccionesHojaVida(e: {
+  esBio: boolean; llevaCal: boolean; deBaja: boolean;
+  calibraciones: number; pruebas: number; documentos: number; licencias: number; alertas: number; bajas: number;
+}): { presentes: Record<SeccionHoja, boolean>; num: Partial<Record<SeccionHoja, number>> } {
+  const presentes: Record<SeccionHoja, boolean> = {
+    ident: true, planes: true, ots: true,
+    cal: e.llevaCal || e.calibraciones > 0,
+    se: e.esBio || e.pruebas > 0,
+    docs: e.esBio || e.documentos > 0,
+    lic: e.esBio || e.licencias > 0,
+    cap: e.esBio,
+    alertas: e.alertas > 0,
+    baja: e.deBaja || e.bajas > 0,
+  };
+  const num: Partial<Record<SeccionHoja, number>> = {};
+  let n = 0;
+  for (const k of Object.keys(presentes) as SeccionHoja[]) if (presentes[k]) num[k] = ++n;
+  return { presentes, num };
 }
 
 /** Borde de la tarjeta en la línea de tiempo. */
