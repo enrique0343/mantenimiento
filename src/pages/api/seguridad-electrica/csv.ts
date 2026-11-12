@@ -1,7 +1,8 @@
 // CSV de seguridad eléctrica, con los mismos filtros que la pantalla.
 //   ?alcance=clase3|biomedicos&estado=&sucursal=  → un renglón por equipo (tablero)
 //   ?activoId=ID                                 → todas las pruebas de un equipo
-// Fechas AAAA-MM-DD (Excel las reconoce en cualquier idioma); Sí/No en los booleanos.
+// Fechas AAAA-MM-DD (Excel las reconoce en cualquier idioma), marcas 'AAAA-MM-DD HH:MM'
+// en hora de El Salvador y Sí/No en los booleanos (§f.5).
 import type { APIRoute } from "astro";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -18,6 +19,13 @@ import { errorJson, exigirRol, idPositivo, leerAlcance, pruebasDeActivo, tablero
 export const prerender = false;
 
 const siNo = (v: boolean) => (v ? "Sí" : "No");
+/** Marca de tiempo como 'AAAA-MM-DD HH:MM' en hora de El Salvador (§f.5); vacía → ''. */
+const marcaSV = (v: string | null | undefined) => {
+  const dia = diaSV(v);
+  if (!dia) return "";
+  const hora = horaSV(v);
+  return hora ? `${dia} ${hora}` : dia;
+};
 const conformidad = (v: string) => (v === "conforme" ? "Conforme" : v === "no_conforme" ? "No conforme" : v);
 const ESTADOS: readonly EstadoSeguridadElectrica[] = ["vigente", "por_vencer", "vencida", "no_pasa", "sin_prueba"];
 
@@ -56,12 +64,11 @@ export const GET: APIRoute = async (ctx) => {
       realizo: p.realizadoPor,
       empresa: p.empresaExterna ?? "",
       registro: p.registradoPorNombre ?? "",
-      registradoEl: diaSV(p.createdAt) ?? "",
-      horaRegistro: horaSV(p.createdAt),
+      registradoEl: marcaSV(p.createdAt),
       proxima: p.proximaFecha,
       informe: siNo(!!p.informeR2Key),
       estado: p.estado === "anulada" ? "Anulada" : "Válida",
-      anuladaEl: diaSV(p.anuladaEn) ?? "",
+      anuladaEl: marcaSV(p.anuladaEn),
       motivoAnulacion: p.motivoAnulacion ?? "",
       notas: p.notas ?? "",
     }));
@@ -77,8 +84,7 @@ export const GET: APIRoute = async (ctx) => {
       { key: "resultado", label: "Resultado" }, { key: "motivo", label: "Motivo" },
       { key: "analizador", label: "Analizador" }, { key: "serie", label: "Serie" }, { key: "calVence", label: "Calibración vence" },
       { key: "realizo", label: "Realizó" }, { key: "empresa", label: "Empresa" }, { key: "registro", label: "Registró" },
-      { key: "registradoEl", label: "Registrado el" }, { key: "horaRegistro", label: "Hora de registro" },
-      { key: "proxima", label: "Próxima" }, { key: "informe", label: "Informe" },
+      { key: "registradoEl", label: "Registrado el" }, { key: "proxima", label: "Próxima" }, { key: "informe", label: "Informe" },
       { key: "estado", label: "Registro (Válida/Anulada)" }, { key: "anuladaEl", label: "Anulada el" },
       { key: "motivoAnulacion", label: "Motivo de anulación" }, { key: "notas", label: "Notas" },
     ]);

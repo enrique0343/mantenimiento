@@ -309,13 +309,28 @@ try {
   es(lineasT[0], 'Código,Equipo,Marca,Modelo,Serie,Nº de activo,Sede,Ubicación,Clase de riesgo,Estado del equipo,Clase de protección,Parte aplicada,Última prueba,Tipo de prueba,Resultado,Analizador,Serie del analizador,Calibración del analizador vence,Realizó,Próxima prueba,Estado de la prueba,Informe adjunto', 'columnas del tablero');
   es(lineasT.length, 2, 'solo las vencidas');
   es(lineasT[1], `BIO-1003,BOMBA DE INFUSIÓN,BBraun,Infusomat,B-1,,Sede Central,UCI Adultos,Clase IIb (riesgo moderado-alto),Operativo,Clase II (doble aislamiento),Sin parte aplicada,${dias(-200)},Periódica,Pasa,Fluke ESA615,SN-PAT-1,${dias(65)},Prueba tecnico,${B.sumarMeses(dias(-200), 6)},Vencida,No`, 'fila con etiquetas, fechas AAAA-MM-DD y Sí/No');
+  // Marcas conocidas (UTC) para ver la hora de El Salvador en el CSV.
+  sql.prepare("UPDATE pruebas_seguridad_electrica SET created_at = '2026-11-12 02:30:00', anulada_en = '2026-11-12T03:15:00.000Z' WHERE id = ?").run(id1);
   const csvE = await llamar(h.app.csv.GET, '/api/seguridad-electrica/csv?activoId=1001', { rol: 'tecnico' });
   es(csvE.headers.get('content-disposition'), `attachment; filename="seguridad-electrica-BIO-1001_${sello}.csv"`, 'CSV del equipo');
   const lineasE = csvE.text.replace(/^﻿/, '').split('\r\n');
   es(lineasE.length, 4, 'las tres pruebas del equipo');
-  si(lineasE[0].startsWith('Fecha,Tipo,Orden,Clase de protección,Parte aplicada,Método,Inspección visual,Tierra (Ω),Límite tierra,') && lineasE[0].includes(',Registrado el,Hora de registro,Próxima,Informe,Registro (Válida/Anulada),Anulada el,Motivo de anulación,Notas'), 'columnas del equipo');
+  si(lineasE[0].startsWith('Fecha,Tipo,Orden,Clase de protección,Parte aplicada,Método,Inspección visual,Tierra (Ω),Límite tierra,') && lineasE[0].endsWith(',Registró,Registrado el,Próxima,Informe,Registro (Válida/Anulada),Anulada el,Motivo de anulación,Notas'), 'columnas del equipo (la marca va en una sola columna)');
   si(lineasE[1].startsWith(`${dias(-1)},Periódica,`) && lineasE[1].includes(',0.12,0.3,,2,120,500,15,5000,') && lineasE[1].includes(',Anulada,'), 'la anulada, con valores y límites');
   si(!/\d{4}-\d{2}-\d{2}T\d{2}:/.test(csvE.text), 'sin marcas ISO con «T» en el CSV');
+  const celdas = (linea) => {
+    const out = []; let cur = '', comillas = false;
+    for (let i = 0; i < linea.length; i++) {
+      const ch = linea[i];
+      if (comillas) { if (ch === '"' && linea[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') comillas = false; else cur += ch; }
+      else if (ch === '"') comillas = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur); return out;
+  };
+  const cabE = celdas(lineasE[0]);
+  const celda = (linea, col) => celdas(linea)[cabE.indexOf(col)];
+  es([celda(lineasE[1], 'Registrado el'), celda(lineasE[1], 'Anulada el')], ['2026-11-11 20:30', '2026-11-11 21:15'], 'marcas «AAAA-MM-DD HH:MM» en hora de El Salvador (§f.5)');
+  si(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(celda(lineasE[2], 'Registrado el')) && celda(lineasE[2], 'Anulada el') === '', 'la válida: con su marca y sin anulación');
   es((await llamar(h.app.csv.GET, '/api/seguridad-electrica/csv?activoId=99999', { rol: 'admin' })).status, 404, 'CSV de un equipo que no existe');
   es((await llamar(h.app.csv.GET, '/api/seguridad-electrica/csv', { rol: 'solicitante' })).status, 403, 'el solicitante no descarga el CSV');
 

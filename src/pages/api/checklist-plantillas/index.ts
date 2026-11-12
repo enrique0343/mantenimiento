@@ -53,20 +53,26 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: mensajeErrorPlantilla(parsed.error) }, { status: 400 });
 
   const db = getDb(ctx);
-  const [plantilla] = await db.insert(checklistPlantillas).values({
-    nombre: parsed.data.nombre,
-    descripcion: parsed.data.descripcion?.trim() || null,
-  }).returning();
+  const noSeGuardo = () => Response.json({ error: "No se pudo guardar la plantilla. Intenta de nuevo." }, { status: 500 });
+  let plantilla: typeof checklistPlantillas.$inferSelect;
+  try {
+    [plantilla] = await db.insert(checklistPlantillas).values({
+      nombre: parsed.data.nombre,
+      descripcion: parsed.data.descripcion?.trim() || null,
+    }).returning();
+  } catch {
+    return noSeGuardo();
+  }
 
   const filas = filasDeReemplazo(parsed.data.items, [], plantilla.id);
   if (filas.length) {
     const inserts = tandasDeFilas(filas).map((t) => db.insert(checklistPlantillaItems).values(t));
     try {
       await db.batch(inserts as unknown as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
-    } catch (e) {
+    } catch {
       // Sin pasos la plantilla no sirve: se quita la cabecera recién creada.
       await db.delete(checklistPlantillas).where(eq(checklistPlantillas.id, plantilla.id)).catch(() => {});
-      throw e;
+      return noSeGuardo();
     }
   }
   await logAudit(ctx, {
