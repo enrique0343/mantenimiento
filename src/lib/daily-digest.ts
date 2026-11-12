@@ -238,14 +238,17 @@ export async function enviarDigestDiario(
     const horas = Number(r.o.horasTrabajadas ?? 0);
     costoManoObraMes += tarifa * horas;
   }
+  // Las mismas órdenes que cerradasMes (creadas este mes y cerradas), con JOIN y no con
+  // una lista de ids: D1 acepta hasta 100 parámetros y un mes puede cerrar más órdenes.
   const repuestosMesRows = cerradasMes.length > 0
     ? await db
-        .select({ rep: ordenRepuestos })
+        .select({ precioUnitario: ordenRepuestos.precioUnitario, cantidad: ordenRepuestos.cantidad })
         .from(ordenRepuestos)
-        .where(inArray(ordenRepuestos.ordenId, cerradasMes.map((r) => r.o.id)))
+        .innerJoin(ordenes, eq(ordenes.id, ordenRepuestos.ordenId))
+        .where(and(eq(ordenes.estado, "cerrada"), gte(ordenes.createdAt, inicioMes)))
     : [];
   const costoRepuestosMes = repuestosMesRows.reduce(
-    (s, r) => s + (r.rep.precioUnitario ?? 0) * r.rep.cantidad, 0
+    (s, r) => s + (r.precioUnitario ?? 0) * r.cantidad, 0
   );
   const costoTotalMes = costoManoObraMes + costoRepuestosMes;
 

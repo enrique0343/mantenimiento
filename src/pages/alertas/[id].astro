@@ -472,6 +472,22 @@ const fechaAnalisisInicial = al.aplicabilidadFecha ?? hoy;
       });
     });
 
+    // Acción de un botón fuera de las ventanas: una a la vez y, si falla (también sin
+    // conexión), el aviso de la hoja dice por qué y el botón vuelve a servir.
+    async function accionBoton(b: HTMLButtonElement, hacer: () => Promise<Response>, listo: () => void, porDefecto: string) {
+      if (b.disabled) return;
+      b.disabled = true;
+      document.getElementById("hojaError")?.classList.add("hidden");
+      try {
+        const res = await hacer();
+        if (res.ok) { listo(); return; }
+        avisoHoja(await textoError(res, porDefecto));
+      } catch {
+        avisoHoja("No hay conexión. Intenta de nuevo.");
+      }
+      b.disabled = false;
+    }
+
     // Quitar un archivo
     document.querySelectorAll<HTMLButtonElement>(".quitar-adjunto").forEach((b) => {
       b.addEventListener("click", async () => {
@@ -480,21 +496,20 @@ const fechaAnalisisInicial = al.aplicabilidadFecha ?? hoy;
           ? await window.confirmAction("Quitar archivo", `¿Quitar «${nombre}» de la alerta?`, { danger: true, confirmLabel: "Quitar" })
           : confirm(`¿Quitar «${nombre}» de la alerta?`);
         if (!ok) return;
-        const res = await fetch(`/api/alertas/${alertaId}/adjuntos?adjuntoId=${b.dataset.adjuntoId}`, { method: "DELETE" });
-        if (res.ok) location.reload();
-        else avisoHoja(await textoError(res, "No se pudo quitar el archivo."));
+        await accionBoton(b, () => fetch(`/api/alertas/${alertaId}/adjuntos?adjuntoId=${b.dataset.adjuntoId}`, { method: "DELETE" }),
+          () => location.reload(), "No se pudo quitar el archivo.");
       });
     });
 
     // Borrar la alerta (solo admin, no cerrada)
-    document.getElementById("btnBorrar")?.addEventListener("click", async () => {
+    const btnBorrar = document.getElementById("btnBorrar") as HTMLButtonElement | null;
+    btnBorrar?.addEventListener("click", async () => {
       const ok = window.confirmAction
         ? await window.confirmAction("Borrar alerta", "Se borran la alerta, sus equipos marcados y sus archivos. ¿Continuar?", { danger: true, confirmLabel: "Borrar" })
         : confirm("Se borran la alerta, sus equipos marcados y sus archivos. ¿Continuar?");
       if (!ok) return;
-      const res = await fetch(`/api/alertas/${alertaId}`, { method: "DELETE" });
-      if (res.ok) location.href = "/alertas";
-      else avisoHoja(await textoError(res, "No se pudo borrar la alerta."));
+      await accionBoton(btnBorrar, () => fetch(`/api/alertas/${alertaId}`, { method: "DELETE" }),
+        () => { location.href = "/alertas"; }, "No se pudo borrar la alerta.");
     });
   </script>
 </Layout>

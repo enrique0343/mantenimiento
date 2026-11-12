@@ -108,6 +108,28 @@ try {
   es([r.enviados, enviados.at(-1).to], [1, 'jefe.nuevo@example.invalid'], 'quien no lo recibió hoy lo recibe');
   r = await D.enviarAvisoVencimientosBio(ctx, { force: true });
   es(r.enviados, 4, 'force reenvía a todos');
+
+  // ── Resumen diario de los admins con más de 100 órdenes cerradas en el mes ──
+  // D1 acepta hasta 100 parámetros por consulta: los repuestos del mes no pueden
+  // pedirse con la lista de ids de las órdenes (antes el resumen entero fallaba y
+  // los admins no recibían tampoco la sección de vencimientos biomédicos).
+  const limitar = (st) => ({ ...st, bind(...v) { if (v.length > 100) throw new Error(`D1: too many SQL variables (${v.length})`); return limitar(st.bind(...v)); } });
+  const ctxD1 = { locals: { runtime: { env: { DB: { ...h.DB, prepare: (sql) => limitar(h.DB.prepare(sql)) }, APP_URL: 'https://app.test' } } } };
+  const ahora = new Date();
+  const inicioMes = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1, 6, 0, 0)).toISOString();
+  const orden = h.sqlite.prepare("INSERT INTO ordenes (id, titulo, estado, creado_por, created_at, cerrado_en) VALUES (?, ?, 'cerrada', 1, ?, ?)");
+  for (let i = 0; i < 101; i++) orden.run(500 + i, `OT cerrada ${i}`, inicioMes, inicioMes);
+  h.sqlite.exec(`
+    INSERT INTO ordenes (id, titulo, estado, creado_por, created_at) VALUES (700, 'OT abierta', 'abierta', 1, '${inicioMes}');
+    INSERT INTO items (id, codigo, nombre) VALUES (1, 'REP-1', 'Sensor');
+    INSERT INTO orden_repuestos (orden_id, item_id, cantidad, precio_unitario) VALUES (550, 1, 2, 7.5), (700, 1, 1, 100);
+  `);
+  const antes = enviados.length;
+  r = await D.enviarDigestDiario(ctxD1, { force: true });
+  es(r.enviados, 1, 'el resumen sale con 101 órdenes cerradas en el mes (el admin)');
+  const resumen = enviados.slice(antes).find((c) => c.tipo === 'digest_diario')?.html ?? '';
+  si(resumen.includes('Repuestos: <strong>$15.00</strong>'), 'repuestos del mes: solo las órdenes cerradas, sin lista de ids');
+  si(resumen.includes('Equipo biomédico: vencimientos'), 'y lleva la sección de vencimientos biomédicos');
   es(h.queries.filter((q) => q.columns.length > 100).length, 0, 'ninguna consulta pasa de 100 columnas');
 } finally {
   await h.close();

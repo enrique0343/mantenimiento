@@ -3,9 +3,7 @@ import { eq, lte, and, asc } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias, usuarios } from "@/lib/schema";
 import { enviarRecordatoriosEncuestas } from "@/lib/encuestas-recordatorio";
-// Import de espacio de nombres: las pruebas del cron reemplazan este módulo por uno
-// que solo trae enviarDigestDiario; el aviso biomédico entonces no corre (try/catch).
-import * as resumenDiario from "@/lib/daily-digest";
+import { enviarAvisoVencimientosBio, enviarDigestDiario } from "@/lib/daily-digest";
 
 import { rubroDeActivo } from "@/lib/rubros";
 import { hoySV } from "@/lib/biomedico";
@@ -188,7 +186,7 @@ export const POST: APIRoute = async (ctx) => {
   // llamarse desde cualquier cron sin importar la hora.
   let digestEnviados = 0;
   try {
-    const r = await resumenDiario.enviarDigestDiario(ctx);
+    const r = await enviarDigestDiario(ctx);
     digestEnviados = r.enviados;
   } catch (e) {
     console.error("digest diario:", e);
@@ -197,7 +195,7 @@ export const POST: APIRoute = async (ctx) => {
   // Correo corto a la jefatura biomédica con lo que vence (una vez al día, solo si hay algo).
   let avisoBioEnviados = 0;
   try {
-    const r = await resumenDiario.enviarAvisoVencimientosBio(ctx);
+    const r = await enviarAvisoVencimientosBio(ctx);
     avisoBioEnviados = r.enviados;
   } catch (e) {
     console.error("aviso de vencimientos biomédicos:", e);

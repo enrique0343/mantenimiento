@@ -72,7 +72,12 @@ export const POST: APIRoute = async (ctx) => {
   const nombreArchivo = (file.name || `plan-firmado.${v.extension}`).slice(0, 200);
   const r2Key = `planes/aprobaciones/${anio}/${area}/${Date.now()}-${crypto.randomUUID()}-${nombreSeguroR2(nombreArchivo)}`;
   const env = getEnv(ctx);
-  await env.R2.put(r2Key, bytes, { httpMetadata: { contentType: v.contentType } });
+  try {
+    await env.R2.put(r2Key, bytes, { httpMetadata: { contentType: v.contentType } });
+  } catch (e) {
+    console.error("plan: R2", e);
+    return Response.json({ error: "No se pudo guardar el archivo. Intenta de nuevo." }, { status: 500 });
+  }
   let aprobacion;
   try {
     [aprobacion] = await db.insert(planAprobaciones).values({
