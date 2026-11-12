@@ -80,8 +80,9 @@ async function abrir() {
     ] }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   w.eval(script);
-  await new Promise((r) => setTimeout(r, 30));
   const d = w.document;
+  // La lista de analizadores llega después del fetch: se espera a que esté (hasta ~2 s).
+  for (let i = 0; i < 100 && d.getElementById('se-analizador').options.length < 2; i++) await new Promise((r) => setTimeout(r, 20));
   const cambiar = (el, valor, evento = 'change') => { el.value = valor; el.dispatchEvent(new w.Event(evento, { bubbles: true })); };
   return { w, d, navegaciones, errores, preguntas, pedidos, cambiar, responder: (v) => { respuesta = v; } };
 }
