@@ -19,6 +19,9 @@ const es = (r, esperado, nota) => { n++; assert.deepEqual(r, esperado, nota); };
 
 // ── Frecuencias ─────────────────────────────────────────────────────────────
 es(F.FRECUENCIAS.some((f) => f.value === 'turno'), true, 'FRECUENCIAS conserva «turno» (registros viejos; el formulario filtra)');
+// La ficha muestra estas etiquetas en el formulario de rutina (pedido de WP-C).
+es(F.FRECUENCIAS.find((f) => f.value === 'quincenal').label, 'Quincenal (15 días)', 'etiqueta con tilde');
+es(F.FRECUENCIAS.filter((f) => /\bdias\b/.test(f.label)).length, 0, 'ninguna etiqueta dice «dias» sin tilde');
 es(B.FRECUENCIAS_RUTINA_EQUIPO.includes('turno'), false, 'las rutinas de equipo no ofrecen «Por turno»');
 es(B.FRECUENCIAS_RUTINA_EQUIPO.includes('cuatrimestral'), true, 'las rutinas de equipo ofrecen «Cuatrimestral»');
 es(B.etiquetaFrecuencia('turno'), 'Por turno', 'etiqueta de turno');

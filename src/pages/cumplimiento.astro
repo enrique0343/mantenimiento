@@ -18,6 +18,9 @@ export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe" && user.rol !== "visualizador") return Astro.redirect("/");
+// Clasificar es de admin y jefe (/activos/clasificar redirige a los demás): el
+// visualizador (la cuenta del auditor) no ve ese botón.
+const puedeClasificar = user.rol === "admin" || user.rol === "jefe";
 const db = getDb(Astro);
 
 const hoy = hoySV();
@@ -99,7 +102,7 @@ const bt = biblio.totales;
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
-      <a href="/activos/clasificar" class="btn-secondary">Clasificar</a>
+      {puedeClasificar && <a href="/activos/clasificar" class="btn-secondary">Clasificar</a>}
       <a href="/alertas" class="btn-secondary">Alertas</a>
       <a href="/calibraciones?criticos=1" class="btn-secondary">Equipos críticos: calibración</a>
       <a href="/api/cumplimiento/exportar" class="btn-secondary">Descargar CSV</a>
@@ -165,8 +168,8 @@ const bt = biblio.totales;
     <div class="card mt-4 border-l-4 border-amber-400 p-4">
       <h2 class="font-semibold text-amber-800">Clasificación pendiente</h2>
       <p class="mt-1 text-xs text-slate-600">
-        {sinCriticidad.length} sin criticidad · {sinSubcat.length} sin subcategoría clínica · {sinClase.length} sin clase de riesgo —
-        <a href="/activos/clasificar" class="text-brand-600 hover:underline font-medium no-print">completar en la herramienta de clasificación →</a>
+        {sinCriticidad.length} sin criticidad · {sinSubcat.length} sin subcategoría clínica · {sinClase.length} sin clase de riesgo
+        {puedeClasificar && <> — <a href="/activos/clasificar" class="text-brand-600 hover:underline font-medium no-print">completar en la herramienta de clasificación →</a></>}
       </p>
     </div>
   )}
@@ -195,9 +198,10 @@ const bt = biblio.totales;
             </>
           )}
           <p class="mt-1.5 text-[11px] leading-snug text-slate-400">{i.descripcion}</p>
-          <div class="no-print mt-2 flex flex-wrap gap-3 text-xs">
+          <div class="no-print mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
             <a href={`#det-${i.clave}`} class="font-medium text-brand-700 hover:underline">Ver detalle</a>
             <a href={i.enlace} class="text-slate-500 hover:underline">{i.enlaceTexto} →</a>
+            {i.extras.map((x) => <a href={x.enlace} class="text-slate-500 hover:underline">{x.texto} →</a>)}
           </div>
         </div>
       ))}

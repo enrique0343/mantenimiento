@@ -37,9 +37,11 @@ function ayerEnSV(): { inicio: string; fin: string } {
 
 function inicioMesEnSV(): string {
   const ahora = new Date();
-  // Primer día del mes 00:00 SV = primer día 06:00 UTC
+  // Primer día del mes 00:00 SV = primer día 06:00 UTC. Se compara como texto con
+  // ordenes.created_at, que SQLite guarda como 'AAAA-MM-DD HH:MM:SS' (UTC): va en ese
+  // formato. Con la «T» del ISO, las órdenes creadas el día 1 quedaban fuera del mes.
   const primer = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1, 6, 0, 0));
-  return primer.toISOString();
+  return primer.toISOString().slice(0, 19).replace("T", " ");
 }
 
 function hoyDateSV(): string {
@@ -238,14 +240,17 @@ export async function enviarDigestDiario(
     const horas = Number(r.o.horasTrabajadas ?? 0);
     costoManoObraMes += tarifa * horas;
   }
+  // Las mismas órdenes que cerradasMes (creadas este mes y cerradas), con JOIN y no con
+  // una lista de ids: D1 acepta hasta 100 parámetros y un mes puede cerrar más órdenes.
   const repuestosMesRows = cerradasMes.length > 0
     ? await db
-        .select({ rep: ordenRepuestos })
+        .select({ precioUnitario: ordenRepuestos.precioUnitario, cantidad: ordenRepuestos.cantidad })
         .from(ordenRepuestos)
-        .where(inArray(ordenRepuestos.ordenId, cerradasMes.map((r) => r.o.id)))
+        .innerJoin(ordenes, eq(ordenes.id, ordenRepuestos.ordenId))
+        .where(and(eq(ordenes.estado, "cerrada"), gte(ordenes.createdAt, inicioMes)))
     : [];
   const costoRepuestosMes = repuestosMesRows.reduce(
-    (s, r) => s + (r.rep.precioUnitario ?? 0) * r.rep.cantidad, 0
+    (s, r) => s + (r.precioUnitario ?? 0) * r.cantidad, 0
   );
   const costoTotalMes = costoManoObraMes + costoRepuestosMes;
 

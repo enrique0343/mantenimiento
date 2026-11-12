@@ -53,11 +53,16 @@ export type ClaveIndicador =
   | "sin_plan" | "preventivo_vencido" | "inventario" | "clase_riesgo" | "registro_sanitario" | "expediente"
   | "calibracion" | "patron" | "laboratorio" | "seguridad_electrica" | "capacitacion" | "licencia" | "alerta" | "baja_sin_acta";
 
+/** Otra lista del módulo que muestra una parte de los hallazgos (no se imprime). */
+export interface EnlaceIndicador { texto: string; enlace: string }
+
 export interface Indicador {
   clave: ClaveIndicador; titulo: string; descripcion: string;
   universo: number | null; fallas: number; avisos: number; pct: number | null;
   /** Pantalla del módulo donde se corrige (no se imprime). */
   enlace: string; enlaceTexto: string;
+  /** Listas que la principal no cubre (p. ej. registros sin número además de los vencidos). */
+  extras: ReadonlyArray<EnlaceIndicador>;
   sinDatos: boolean;
 }
 
@@ -70,22 +75,37 @@ export interface Hallazgo {
   enlace: string;
 }
 
-/** Títulos y textos de cada indicador, en el orden del panel. */
-export const INDICADORES: ReadonlyArray<{ clave: ClaveIndicador; titulo: string; descripcion: string; enlace: string; enlaceTexto: string }> = [
-  { clave: "sin_plan", titulo: "Sin rutina preventiva", descripcion: "Equipos biomédicos vigentes sin ninguna rutina activa.", enlace: "/plan-mantenimiento?area=biomedico", enlaceTexto: "Plan biomédico" },
-  { clave: "preventivo_vencido", titulo: "Preventivos vencidos", descripcion: "Equipos con alguna rutina cuya próxima fecha ya llegó.", enlace: "/cronograma?area=biomedico", enlaceTexto: "Cronograma" },
-  { clave: "inventario", titulo: "Datos del inventario incompletos", descripcion: "Falta identificación, marca, modelo, serie, ubicación, centro de costo, clase de riesgo o registro sanitario.", enlace: "/activos?area=biomedico&estado=vigentes", enlaceTexto: "Inventario" },
-  { clave: "clase_riesgo", titulo: "Sin clase de riesgo", descripcion: "Equipos biomédicos sin clase de riesgo I, IIa, IIb o III.", enlace: "/activos?area=biomedico&clase=sin&estado=vigentes", enlaceTexto: "Equipos sin clase" },
-  { clave: "registro_sanitario", titulo: "Registro sanitario", descripcion: `Sin número o vencido; aviso ${DIAS_AVISO.registroSanitario} días antes de vencer.`, enlace: "/activos?area=biomedico&registro=vencido&estado=vigentes", enlaceTexto: "Registros vencidos" },
-  { clave: "expediente", titulo: "Expediente técnico", descripcion: "Manuales, ficha técnica, registro sanitario y acta de aceptación.", enlace: "/expedientes?estado=incompletos", enlaceTexto: "Expedientes" },
-  { clave: "calibracion", titulo: "Calibración", descripcion: `Misma regla que Calibraciones: última calibración conforme, vigente y con certificado; aviso ${DIAS_AVISO.calibracion} días antes.`, enlace: "/calibraciones", enlaceTexto: "Calibraciones" },
-  { clave: "patron", titulo: "Equipos patrón", descripcion: "Analizadores y simuladores con calibración al día (también cuentan en Calibración).", enlace: "/calibraciones/patrones", enlaceTexto: "Patrones" },
-  { clave: "laboratorio", titulo: "Laboratorios acreditados", descripcion: `Acreditación vencida o sin vigencia; aviso ${DIAS_AVISO.acreditacion} días antes.`, enlace: "/calibraciones/laboratorios", enlaceTexto: "Laboratorios" },
-  { clave: "seguridad_electrica", titulo: "Seguridad eléctrica (Clase III)", descripcion: `Equipos de clase de riesgo III con prueba IEC 62353 vigente; aviso ${DIAS_AVISO.seguridadElectrica} días antes.`, enlace: "/seguridad-electrica?alcance=clase3", enlaceTexto: "Seguridad eléctrica" },
-  { clave: "capacitacion", titulo: "Capacitación (equipos críticos)", descripcion: "Equipos críticos (soporte de vida, criticidad alta o clase III) con capacitación en los últimos 24 meses.", enlace: "/capacitaciones", enlaceTexto: "Capacitaciones" },
-  { clave: "licencia", titulo: "Licencias y permisos", descripcion: `Licencias activas vencidas; aviso ${DIAS_AVISO.licencia} días antes.`, enlace: "/licencias?situacion=vence_90", enlaceTexto: "Licencias" },
-  { clave: "alerta", titulo: "Alertas y retiros", descripcion: "Alertas abiertas o en proceso, o sin análisis de aplicabilidad.", enlace: "/alertas?estado=abiertas", enlaceTexto: "Alertas" },
-  { clave: "baja_sin_acta", titulo: "Bajas sin acta", descripcion: "Equipos dados de baja sin registro de baja o sin el acta firmada en sus documentos.", enlace: "/activos?area=biomedico&estado=baja", enlaceTexto: "Equipos de baja" },
+/**
+ * Títulos y textos de cada indicador, en el orden del panel. Los enlaces usan los
+ * filtros de cada dueño (K-A2, K-D2, K-F1): cuando una lista no tiene un valor que
+ * junte todas las fallas (registro vencido o sin número; licencias por vencer o
+ * vencidas), van como `extras`.
+ */
+export const INDICADORES: ReadonlyArray<{ clave: ClaveIndicador; titulo: string; descripcion: string; enlace: string; enlaceTexto: string; extras: ReadonlyArray<EnlaceIndicador> }> = [
+  { clave: "sin_plan", titulo: "Sin rutina preventiva", descripcion: "Equipos biomédicos vigentes sin ninguna rutina activa.", enlace: "/plan-mantenimiento?area=biomedico", enlaceTexto: "Plan biomédico", extras: [] },
+  { clave: "preventivo_vencido", titulo: "Preventivos vencidos", descripcion: "Equipos con alguna rutina cuya próxima fecha ya llegó.", enlace: "/cronograma?area=biomedico", enlaceTexto: "Cronograma", extras: [] },
+  { clave: "inventario", titulo: "Datos del inventario incompletos", descripcion: "Falta identificación, marca, modelo, serie, ubicación, centro de costo, clase de riesgo o registro sanitario.", enlace: "/activos?area=biomedico&estado=vigentes", enlaceTexto: "Inventario",
+    extras: [{ texto: "Sin centro de costo", enlace: "/activos?area=biomedico&estado=vigentes&centro=sin" }] },
+  { clave: "clase_riesgo", titulo: "Sin clase de riesgo", descripcion: "Equipos biomédicos sin clase de riesgo I, IIa, IIb o III.", enlace: "/activos?area=biomedico&clase=sin&estado=vigentes", enlaceTexto: "Equipos sin clase", extras: [] },
+  { clave: "registro_sanitario", titulo: "Registro sanitario", descripcion: `Sin número o vencido; aviso ${DIAS_AVISO.registroSanitario} días antes de vencer.`, enlace: "/activos?area=biomedico&registro=vencido&estado=vigentes", enlaceTexto: "Registros vencidos",
+    extras: [
+      { texto: "Sin registro", enlace: "/activos?area=biomedico&registro=sin_registro&estado=vigentes" },
+      { texto: "Por vencer", enlace: "/activos?area=biomedico&registro=por_vencer&estado=vigentes" },
+    ] },
+  { clave: "expediente", titulo: "Expediente técnico", descripcion: "Manuales, ficha técnica, registro sanitario y acta de aceptación.", enlace: "/expedientes?estado=incompletos", enlaceTexto: "Expedientes", extras: [] },
+  { clave: "calibracion", titulo: "Calibración", descripcion: `Misma regla que Calibraciones: última calibración conforme, vigente y con certificado; aviso ${DIAS_AVISO.calibracion} días antes.`, enlace: "/calibraciones", enlaceTexto: "Calibraciones", extras: [] },
+  { clave: "patron", titulo: "Equipos patrón", descripcion: "Analizadores y simuladores con calibración al día (también cuentan en Calibración).", enlace: "/calibraciones/patrones", enlaceTexto: "Patrones", extras: [] },
+  { clave: "laboratorio", titulo: "Laboratorios acreditados", descripcion: `Acreditación vencida o sin vigencia; aviso ${DIAS_AVISO.acreditacion} días antes.`, enlace: "/calibraciones/laboratorios", enlaceTexto: "Laboratorios", extras: [] },
+  { clave: "seguridad_electrica", titulo: "Seguridad eléctrica (Clase III)", descripcion: `Equipos de clase de riesgo III con prueba IEC 62353 vigente; aviso ${DIAS_AVISO.seguridadElectrica} días antes.`, enlace: "/seguridad-electrica?alcance=clase3", enlaceTexto: "Seguridad eléctrica",
+    extras: [
+      { texto: "Vencidas", enlace: "/seguridad-electrica?alcance=clase3&estado=vencida" },
+      { texto: "Sin prueba", enlace: "/seguridad-electrica?alcance=clase3&estado=sin_prueba" },
+    ] },
+  { clave: "capacitacion", titulo: "Capacitación (equipos críticos)", descripcion: "Equipos críticos (soporte de vida, criticidad alta o clase III) con capacitación en los últimos 24 meses.", enlace: "/capacitaciones", enlaceTexto: "Capacitaciones", extras: [] },
+  { clave: "licencia", titulo: "Licencias y permisos", descripcion: `Licencias activas vencidas; aviso ${DIAS_AVISO.licencia} días antes.`, enlace: "/licencias?situacion=vence_90", enlaceTexto: "Licencias",
+    extras: [{ texto: "Vencidas", enlace: "/licencias?situacion=vencidas" }] },
+  { clave: "alerta", titulo: "Alertas y retiros", descripcion: "Alertas abiertas o en proceso, o sin análisis de aplicabilidad.", enlace: "/alertas?estado=abiertas", enlaceTexto: "Alertas", extras: [] },
+  { clave: "baja_sin_acta", titulo: "Bajas sin acta", descripcion: "Equipos dados de baja sin registro de baja o sin el acta firmada en sus documentos.", enlace: "/activos?area=biomedico&estado=baja", enlaceTexto: "Equipos de baja", extras: [] },
 ];
 
 const enlaceEquipo = (id: number) => `/activos/${id}`;

@@ -14,7 +14,7 @@ export const FRECUENCIAS: { value: Frecuencia; label: string; dias: number }[] =
   { value: "turno", label: "Por turno", dias: 1 },
   { value: "diaria", label: "Diaria", dias: 1 },
   { value: "semanal", label: "Semanal", dias: 7 },
-  { value: "quincenal", label: "Quincenal (15 dias)", dias: 15 },
+  { value: "quincenal", label: "Quincenal (15 días)", dias: 15 },
   { value: "mensual", label: "Mensual", dias: 30 },
   { value: "bimestral", label: "Bimestral (2 meses)", dias: 60 },
   { value: "trimestral", label: "Trimestral (3 meses)", dias: 90 },

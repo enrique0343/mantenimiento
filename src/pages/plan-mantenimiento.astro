@@ -715,28 +715,33 @@ const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActua
       document.getElementById("docCancel")?.addEventListener("click", () => ocultar(docModal));
       docModal.addEventListener("click", (e) => { if (e.target === docModal) ocultar(docModal); });
 
-      document.getElementById("docSave")?.addEventListener("click", async () => {
-        const res = await fetch(areaHref("/api/plan-config", area), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            valores: {
-              "plan.codigo": valor("d_codigo"),
-              "plan.version": valor("d_version"),
-              "plan.elaboro": valor("d_elaboro"),
-              "plan.reviso": valor("d_reviso"),
-              "plan.aprobo": valor("d_aprobo"),
-              "plan.intro": valor("d_intro"),
-              "plan.objetivos": valor("d_objetivos"),
-              "plan.normativa": valor("d_normativa"),
-              "plan.recursos": valor("d_recursos"),
-              "plan.correctivo": valor("d_correctivo"),
-              "plan.correctivo_responsable": valor("d_correctivo_responsable"),
-            },
-          }),
-        });
-        if (res.ok) { window.showToast?.("Textos guardados", "success"); location.reload(); }
-        else fallo("docErr", await textoError(res, "No se pudieron guardar los textos."));
+      const docSave = document.getElementById("docSave") as HTMLButtonElement | null;
+      docSave?.addEventListener("click", async () => {
+        docSave.disabled = true;
+        try {
+          const res = await fetch(areaHref("/api/plan-config", area), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              valores: {
+                "plan.codigo": valor("d_codigo"),
+                "plan.version": valor("d_version"),
+                "plan.elaboro": valor("d_elaboro"),
+                "plan.reviso": valor("d_reviso"),
+                "plan.aprobo": valor("d_aprobo"),
+                "plan.intro": valor("d_intro"),
+                "plan.objetivos": valor("d_objetivos"),
+                "plan.normativa": valor("d_normativa"),
+                "plan.recursos": valor("d_recursos"),
+                "plan.correctivo": valor("d_correctivo"),
+                "plan.correctivo_responsable": valor("d_correctivo_responsable"),
+              },
+            }),
+          });
+          if (res.ok) { window.showToast?.("Textos guardados", "success"); location.reload(); return; }
+          fallo("docErr", await textoError(res, "No se pudieron guardar los textos."));
+        } catch { fallo("docErr", "No hay conexión. Intenta de nuevo."); }
+        docSave.disabled = false;
       });
     }
 
@@ -749,8 +754,18 @@ const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActua
     document.getElementById("anularCancel")?.addEventListener("click", () => ocultar(anularModal));
     for (const m of [aprobarModal, anularModal]) m?.addEventListener("click", (e) => { if (e.target === m) ocultar(m); });
 
+    // Un solo envío a la vez: el plan firmado puede tardar en subir y un segundo clic
+    // registraba otra aprobación vigente de la misma versión.
+    const enviando = new WeakSet<HTMLFormElement>();
+    const bloquear = (form: HTMLFormElement, si: boolean) => {
+      if (si) enviando.add(form); else enviando.delete(form);
+      form.querySelectorAll<HTMLButtonElement>("button[type=submit]").forEach((b) => { b.disabled = si; });
+    };
+
     document.getElementById("aprobarForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const form = e.currentTarget as HTMLFormElement;
+      if (enviando.has(form)) return;
       document.getElementById("aprobarErr")?.classList.add("hidden");
       const archivo = (document.getElementById("ap_archivo") as HTMLInputElement | null)?.files?.[0];
       if (!archivo) return fallo("aprobarErr", "Adjunta el plan firmado.");
@@ -762,11 +777,13 @@ const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActua
       datos.set("fechaAprobacion", valor("ap_fecha"));
       datos.set("notas", valor("ap_notas").trim());
       datos.set("archivo", archivo);
+      bloquear(form, true);
       try {
         const res = await fetch("/api/planes/aprobaciones", { method: "POST", body: datos });
-        if (res.ok) { window.showToast?.("Aprobación registrada", "success"); location.reload(); }
-        else fallo("aprobarErr", await textoError(res, "No se pudo registrar la aprobación."));
+        if (res.ok) { window.showToast?.("Aprobación registrada", "success"); location.reload(); return; }
+        fallo("aprobarErr", await textoError(res, "No se pudo registrar la aprobación."));
       } catch { fallo("aprobarErr", "No hay conexión. Intenta de nuevo."); }
+      bloquear(form, false);
     });
 
     let anularId = "";
@@ -781,15 +798,20 @@ const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActua
     });
     document.getElementById("anularForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const form = e.currentTarget as HTMLFormElement;
+      if (enviando.has(form)) return;
+      document.getElementById("anularErr")?.classList.add("hidden");
+      bloquear(form, true);
       try {
         const res = await fetch(`/api/planes/aprobaciones/${anularId}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ motivo: valor("an_motivo").trim() }),
         });
-        if (res.ok) location.reload();
-        else fallo("anularErr", await textoError(res, "No se pudo anular."));
+        if (res.ok) { location.reload(); return; }
+        fallo("anularErr", await textoError(res, "No se pudo anular."));
       } catch { fallo("anularErr", "No hay conexión. Intenta de nuevo."); }
+      bloquear(form, false);
     });
   </script>
 </Layout>

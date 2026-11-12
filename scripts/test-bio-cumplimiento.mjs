@@ -34,6 +34,18 @@ const cal = (activoId, fecha, proxima, extra = {}) => ({ id: ++id, activoId, fec
 // ── Universo vacío y bajas ──────────────────────────────────────────────────
 let r = C.armarCumplimiento(datos());
 es(r.indicadores.length, 14, 'catorce indicadores');
+// Enlaces con los filtros de cada dueño: la lista de equipos no junta «vencido» y «sin
+// registro» (K-A2) y la de licencias por vencer no trae las vencidas (K-D2).
+const enlaces = (clave) => { const i = ind(r, clave); return [i.enlace, ...i.extras.map((x) => x.enlace)]; };
+es(enlaces('registro_sanitario'), [
+  '/activos?area=biomedico&registro=vencido&estado=vigentes',
+  '/activos?area=biomedico&registro=sin_registro&estado=vigentes',
+  '/activos?area=biomedico&registro=por_vencer&estado=vigentes',
+], 'registro sanitario: vencidos, sin registro y por vencer');
+es(enlaces('licencia'), ['/licencias?situacion=vence_90', '/licencias?situacion=vencidas'], 'licencias: por vencer y vencidas');
+es(enlaces('inventario').at(-1), '/activos?area=biomedico&estado=vigentes&centro=sin', 'inventario: sin centro de costo');
+es(enlaces('seguridad_electrica').slice(1), ['/seguridad-electrica?alcance=clase3&estado=vencida', '/seguridad-electrica?alcance=clase3&estado=sin_prueba'], 'seguridad eléctrica: vencidas y sin prueba');
+es(r.indicadores.every((i) => Array.isArray(i.extras) && !i.enlace.includes('area=general')), true, 'todos con extras y sin area=general');
 es(r.indicadores.every((i) => i.pct === null && i.fallas === 0), true, 'universo vacío: pct null');
 es(r.indicadores.map((i) => i.clave), C.INDICADORES.map((i) => i.clave), 'en el orden del panel');
 const deBaja = equipo({ estado: 'baja', claseRiesgo: null, marca: null });

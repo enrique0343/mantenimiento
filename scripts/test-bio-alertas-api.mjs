@@ -27,10 +27,20 @@ const h = await setupConjuntos({ modules: {
 } });
 const { app, sqlite } = h;
 
-// R2 de memoria (el del arnés no deja borrar).
+// R2 de memoria (el del arnés no deja borrar). `conR2Caido` simula R2 caído al subir
+// (y calla el console.error que la API deja en el registro).
 const r2 = new Map();
+let r2Falla = false;
+const conR2Caido = async (accion) => {
+  const errorOriginal = console.error;
+  r2Falla = true; console.error = () => {};
+  try { return await accion(); } finally { r2Falla = false; console.error = errorOriginal; }
+};
 const R2 = {
-  async put(clave, valor, opciones) { r2.set(clave, { bytes: new Uint8Array(valor), tipo: opciones?.httpMetadata?.contentType }); },
+  async put(clave, valor, opciones) {
+    if (r2Falla) throw new Error('R2 no disponible');
+    r2.set(clave, { bytes: new Uint8Array(valor), tipo: opciones?.httpMetadata?.contentType });
+  },
   async get(clave) { const o = r2.get(clave); return o ? { arrayBuffer: async () => o.bytes.slice().buffer } : null; },
   async delete(clave) { r2.delete(clave); },
 };
@@ -129,6 +139,10 @@ try {
   es(r.status, 403, 'el visualizador no sube');
   r = await subir('jefe', { categoria: 'evaluacion', archivo: new File([PNG], 'foto.png') });
   es([r.status, r.body.adjunto?.contentType], [201, 'image/png'], 'una foto también vale');
+  // R2 caído: la API responde { error } en texto (antes la excepción salía sin JSON) y no queda fila.
+  const adjuntosAntes = cuenta(`SELECT count(*) AS n FROM alerta_adjuntos WHERE alerta_id = ${id}`);
+  r = await conR2Caido(() => subir('jefe', { categoria: 'evidencia', archivo: new File([PDF], 'evidencia.pdf') }));
+  es([r.status, r.body.error, cuenta(`SELECT count(*) AS n FROM alerta_adjuntos WHERE alerta_id = ${id}`)], [500, 'No se pudo guardar el archivo. Intenta de nuevo.', adjuntosAntes], 'R2 caído al subir un archivo de la alerta');
 
   r = await llamar(app.adjunto.GET, `/api/alertas/adjunto/${adjuntoId}`, { id: adjuntoId, rol: 'visualizador' });
   es([r.status, r.headers.get('content-type'), r.headers.get('x-content-type-options'), r.headers.get('cache-control')], [200, 'application/pdf', 'nosniff', 'private, max-age=60'], 'descarga del visualizador');
@@ -171,6 +185,8 @@ try {
   es([r.status, r.body.error], [400, 'La fecha de aprobación no puede ser futura.'], 'fecha futura');
   r = await aprobar('jefe', { ...base, version: '03', archivo: new File([HTML], 'plan.pdf') });
   es(r.status, 415, 'el plan firmado tiene que ser PDF o foto');
+  r = await conR2Caido(() => aprobar('jefe', { ...base, version: '04' }));
+  es([r.status, r.body.error, cuenta("SELECT count(*) AS n FROM plan_aprobaciones WHERE version = '04'")], [500, 'No se pudo guardar el archivo. Intenta de nuevo.', 0], 'R2 caído al subir el plan firmado: { error } y sin registro');
   r = await aprobar('admin', { ...base, area: 'general', version: '01', archivo: new File([PNG], 'plan.png') });
   es([r.status, r.body.aprobacion?.area], [201, 'general'], 'el plan general');
   r = await llamar(app.aprobaciones.GET, `/api/planes/aprobaciones?anio=${hoy.slice(0, 4)}`, { rol: 'visualizador' });

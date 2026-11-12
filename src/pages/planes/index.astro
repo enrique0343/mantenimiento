@@ -223,11 +223,17 @@ const fmt = (s: string) => fechaCorta(s);
         : `¿${verbo} ${ids.length} plan(es)?`;
       if (!confirm(msg)) return;
 
-      const r = await fetch(areaHref("/api/planes/bulk", area), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ accion, ids }),
-      });
+      let r: Response;
+      try {
+        r = await fetch(areaHref("/api/planes/bulk", area), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accion, ids }),
+        });
+      } catch {
+        alert("No hay conexión. Intenta de nuevo.");
+        return;
+      }
       if (r.ok) location.reload();
       else {
         // Por ejemplo: rutinas de equipos dados de baja en la selección (409).
@@ -243,11 +249,20 @@ const fmt = (s: string) => fechaCorta(s);
     // ── Modalidad / contrato inline ──
     async function patchPlan(sel: HTMLSelectElement, body: Record<string, unknown>, prev: string) {
       sel.disabled = true;
-      const r = await fetch(areaHref(`/api/planes/${sel.dataset.id}`, area), {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      let r: Response;
+      try {
+        r = await fetch(areaHref(`/api/planes/${sel.dataset.id}`, area), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        // Sin conexión: el select vuelve a su valor y a servir (antes quedaba bloqueado).
+        sel.disabled = false;
+        sel.value = prev;
+        window.showToast?.("No hay conexión. Intenta de nuevo.", "error");
+        return false;
+      }
       sel.disabled = false;
       if (r.ok) {
         sel.classList.add("ring-2", "ring-emerald-300");
