@@ -108,7 +108,7 @@ const marcaModelo = (p: { marca: string | null; modelo: string | null }) => [p.m
                     ) : "—"}
                   </td>
                   <td>
-                    <span class:list={["badge text-[10px]", ESTADO_CALIBRACION_COLOR[p.estado]]}>{ESTADO_CALIBRACION_LABEL[p.estado]}</span>
+                    <span class:list={["badge whitespace-nowrap text-[10px]", ESTADO_CALIBRACION_COLOR[p.estado]]}>{ESTADO_CALIBRACION_LABEL[p.estado]}</span>
                     {conDias.has(p.estado) && p.dias !== null && <span class="doc-nota-celda">{textoVence(p.dias)}</span>}
                   </td>
                   <td class="n">{p.usos}</td>

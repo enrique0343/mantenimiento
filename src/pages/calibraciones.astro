@@ -188,7 +188,7 @@ const marcaModelo = (f: { marca: string | null; modelo: string | null; serial: s
                   <td>{[f.sede, f.ubicacion].filter(Boolean).join(" · ") || "—"}</td>
                   <td>{f.motivos.length ? f.motivos.map((m) => <span class="doc-critico block">{MOTIVO_CRITICO_LABEL[m]}</span>) : "—"}</td>
                   <td>
-                    <span class:list={["badge text-[10px]", ESTADO_CALIBRACION_COLOR[f.estado]]}>{ESTADO_CALIBRACION_LABEL[f.estado]}</span>
+                    <span class:list={["badge whitespace-nowrap text-[10px]", ESTADO_CALIBRACION_COLOR[f.estado]]}>{ESTADO_CALIBRACION_LABEL[f.estado]}</span>
                     {conDias.has(f.estado) && f.dias !== null && <span class="doc-nota-celda">{textoVence(f.dias)}</span>}
                     {f.estado === "no_aplica" && f.noAplicaMotivo && <span class="doc-nota-celda">{f.noAplicaMotivo}</span>}
                   </td>

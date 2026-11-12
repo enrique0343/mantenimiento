@@ -268,10 +268,11 @@ try {
   const una = (sql, ...p) => ({ ...db.prepare(sql).get(...p) }); // sin prototipo nulo, para deepEqual
   const dia = (d) => B.sumarDias(hoy, d);
   const objetos = new Map();
+  let borradosR2 = 0;
   const R2 = {
     async put(key, valor, opciones) { objetos.set(key, { bytes: new Uint8Array(valor instanceof ArrayBuffer ? valor : await new Response(valor).arrayBuffer()), tipo: opciones?.httpMetadata?.contentType }); return {}; },
     async get(key) { const o = objetos.get(key); return o ? { httpMetadata: { contentType: o.tipo }, async arrayBuffer() { return o.bytes.slice().buffer; } } : null; },
-    async delete(key) { objetos.delete(key); },
+    async delete(key) { borradosR2++; objetos.delete(key); },
   };
   async function llamar(ruta, url, { method = 'GET', rol = 'admin', id, data, form } = {}) {
     const c = h.ctx(url, { method, id, rol, data });
@@ -408,7 +409,7 @@ try {
   es([r.status, r.body.ok, r.body.estado.estado], [200, true, 'sin_calibracion'], 'DELETE: el jefe elimina');
   si(objetos.has(claveFinal), 'el certificado de la calibración borrada sigue en R2');
   es(una('SELECT ultima_calibracion AS u, proxima_calibracion AS p FROM activos WHERE id = 101'), { u: null, p: null }, 'la copia del equipo se vacía');
-  es(h.effects.r2Deletes, 0, 'nunca se borró nada de R2 por la vía del arnés');
+  es(borradosR2, 0, 'corregir y eliminar nunca borran archivos de R2');
 
   // Patrones (K-B4).
   r = await llamar(A.calPatrones.GET, '/api/calibraciones/patrones?fecha=12/11/2026', { rol: 'tecnico' });
