@@ -13,7 +13,8 @@ let n = 0;
 try {
   fixture = await setupConjuntos({ modules: {
     serie: 'pages/api/activos/serie', centros: 'pages/api/centros-costo/index', centro: 'pages/api/centros-costo/[id]',
-    reportes: 'pages/api/reportes/[tipo]',
+    reportes: 'pages/api/reportes/[tipo]', baja: 'pages/api/activos/[id]/baja', revertir: 'pages/api/activos/[id]/baja-revertir',
+    sistema: 'pages/api/activos/[id]/sistema', bulkSistema: 'pages/api/activos/bulk-sistema',
   } });
   const { app, sqlite, call, ctx, faults } = fixture;
   const one = (q, ...a) => { const r = sqlite.prepare(q).get(...a); return r ? { ...r } : r; };
@@ -35,20 +36,31 @@ try {
   es(delJefe.claseRiesgo, 'IIa', 'alta del jefe con clase');
   const escrito = status(await crear({ rubro: 'biomedico', codigo: 'bio-001', nombre: 'monitor', claseRiesgo: 'III', ubicacionId: 1, centroCostoId: 1, serial: 'SN-123' }), 201, 'código escrito').activo;
   es([escrito.codigo, escrito.qrCode, escrito.centroCostoId], ['BIO-001', 'QR-BIO-001', 1], 'el código queda en mayúsculas');
-  es(status(await crear({ rubro: 'biomedico', codigo: 'Bio-001' }), 409, 'duplicado en minúsculas').error, 'El código «BIO-001» ya está en uso en otro equipo.', 'mensaje de duplicado');
-  es(status(await crear({ rubro: 'biomedico', codigo: 'BIO\t002' }), 400, 'tabulador').error, 'El código no puede tener tabuladores ni saltos de línea.', 'mensaje del tabulador');
-  status(await crear({ rubro: 'biomedico', estado: 'baja' }), 400, 'un equipo nuevo no nace de baja');
+  es(status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', codigo: 'Bio-001' }), 409, 'duplicado en minúsculas').error, 'El código «BIO-001» ya está en uso en otro equipo.', 'mensaje de duplicado');
+  es(status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', codigo: 'BIO\t002' }), 400, 'tabulador').error, 'El código no puede tener tabuladores ni saltos de línea.', 'mensaje del tabulador');
+  status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', estado: 'baja' }), 400, 'un equipo nuevo no nace de baja');
   es(status(await crear({ rubro: 'aires', claseRiesgo: 'I' }), 400, 'clase en aires').error, 'La clase de riesgo, la subcategoría y el registro sanitario solo aplican a equipos biomédicos.', 'solo biomédicos');
-  status(await crear({ rubro: 'biomedico', registroSanitarioEmision: '2026-05-10', registroSanitarioVencimiento: '2026-05-09' }), 400, 'vencimiento antes de la emisión');
-  status(await crear({ rubro: 'biomedico', registroSanitarioEmision: '31/02/2026' }), 400, 'fecha de emisión no válida');
-  es(status(await crear({ rubro: 'biomedico', centroCostoId: 2, ubicacionId: 1 }), 400, 'centro de otra sede').error,
+  es(status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', registroSanitarioEmision: '2026-05-10', registroSanitarioVencimiento: '2026-05-09' }), 400, 'vencimiento antes de la emisión').error,
+    'El vencimiento del registro no puede ser anterior a su emisión.', 'mensaje del vencimiento');
+  status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', registroSanitarioEmision: '31/02/2026' }), 400, 'fecha de emisión no válida');
+  es(status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', centroCostoId: 2, ubicacionId: 1 }), 400, 'centro de otra sede').error,
     'El centro de costo «CC-02» es de la sede «Sede Norte» y el equipo está en «Sede Central».', 'mensaje de centro de otra sede');
-  status(await crear({ rubro: 'biomedico', centroCostoId: 3 }), 400, 'centro desactivado');
-  const noRequiere = status(await crear({ rubro: 'biomedico', registroSanitario: 'X-1', registroSanitarioNoRequiere: true }), 201, 'no requiere registro').activo;
+  status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', centroCostoId: 3 }), 400, 'centro desactivado');
+  const noRequiere = status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', registroSanitario: 'X-1', registroSanitarioNoRequiere: true }), 201, 'no requiere registro').activo;
   es([noRequiere.registroSanitario, noRequiere.registroSanitarioNoRequiere], [null, true], '«no requiere» limpia el número');
-  const conFechas = status(await crear({ rubro: 'biomedico', ultimaCalibracion: '2026-01-01', proximaCalibracion: '2027-01-01', esPatron: true }), 201, 'las fechas de calibración se ignoran').activo;
+  const conFechas = status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', ultimaCalibracion: '2026-01-01', proximaCalibracion: '2027-01-01', esPatron: true }), 201, 'las fechas de calibración se ignoran').activo;
   es([conFechas.ultimaCalibracion, conFechas.proximaCalibracion, conFechas.esPatron], [null, null, false], 'POST no escribe calibración ni patrón');
-  status(await crear({ rubro: 'biomedico' }, 'visualizador'), 403, 'el visualizador no registra');
+  status(await crear({ rubro: 'biomedico', claseRiesgo: 'I' }, 'visualizador'), 403, 'el visualizador no registra');
+
+  // Ronda 2 · A2 (requisito 16): la clase es obligatoria en biomédicos también por la API.
+  // Antes solo la exigían el formulario y la carga masiva: la API creaba el biomédico sin clase.
+  const CLASE = 'Elige la clase de riesgo (I, IIa, IIb o III).';
+  const altasAntes = one('SELECT count(*) n FROM activos').n;
+  for (const data of [{ rubro: 'biomedico' }, { tipo: 'biomedico' }, { rubro: 'biomedico', claseRiesgo: null }, { rubro: 'biomedico', claseRiesgo: 'IV' }, { rubro: 'biomedico', claseRiesgo: '2a' }]) {
+    es(status(await crear(data, 'jefe'), 400, `biomédico sin clase válida: ${JSON.stringify(data)}`).error, CLASE, 'mensaje de clase obligatoria (POST)');
+  }
+  es(one('SELECT count(*) n FROM activos').n, altasAntes, 'ningún biomédico sin clase quedó registrado');
+  status(await crear({ rubro: 'equipo_general', nombre: 'impresora' }), 201, 'un equipo general sigue sin clase');
 
   // Revisión: el plan automático del alta cuenta «desde hoy» en El Salvador. A las
   // 19:30 de SV ya es el día siguiente en UTC: con new Date() el plan arrancaba un día tarde.
@@ -62,9 +74,9 @@ try {
   } finally {
     globalThis.Date = RelojReal;
   }
-  es(status(await crear({ rubro: 'biomedico', mantenimientoFrecuencia: 'mensual', mantenimientoProximaFecha: '31/12/2026' }), 400, 'fecha del plan mal escrita').error,
+  es(status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'mensual', mantenimientoProximaFecha: '31/12/2026' }), 400, 'fecha del plan mal escrita').error,
     'La fecha del primer mantenimiento no es válida.', 'la primera fecha del plan se valida');
-  status(await crear({ rubro: 'biomedico', mantenimientoFrecuencia: 'turno' }), 400, '«Por turno» no es una rutina de equipo');
+  status(await crear({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'turno' }), 400, '«Por turno» no es una rutina de equipo');
 
   // ── Cambio de código ──
   es(status(await editar(escrito.id, { codigo: 'BIO-777' }, 'tecnico'), 403, 'el técnico no cambia el código').error,
@@ -85,8 +97,8 @@ try {
   // ── Estado, clase y centro al editar ──
   es(status(await editar(escrito.id, { estado: 'baja' }), 400, 'baja por PATCH').error, 'Para dar de baja usa «Dar de baja» en la ficha del equipo.', 'mensaje de baja');
   status(await editar(escrito.id, { estado: 'averiado' }, 'tecnico'), 200, 'el técnico marca averiado (K-A3)');
-  es(status(await editar(escrito.id, { claseRiesgo: null }), 400, 'borrar la clase de un biomédico').error,
-    'La clase de riesgo es obligatoria en equipos biomédicos: elige una.', 'mensaje de clase obligatoria');
+  es(status(await editar(escrito.id, { claseRiesgo: null }), 400, 'borrar la clase de un biomédico').error, CLASE, 'mensaje de clase obligatoria (PATCH)');
+  es(status(await editar(escrito.id, { claseRiesgo: 'IV' }), 400, 'clase fuera de la escala').error, CLASE, 'una clase que no existe, el mismo texto');
   status(await editar(escrito.id, { centroCostoId: 2 }), 400, 'centro de otra sede al editar');
   status(await editar(escrito.id, { ubicacionId: 2 }), 400, 'mover el equipo a otra sede con su centro');
   status(await editar(escrito.id, { ubicacionId: 2, centroCostoId: 2 }), 200, 'mover con un centro de esa sede');
@@ -96,6 +108,18 @@ try {
   status(await editar(delJefe.id, { rubro: 'aires' }), 200, 'Clasificar cambia el área solo con {rubro}');
   status(await editar(delJefe.id, { claseRiesgo: null }), 200, 'y después limpia la clase');
   status(await editar(delJefe.id, { claseRiesgo: 'I' }), 400, 'un aire no lleva clase');
+  // Ronda 2 · A2: pasar a biomédico sin clase → 400 (Clasificar manda el área y la clase juntas).
+  es(status(await editar(delJefe.id, { rubro: 'biomedico' }), 400, 'pasar a biomédico sin clase').error, CLASE, 'mensaje al pasar a biomédico');
+  es(status(await editar(delJefe.id, { rubro: 'biomedico', tipo: 'biomedico', nombre: 'otra vez monitor' }, 'jefe'), 400, 'como lo mandaría Editar sin clase').error, CLASE, 'Editar sin clase');
+  es(one('SELECT rubro, clase_riesgo c FROM activos WHERE id=?', delJefe.id), { rubro: 'aires', c: null }, 'el rechazo no cambia nada');
+  es(status(await editar(delJefe.id, { rubro: 'biomedico', claseRiesgo: 'IIb' }), 200, 'área y clase juntas').activo.claseRiesgo, 'IIb', 'pasa a biomédico con su clase');
+  // Un biomédico viejo sin clase (dato anterior a la fase) sigue pudiendo cambiar otros datos
+  // (Marcar averiado, aceptación, jerarquía); lo que no puede es quedar sin clase al tocarla.
+  run(`INSERT INTO activos(id,codigo,nombre,qr_code,rubro,tipo) VALUES(70,'BIO-VIEJO','MONITOR VIEJO','QR-BIO-VIEJO','biomedico','biomedico')`);
+  status(await editar(70, { estado: 'averiado' }, 'tecnico'), 200, 'biomédico viejo sin clase: marcar averiado (WP-F)');
+  status(await editar(70, { aceptacionFecha: '2026-11-10', aceptacionResultado: 'aprobado' }), 200, 'biomédico viejo sin clase: aceptación (ficha)');
+  es(status(await editar(70, { claseRiesgo: null, nombre: 'monitor viejo' }), 400, 'tocar la clase y dejarla vacía').error, CLASE, 'no se guarda sin clase');
+  es(status(await editar(70, { claseRiesgo: 'I' }), 200, 'completar la clase').activo.claseRiesgo, 'I', 'la clase se completa');
 
   // ── Serie repetida ──
   const serie = status(await call(app.serie.GET, '/api/activos/serie?valor=sn%20123', { rol: 'tecnico' }), 200, 'buscar serie').coincidencias;
@@ -199,6 +223,34 @@ try {
   es(csvBaja.texto.replace(/^\uFEFF/, '').split('\r\n').slice(1).map((l) => l.split(',')[0]), ['CM-5'], 'solo las bajas');
   es((await descargar('area=biomedico', 'solicitante')).status, 403, 'el solicitante no descarga');
   es((await descargar('q=abc-1', 'admin')).texto.split('\r\n').length, 2, 'la búsqueda filtra la descarga');
+
+  // ── Ronda 2 · A6: las APIs del inventario responden 401 y 403 en JSON { error } (§c),
+  //    no en texto plano: las pantallas muestran j.error. ──
+  const enJson = (nombre, r, esperado) => {
+    n++; assert.equal(r.status, esperado, `${nombre}: ${JSON.stringify(r.body)}`);
+    n++; assert.ok(r.body && typeof r.body === 'object' && typeof r.body.error === 'string' && r.body.error.trim(), `${nombre}: cuerpo ${JSON.stringify(r.body)}`);
+  };
+  const sin = { rol: null };
+  for (const [nombre, ruta, url, opciones, esperado] of [
+    ['alta sin sesión', app.assetCreate.POST, '/api/activos', { method: 'POST', data: {}, ...sin }, 401],
+    ['lista sin sesión', app.assetCreate.GET, '/api/activos', sin, 401],
+    ['alta del solicitante', app.assetCreate.POST, '/api/activos', { method: 'POST', data: {}, rol: 'solicitante' }, 403],
+    ['ficha sin sesión', app.assets.GET, '/api/activos/50', { id: 50, ...sin }, 401],
+    ['editar del visualizador', app.assets.PATCH, '/api/activos/50', { method: 'PATCH', id: 50, data: { nombre: 'x' }, rol: 'visualizador' }, 403],
+    ['eliminar del jefe', app.assets.DELETE, '/api/activos/50', { method: 'DELETE', id: 50, rol: 'jefe' }, 403],
+    ['serie del visualizador', app.serie.GET, '/api/activos/serie?valor=ABC123', { rol: 'visualizador' }, 403],
+    ['centro del técnico', app.centros.POST, '/api/centros-costo', { method: 'POST', data: { codigo: 'CC-90', nombre: 'X' }, rol: 'tecnico' }, 403],
+    ['editar centro del técnico', app.centro.PATCH, '/api/centros-costo/1', { method: 'PATCH', id: 1, data: { nombre: 'X' }, rol: 'tecnico' }, 403],
+    ['borrar centro del técnico', app.centro.DELETE, '/api/centros-costo/1', { method: 'DELETE', id: 1, rol: 'tecnico' }, 403],
+    ['carga masiva del técnico', app.assetImport.POST, '/api/admin/import-equipos', { method: 'POST', data: { csv: 'codigo\nX-1' }, rol: 'tecnico' }, 403],
+    ['plantilla del técnico', app.assetImport.GET, '/api/admin/import-equipos?plantilla=1&area=biomedico', { rol: 'tecnico' }, 403],
+    ['baja del técnico', app.baja.POST, '/api/activos/50/baja', { method: 'POST', id: 50, data: {}, rol: 'tecnico' }, 403],
+    ['revertir del técnico', app.revertir.POST, '/api/activos/50/baja-revertir', { method: 'POST', id: 50, data: {}, rol: 'tecnico' }, 403],
+    ['familia del solicitante', app.sistema.PATCH, '/api/activos/50/sistema', { method: 'PATCH', id: 50, data: { sistema: null }, rol: 'solicitante' }, 403],
+    ['familias en lote sin sesión', app.bulkSistema.POST, '/api/activos/bulk-sistema', { method: 'POST', data: { ids: [50], sistema: 'electrico' }, ...sin }, 401],
+  ]) enJson(nombre, await call(ruta, url, opciones), esperado);
+  const csvSinPermiso = await app.reportes.GET(Object.assign(ctx('/api/reportes/equipos', { rol: 'solicitante' }), { params: { tipo: 'equipos' } }));
+  enJson('CSV de equipos del solicitante', { status: csvSinPermiso.status, body: await csvSinPermiso.json().catch(() => null) }, 403);
 
   assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
   console.log(`PASS test-bio-activos-api: ${n} casos`);

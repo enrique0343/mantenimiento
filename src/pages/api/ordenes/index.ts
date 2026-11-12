@@ -15,6 +15,7 @@ import { parseArea } from "@/lib/areas";
 import { conCodigo, validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { sembrarDesdeMop } from "@/lib/mop";
+import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -90,6 +91,9 @@ export const POST: APIRoute = async (ctx) => {
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   const contextError = validarContextoArea(ctx.request, areaResult.rubro);
   if (contextError) return contextError;
+  // Fase 59 · requisito 13: a un equipo dado de baja no se le abren órdenes (409).
+  const rechazoBaja = await rechazoOrdenEquipoBaja(db, parsed.data.activoId);
+  if (rechazoBaja) return rechazoBaja;
 
   // Si no se proporcionó vencimiento explícito y hay equipo, calcular desde SLA
   let vencimiento = parsed.data.vencimiento ?? null;

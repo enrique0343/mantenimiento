@@ -12,7 +12,9 @@ import {
   DESTINOS_BAJA, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, MOTIVOS_BAJA, estadoRegistroSanitario, fechaCorta, folioActaBaja, hoySV, puedeVerBio,
   type EstadoActivo,
 } from "@/lib/biomedico";
-import { aFilaInventario, describirFiltros, filtrosAQuery, leerFiltrosInventario, pasaFiltros } from "@/lib/inventario-filtros";
+import {
+  aFilaInventario, agruparPorCentro, describirFiltros, filtrosAQuery, leerAgrupacion, leerFiltrosInventario, pasaFiltros,
+} from "@/lib/inventario-filtros";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -56,10 +58,34 @@ const filas = rows
 const sede = filtros.sucursal != null ? (await db.select({ nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.id, filtros.sucursal)).limit(1))[0]?.nombre : null;
 const ubic = filtros.ubicacion != null ? (await db.select({ nombre: ubicaciones.nombre }).from(ubicaciones).where(eq(ubicaciones.id, filtros.ubicacion)).limit(1))[0]?.nombre : null;
 const centro = typeof filtros.centro === "number" ? (await db.select({ codigo: centrosCosto.codigo }).from(centrosCosto).where(eq(centrosCosto.id, filtros.centro)).limit(1))[0]?.codigo : null;
+// Requisito 1 · «Inventario desglosado por centro de costo» (?agrupar=centro): un grupo por
+// centro, ordenados por código, cada uno con su subtotal, y «Sin centro de costo» al final.
+const grupos = leerAgrupacion(Astro.url.searchParams) === "centro" ? agruparPorCentro(filas) : null;
+const cuantos = (n: number) => `${n} ${n === 1 ? "equipo" : "equipos"}`;
 const titulo = filtros.area === "biomedico" ? "Inventario de equipos biomédicos" : filtros.area ? `Inventario · ${AREAS[filtros.area].label}` : "Inventario de activos";
-const subtitulo = `${describirFiltros(filtros, { sucursal: sede, ubicacion: ubic, centro })} · ${filas.length} ${filas.length === 1 ? "equipo" : "equipos"}`;
+const subtitulo = `${describirFiltros(filtros, { sucursal: sede, ubicacion: ubic, centro })} · ${cuantos(filas.length)}${grupos ? " · Por centro de costo" : ""}`;
 const deBajas = filtros.estado === "baja";
 const volverHref = `/activos?${filtrosAQuery({ ...filtros, q: null })}`;
+const otraVistaHref = `/activos/imprimir?${filtrosAQuery(filtros)}${grupos ? "" : "&agrupar=centro"}`;
+// Sin agrupar, la columna «Centro de costo» va en cada fila; agrupado, la dice el grupo.
+const columnas = 10 + (grupos ? 0 : 1) + (deBajas ? 4 : 2);
+
+type Linea =
+  | { tipo: "grupo"; etiqueta: string }
+  | { tipo: "fila"; n: number; r: (typeof filas)[number]["r"]; fila: (typeof filas)[number]["fila"] }
+  | { tipo: "subtotal"; texto: string };
+const lineas: Linea[] = [];
+if (grupos) {
+  let n = 0;
+  for (const g of grupos) {
+    lineas.push({ tipo: "grupo", etiqueta: g.etiqueta });
+    for (const x of g.filas) lineas.push({ tipo: "fila", n: ++n, ...x });
+    const de = g.centroId == null ? "sin centro de costo" : `del centro ${g.etiqueta}`;
+    lineas.push({ tipo: "subtotal", texto: `Subtotal ${de}: ${cuantos(g.filas.length)}` });
+  }
+} else {
+  filas.forEach((x, i) => lineas.push({ tipo: "fila", n: i + 1, ...x }));
+}
 
 function registroTxt(r: (typeof rows)[number], area: string): string {
   if (area !== "biomedico") return "—";
@@ -73,7 +99,10 @@ function registroTxt(r: (typeof rows)[number], area: string): string {
 <Layout title={titulo}>
   <div class="no-print doc-barra">
     <a class="btn-secondary" href={areaHref(volverHref, filtros.area)}>Volver al inventario</a>
-    <button class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+    <div class="flex flex-wrap gap-2">
+      <a class="btn-secondary" href={otraVistaHref} id="otraVista">{grupos ? "Sin agrupar" : "Agrupar por centro de costo"}</a>
+      <button class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+    </div>
   </div>
 
   <article class="print-doc doc-hoja doc-ancha">
@@ -82,44 +111,53 @@ function registroTxt(r: (typeof rows)[number], area: string): string {
       {filas.length === 0 ? (
         <p class="doc-texto">No hay equipos con estos filtros.</p>
       ) : (
-        <table class="doc-tabla">
+        <table class="doc-tabla" id="inventarioTabla" data-agrupar={grupos ? "centro" : undefined}>
           <thead>
             <tr>
               <th class="n">N.º</th><th>Código</th><th>N.º activo</th><th>Nombre</th><th>Marca / Modelo</th><th>Serie</th>
-              <th>Sede</th><th>Ubicación</th><th>Centro de costo</th><th>Clase</th><th>Registro sanitario</th>
+              <th>Sede</th><th>Ubicación</th>{!grupos && <th>Centro de costo</th>}<th>Clase</th><th>Registro sanitario</th>
               {deBajas ? <><th>Fecha de baja</th><th>Motivo</th><th>Destino</th><th>Acta</th></> : <><th>Estado</th><th>Próx. calibración</th></>}
             </tr>
           </thead>
           <tbody>
-            {filas.map(({ r, fila }, i) => (
+            {lineas.map((l) => l.tipo === "grupo" ? (
+              <tr class="grupo-centro"><th colspan={columnas} scope="colgroup" style="padding-top: 12px">{l.etiqueta}</th></tr>
+            ) : l.tipo === "subtotal" ? (
+              <tr class="subtotal-centro"><td colspan={columnas} class="text-right font-semibold">{l.texto}</td></tr>
+            ) : (
               <tr>
-                <td class="n">{i + 1}</td>
-                <td class="tn">{r.codigo}</td>
-                <td>{r.numeroActivo ?? "—"}</td>
-                <td>{r.nombre}</td>
-                <td>{[r.marca, r.modelo].filter(Boolean).join(" / ") || "—"}</td>
-                <td>{r.serial ?? "—"}</td>
-                <td>{r.sucursal ?? "—"}</td>
-                <td>{[r.ubicacionNombre, r.ubicacionDetalle].filter(Boolean).join(" · ") || "—"}</td>
-                <td>{r.centroCodigo ?? "—"}</td>
-                <td>{fila.area === "biomedico" ? (r.claseRiesgo ?? "Sin clase") : "—"}</td>
-                <td>{registroTxt(r, fila.area)}</td>
+                <td class="n">{l.n}</td>
+                <td class="tn">{l.r.codigo}</td>
+                <td>{l.r.numeroActivo ?? "—"}</td>
+                <td>{l.r.nombre}</td>
+                <td>{[l.r.marca, l.r.modelo].filter(Boolean).join(" / ") || "—"}</td>
+                <td>{l.r.serial ?? "—"}</td>
+                <td>{l.r.sucursal ?? "—"}</td>
+                <td>{[l.r.ubicacionNombre, l.r.ubicacionDetalle].filter(Boolean).join(" · ") || "—"}</td>
+                {!grupos && <td>{l.r.centroCodigo ?? "—"}</td>}
+                <td>{l.fila.area === "biomedico" ? (l.r.claseRiesgo ?? "Sin clase") : "—"}</td>
+                <td>{registroTxt(l.r, l.fila.area)}</td>
                 {deBajas ? (
                   <>
-                    <td class="tn">{fechaCorta(r.bajaFecha)}</td>
-                    <td>{r.bajaMotivo ? (MOTIVOS_BAJA[r.bajaMotivo as keyof typeof MOTIVOS_BAJA] ?? r.bajaMotivo) : "Sin acta"}</td>
-                    <td>{r.bajaDestino ? (DESTINOS_BAJA[r.bajaDestino as keyof typeof DESTINOS_BAJA] ?? r.bajaDestino) : "—"}</td>
-                    <td class="tn">{r.bajaId ? folioActaBaja(r.bajaId) : "—"}</td>
+                    <td class="tn">{fechaCorta(l.r.bajaFecha)}</td>
+                    <td>{l.r.bajaMotivo ? (MOTIVOS_BAJA[l.r.bajaMotivo as keyof typeof MOTIVOS_BAJA] ?? l.r.bajaMotivo) : "Sin acta"}</td>
+                    <td>{l.r.bajaDestino ? (DESTINOS_BAJA[l.r.bajaDestino as keyof typeof DESTINOS_BAJA] ?? l.r.bajaDestino) : "—"}</td>
+                    <td class="tn">{l.r.bajaId ? folioActaBaja(l.r.bajaId) : "—"}</td>
                   </>
                 ) : (
                   <>
-                    <td>{ESTADO_ACTIVO_LABEL[r.estado as EstadoActivo] ?? r.estado}</td>
-                    <td class="tn">{fechaCorta(r.proximaCalibracion)}</td>
+                    <td>{ESTADO_ACTIVO_LABEL[l.r.estado as EstadoActivo] ?? l.r.estado}</td>
+                    <td class="tn">{fechaCorta(l.r.proximaCalibracion)}</td>
                   </>
                 )}
               </tr>
             ))}
           </tbody>
+          {grupos && (
+            <tfoot>
+              <tr class="total-centros"><td colspan={columnas} class="text-right font-semibold">Total: {cuantos(filas.length)}</td></tr>
+            </tfoot>
+          )}
         </table>
       )}
     </section>

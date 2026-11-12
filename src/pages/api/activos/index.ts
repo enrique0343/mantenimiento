@@ -10,7 +10,7 @@ import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
 import {
   textoRegistro, generarCodigoActivo, nombrePendienteActivo, esCodigoDuplicado, errorCodigoActivo, mensajeCodigoDuplicado,
-  errorDeDatos, errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS,
+  errorDeDatos, errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS, MENSAJE_CLASE_OBLIGATORIA,
 } from "@/lib/registro-activos";
 import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
 import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, FRECUENCIAS_RUTINA_EQUIPO, esFechaISO, hoySV } from "@/lib/biomedico";
@@ -125,6 +125,9 @@ export const POST: APIRoute = async (ctx) => {
   if (rubro !== "biomedico" && (r.claseRiesgo || r.subcategoria || traeRegistro)) {
     return Response.json({ error: MENSAJE_SOLO_BIOMEDICOS }, { status: 400 });
   }
+  // Requisito 16: la clase de riesgo es obligatoria en biomédicos también por la API
+  // (antes solo la exigían el formulario y la carga masiva).
+  if (rubro === "biomedico" && !r.claseRiesgo) return Response.json({ error: MENSAJE_CLASE_OBLIGATORIA }, { status: 400 });
   if (r.registroSanitarioNoRequiere) {
     activoData = { ...activoData, registroSanitario: null, registroSanitarioEntidad: null, registroSanitarioEmision: null, registroSanitarioVencimiento: null };
   } else if (r.registroSanitarioEmision && r.registroSanitarioVencimiento && r.registroSanitarioVencimiento < r.registroSanitarioEmision) {

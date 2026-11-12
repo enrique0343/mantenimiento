@@ -46,6 +46,9 @@ export const mensajeCodigoDuplicado = (codigo: string): string => `El código «
 
 export const MENSAJE_SOLO_BIOMEDICOS = "La clase de riesgo, la subcategoría y el registro sanitario solo aplican a equipos biomédicos.";
 
+/** Requisito 16: la clase de riesgo es obligatoria en biomédicos (también por la API). */
+export const MENSAJE_CLASE_OBLIGATORIA = "Elige la clase de riesgo (I, IIa, IIb o III).";
+
 // Lo que se escribe cuando el equipo no tiene serie: no cuenta como repetida.
 const SERIES_VACIAS = new Set([
   "NA", "ND", "SN", "SS", "SINSERIE", "SINNUMERO", "NOTIENE", "NOAPLICA", "NOVISIBLE", "ILEGIBLE", "DESCONOCIDO", "PENDIENTE",
@@ -74,6 +77,8 @@ export function errorDeDatos(error: z.ZodError): string {
   if (!issue) return "Datos no válidos.";
   if (issue.code === "custom" && issue.message) return issue.message;
   const campo = issue.path.length ? String(issue.path[0]) : "";
+  // Una clase que no es de la escala («IV», «2a» escrito a mano): el mismo texto que cuando falta.
+  if (campo === "claseRiesgo") return MENSAJE_CLASE_OBLIGATORIA;
   return campo ? `Revisa el dato «${ETIQUETA_DATO[campo] ?? campo}».` : "Datos no válidos.";
 }
 

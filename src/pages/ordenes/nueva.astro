@@ -3,11 +3,12 @@ import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, usuarios, ubicaciones, sucursales, procedimientos } from "@/lib/schema";
-import { asc, eq, and, inArray } from "drizzle-orm";
+import { asc, eq, and, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { queSigue, type Situacion } from "@/lib/resolver";
 import { parseArea, areaHref, AREAS, AREA_KEYS, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { equipoDadoDeBaja } from "@/lib/equipo-baja";
 export const prerender = false;
 
 const user = Astro.locals.user ?? null;
@@ -76,7 +77,8 @@ const activosList = await db
     ubicacionId: activos.ubicacionId,
   })
   .from(activos)
-  .where(area ? activoAreaCondition(area) : eq(activos.id, -1))
+  // Fase 59 · requisito 13: a un equipo dado de baja no se le abren órdenes; la lista no lo ofrece.
+  .where(area ? and(activoAreaCondition(area), ne(activos.estado, "baja")) : eq(activos.id, -1))
   .orderBy(asc(activos.codigo));
 
 const ubicacionesList = await db
@@ -118,10 +120,21 @@ const preUbicacion = preActivo?.ubicacionId
   ? ubicacionesList.find((u) => u.id === preActivo.ubicacionId) ?? null
   : null;
 
+const preseleccion = qp.get("activoId") ?? qp.get("activo");
+const activoPreseleccionado = preseleccion ? activosList.find(a => String(a.id) === preseleccion)?.id : null;
+// Fase 59 · requisito 13: si la URL trae un equipo dado de baja (por ejemplo, desde su
+// ficha), la página lo dice y no lo elige; tampoco toma el procedimiento que traía.
+// Cualquier otro equipo fuera de la lista sigue siendo un error, como antes.
+let equipoBaja: Awaited<ReturnType<typeof equipoDadoDeBaja>> = null;
+if (preseleccion && !activoPreseleccionado) {
+  equipoBaja = await equipoDadoDeBaja(db, Number(preseleccion));
+  if (!equipoBaja || (area && equipoBaja.area !== area)) return new Response("El equipo no está disponible en el área seleccionada.", { status: 400 });
+}
+
 // El procedimiento que trae la URL manda sobre el que resuelva el sistema: lo
 // eligió quien abrió la orden desde la ficha del equipo.
 let preProc: { id: number; codigoCorto: string; titulo: string; tipo: string } | null = null;
-if (Number.isFinite(qProcId) && qProcId > 0) {
+if (!equipoBaja && Number.isFinite(qProcId) && qProcId > 0) {
   try {
     const [p] = await db
       .select({
@@ -145,14 +158,17 @@ const preJson = JSON.stringify({
   sucursal: preUbicacion?.sucursalId ?? null,
   proc: preProc,
 });
-const preseleccion = qp.get("activoId") ?? qp.get("activo");
-const activoPreseleccionado = preseleccion ? activosList.find(a => String(a.id) === preseleccion)?.id : null;
-if (preseleccion && !activoPreseleccionado) return new Response("El equipo no está disponible en el área seleccionada.", { status: 400 });
 ---
 
 <Layout title="Nueva orden">
   <a href={areaHref("/ordenes", area)} class="text-sm text-slate-500 hover:underline">&larr; Volver</a>
   <h1 class="mt-2 text-2xl font-bold">Nueva orden{area ? ` · ${AREAS[area].label}` : " de trabajo"}</h1>
+  {equipoBaja && (
+    <div id="avisoEquipoBaja" role="alert" class="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <p class="font-semibold">El equipo {equipoBaja.codigo} · {equipoBaja.nombre} está dado de baja: no se le abren órdenes de trabajo.</p>
+      <p class="mt-1">Elige otro equipo o registra el trabajo sin equipo. <a class="font-medium underline" href={areaHref(`/activos/${equipoBaja.id}`, equipoBaja.area)}>Ver la ficha del equipo</a></p>
+    </div>
+  )}
 
   <form id="form" class="card mt-4 space-y-4 p-5">
     <div>

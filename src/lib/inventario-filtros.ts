@@ -6,7 +6,7 @@
 // clase, centro, registro, sucursal, ubicacion, criticidad, categoria, tipo y q.
 import {
   CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL,
-  estadoRegistroSanitario, normalizarTexto,
+  estadoRegistroSanitario, etiquetaCentroCosto, normalizarTexto,
   type ClaseRiesgo, type EstadoActivo, type EstadoRegistro,
 } from "./biomedico";
 import { RUBROS, rubroDeActivo, type RubroKey } from "./rubros";
@@ -207,6 +207,42 @@ export function pasaFiltros(f: FilaInventario, filtros: FiltrosInventario, hoy: 
     if (q && !textoBusqueda(f).includes(q)) return false;
   }
   return true;
+}
+
+// ── Inventario desglosado por centro de costo (requisito 1) ──────────────────
+
+/** Cómo se agrupa la impresión: /activos/imprimir?agrupar=centro. Otro valor = sin agrupar. */
+export type Agrupacion = "centro";
+export const leerAgrupacion = (p: URLSearchParams): Agrupacion | null => (p.get("agrupar") === "centro" ? "centro" : null);
+
+export interface GrupoCentro<T> {
+  centroId: number | null;
+  /** «CC-01 · UCI ADULTOS» o «Sin centro de costo». */
+  etiqueta: string;
+  filas: T[];
+}
+
+/**
+ * Un grupo por centro de costo, ordenados por el código del centro (CC-2 antes que CC-10),
+ * con «Sin centro de costo» al final. Dentro de cada grupo se conserva el orden recibido
+ * (la impresión llega ordenada por sede, ubicación y código).
+ */
+export function agruparPorCentro<T extends { fila: FilaInventario }>(items: readonly T[]): GrupoCentro<T>[] {
+  const grupos = new Map<number | null, { codigo: string; grupo: GrupoCentro<T> }>();
+  for (const x of items) {
+    const id = x.fila.centroCostoId ?? null;
+    let g = grupos.get(id);
+    if (!g) {
+      const cc = id != null && x.fila.centroCodigo ? { codigo: x.fila.centroCodigo, nombre: x.fila.centroNombre ?? "" } : null;
+      g = { codigo: cc?.codigo ?? "", grupo: { centroId: id, etiqueta: etiquetaCentroCosto(cc), filas: [] } };
+      grupos.set(id, g);
+    }
+    g.grupo.filas.push(x);
+  }
+  return [...grupos.values()]
+    .sort((a, b) => Number(a.grupo.centroId == null) - Number(b.grupo.centroId == null)
+      || a.codigo.localeCompare(b.codigo, "es", { numeric: true }))
+    .map((g) => g.grupo);
 }
 
 /** «Vigentes (sin bajas) · Clase III · Centro CC-01 · Sede Central». */
