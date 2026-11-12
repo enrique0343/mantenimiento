@@ -53,7 +53,8 @@ const patchSchema = z.object({
 export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
-  if (!puedeVerProcedimientos(user.rol)) return new Response("Sin permisos", { status: 403 });
+  // 403 en JSON { error }, como requireUser y el middleware: las pantallas leen j.error.
+  if (!puedeVerProcedimientos(user.rol)) return Response.json({ error: "Sin permisos" }, { status: 403 });
 
   const id = Number(ctx.params.id);
   if (!Number.isInteger(id)) return Response.json({ error: "ID inválido" }, { status: 400 });
@@ -80,7 +81,7 @@ export const GET: APIRoute = async (ctx) => {
 export const PATCH: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
-  if (!puedeAdministrarProcedimientos(user.rol)) return new Response("Sin permisos", { status: 403 });
+  if (!puedeAdministrarProcedimientos(user.rol)) return Response.json({ error: "Sin permisos" }, { status: 403 });
 
   const id = Number(ctx.params.id);
   if (!Number.isInteger(id)) return Response.json({ error: "ID inválido" }, { status: 400 });
@@ -196,7 +197,7 @@ export const PATCH: APIRoute = async (ctx) => {
 export const DELETE: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
-  if (!puedeAdministrarProcedimientos(user.rol)) return new Response("Sin permisos", { status: 403 });
+  if (!puedeAdministrarProcedimientos(user.rol)) return Response.json({ error: "Sin permisos" }, { status: 403 });
 
   const id = Number(ctx.params.id);
   if (!Number.isInteger(id)) return Response.json({ error: "ID inválido" }, { status: 400 });

@@ -163,6 +163,25 @@ try {
   await st(llamar(R.ficha.PATCH, `/api/procedimientos/${id}`, { method: 'PATCH', id, data: { r2Key: 'cualquier/objeto.pdf', titulo: 'Limpieza y desinfección de equipo médico (rev.)' } }), 200, 'PATCH con r2Key');
   es(uno('SELECT r2_key, titulo FROM procedimientos WHERE id = ?', id), { r2_key: null, titulo: 'Limpieza y desinfección de equipo médico (rev.)' }, 'r2Key descartado; lo demás se guarda');
 
+  // ── 401 y 403 en JSON { error }, como requireUser (ronda 2) ───────────────
+  // Antes los cinco 403 de la lista y la ficha salían en texto plano y las pantallas
+  // decían «No se pudo guardar» en vez de la razón.
+  const fueraDeRol = [
+    ['GET de la lista', R.lista.GET, '/api/procedimientos', { rol: 'solicitante' }],
+    ['POST de la lista', R.lista.POST, '/api/procedimientos', { method: 'POST', data: alta, rol: 'tecnico' }],
+    ['GET de la ficha', R.ficha.GET, `/api/procedimientos/${id}`, { id, rol: 'motorista' }],
+    ['PATCH de la ficha', R.ficha.PATCH, `/api/procedimientos/${id}`, { method: 'PATCH', id, data: { titulo: 'Otro título' }, rol: 'visualizador' }],
+    ['DELETE de la ficha', R.ficha.DELETE, `/api/procedimientos/${id}`, { method: 'DELETE', id, rol: 'tecnico' }],
+  ];
+  for (const [nota, ruta, url, opciones] of fueraDeRol) {
+    const r = await st(llamar(ruta, url, opciones), 403, `${nota} fuera de rol`);
+    es([r.body, r.headers.get('content-type')?.split(';')[0]], [{ error: 'Sin permisos' }, 'application/json'], `${nota}: 403 en JSON`);
+    const sinSesion = await st(llamar(ruta, url, { ...opciones, rol: null }), 401, `${nota} sin sesión`);
+    es(sinSesion.body, { error: 'No autenticado' }, `${nota}: 401 en JSON`);
+  }
+  es(uno('SELECT titulo, estado, activo FROM procedimientos WHERE id = ?', id), { titulo: 'Limpieza y desinfección de equipo médico (rev.)', estado: 'borrador', activo: 1 },
+    'fuera de rol no cambia nada');
+
   // ── Subir el PDF: roles, archivo, tamaño y firma ──────────────────────────
   await st(subir(id, archivo(PDF, 'a.pdf'), 'tecnico'), 403, 'el técnico no sube');
   await st(subir(id, archivo(PDF, 'a.pdf'), 'visualizador'), 403, 'el visualizador no sube');

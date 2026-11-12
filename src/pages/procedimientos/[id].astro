@@ -692,7 +692,9 @@ const pdfHref = `/api/procedimientos/${p.id}/pdf?v=${encodeURIComponent(p.pdfSub
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       const motivos = Array.isArray(j.motivos) && j.motivos.length ? "\n• " + j.motivos.join("\n• ") : "";
-      window.showToast?.((j.error || "No se pudo guardar") + motivos, "error");
+      // El servidor responde { error } en JSON (también el 401 y el 403): se muestra si es texto.
+      const error = typeof j.error === "string" && j.error.trim() ? j.error : "No se pudo guardar";
+      window.showToast?.(error + motivos, "error");
       return null;
     }
     if (j.aviso) window.showToast?.(j.aviso, "success");

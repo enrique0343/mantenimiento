@@ -2,11 +2,14 @@
 // al trabajar: inicio, cada paso con su hora, pausas, lecturas, fotos y fin.
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import {
-  activos, adjuntos, items, ordenPasoMarcas, ordenRepuestos, ordenVerificacion, ordenVerificacionEventos, ordenes,
-  planesMantenimiento, sucursales, ubicaciones, usuarios,
+  activos, adjuntos, items, ordenIncidentes, ordenPasoMarcas, ordenPrerrequisitos, ordenRepuestos, ordenVerificacion,
+  ordenVerificacionEventos, ordenes, planesMantenimiento, sucursales, ubicaciones, usuarios,
 } from "./schema";
-import { evaluarValorChecklist, minutosEstimadosChecklist, parseChecklist } from "./ordenes";
+import { PRERREQ_LABEL, PRERREQ_TIPOS, evaluarValorChecklist, minutosEstimadosChecklist, parseChecklist, type PrerrequisitoTipo } from "./ordenes";
 import { etiquetaOT } from "./orden-codigo";
+import { fechaHoraSV } from "./biomedico";
+// La marca de incidente con el texto de K-G1 (la misma de la hoja de vida y el historial).
+import { textoIncidente } from "./historial-equipo";
 import type { getDb } from "./db";
 
 type Db = ReturnType<typeof getDb>;
@@ -38,6 +41,50 @@ export function etiquetaMinutos(min: number | null | undefined) {
   const m = Math.round(min);
   if (m < 60) return `${m} min`;
   return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+}
+
+// ── Fase 59 · WP-G: incidente y prerrequisitos en el reporte impreso ──────────
+
+/**
+ * Requisito 12: bajo el encabezado, la marca de incidente de la orden (K-G1) dicha como frase:
+ * «Relacionada con un incidente · reporte de Calidad RC-2026-0148 · aviso 10/11/2026».
+ * Sin número de reporte dice «pendiente»; sin marca, null.
+ */
+export function lineaIncidente(inc: { numeroReporte: string | null; fechaNotificacion: string } | null | undefined): string | null {
+  const marca = textoIncidente(inc ? { numero: inc.numeroReporte, fecha: inc.fechaNotificacion } : null);
+  return marca ? marca.replace(/^Incidente\b/, "Relacionada con un incidente") : null;
+}
+
+export interface PrerrequisitoReporte {
+  tipo: string;
+  texto: string;
+  opcional: boolean;
+  referencia: string;
+  cumplio: string;
+  cuando: string;
+}
+
+/**
+ * Requisito 7: los prerrequisitos de la orden como los imprime el reporte (solo lectura).
+ * La referencia es lo que los vuelve verificables: n.º de permiso, clase de la ICRA, id del
+ * candado, el instrumento calibrado y su vigencia. «Cuándo» va en hora de El Salvador.
+ */
+export function filasPrerrequisitos(filas: ReadonlyArray<{
+  tipo: string | null; texto: string; obligatorio: boolean; cumplido: boolean;
+  referencia: string | null; cumplidoPor: string | null; cumplidoEn: string | null;
+}>): PrerrequisitoReporte[] {
+  return filas.map((p) => {
+    const tipo: PrerrequisitoTipo = (PRERREQ_TIPOS as readonly string[]).includes(p.tipo ?? "") ? (p.tipo as PrerrequisitoTipo) : "otro";
+    return {
+      tipo: PRERREQ_LABEL[tipo],
+      texto: p.texto,
+      opcional: !p.obligatorio,
+      referencia: p.referencia?.trim() || "—",
+      // Uno cargado a mano como cumplido, sin quién ni cuándo, dice «Cumplido».
+      cumplio: p.cumplido ? p.cumplidoPor?.trim() || "Cumplido" : "Pendiente",
+      cuando: p.cumplido ? fechaHoraSV(p.cumplidoEn) : "—",
+    };
+  });
 }
 
 export async function reporteDeOrden(db: Db, id: number) {
@@ -139,6 +186,24 @@ export async function reporteDeOrden(db: Db, id: number) {
     .where(eq(adjuntos.ordenId, id))
     .orderBy(asc(adjuntos.id));
 
+  // Requisito 12: la marca de incidente (una fila por orden en orden_incidentes). Una sola lectura.
+  const [incidente] = await db
+    .select({ numeroReporte: ordenIncidentes.numeroReporte, fechaNotificacion: ordenIncidentes.fechaNotificacion })
+    .from(ordenIncidentes)
+    .where(eq(ordenIncidentes.ordenId, id))
+    .limit(1);
+  // Requisito 7: los prerrequisitos, en el orden de la ficha, con quién los cumplió.
+  const prerrequisitos = await db
+    .select({
+      tipo: ordenPrerrequisitos.tipo, texto: ordenPrerrequisitos.texto, obligatorio: ordenPrerrequisitos.obligatorio,
+      cumplido: ordenPrerrequisitos.cumplido, referencia: ordenPrerrequisitos.referencia,
+      cumplidoPor: usuarios.nombre, cumplidoEn: ordenPrerrequisitos.cumplidoEn,
+    })
+    .from(ordenPrerrequisitos)
+    .leftJoin(usuarios, eq(usuarios.id, ordenPrerrequisitos.cumplidoPor))
+    .where(eq(ordenPrerrequisitos.ordenId, id))
+    .orderBy(asc(ordenPrerrequisitos.orden), asc(ordenPrerrequisitos.id));
+
   return {
     orden: o,
     codigo: etiquetaOT(o),
@@ -167,6 +232,9 @@ export async function reporteDeOrden(db: Db, id: number) {
     fotos: fotos.filter((f) => f.contentType?.startsWith("image/")),
     documentos: fotos.filter((f) => !f.contentType?.startsWith("image/")),
     historial: historialDe(eventos),
+    incidente: incidente ?? null,
+    lineaIncidente: lineaIncidente(incidente),
+    prerrequisitos: filasPrerrequisitos(prerrequisitos),
   };
 }
 
