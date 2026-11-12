@@ -272,11 +272,20 @@ const ubJson = JSON.stringify(ubRows);
           ubicacionId: ubEl?.value ? Number(ubEl.value) : null,
           activoId: actEl?.value ? Number(actEl.value) : null,
         };
-        const res = await fetch("/api/tickets/publico", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        let res;
+        try {
+          res = await fetch("/api/tickets/publico", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } catch {
+          // Sin red el botón quedaba en «Enviando...» y había que recargar y escribir todo otra vez.
+          err.textContent = "No pudimos enviar tu solicitud: revisa tu conexión e inténtalo de nuevo. Lo que escribiste sigue aquí.";
+          err.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = "Enviar solicitud";
+          return;
+        }
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
           err.textContent = typeof j.error === "string" ? j.error : "No pudimos enviar tu solicitud. Verifica los campos e intenta de nuevo.";

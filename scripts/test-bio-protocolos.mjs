@@ -96,6 +96,8 @@ const R = await empaquetar({
   lista: 'pages/api/procedimientos/index',
   ficha: 'pages/api/procedimientos/[id]',
   pdf: 'pages/api/procedimientos/[id]/pdf',
+  biblioteca: 'lib/biblioteca-db',
+  db: 'lib/db',
 });
 const h = await setupConjuntos();
 const { sqlite, faults } = h;
@@ -233,6 +235,31 @@ try {
   es(cap.bitacora.at(-1).resumen, 'PDF quitado: version-final.pdf', 'bitácora al quitar');
   es((await st(quitarPdf(id), 404, 'quitar otra vez')).body, { error: 'Este documento no tiene PDF cargado.' }, 'ya no hay PDF');
   await st(quitarPdf(99999), 404, 'documento inexistente');
+
+  // ── La lista de la biblioteca con más de 100 documentos (revisión WP-G) ───
+  // Antes pedía campos y validaciones con la lista de ids de todos los documentos
+  // activos: con 101 o más, D1 rechaza la consulta (100 parámetros) y /procedimientos
+  // no abre. Con la subconsulta, cada consulta lleva un solo parámetro.
+  const insDoc = sqlite.prepare("INSERT INTO procedimientos(codigo_corto, tipo, sistema, titulo, responsable_id, activo) VALUES (?, 'sop', 'otro', ?, 2, ?)");
+  const insCampo = sqlite.prepare("INSERT INTO procedimiento_campos(procedimiento_id, etiqueta) VALUES (?, 'Valor en azul')");
+  const insVal = sqlite.prepare("INSERT INTO procedimiento_validaciones(procedimiento_id, area, fecha_programada) VALUES (?, 'Calidad', '2026-11-20')");
+  for (let i = 0; i < 151; i++) {
+    const doc = Number(insDoc.run(`LOTE-${String(i).padStart(3, '0')}`, `Documento ${i}`, i === 150 ? 0 : 1).lastInsertRowid);
+    insCampo.run(doc); insVal.run(doc);
+  }
+  const activosDocs = todos('SELECT id FROM procedimientos WHERE activo = 1').map((f) => f.id);
+  es(activosDocs.length > 100, true, `más de 100 documentos activos (${activosDocs.length})`);
+  const desde = h.queries.length;
+  const bib = await R.biblioteca.camposYValidacionesActivos(R.db.getDb(contexto('/procedimientos')));
+  const enActivos = (q) => uno(`SELECT count(*) AS n FROM ${q} WHERE procedimiento_id IN (SELECT id FROM procedimientos WHERE activo = 1)`).n;
+  es([bib.campos.length, bib.validaciones.length], [enActivos('procedimiento_campos'), enActivos('procedimiento_validaciones')], 'campos y validaciones de todos los activos');
+  const inactivo = uno("SELECT id FROM procedimientos WHERE codigo_corto = 'LOTE-150'").id;
+  es(bib.campos.some((c) => c.procedimientoId === inactivo), false, 'sin los del documento inactivo');
+  const nuevas = h.queries.slice(desde);
+  es(nuevas.length, 2, 'dos consultas');
+  es(Math.max(...nuevas.map((q) => (q.sql.match(/\?/g) ?? []).length)), 1, 'un solo parámetro por consulta, cualquiera que sea el tamaño de la biblioteca');
+  const paginaLista = await fs.readFile(path.join(raiz, 'src/pages/procedimientos.astro'), 'utf8');
+  es([paginaLista.includes('await camposYValidacionesActivos(db)'), /inArray\(procedimiento(Campos|Validaciones)\./.test(paginaLista)], [true, false], '/procedimientos usa la subconsulta, no la lista de ids');
 } finally {
   faults.beforeStatement = null;
   await h.close();
