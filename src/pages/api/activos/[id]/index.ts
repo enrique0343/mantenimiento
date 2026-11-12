@@ -260,16 +260,39 @@ export const PATCH: APIRoute = async (ctx) => {
   return Response.json({ activo: row });
 };
 
+// Llaves foráneas sin cascada hacia activos que HISTORIAL_ACTIVO todavía no nombra
+// (pedido a BASE). Sin revisarlas, el DELETE choca con la base y responde 500 en vez
+// del 409 con el motivo (K-A3): por ejemplo, un equipo con equipos que dependen de él.
+const VINCULOS_SIN_CASCADA = [
+  { tabla: "activos", columna: "padre_id", etiqueta: "equipos que dependen de él" },
+  { tabla: "orden_conjuntos", columna: "activo_id", etiqueta: "órdenes de conjuntos donde se usó" },
+  { tabla: "checklist_plantilla_items", columna: "activo_id", etiqueta: "pasos de plantillas de checklist" },
+  { tabla: "rondas_proposals", columna: "asset_id", etiqueta: "propuestas de ronda" },
+] as const;
+const VINCULOS_AL_ELIMINAR = [
+  ...HISTORIAL_ACTIVO,
+  ...VINCULOS_SIN_CASCADA.filter((v) => !HISTORIAL_ACTIVO.some((h) => h.tabla === v.tabla && h.columna === v.columna)),
+];
+
 /** Etiquetas de lo que el equipo tiene en su historial (una sola consulta). */
 async function historialDelActivo(db: ReturnType<typeof getDb>, id: number): Promise<string[]> {
-  const columnas = HISTORIAL_ACTIVO.map((h, i) =>
+  const columnas = VINCULOS_AL_ELIMINAR.map((h, i) =>
     sql`EXISTS(SELECT 1 FROM ${sql.raw(h.tabla)} WHERE ${sql.raw(h.columna)} = ${id}) AS ${sql.raw(`h${i}`)}`);
   const fila = await db.get<Record<string, number>>(sql`SELECT ${sql.join(columnas, sql`, `)}`);
-  return HISTORIAL_ACTIVO.filter((_, i) => Number(fila?.[`h${i}`] ?? 0) > 0).map((h) => h.etiqueta);
+  return VINCULOS_AL_ELIMINAR.filter((_, i) => Number(fila?.[`h${i}`] ?? 0) > 0).map((h) => h.etiqueta);
 }
 
 const mensajeHistorial = (etiquetas: string[]) =>
   `No se puede eliminar: el equipo tiene ${etiquetas.join(", ")}. Para retirarlo del servicio usa «Dar de baja».`;
+
+/** La base rechazó el borrado por una llave foránea (D1 envuelve el error en `cause`). */
+function esLlaveForanea(error: unknown): boolean {
+  for (let actual: unknown = error, i = 0; actual && i < 5; i++) {
+    if (/FOREIGN KEY constraint failed/i.test(String((actual as Error).message ?? actual))) return true;
+    actual = (actual as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 export const DELETE: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx, ["admin"]);
@@ -286,6 +309,8 @@ export const DELETE: APIRoute = async (ctx) => {
   } catch (error) {
     const despues = await historialDelActivo(db, id);
     if (despues.length) return Response.json({ error: mensajeHistorial(despues) }, { status: 409 });
+    // Otro vínculo que la base protege: se explica, no se responde 500.
+    if (esLlaveForanea(error)) return Response.json({ error: mensajeHistorial(["registros vinculados"]) }, { status: 409 });
     throw error;
   }
   await logAudit(ctx, { entidad: "activo", entidadId: id, accion: "delete", resumen: "Equipo eliminado" });

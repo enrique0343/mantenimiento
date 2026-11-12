@@ -138,12 +138,22 @@ const inventarioHref = areaHref("/activos", area);
 
     let csvText = "";
     let nombreArchivo = "";
-    let simulado: { clave: string; datos: Respuesta } | null = null;
+    let simulado: { clave: string; modo: "crear" | "actualizar"; datos: Respuesta } | null = null;
     let filasMostradas: Fila[] = [];
     let grabadas = false;
 
+    const radiosModo = () => document.querySelectorAll<HTMLInputElement>('input[name="modo"]');
     const modo = () => (document.querySelector<HTMLInputElement>('input[name="modo"]:checked')?.value ?? "crear") as "crear" | "actualizar";
     const claveActual = () => `${nombreArchivo}|${csvText.length}|${modo()}`;
+    /** El servidor no acepta más de 5 000 000 de caracteres por envío. */
+    const MAX_CARACTERES = 5_000_000;
+
+    /** Un Excel no es un CSV: .xlsx es un ZIP («PK») y .xls, un documento OLE. */
+    function esExcel(bytes: ArrayBuffer): boolean {
+      const b = new Uint8Array(bytes, 0, Math.min(8, bytes.byteLength));
+      const empieza = (firma: number[]) => firma.every((x, i) => b[i] === x);
+      return empieza([0x50, 0x4b, 0x03, 0x04]) || empieza([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    }
 
     function aviso(texto: string, tono: "info" | "ok" | "error" = "info") {
       msg.textContent = texto;
@@ -179,9 +189,23 @@ const inventarioHref = areaHref("/activos", area);
       resultado.classList.add("hidden"); verInventario.classList.add("hidden"); msg.classList.add("hidden");
       if (!f) { archivoInfo.classList.add("hidden"); actualizarBotones(); return; }
       const bytes = await f.arrayBuffer();
+      if (esExcel(bytes)) {
+        archivoInfo.classList.add("hidden");
+        aviso(`«${f.name}» es un archivo de Excel, no un CSV. En Excel usa «Guardar como» → «CSV UTF-8 (delimitado por comas)» y súbelo de nuevo.`, "error");
+        actualizarBotones();
+        return;
+      }
       // El «CSV» de Excel en Windows suele venir en Windows-1252, no en UTF-8.
-      try { csvText = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-      catch { csvText = new TextDecoder("windows-1252").decode(bytes); }
+      let texto: string;
+      try { texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      catch { texto = new TextDecoder("windows-1252").decode(bytes); }
+      if (texto.length > MAX_CARACTERES) {
+        archivoInfo.classList.add("hidden");
+        aviso(`«${f.name}» es demasiado grande para una sola carga: divídelo en partes de hasta 3000 filas.`, "error");
+        actualizarBotones();
+        return;
+      }
+      csvText = texto;
       nombreArchivo = f.name;
       archivoInfo.textContent = `Archivo «${f.name}»: ${contarFilas(csvText)} filas.`;
       archivoInfo.classList.remove("hidden");
@@ -272,9 +296,13 @@ const inventarioHref = areaHref("/activos", area);
       simBtn.disabled = true; goBtn.disabled = true;
       grabadas = false; verInventario.classList.add("hidden");
       aviso("Simulando…");
-      const r = await enviar({ dryRun: true });
+      // La clave y la opción son las del envío: si se cambia la opción mientras se
+      // simula, «Grabar» no se habilita con una simulación hecha con la otra.
+      const clave = claveActual();
+      const modoSimulado = modo();
+      const r = await enviar({ dryRun: true, modo: modoSimulado });
       if (!r.ok) { simulado = null; resultado.classList.add("hidden"); aviso(r.error, "error"); actualizarBotones(); return; }
-      simulado = { clave: claveActual(), datos: r.datos };
+      simulado = { clave, modo: modoSimulado, datos: r.datos };
       const d = r.datos;
       const conError = d.resultados.filter((f) => f.accion === "error").length;
       aviso(`Simulación lista: ${d.filas} filas. ${d.aInsertar} a crear, ${d.aActualizar} a actualizar, ${conError} con error. Nada se grabó todavía.`, conError ? "info" : "ok");
@@ -285,19 +313,23 @@ const inventarioHref = areaHref("/activos", area);
     goBtn.addEventListener("click", async () => {
       if (!simulado || simulado.clave !== claveActual()) return;
       const s = simulado.datos;
+      // Todas las tandas van con la opción que se simuló y se confirmó: cambiar la
+      // opción mientras se graba no puede pasar el resto del archivo a «Actualizar».
+      const modoGrabacion = simulado.modo;
       const conError = s.resultados.filter((f) => f.accion === "error").length;
       const crear = s.aInsertar === 1 ? "Se creará 1 equipo" : `Se crearán ${s.aInsertar} equipos`;
       const actualizar = s.aActualizar === 1 ? "se actualizará 1" : `se actualizarán ${s.aActualizar}`;
       const errores = conError === 0 ? "" : conError === 1 ? " La fila con error no se grabará." : ` Las ${conError} filas con error no se grabarán.`;
       if (!confirm(`${crear} y ${actualizar}.${errores} ¿Continuar?`)) return;
       simBtn.disabled = true; goBtn.disabled = true; file.disabled = true;
+      radiosModo().forEach((r) => { r.disabled = true; });
       const total = s.filas;
       const acumulado: Respuesta = { ...s, insertados: 0, actualizados: 0, sinCambios: 0, errores: [], avisos: [], resultados: [] };
       let detenido = false;
       for (let desde = 0; desde < total; desde += tanda) {
         const hasta = Math.min(desde + tanda, total);
         aviso(`Grabando filas ${desde + 1} a ${hasta} de ${total}…`);
-        const r = await enviar({ dryRun: false, desde, hasta });
+        const r = await enviar({ dryRun: false, desde, hasta, modo: modoGrabacion });
         if (!r.ok) {
           aviso(`Se detuvo en las filas ${desde + 1} a ${hasta}: ${r.error} Lo anterior quedó guardado. Simula y graba de nuevo: lo ya grabado no se repite.`, "error");
           detenido = true;
@@ -311,6 +343,7 @@ const inventarioHref = areaHref("/activos", area);
       grabadas = true;
       simulado = null;
       file.disabled = false;
+      radiosModo().forEach((r) => { r.disabled = false; });
       const conErrorFinal = acumulado.resultados.filter((f) => f.accion === "error").length;
       if (!detenido) aviso(`Listo: ${acumulado.insertados} creados, ${acumulado.actualizados} actualizados, ${conErrorFinal} con error.`, "ok");
       verInventario.classList.remove("hidden");

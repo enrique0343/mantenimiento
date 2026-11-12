@@ -13,7 +13,7 @@ import {
   errorDeDatos, errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS,
 } from "@/lib/registro-activos";
 import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
-import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, esFechaISO } from "@/lib/biomedico";
+import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, FRECUENCIAS_RUTINA_EQUIPO, esFechaISO, hoySV } from "@/lib/biomedico";
 import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
@@ -78,9 +78,10 @@ const createSchema = z.object({
   modeloAireId: z.number().int().positive().safe().optional(),
   modeloAireVersion: z.number().int().positive().safe().optional(),
   modeloAireSnapshot: z.never().optional(),
-  // Configuración opcional de mantenimiento preventivo automático
-  mantenimientoFrecuencia: z.enum(["diaria", "semanal", "quincenal", "mensual", "bimestral", "trimestral", "semestral", "anual"]).optional().nullable(),
-  mantenimientoProximaFecha: z.string().optional().nullable(),
+  // Configuración opcional de mantenimiento preventivo automático: las frecuencias
+  // de rutina de equipo (con cuatrimestral, sin «Por turno»), como K-E1.
+  mantenimientoFrecuencia: z.enum(FRECUENCIAS_RUTINA_EQUIPO).optional().nullable(),
+  mantenimientoProximaFecha: fechaOpcional("La fecha del primer mantenimiento no es válida."),
   mantenimientoTitulo: textoRegistro,
   mantenimientoPrioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
 }).refine(value => (value.modeloAireId === undefined) === (value.modeloAireVersion === undefined),
@@ -166,7 +167,9 @@ export const POST: APIRoute = async (ctx) => {
           activoId: sql`(SELECT id FROM activos WHERE codigo = ${codigo})`,
           titulo: mantenimientoTitulo || `MANTENIMIENTO PREVENTIVO ${mantenimientoFrecuencia.toUpperCase()}`,
           frecuencia: mantenimientoFrecuencia,
-          proximaFecha: mantenimientoProximaFecha || siguienteFecha(new Date(), mantenimientoFrecuencia as Frecuencia),
+          // «Desde hoy» es hoy en El Salvador: con new Date(), después de las 18:00 el
+          // plan arrancaba un día más tarde (la fecha UTC ya es mañana).
+          proximaFecha: mantenimientoProximaFecha || siguienteFecha(hoySV(), mantenimientoFrecuencia as Frecuencia),
           prioridad: mantenimientoPrioridad ?? "media",
         })]);
         row = rows[0];
