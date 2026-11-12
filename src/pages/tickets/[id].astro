@@ -430,6 +430,8 @@ const docFalla = rigeFalla?.documento ?? null;
         // Si se creó OT automáticamente, lleva al usuario directo a esa OT
         location.href = `/ordenes/${j.otCreada}?area=${encodeURIComponent(area || "")}`;
       } else {
+        // Equipo dado de baja: la solicitud se guardó, pero no se abrió la orden (fase 59).
+        if (typeof j.otOmitida === "string") alert(`Se guardó la solicitud. ${j.otOmitida}`);
         location.reload();
       }
     });

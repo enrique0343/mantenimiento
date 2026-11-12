@@ -266,6 +266,9 @@ function chartPath(meds: typeof allMeds[0]["mediciones"], width: number, height:
             location.href = `/ordenes/${j.ordenAutomatica.id}?area=${area}`;
             return;
           }
+        } else if (typeof j.ordenOmitida === "string") {
+          // Equipo dado de baja: la medición se guardó, pero no se abrió la orden (fase 59).
+          alert(`Medición crítica guardada. ${j.ordenOmitida}`);
         }
         location.reload();
       });
