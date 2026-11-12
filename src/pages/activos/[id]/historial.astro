@@ -1,270 +1,183 @@
 ---
+// Historial del equipo (requisito 9): indicadores de toda su vida y la línea de tiempo
+// de todo lo que le pasó, con filtro de período, impresión y CSV. Los eventos salen
+// del cargador único (src/lib/historial-equipo-db.ts), el mismo del CSV y de la hoja de vida.
 import Layout from "@/layouts/Layout.astro";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
-import {
-  activos, ordenes, usuarios, comentarios, ordenRepuestos, items as itemsTable,
-  movimientosInventario, encuestasSatisfaccion, calibraciones, proveedores,
-} from "@/lib/schema";
-import { eq, desc, and, sql, isNotNull, gte } from "drizzle-orm";
-import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
-import { etiquetaOT } from "@/lib/orden-codigo";
-import { RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
-import { areaHref, parseArea } from "@/lib/areas";
+import { activos, ordenes, usuarios, encuestasSatisfaccion } from "@/lib/schema";
+import { eq, and, isNotNull } from "drizzle-orm";
+import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { diaSV, fechaCorta, horaSV, hoySV, puedeVerBio } from "@/lib/biomedico";
+import {
+  TIPO_EVENTO_LABEL, claveTiempo, colorEvento, construirEventos, enPeriodo, ordenarEventos, periodoValido,
+  textoIncidente, textoPeriodo,
+} from "@/lib/historial-equipo";
+import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
-if (!Number.isFinite(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+if (!Number.isInteger(id) || id <= 0) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
 const db = getDb(Astro);
-const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
+const [a] = await db
+  .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo, rubro: activos.rubro })
+  .from(activos).where(eq(activos.id, id)).limit(1);
 if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
 const area = rubroDeActivo(a.rubro, a.tipo);
-const conjuntosHistorial = ["admin", "jefe", "tecnico", "visualizador"].includes(Astro.locals.user!.rol)
-  ? await getConjuntosDelActivo(Astro, id) : [];
 if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
+const conjuntosHistorial = await getConjuntosDelActivo(Astro, id);
 
-// Todas las OTs del equipo (orden cronológico inverso)
-const ots = await db
-  .select({ o: ordenes, asignado: usuarios })
-  .from(ordenes)
-  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(eq(ordenes.activoId, id))
-  .orderBy(desc(ordenes.id));
+// Período (opcional): solo filtra la línea de tiempo. Los indicadores son de toda la vida del equipo.
+const desdeTxt = Astro.url.searchParams.get("desde") ?? "";
+const hastaTxt = Astro.url.searchParams.get("hasta") ?? "";
+const periodo = periodoValido(desdeTxt, hastaTxt);
+const { desde, hasta } = periodo;
+const periodoTxt = textoPeriodo(desde, hasta);
 
-const otIds = ots.map((r) => r.o.id);
+const historial = await cargarHistorialEquipo(db, id);
+const ots = historial.ots;
 
-// Comentarios de esas OTs
-const coms = otIds.length > 0 ? await db
-  .select({ c: comentarios, u: usuarios, codigoOrden: ordenes.codigo })
-  .from(comentarios)
-  .leftJoin(usuarios, eq(usuarios.id, comentarios.usuarioId))
-  .leftJoin(ordenes, eq(ordenes.id, comentarios.ordenId))
-  .where(sql`${comentarios.ordenId} IN (${sql.raw(otIds.join(","))})`)
-  .orderBy(desc(comentarios.id))
-  : [];
-
-// Repuestos consumidos
-const repuestos = otIds.length > 0 ? await db
-  .select({ rep: ordenRepuestos, it: itemsTable, codigoOrden: ordenes.codigo })
-  .from(ordenRepuestos)
-  .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
-  .leftJoin(ordenes, eq(ordenes.id, ordenRepuestos.ordenId))
-  .where(sql`${ordenRepuestos.ordenId} IN (${sql.raw(otIds.join(","))})`)
-  .orderBy(desc(ordenRepuestos.id))
-  : [];
-
-// ─── Métricas agregadas ──────────────────────────────────────────────────────
+// ─── Indicadores (toda la vida del equipo) ───────────────────────────────────
 const totalOts = ots.length;
-const totalCorrectivos = ots.filter((r) => r.o.tipo === "correctivo").length;
-const totalPreventivos = ots.filter((r) => r.o.tipo === "preventivo").length;
-const totalCerradas = ots.filter((r) => r.o.estado === "cerrada" || r.o.estado === "verificada" || r.o.estado === "completada").length;
+const totalCorrectivos = ots.filter((o) => o.tipo === "correctivo").length;
+const totalPreventivos = ots.filter((o) => o.tipo === "preventivo").length;
 
-// Costo total acumulado
-const tarifaUserMap = new Map<number, number>();
-const userIds = Array.from(new Set(ots.map((r) => r.o.asignadoA).filter((x): x is number => !!x)));
-if (userIds.length > 0) {
-  const us = await db.select({ id: usuarios.id, t: usuarios.tarifaHora })
-    .from(usuarios).where(sql`${usuarios.id} IN (${sql.raw(userIds.join(","))})`);
-  for (const u of us) tarifaUserMap.set(u.id, Number(u.t));
-}
-
+// Costo: horas por la tarifa de quien la tenía asignada, más repuestos.
+const tarifas = await db.select({ id: usuarios.id, t: usuarios.tarifaHora }).from(usuarios);
+const tarifaUserMap = new Map(tarifas.map((u) => [u.id, Number(u.t)]));
 let costoMOTotal = 0;
 let costoRepTotal = 0;
 const costoPorOt = new Map<number, { mo: number; rep: number }>();
-for (const r of ots) {
-  const tarifa = r.o.asignadoA ? tarifaUserMap.get(r.o.asignadoA) ?? 0 : 0;
-  const mo = Number(r.o.horasTrabajadas ?? 0) * tarifa;
+for (const o of ots) {
+  const tarifa = o.asignadoId ? tarifaUserMap.get(o.asignadoId) ?? 0 : 0;
+  const mo = Number(o.horasTrabajadas ?? 0) * tarifa;
   costoMOTotal += mo;
-  costoPorOt.set(r.o.id, { mo, rep: 0 });
+  costoPorOt.set(o.id, { mo, rep: 0 });
 }
-for (const r of repuestos) {
-  const sub = r.rep.cantidad * Number(r.rep.precioUnitario ?? 0);
+for (const r of historial.repuestos) {
+  const sub = r.cantidad * Number(r.precioUnitario ?? 0);
   costoRepTotal += sub;
-  const cur = costoPorOt.get(r.rep.ordenId) ?? { mo: 0, rep: 0 };
+  const cur = costoPorOt.get(r.ordenId) ?? { mo: 0, rep: 0 };
   cur.rep += sub;
-  costoPorOt.set(r.rep.ordenId, cur);
+  costoPorOt.set(r.ordenId, cur);
 }
 const costoTotal = costoMOTotal + costoRepTotal;
 
 // Tiempo medio entre fallas correctivas (MTBF)
 const correctivosConFecha = ots
-  .filter((r) => r.o.tipo === "correctivo")
-  .map((r) => new Date(r.o.createdAt).getTime())
-  .sort((a, b) => a - b);
+  .filter((o) => o.tipo === "correctivo")
+  .map((o) => claveTiempo(o.createdAt))
+  .filter((ms) => ms > 0)
+  .sort((x, y) => x - y);
 let mtbfDias: number | null = null;
 if (correctivosConFecha.length >= 2) {
   const diffs: number[] = [];
-  for (let i = 1; i < correctivosConFecha.length; i++) {
-    diffs.push((correctivosConFecha[i] - correctivosConFecha[i - 1]) / 86400_000);
-  }
+  for (let i = 1; i < correctivosConFecha.length; i++) diffs.push((correctivosConFecha[i] - correctivosConFecha[i - 1]) / 86400_000);
   mtbfDias = diffs.reduce((s, x) => s + x, 0) / diffs.length;
 }
 
 // Repuestos más usados
 const repuestosCount = new Map<string, { codigo: string | null; nombre: string | null; cantidad: number; subtotal: number }>();
-for (const r of repuestos) {
-  const key = String(r.rep.itemId);
-  const cur = repuestosCount.get(key) ?? { codigo: r.it?.codigo ?? null, nombre: r.it?.nombre ?? null, cantidad: 0, subtotal: 0 };
-  cur.cantidad += r.rep.cantidad;
-  cur.subtotal += r.rep.cantidad * Number(r.rep.precioUnitario ?? 0);
+for (const r of historial.repuestos) {
+  const key = `${r.codigo ?? ""}|${r.nombre ?? ""}`;
+  const cur = repuestosCount.get(key) ?? { codigo: r.codigo, nombre: r.nombre, cantidad: 0, subtotal: 0 };
+  cur.cantidad += r.cantidad;
+  cur.subtotal += r.cantidad * Number(r.precioUnitario ?? 0);
   repuestosCount.set(key, cur);
 }
-const topRepuestos = Array.from(repuestosCount.values()).sort((a, b) => b.cantidad - a.cantidad).slice(0, 10);
+const topRepuestos = Array.from(repuestosCount.values()).sort((x, y) => y.cantidad - x.cantidad).slice(0, 10);
 
-// Encuestas de satisfacción ligadas a OTs de este equipo
-const sats = otIds.length > 0 ? await db
-  .select()
+// Encuestas de satisfacción de las órdenes de este equipo (por JOIN, sin listas de ids).
+const sats = await db
+  .select({ calificacion: encuestasSatisfaccion.calificacion })
   .from(encuestasSatisfaccion)
-  .where(and(
-    sql`${encuestasSatisfaccion.ordenId} IN (${sql.raw(otIds.join(","))})`,
-    isNotNull(encuestasSatisfaccion.respondidaEn)
-  ))
-  : [];
+  .innerJoin(ordenes, eq(ordenes.id, encuestasSatisfaccion.ordenId))
+  .where(and(eq(ordenes.activoId, id), isNotNull(encuestasSatisfaccion.respondidaEn)));
 const satAvg = sats.length > 0 ? sats.reduce((s, r) => s + (r.calificacion ?? 0), 0) / sats.length : null;
 
-// Costo por mes (últimos 12 meses)
-const now = new Date();
+// Costo por mes (últimos 12 meses, por el día de El Salvador en que se creó la orden)
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const hoy = hoySV();
+const mesesHoy = Number(hoy.slice(0, 4)) * 12 + Number(hoy.slice(5, 7)) - 1;
 type CostoMes = { mes: string; mo: number; rep: number; total: number; ots: number };
 const costoMes: CostoMes[] = [];
 for (let i = 11; i >= 0; i--) {
-  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-  const inicio = d.toISOString().slice(0, 10);
-  const fin = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10);
+  const total = mesesHoy - i;
+  const anio = Math.floor(total / 12);
+  const mes = (total % 12) + 1;
+  const clave = `${anio}-${String(mes).padStart(2, "0")}`;
   let mo = 0, rep = 0, count = 0;
-  for (const r of ots) {
-    if (r.o.createdAt >= inicio && r.o.createdAt < fin) {
-      const c = costoPorOt.get(r.o.id) ?? { mo: 0, rep: 0 };
-      mo += c.mo; rep += c.rep; count++;
-    }
+  for (const o of ots) {
+    if ((diaSV(o.createdAt) ?? "").slice(0, 7) !== clave) continue;
+    const c = costoPorOt.get(o.id) ?? { mo: 0, rep: 0 };
+    mo += c.mo; rep += c.rep; count++;
   }
-  costoMes.push({
-    mes: d.toLocaleDateString("es", { month: "short", timeZone: "America/El_Salvador" }).replace(".", "") + " " + String(d.getFullYear()).slice(2),
-    mo, rep, total: mo + rep, ots: count,
-  });
+  costoMes.push({ mes: `${MESES_CORTOS[mes - 1]} ${String(anio).slice(2)}`, mo, rep, total: mo + rep, ots: count });
 }
 const maxCosto = Math.max(1, ...costoMes.map((m) => m.total));
 
-// ─── Construir timeline unificado ────────────────────────────────────────────
-type EventoTL = {
-  fecha: string;
-  tipo: "ot_creada" | "ot_completada" | "ot_cerrada" | "comentario" | "repuesto" | "calibracion";
-  titulo: string;
-  detalle: string;
-  meta?: string;
-  link?: string;
-  color: string;
-  icono: string;
-};
+// ─── Línea de tiempo ─────────────────────────────────────────────────────────
+const eventos = ordenarEventos(construirEventos(historial)).filter((e) => enPeriodo(e.fecha, desde, hasta));
+// Las páginas del equipo y de las órdenes llevan el área; los archivos (/api/) y las páginas de otros módulos, no.
+const hrefEvento = (link: string) => (/^\/(ordenes|activos)\//.test(link) ? areaHref(link, area) : link);
 
-const eventos: EventoTL[] = [];
-for (const r of ots) {
-  eventos.push({
-    fecha: r.o.createdAt,
-    tipo: "ot_creada",
-    titulo: `${etiquetaOT(r.o)}: ${r.o.titulo}`,
-    detalle: r.o.descripcion ?? "",
-    meta: `${r.o.tipo} · ${r.o.prioridad}${r.asignado ? ` · ${r.asignado.nombre}` : ""}`,
-    link: `/ordenes/${r.o.id}`,
-    color: r.o.tipo === "correctivo" ? "border-red-400" : r.o.tipo === "preventivo" ? "border-emerald-400" : "border-purple-400",
-    icono: r.o.tipo === "correctivo" ? "" : r.o.tipo === "preventivo" ? "" : "",
-  });
-  if (r.o.completadaEn) {
-    eventos.push({
-      fecha: r.o.completadaEn,
-      tipo: "ot_completada",
-      titulo: `Completada ${etiquetaOT(r.o)}`,
-      detalle: r.o.solucionAplicada ?? r.o.trabajosRealizados ?? "",
-      meta: `${r.o.horasTrabajadas ?? 0}h trabajadas`,
-      link: `/ordenes/${r.o.id}`,
-      color: "border-emerald-500",
-      icono: "✓",
-    });
-  }
-  if (r.o.cerradoEn) {
-    eventos.push({
-      fecha: r.o.cerradoEn,
-      tipo: "ot_cerrada",
-      titulo: `Cerrada ${etiquetaOT(r.o)}`,
-      detalle: "",
-      link: `/ordenes/${r.o.id}`,
-      color: "border-slate-400",
-      icono: "",
-    });
-  }
-}
-for (const c of coms) {
-  eventos.push({
-    fecha: c.c.createdAt,
-    tipo: "comentario",
-    titulo: `Comentario en ${etiquetaOT({ id: c.c.ordenId, codigo: c.codigoOrden })}`,
-    detalle: c.c.texto.slice(0, 200),
-    meta: c.u?.nombre,
-    link: `/ordenes/${c.c.ordenId}`,
-    color: "border-blue-300",
-    icono: "",
-  });
-}
-for (const r of repuestos) {
-  eventos.push({
-    fecha: r.rep.createdAt,
-    tipo: "repuesto",
-    titulo: `Repuesto: ${r.it?.codigo ?? ""} ${r.it?.nombre ?? ""}`,
-    detalle: `${r.rep.cantidad} ${r.it?.unidad ?? ""}${r.rep.precioUnitario ? ` × $${r.rep.precioUnitario}` : ""}`,
-    meta: etiquetaOT({ id: r.rep.ordenId, codigo: r.codigoOrden }),
-    link: `/ordenes/${r.rep.ordenId}`,
-    color: "border-amber-400",
-    icono: "",
-  });
-}
-// Calibraciones con trazabilidad metrológica (tabla calibraciones, Fase 34)
-const calibracionesRows = await db
-  .select({ c: calibraciones, lab: proveedores })
-  .from(calibraciones)
-  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
-  .where(eq(calibraciones.activoId, id))
-  .orderBy(desc(calibraciones.fechaCalibracion));
-for (const { c, lab } of calibracionesRows) {
-  const labNombre = lab?.nombre ?? c.laboratorioExterno;
-  const detalle = [
-    c.proximaCalibracion ? `Próxima: ${new Date(c.proximaCalibracion).toLocaleDateString("es", { timeZone: "America/El_Salvador" })}` : "",
-    c.patronReferencia ? `Patrón: ${c.patronReferencia}` : "",
-  ].filter(Boolean).join(" · ");
-  eventos.push({
-    fecha: c.fechaCalibracion,
-    tipo: "calibracion",
-    titulo: `Calibración: ${RESULTADO_CALIB_LABEL[c.resultado]}`,
-    detalle,
-    meta: [labNombre, c.numeroCertificado ? `Cert. ${c.numeroCertificado}` : ""].filter(Boolean).join(" · "),
-    link: c.certificadoR2Key ? `/api/calibraciones/certificado/${c.id}` : undefined,
-    color: c.resultado === "no_conforme" ? "border-red-500" : "border-purple-500",
-    icono: "",
-  });
-}
-
-eventos.sort((a, b) => b.fecha.localeCompare(a.fecha));
-
-const fmt = (s: string) => new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" });
-const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—";
+const filtros = new URLSearchParams();
+if (desde) filtros.set("desde", desde);
+if (hasta) filtros.set("hasta", hasta);
+const qsFiltros = filtros.toString();
+const csvHref = `/api/activos/${a.id}/historial${qsFiltros ? `?${qsFiltros}` : ""}`;
 ---
 
 <Layout title={`Historial · ${a.codigo}`}>
-  <ActivoConjuntos relaciones={conjuntosHistorial} />
-  <a href={areaHref(`/activos/${a.id}`, area)} class="text-sm text-slate-500 hover:underline">← Volver al equipo</a>
-  <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
-    <div>
-      <h1 class="text-2xl font-bold">Historial: {a.codigo}</h1>
-      <p class="text-sm text-slate-500">{a.nombre} · {a.tipo === "biomedico" ? "Biomédico" : "General"}</p>
+  <div class="no-print">
+    <ActivoConjuntos relaciones={conjuntosHistorial} />
+    <a href={areaHref(`/activos/${a.id}`, area)} class="text-sm text-slate-500 hover:underline">← Volver al equipo</a>
+    <div class="mt-2 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold">Historial: {a.codigo}</h1>
+        <p class="text-sm text-slate-500">{a.nombre} · {AREAS[area].label}</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
+        <button type="button" onclick="window.print()" class="btn-secondary">Imprimir</button>
+        <a href={csvHref} class="btn-primary" download>Descargar CSV</a>
+      </div>
     </div>
+
+    <form method="get" class="card mt-4 flex flex-wrap items-end gap-3 p-4">
+      <input type="hidden" name="area" value={area} />
+      <div>
+        <label class="label text-xs" for="f_desde">Desde</label>
+        <input id="f_desde" name="desde" type="date" class="input" value={desde ?? desdeTxt} />
+      </div>
+      <div>
+        <label class="label text-xs" for="f_hasta">Hasta</label>
+        <input id="f_hasta" name="hasta" type="date" class="input" value={hasta ?? hastaTxt} />
+      </div>
+      <button type="submit" class="btn-primary">Aplicar</button>
+      {(desdeTxt || hastaTxt) && <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Quitar filtro</a>}
+      <p class="w-full text-xs text-slate-500">
+        El período filtra la línea de tiempo y el CSV. Los indicadores y los costos son de toda la vida del equipo.
+      </p>
+      {periodo.error && <p class="w-full text-sm font-medium text-red-600">{periodo.error} No se aplicó el filtro.</p>}
+    </form>
   </div>
+
+  <DocCabecera soloImpresion titulo="Historial del equipo" subtitulo={`${a.codigo} · ${a.nombre}${periodoTxt ? ` · Período ${periodoTxt}` : ""}`} codigo={a.codigo} fecha={hoy} />
 
   <!-- KPIs del equipo -->
   <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">Total OTs</div>
       <div class="mt-1 text-2xl font-bold text-slate-700">{totalOts}</div>
+      <div class="text-[10px] text-slate-500">Desde el registro del equipo</div>
     </div>
     <div class="card p-4">
       <div class="text-xs uppercase text-slate-500">Correctivos</div>
@@ -334,7 +247,7 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", {
         {topRepuestos.map((r) => (
           <li class="flex items-center justify-between py-2">
             <div class="min-w-0 flex-1">
-              <div class="truncate font-medium">{r.codigo} · {r.nombre}</div>
+              <div class="truncate font-medium">{[r.codigo, r.nombre].filter(Boolean).join(" · ")}</div>
               <div class="text-xs text-slate-500">{r.cantidad} usados · ${r.subtotal.toFixed(2)}</div>
             </div>
           </li>
@@ -343,34 +256,49 @@ const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString("es", {
     </div>
   </div>
 
-  <!-- Timeline -->
+  <!-- Línea de tiempo -->
   <div class="mt-6">
-    <h2 class="font-semibold text-slate-900 mb-3">Timeline ({eventos.length} eventos)</h2>
-    {eventos.length === 0 && <div class="card p-6 text-center text-slate-400">Sin actividad registrada en este equipo.</div>}
-    <div class="relative">
-      <div class="absolute left-4 top-0 bottom-0 w-px bg-slate-200"></div>
-      <ul class="space-y-3">
-        {eventos.map((e) => (
-          <li class:list={["relative pl-12 border-l-4 ml-4", e.color]}>
-            <div class="absolute left-0 -ml-2 flex h-8 w-8 items-center justify-center rounded-full bg-white border border-slate-200 shadow-sm" style="margin-left:-1rem">
-            </div>
-            <div class="card p-3 ml-4">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  {e.link ? (
-                    <a href={areaHref(e.link, area)} class="font-semibold text-brand-700 hover:underline">{e.titulo}</a>
-                  ) : (
-                    <span class="font-semibold">{e.titulo}</span>
-                  )}
-                  {e.detalle && <p class="mt-1 text-sm text-slate-700 whitespace-pre-wrap">{e.detalle}</p>}
-                  {e.meta && <div class="mt-1 text-xs text-slate-500">{e.meta}</div>}
-                </div>
-                <span class="text-xs text-slate-400 whitespace-nowrap">{fmt(e.fecha)}</span>
+    <h2 class="font-semibold text-slate-900 mb-3">
+      Línea de tiempo ({eventos.length} {eventos.length === 1 ? "evento" : "eventos"}){periodoTxt && <span class="font-normal text-slate-500"> · {periodoTxt}</span>}
+    </h2>
+    {eventos.length === 0 && (
+      <div class="card p-6 text-center text-slate-400">
+        {periodoTxt ? "Sin actividad registrada en este período." : "Sin actividad registrada en este equipo."}
+      </div>
+    )}
+    <ul class="space-y-3">
+      {eventos.map((e) => (
+        <li class:list={["ml-1 border-l-4 pl-3", colorEvento(e)]}>
+          <div class="card p-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{TIPO_EVENTO_LABEL[e.tipo]}</div>
+                {e.link ? (
+                  <a
+                    href={hrefEvento(e.link)}
+                    target={e.link.startsWith("/api/") ? "_blank" : undefined}
+                    class:list={["font-semibold text-brand-700 hover:underline", { "line-through": e.anulado }]}
+                  >{e.titulo}</a>
+                ) : (
+                  <span class:list={["font-semibold", { "line-through": e.anulado }]}>{e.titulo}</span>
+                )}
+                {e.detalle && <p class="mt-1 text-sm text-slate-700 whitespace-pre-wrap">{e.detalle}</p>}
+                {(e.responsable || e.resultado || e.orden) && (
+                  <div class="mt-1 text-xs text-slate-500">
+                    {[e.responsable, e.resultado, e.tipo === "comentario" || e.tipo === "repuesto" ? e.orden : null].filter(Boolean).join(" · ")}
+                  </div>
+                )}
+                {e.incidente && e.tipo !== "incidente" && (
+                  <a href={`/incidentes?activo=${a.id}`} class="mt-1 inline-block text-xs font-semibold text-red-700 hover:underline">{textoIncidente(e.incidente)}</a>
+                )}
               </div>
+              <span class="whitespace-nowrap text-xs text-slate-400">{fechaCorta(e.fecha)}{horaSV(e.fecha) ? ` ${horaSV(e.fecha)}` : ""}</span>
             </div>
-          </li>
-        ))}
-      </ul>
-    </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   </div>
+
+  <DocFolio soloImpresion codigo={a.codigo} />
 </Layout>
