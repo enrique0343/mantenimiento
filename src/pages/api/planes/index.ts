@@ -15,7 +15,12 @@ export const GET: APIRoute = async (ctx) => {
   if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
   const rows = await db
-    .select({ p: planesMantenimiento, a: activos, u: usuarios })
+    // Columnas explícitas: D1 corta el resultado a 100 columnas.
+    .select({
+      p: planesMantenimiento,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro },
+      u: { id: usuarios.id, nombre: usuarios.nombre },
+    })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))

@@ -22,12 +22,15 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   const [row] = await db
-    .select({ p: planesMantenimiento, a: activos })
+    // Del equipo solo hace falta lo que va en la orden (D1 corta a 100 columnas).
+    .select({ p: planesMantenimiento, a: { id: activos.id, codigo: activos.codigo, rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado } })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .where(eq(planesMantenimiento.id, id))
     .limit(1);
   if (!row || (area && (!row.a || rubroDeActivo(row.a.rubro, row.a.tipo) !== area))) return Response.json({ error: "Plan no encontrado en esta área" }, { status: 404 });
+  // Parte automática del requisito 13: un equipo dado de baja no recibe órdenes.
+  if (row.a?.estado === "baja") return Response.json({ error: "El equipo está dado de baja: no se generan órdenes." }, { status: 409 });
   if (!row.p.activo) return Response.json({ error: "El plan está inactivo" }, { status: 400 });
 
   const p = row.p;
