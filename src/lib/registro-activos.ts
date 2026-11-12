@@ -114,7 +114,7 @@ export function errorNombreCentro(nombre: string): string | null {
  * solo ceros o solo X, o «S/N», «N/A», «sin serie»…).
  */
 export function normalizarSerie(s: string | null | undefined): string | null {
-  const t = String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const t = String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (t.length < 3 || /^0+$/.test(t) || /^X+$/.test(t) || SERIES_VACIAS.has(t)) return null;
   return t;
 }

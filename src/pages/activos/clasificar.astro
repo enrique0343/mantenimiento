@@ -393,18 +393,20 @@ const CRIT = [
           const fila = sel.closest("tr")!;
           const sub = fila.querySelector<HTMLSelectElement>(".subcat-sel")!;
           const esBio = sel.value === "biomedico";
-          sub.disabled = !esBio;
+          // La subcategoría y la clase de riesgo solo aplican a biomédicos: si deja
+          // de serlo, se limpian. Se espera a que se guarden antes de recargar.
+          const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
+          const limpiezas: Promise<boolean>[] = [];
           if (!esBio && sub.value) {
             sub.value = "";
-            patchActivo(sub, { subcategoria: null }, "");
-            sub.disabled = true;
+            limpiezas.push(patchActivo(sub, { subcategoria: null }, ""));
           }
-          // La clase de riesgo solo aplica a biomédicos: si deja de serlo, se limpia.
-          const clase = fila.querySelector<HTMLSelectElement>(".clase-sel")!;
           if (!esBio && clase.value) {
             clase.value = "";
-            patchActivo(clase, { claseRiesgo: null }, "").then(() => { clase.disabled = true; });
+            limpiezas.push(patchActivo(clase, { claseRiesgo: null }, ""));
           }
+          await Promise.all(limpiezas);
+          sub.disabled = !esBio;
           clase.disabled = !esBio;
           fila.dataset.clase = esBio ? (clase.value || "__sin__") : "";
           pintarClase(clase);

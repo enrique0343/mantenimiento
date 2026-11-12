@@ -497,7 +497,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
     // ── Búsqueda en vivo (minúsculas y sin tildes, como el servidor) ─────────
     const searchBox = document.getElementById("searchBox");
     const visibleCount = document.getElementById("visibleCount");
-    const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 
     function aplicarBusqueda() {
       const q = normalizar(searchBox.value);

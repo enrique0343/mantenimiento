@@ -49,7 +49,7 @@ function detectarSeparador(t: string): Separador {
  * numeración de las filas.
  */
 export function parsearCsv(texto: string, separadorFijo?: Separador): { separador: Separador; registros: string[][] } {
-  const t = texto.replace(/^﻿/, "");
+  const t = texto.replace(/^\uFEFF/, "");
   const separador = separadorFijo ?? detectarSeparador(t);
   const registros: string[][] = [];
   let fila: string[] = [];
@@ -83,7 +83,7 @@ export function parsearCsv(texto: string, separadorFijo?: Separador): { separado
 
 /** 'Vida útil (años)' → 'vida_util_anos'; 'N.º de serie' → 'n_de_serie'. */
 export function normalizarEncabezado(h: string | null | undefined): string {
-  return String(h ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  return String(h ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
@@ -209,7 +209,7 @@ export function columnasPlantilla(area: RubroKey | null): ColumnaInventario[] {
 
 /** BOM más el encabezado de las columnas que se cargan en el área. */
 export function plantillaCsv(area: RubroKey | null): string {
-  return "﻿" + columnasPlantilla(area).map((c) => c.plantilla).join(",") + "\r\n";
+  return "\uFEFF" + columnasPlantilla(area).map((c) => c.plantilla).join(",") + "\r\n";
 }
 
 /** Columnas del CSV de equipos para toCsv, en orden. */
@@ -396,6 +396,12 @@ const igual = (a: unknown, b: unknown) => {
   return (a ?? null) === (b ?? null);
 };
 
+/** Mismos datos técnicos aunque el JSON guardado tenga otro orden de llaves. */
+function mismosDatosTecnicos(a: string | null, b: string | null): boolean {
+  const ordenado = (s: string | null) => JSON.stringify(Object.entries(leerDatosTecnicos(s)).filter(([, v]) => v != null && v !== "").sort(([x], [y]) => x.localeCompare(y)));
+  return ordenado(a) === ordenado(b);
+}
+
 /** Lee el archivo completo y decide qué pasa con cada fila. No escribe nada. */
 export function planificarImportacion(texto: string, ctx: ContextoImportacion): PlanImportacion {
   const { separador, registros } = parsearCsv(texto);
@@ -422,35 +428,43 @@ export function planificarImportacion(texto: string, ctx: ContextoImportacion): 
     return { ...plan, error: `El archivo tiene ${datos.length} filas; el máximo es ${MAX_FILAS_IMPORTACION}. Divídelo en partes.` };
   }
 
-  // ── Búsquedas ──
-  const porCodigo = new Map<string, ActivoExistente>();
-  const porSerie = new Map<string, ActivoExistente[]>();
-  const porNumeroActivo = new Map<string, ActivoExistente[]>();
-  for (const a of ctx.activos) {
-    porCodigo.set(a.codigo.trim().toUpperCase(), a);
-    const s = normalizarSerie(a.serial);
-    if (s) porSerie.set(s, [...(porSerie.get(s) ?? []), a]);
-    const na = a.numeroActivo?.trim().toUpperCase();
-    if (na) porNumeroActivo.set(na, [...(porNumeroActivo.get(na) ?? []), a]);
-  }
+  // ── Búsquedas (se arman una vez: el archivo puede traer 3000 filas) ──
+  const agrupar = <T>(lista: readonly T[], clave: (x: T) => string | null | undefined) => {
+    const m = new Map<string, T[]>();
+    for (const x of lista) {
+      const k = clave(x);
+      if (!k) continue;
+      const grupo = m.get(k);
+      if (grupo) grupo.push(x); else m.set(k, [x]);
+    }
+    return m;
+  };
+  const porCodigo = new Map<string, ActivoExistente>(ctx.activos.map((a) => [a.codigo.trim().toUpperCase(), a]));
+  const porSerie = agrupar(ctx.activos, (a) => normalizarSerie(a.serial));
+  const porNumeroActivo = agrupar(ctx.activos, (a) => a.numeroActivo?.trim().toUpperCase());
   const sedes = new Map(ctx.sucursales.map((s) => [s.id, s]));
   const nombreSede = (id: number | null | undefined) => (id != null ? sedes.get(id)?.nombre ?? `#${id}` : "sin sede");
   const ubicacionesPorId = new Map(ctx.ubicaciones.map((u) => [u.id, u]));
+  const ubicacionesPorNombre = agrupar(ctx.ubicaciones, (u) => normalizarTexto(u.nombre));
   const centrosPorId = new Map(ctx.centros.map((c) => [c.id, c]));
+  const centrosPorCodigo = agrupar(ctx.centros, (c) => normalizarTexto(c.codigo));
+  const centrosPorNombre = agrupar(ctx.centros, (c) => normalizarTexto(c.nombre));
+  const sedesPorNombre = agrupar(ctx.sucursales, (s) => normalizarTexto(s.nombre));
+  const sedesPorCodigo = agrupar(ctx.sucursales, (s) => normalizarTexto(s.codigo));
+  const proveedoresPorNombre = agrupar(ctx.proveedores, (p) => normalizarTexto(p.nombre));
   const buscarSucursal = (t: string) => {
     const n = normalizarTexto(t);
-    return ctx.sucursales.find((s) => normalizarTexto(s.nombre) === n) ?? ctx.sucursales.find((s) => s.codigo && normalizarTexto(s.codigo) === n) ?? null;
+    return sedesPorNombre.get(n)?.[0] ?? sedesPorCodigo.get(n)?.[0] ?? null;
   };
   const buscarCentro = (t: string): CentroImportacion | CentroImportacion[] | null => {
     const n = normalizarTexto(t);
-    const porCod = ctx.centros.find((c) => normalizarTexto(c.codigo) === n);
+    const porCod = centrosPorCodigo.get(n)?.[0];
     if (porCod) return porCod;
-    const porNombre = ctx.centros.filter((c) => normalizarTexto(c.nombre) === n);
+    const porNombre = centrosPorNombre.get(n) ?? [];
     return porNombre.length === 1 ? porNombre[0] : porNombre.length > 1 ? porNombre : null;
   };
   const buscarProveedor = (t: string) => {
-    const n = normalizarTexto(t);
-    const todos = ctx.proveedores.filter((p) => normalizarTexto(p.nombre) === n);
+    const todos = proveedoresPorNombre.get(normalizarTexto(t)) ?? [];
     return todos.find((p) => p.activo) ?? todos[0] ?? null;
   };
 
@@ -620,8 +634,7 @@ export function planificarImportacion(texto: string, ctx: ContextoImportacion): 
     }
     let ubicacion: UbicacionImportacion | undefined;
     if (ubTxt && !(sucTxt && !sede)) {
-      const n = normalizarTexto(ubTxt);
-      const candidatas = ctx.ubicaciones.filter((u) => normalizarTexto(u.nombre) === n && (!sede || u.sucursalId === sede.id));
+      const candidatas = (ubicacionesPorNombre.get(normalizarTexto(ubTxt)) ?? []).filter((u) => !sede || u.sucursalId === sede.id);
       // Al actualizar, si el nombre coincide con la ubicación que ya tiene el equipo, se queda esa.
       const laDelEquipo = !crear ? candidatas.find((u) => u.id === existente!.ubicacionId) : undefined;
       const activas = candidatas.filter((u) => u.activa);
@@ -761,7 +774,8 @@ export function planificarImportacion(texto: string, ctx: ContextoImportacion): 
     for (const [campo, despues] of Object.entries(v) as [keyof ActivoExistente, unknown][]) {
       if (despues === undefined) continue;
       const antes = a[campo] ?? null;
-      if (campo === "datosTecnicos" && despues === (a.datosTecnicos ?? null)) continue;
+      // Los datos técnicos se comparan por su contenido, no por el orden del JSON guardado.
+      if (campo === "datosTecnicos" && mismosDatosTecnicos(a.datosTecnicos, despues as string | null)) continue;
       if (!igual(antes, despues)) cambios[campo] = { antes, despues };
     }
     if (!Object.keys(cambios).length) {

@@ -15,7 +15,7 @@ const si = (r, nota) => { n++; assert.ok(r, nota); };
 es(I.parsearCsv('a,b\n1,2'), { separador: ',', registros: [['a', 'b'], ['1', '2']] }, 'coma');
 es(I.parsearCsv('a;b\r\n1;2\r\n'), { separador: ';', registros: [['a', 'b'], ['1', '2']] }, 'punto y coma con CRLF');
 es(I.parsearCsv('a\tb\n1\t2').separador, '\t', 'tabulador');
-es(I.parsearCsv('﻿codigo,nombre\nX,Y').registros[0], ['codigo', 'nombre'], 'quita el BOM');
+es(I.parsearCsv('\uFEFFcodigo,nombre\nX,Y').registros[0], ['codigo', 'nombre'], 'quita el BOM');
 es(I.parsearCsv('a,b\n"1,5","dijo ""hola"""').registros[1], ['1,5', 'dijo "hola"'], 'comillas con coma y comillas dobles');
 es(I.parsearCsv('a,b\n"línea 1\nlínea 2",x\n3,4').registros, [['a', 'b'], ['línea 1\nlínea 2', 'x'], ['3', '4']], 'salto de línea dentro de comillas');
 es(I.parsearCsv('a;b\n"x;y";2').registros[1], ['x;y', '2'], 'separador dentro de comillas');
@@ -36,11 +36,11 @@ for (const [h, clave] of [['codigo_institucional', 'codigo'], ['Serie', 'serial'
   es(I.columnaDeEncabezado(h)?.clave, clave, `alias «${h}»`);
 }
 const plantillaBio = I.plantillaCsv('biomedico');
-si(plantillaBio.startsWith('﻿codigo,numero_activo,nombre,area,'), 'la plantilla empieza con BOM y código');
+si(plantillaBio.startsWith('\uFEFFcodigo,numero_activo,nombre,area,'), 'la plantilla empieza con BOM y código');
 si(plantillaBio.includes(',clase_riesgo,') && plantillaBio.includes(',registro_vencimiento,'), 'la plantilla biomédica trae clase y registro');
 si(!plantillaBio.includes('refrigerante') && !plantillaBio.includes('ultima_calibracion'), 'sin columnas de aires ni de calibración');
 si(I.plantillaCsv('aires').includes('refrigerante') && !I.plantillaCsv('aires').includes('clase_riesgo'), 'la plantilla de aires trae sus datos técnicos');
-for (const h of I.plantillaCsv(null).replace('﻿', '').trim().split(',')) es(I.columnaDeEncabezado(h)?.importable, true, `la plantilla se vuelve a leer: ${h}`);
+for (const h of I.plantillaCsv(null).replace('\uFEFF', '').trim().split(',')) es(I.columnaDeEncabezado(h)?.importable, true, `la plantilla se vuelve a leer: ${h}`);
 
 // ── Contexto en memoria ─────────────────────────────────────────────────────
 const vacio = { numeroActivo: null, serial: null, categoria: null, subcategoria: null, marca: null, modelo: null, descripcion: null, anio: null,
@@ -55,6 +55,7 @@ const ctx = (modo = 'crear', area = 'biomedico') => ({
     { ...vacio, id: 2, codigo: 'Bio-Legado', nombre: 'BOMBA', rubro: 'biomedico', tipo: 'biomedico' },
     { ...vacio, id: 3, codigo: 'EQ-1', nombre: 'IMPRESORA', rubro: 'equipo_general', tipo: 'general' },
     { ...vacio, id: 4, codigo: 'BIO-BAJA', nombre: 'VIEJO', rubro: 'biomedico', tipo: 'biomedico', estado: 'baja', claseRiesgo: 'I' },
+    { ...vacio, id: 5, codigo: 'AC-1', nombre: 'SPLIT', rubro: 'aires', tipo: 'general', datosTecnicos: '{"refrigerante":"R32","tipoUnidad":"MINI SPLIT"}' },
   ],
   sucursales: [{ id: 1, nombre: 'Sede Central', codigo: 'SC' }, { id: 2, nombre: 'Sede Norte', codigo: 'SN' }],
   ubicaciones: [
@@ -177,6 +178,8 @@ es(cambioCentro.cambios.centroCostoId, { antes: null, despues: 3 }, 'centro en l
 es(cambioCentro.cambiosBitacora.centroCostoId, { antes: 'Sin centro de costo', despues: 'CC-03 · NORTE' }, 'centro legible en la bitácora');
 es(fila('codigo,registro_no_requiere\nBIO-1,sí', 'actualizar').cambios.registroSanitarioNoRequiere, { antes: false, despues: true }, 'marcar «no requiere»');
 es(errores(fila('codigo,area\nBIO-1,equipo_general', 'actualizar', null)), ['El equipo es de otra área (Equipos biomédicos).'], 'no cambia el área');
+es(fila('codigo,tipo_unidad,refrigerante\nAC-1,mini split,r32', 'actualizar', 'aires').accion, 'sin_cambios', 'datos técnicos iguales aunque el JSON tenga otro orden');
+es(JSON.parse(fila('codigo,refrigerante\nAC-1,R-410A', 'actualizar', 'aires').cambios.datosTecnicos.despues), { tipoUnidad: 'MINI SPLIT', refrigerante: 'R-410A' }, 'cambia solo el refrigerante');
 
 // El CSV descargado se vuelve a cargar sin cambios
 const fila1 = I.filaExportacion({ codigo: 'BIO-1', numeroActivo: 'AF-9', nombre: 'MONITOR', rubro: 'biomedico', tipo: 'biomedico', categoria: null,
