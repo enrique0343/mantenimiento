@@ -304,8 +304,118 @@ try {
   sq.prepare("UPDATE activo_documentos SET created_at = '2026-11-11 02:30:00' WHERE id = ?").run(subido.id);
   const csvDocs = (await csv(A.expCsv.GET, '/api/expedientes/exportar?detalle=documentos')).texto.split('\r\n');
   es([csvDocs.length, csvDocs[1].endsWith(',Prueba tecnico,2026-11-10 20:30')], [2, true], 'CSV de documentos: subido el 2026-11-10 20:30 (no el día UTC ni sin hora)');
+
+  // ── Ronda 2 · D1: «No requiere registro sanitario» del inventario = «No aplica» (sin fila propia) ──
+  const MOTIVO_INV = 'El inventario marca que el equipo no requiere registro sanitario.';
+  es(A.bio.MOTIVO_SIN_REGISTRO, MOTIVO_INV, 'el motivo es el de biomedico.ts');
+  sq.exec("INSERT INTO activos (id, codigo, nombre, tipo, rubro, ubicacion_id, registro_sanitario_no_requiere) VALUES (102, 'BIO-102', 'NEGATOSCOPIO', 'biomedico', 'biomedico', 10, 1)");
+  const exp102 = await A.consultas.expedienteDeActivo(db, 102, hoy);
+  const reg102 = exp102.completitud.requisitos.find((r) => r.clave === 'registro_sanitario');
+  es([exp102.activo.registroSanitarioNoRequiere, reg102.estado, reg102.motivoNoAplica, exp102.noAplica.length, exp102.completitud.cumplidos, exp102.completitud.faltan.includes('Registro sanitario')],
+    [true, 'no_aplica', MOTIVO_INV, 0, 1, false], 'expedienteDeActivo: «No aplica» por el inventario, sin fila en activo_expediente_na');
+  es((await A.consultas.expedienteDeActivo(db, 101, hoy)).activo.registroSanitarioNoRequiere, false, 'un equipo que sí lo requiere');
+  const fila102 = (await A.consultas.expedientesBiomedicos(db, { hoy })).find((f) => f.activoId === 102);
+  es([fila102.completitud.requisitos.find((r) => r.clave === 'registro_sanitario').estado, fila102.completitud.faltan],
+    ['no_aplica', ['Manual de operación', 'Manual de mantenimiento o servicio', 'Ficha técnica o especificaciones', 'Acta de instalación o aceptación']],
+    '/expedientes: el registro sanitario ya no sale en «Falta»');
+  // CSV del expediente: «No aplica» con el motivo del inventario; «Falta» sin el registro sanitario.
+  const celdasCsv = (linea) => {
+    const out = []; let cur = '', comillas = false;
+    for (let i = 0; i < linea.length; i++) {
+      const ch = linea[i];
+      if (comillas) { if (ch === '"' && linea[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') comillas = false; else cur += ch; }
+      else if (ch === '"') comillas = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur);
+    return out;
+  };
+  const [encabExp, fila102Csv, ...restoCsv] = (await csv(A.expCsv.GET, '/api/expedientes/exportar?q=BIO-102')).texto.replace(/^﻿/, '').split('\r\n').map(celdasCsv);
+  const celda102 = (nombre) => fila102Csv[encabExp.indexOf(nombre)];
+  es([restoCsv.length, celda102('Código'), celda102('Registro sanitario'), celda102('Falta').includes('Registro sanitario'), celda102('Avance')],
+    [0, 'BIO-102', `No aplica: ${MOTIVO_INV}`, false, '1/5'], 'CSV del expediente: «No aplica» con el motivo del inventario');
+  es((await csv(A.expCsv.GET, '/api/expedientes/exportar?falta=registro_sanitario&q=BIO-102')).texto.split('\r\n').length, 1, 'el filtro «Falta: Registro sanitario» ya no lo lista');
+
+  // ── Ronda 2 · D2: un equipo dado de baja no recibe licencias ni capacitaciones nuevas ──
+  const BAJA = 'El equipo está dado de baja: no se le registran licencias ni capacitaciones nuevas.';
+  sq.exec("INSERT INTO activos (id, codigo, nombre, tipo, rubro, ubicacion_id) VALUES (103, 'BIO-103', 'EQUIPO DE RAYOS X', 'biomedico', 'biomedico', 10), (104, 'BIO-104', 'ARCO EN C', 'biomedico', 'biomedico', 10)");
+  const licRx = (await cuerpo(await llamar(A.licencias.POST, '/api/licencias', { method: 'POST', rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 103, sucursalId: null, nombre: 'Licencia del equipo de rayos X', numero: 'RX-1' }) }))).licencia;
+  const capRx = (await cuerpo(await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [103], asistentesTexto: asistentes(2) }) }))).capacitacion.id;
+  sq.exec("UPDATE activos SET estado = 'baja' WHERE id IN (103, 104)");
+  res = await llamar(A.licencias.POST, '/api/licencias', { method: 'POST', rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 103, sucursalId: null, numero: 'RX-2' }) });
+  es([res.status, await cuerpo(res)], [409, { error: BAJA }], 'licencia nueva de un equipo de baja: 409');
+  res = await llamar(A.licencias.POST, '/api/licencias', { method: 'POST', rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 103, sucursalId: null, numero: 'RX-2', reemplazaAId: licRx.id }) });
+  es([res.status, (await cuerpo(res)).error, sq.prepare('SELECT estado FROM licencias WHERE id = ?').get(licRx.id).estado], [409, BAJA, 'activa'], 'ni su renovación: la licencia sigue activa');
+  res = await llamar(A.licencia.PATCH, `/api/licencias/${licRx.id}`, { method: 'PATCH', id: licRx.id, rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 103, sucursalId: null, nombre: 'Licencia del equipo de rayos X', numero: 'RX-1', notas: 'Equipo retirado del servicio' }) });
+  es([res.status, { ...sq.prepare('SELECT notas, activo_id FROM licencias WHERE id = ?').get(licRx.id) }], [200, { notas: 'Equipo retirado del servicio', activo_id: 103 }],
+    'editar la licencia que ya tenía el equipo de baja sigue funcionando');
+  res = await llamar(A.licencia.PATCH, `/api/licencias/${licRx.id}`, { method: 'PATCH', id: licRx.id, rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 104, sucursalId: null, numero: 'RX-1' }) });
+  es([res.status, (await cuerpo(res)).error], [409, BAJA], 'cambiarla a otro equipo de baja: 409');
+  res = await llamar(A.licencia.PATCH, `/api/licencias/${l1.id}`, { method: 'PATCH', id: l1.id, rol: 'jefe', json: licencia({ ambito: 'equipo', activoId: 103, sucursalId: null }) });
+  es([res.status, (await cuerpo(res)).error, sq.prepare('SELECT activo_id FROM licencias WHERE id = ?').get(l1.id).activo_id], [409, BAJA, 100], 'pasar otra licencia a un equipo de baja: 409 y no cambia');
+  es((await A.consultas.listarLicencias(db)).find((l) => l.id === licRx.id).equipoEstado, 'baja', 'listarLicencias trae el estado del equipo');
+  es((await A.consultas.licenciaConDetalle(db, l1.id)).licencia.equipoEstado, 'operativo', 'licenciaConDetalle también');
+
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capRx}`, { method: 'PATCH', id: capRx, rol: 'tecnico', json: capacitacion({ tema: 'Protección radiológica', equipoIds: [103], asistentesTexto: asistentes(3) }) });
+  es([res.status, sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_asistentes WHERE capacitacion_id = ?').get(capRx).n], [200, 3], 'editar la capacitación que ya tenía el equipo de baja sigue funcionando');
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capRx}`, { method: 'PATCH', id: capRx, rol: 'tecnico', json: capacitacion({ equipoIds: [103, 104], asistentesTexto: asistentes(3) }) });
+  es([res.status, (await cuerpo(res)).error, sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_equipos WHERE capacitacion_id = ?').get(capRx).n], [409, BAJA, 1], 'sumarle otro equipo de baja: 409 y no cambia');
+  res = await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [300, 103], asistentesTexto: '' }) });
+  es([res.status, (await cuerpo(res)).error], [409, BAJA], 'capacitación nueva con un equipo de baja: 409');
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capArea}`, { method: 'PATCH', id: capArea, rol: 'tecnico', json: capacitacion({ equipoIds: [400, 401, 104], asistentesTexto: asistentes(2) }) });
+  es([res.status, (await cuerpo(res)).error], [409, BAJA], 'ni en otra capacitación que no lo tenía');
+  res = await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [200, 103], asistentesTexto: '' }) });
+  es(res.status, 400, 'un equipo que no es biomédico sigue dando 400 antes que el 409');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: true })).includes(103), false, 'el alta de capacitación no ofrece equipos de baja');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: true, capacitacionId: capRx })).includes(103), true, 'la edición conserva el equipo de baja que ya tenía');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: false })).includes(103), false, 'el alta de licencia tampoco');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: false, activoId: 103 })).includes(103), true, 'la edición de la licencia conserva su equipo de baja');
+  // Más de 90 equipos al editar: la revisión va en tandas (≤ 92 parámetros) y el de baja enlazado sigue valiendo.
+  for (let i = 0; i < 35; i++) sq.prepare("INSERT INTO activos (id, codigo, nombre, tipo, rubro) VALUES (?, ?, 'MONITOR', 'biomedico', 'biomedico')").run(500 + i, `BIO-${500 + i}`);
+  const muchos = [103, ...Array.from({ length: 60 }, (_, i) => 300 + i), ...Array.from({ length: 35 }, (_, i) => 500 + i)];
+  const antesTandas = h.queries.length;
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capRx}`, { method: 'PATCH', id: capRx, rol: 'tecnico', json: capacitacion({ equipoIds: muchos, asistentesTexto: asistentes(3) }) });
+  const consultasEquipos = h.queries.slice(antesTandas).filter((q) => /from "activos" where "activos"."id" in/i.test(q.sql));
+  es([res.status, sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_equipos WHERE capacitacion_id = ?').get(capRx).n, consultasEquipos.length], [200, 96, 2], '96 equipos: dos tandas y se guardan todos');
+  es(Math.max(...h.queries.slice(antesTandas).map((q) => (q.sql.match(/\?/g) ?? []).length)) <= 100, true, 'ninguna consulta pasa de 100 parámetros');
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capRx}`, { method: 'PATCH', id: capRx, rol: 'tecnico', json: capacitacion({ equipoIds: [...muchos, 104], asistentesTexto: asistentes(3) }) });
+  es([res.status, (await cuerpo(res)).error], [409, BAJA], 'y uno de baja nuevo en la segunda tanda también da 409');
+
+  // ── Ronda 2 · D3: 401 y 403 en JSON { error } en todas las APIs de WP-D ──
+  const rutas = [
+    ['POST documentos', A.docs.POST, '/api/activos/100/documentos', 'POST', 100],
+    ['DELETE documentos', A.docs.DELETE, '/api/activos/100/documentos?documentoId=1', 'DELETE', 100],
+    ['GET documento', A.doc.GET, `/api/activos/documento/${subido.id}`, 'GET', subido.id],
+    ['PATCH documento', A.doc.PATCH, `/api/activos/documento/${subido.id}`, 'PATCH', subido.id],
+    ['POST expediente', A.exp.POST, '/api/activos/100/expediente', 'POST', 100],
+    ['DELETE expediente', A.exp.DELETE, '/api/activos/100/expediente?requisito=registro_sanitario', 'DELETE', 100],
+    ['POST licencias', A.licencias.POST, '/api/licencias', 'POST'],
+    ['PATCH licencia', A.licencia.PATCH, `/api/licencias/${l1.id}`, 'PATCH', l1.id],
+    ['DELETE licencia', A.licencia.DELETE, `/api/licencias/${l1.id}`, 'DELETE', l1.id],
+    ['POST archivos de licencia', A.licArchivos.POST, `/api/licencias/${l1.id}/archivos`, 'POST', l1.id],
+    ['DELETE archivos de licencia', A.licArchivos.DELETE, `/api/licencias/${l1.id}/archivos?archivoId=1`, 'DELETE', l1.id],
+    ['GET archivo de licencia', A.licArchivo.GET, '/api/licencias/archivo/1', 'GET', 1],
+    ['GET CSV de licencias', A.licCsv.GET, '/api/licencias/exportar', 'GET'],
+    ['POST capacitaciones', A.caps.POST, '/api/capacitaciones', 'POST'],
+    ['PATCH capacitación', A.cap.PATCH, `/api/capacitaciones/${capRx}`, 'PATCH', capRx],
+    ['DELETE capacitación', A.cap.DELETE, `/api/capacitaciones/${capRx}`, 'DELETE', capRx],
+    ['POST archivos de capacitación', A.capArchivos.POST, `/api/capacitaciones/${capRx}/archivos`, 'POST', capRx],
+    ['DELETE archivos de capacitación', A.capArchivos.DELETE, `/api/capacitaciones/${capRx}/archivos?archivoId=1`, 'DELETE', capRx],
+    ['GET archivo de capacitación', A.capArchivo.GET, '/api/capacitaciones/archivo/1', 'GET', 1],
+    ['GET CSV de capacitaciones', A.capCsv.GET, '/api/capacitaciones/exportar', 'GET'],
+    ['GET CSV de expedientes', A.expCsv.GET, '/api/expedientes/exportar', 'GET'],
+  ];
+  for (const [nombre, ruta, url, method, id] of rutas) {
+    for (const [rol, codigo] of [[null, 401], ['motorista', 403]]) {
+      const r = await llamar(ruta, url, { method, id, rol });
+      const json = (r.headers.get('content-type') ?? '').includes('application/json');
+      const j = await cuerpo(r);
+      const texto = typeof j === 'object' && j !== null && typeof j.error === 'string' && j.error.length > 0;
+      es([r.status, json, texto], [codigo, true, true], `${nombre}: ${codigo} en JSON { error }`);
+      if (codigo === 401) es(j.error, 'Tu sesión terminó. Vuelve a iniciar sesión.', `${nombre}: el 401 dice que la sesión terminó`);
+    }
+  }
 } finally {
   await h.close();
 }
 
-console.log(`PASS test-bio-documentos-api: ${n} casos; tipo por contenido, roles, «No aplica», renovaciones, tandas de capacitación y CSV con BOM.`);
+console.log(`PASS test-bio-documentos-api: ${n} casos; tipo por contenido, roles, «No aplica» (también del inventario), renovaciones, equipos de baja, tandas de capacitación, CSV con BOM y 401/403 en JSON.`);

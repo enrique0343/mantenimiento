@@ -3,7 +3,10 @@
 // con el protocolo de limpieza). La ficha lo coloca con variante «ficha» (con botones y
 // formulario) y la hoja de vida con variante «hoja» (sin botones ni scripts). Consulta la
 // base por su cuenta y solo se muestra a admin, jefe, técnico y visualizador.
+// Si el inventario marca «No requiere registro sanitario», ese requisito sale «No aplica» con
+// su motivo; no hay nada que quitar aquí: se cambia con «Editar el equipo».
 import { getDb } from "@/lib/db";
+import { areaHref } from "@/lib/areas";
 import { expedienteDeActivo } from "@/lib/bio-consultas";
 import { vencimientosVigentes } from "@/lib/inventario-jci";
 import { partirTitulo } from "./hoja";
@@ -29,11 +32,15 @@ const ficha = variante !== "hoja";
 const tituloHoja = partirTitulo(titulo, "Documentos del equipo");
 const puedeSubir = !!user && puedeRegistrarBio(user.rol) && ficha;
 const puedeGestionar = !!user && puedeGestionarBio(user.rol) && ficha;
+// Los mismos roles que abren /activos/{id}/editar (admin, jefe y técnico).
+const puedeEditarEquipo = !!user && puedeRegistrarBio(user.rol) && ficha;
 
 const docs = exp?.documentos ?? [];
 const c = exp?.completitud ?? null;
 const categorias = categoriasDocumentoPara(exp?.activo.area);
 const naPorRequisito = new Map((exp?.noAplica ?? []).map((n) => [n.requisito, n]));
+const sinRegistroEnInventario = !!exp?.activo.registroSanitarioNoRequiere;
+const editarEquipo = areaHref(`/activos/${activoId}/editar`, exp?.activo.area);
 // Los que mandan para los vencimientos; un documento con vencimiento que no está aquí ya fue reemplazado.
 const mandan = new Set(vencimientosVigentes(docs).map((v) => v.documento.id));
 
@@ -62,6 +69,14 @@ const colorRequisito = (r: Req): string =>
   r.estado === "con_documento" || r.estado === "aceptacion_registrada" ? "text-emerald-700"
     : r.estado === "no_aplica" ? "text-slate-600" : "text-red-600";
 const cumple = (r: Req) => r.estado === "con_documento" || r.estado === "aceptacion_registrada" || r.estado === "no_aplica";
+// «No aplica» que viene del inventario: sin fila en activo_expediente_na, no hay «No aplica» que quitar.
+const noAplicaDelInventario = (r: Req) =>
+  r.clave === "registro_sanitario" && r.estado === "no_aplica" && sinRegistroEnInventario && !naPorRequisito.has(r.clave);
+// Al quitar el «No aplica» marcado aquí, el registro sanitario sigue sin pedirse si el inventario lo dice.
+const avisoQuitar = (r: Req): string | undefined =>
+  r.clave === "registro_sanitario" && r.estado === "no_aplica" && sinRegistroEnInventario
+    ? `«${r.corta}» seguirá como «No aplica»: el inventario marca que el equipo no requiere registro sanitario.`
+    : undefined;
 const kb = (n: number) => `${Math.max(1, Math.round(n / 1024)).toLocaleString("es-SV")} KB`;
 const subtitulo = exp?.esBio
   ? "Expediente técnico: manuales, ficha técnica, registro sanitario y actas. PDF o fotos (JPG, PNG o WEBP) de hasta 15 MB."
@@ -102,11 +117,12 @@ const vigenciaDoc = (d: (typeof docs)[number]) => {
                   <span class="text-slate-700">{r.etiqueta}</span>
                   <span class={`text-xs font-medium ${colorRequisito(r)}`}>{textoRequisito(r)}</span>
                 </div>
-                {(puedeSubir || puedeGestionar) && (
+                {(puedeSubir || puedeGestionar || puedeEditarEquipo) && (
                   <div class="mt-1 flex flex-wrap gap-3 text-xs">
                     {puedeSubir && !cumple(r) && <button type="button" class="text-brand-700 hover:underline" data-doc-subir data-categoria={primeraCategoria(r.clave)}>Subir</button>}
                     {puedeGestionar && !na && !cumple(r) && <button type="button" class="text-slate-600 hover:underline" data-na-abrir data-requisito={r.clave}>No aplica</button>}
-                    {puedeGestionar && na && <button type="button" class="text-slate-600 hover:underline" data-na-quitar data-requisito={r.clave} data-etiqueta={r.corta}>Quitar «No aplica»</button>}
+                    {puedeGestionar && na && <button type="button" class="text-slate-600 hover:underline" data-na-quitar data-requisito={r.clave} data-etiqueta={r.corta} data-aviso={avisoQuitar(r)}>Quitar «No aplica»</button>}
+                    {puedeEditarEquipo && noAplicaDelInventario(r) && <a href={editarEquipo} class="text-brand-700 hover:underline" data-editar-equipo>Editar el equipo</a>}
                   </div>
                 )}
                 {puedeGestionar && !na && !cumple(r) && (

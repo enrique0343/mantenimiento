@@ -139,7 +139,9 @@ function instalar(seccion: HTMLElement): void {
   });
   seccion.querySelectorAll<HTMLButtonElement>("[data-na-quitar]").forEach((b) =>
     b.addEventListener("click", async () => {
-      if (!(await confirmar("¿Quitar «No aplica»?", `«${b.dataset.etiqueta ?? ""}» vuelve a ser requerido en el expediente.`, "Quitar"))) return;
+      // data-aviso: el inventario marca «No requiere registro sanitario» y el requisito sigue sin pedirse.
+      const mensaje = b.dataset.aviso || `«${b.dataset.etiqueta ?? ""}» vuelve a ser requerido en el expediente.`;
+      if (!(await confirmar("¿Quitar «No aplica»?", mensaje, "Quitar"))) return;
       b.disabled = true;
       const res = await pedir(`/api/activos/${activoId}/expediente?requisito=${encodeURIComponent(b.dataset.requisito ?? "")}`, { method: "DELETE" });
       if (res?.ok) { location.reload(); return; }

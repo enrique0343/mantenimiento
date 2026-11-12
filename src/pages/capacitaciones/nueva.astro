@@ -1,9 +1,11 @@
 ---
-// Fase 59 · WP-D: registrar una capacitación. ?activo={id} deja el equipo marcado.
-// Admin, jefe y técnico.
+// Fase 59 · WP-D: registrar una capacitación. ?activo={id} deja el equipo marcado, salvo que
+// esté dado de baja: no recibe capacitaciones nuevas (se avisa). Admin, jefe y técnico.
+import { eq } from "drizzle-orm";
 import Layout from "@/layouts/Layout.astro";
 import CapacitacionForm from "@/components/bio/CapacitacionForm.astro";
 import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
 import { equiposParaElegir, proveedoresParaElegir, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
 import { hoySV, puedeRegistrarBio } from "@/lib/biomedico";
 import { idPositivo } from "@/lib/bio-archivos";
@@ -15,13 +17,18 @@ const area = Astro.locals.area ?? null;
 if (!puedeRegistrarBio(user.rol)) return Astro.redirect(user.rol === "visualizador" ? areaHref("/capacitaciones", area) : "/");
 const db = getDb(Astro);
 const activoId = idPositivo(Astro.url.searchParams.get("activo"));
-const [equipos, provs, sedes, servicios] = await Promise.all([
-  equiposParaElegir(db, { soloBiomedicos: true, activoId }),
+// Biomédicos sin baja: el de ?activo= se marca solo si está entre ellos.
+const [equipos, provs, sedes, servicios, equipoParam] = await Promise.all([
+  equiposParaElegir(db, { soloBiomedicos: true }),
   proveedoresParaElegir(db),
   sedesActivas(db),
   sugerenciasServicio(db),
+  activoId
+    ? db.select({ codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado }).from(activos).where(eq(activos.id, activoId)).limit(1).then((f) => f[0] ?? null)
+    : Promise.resolve(null),
 ]);
 const preelegido = activoId && equipos.some((e) => e.id === activoId) ? [activoId] : [];
+const equipoDeBaja = equipoParam?.estado === "baja" ? equipoParam : null;
 const volver = activoId ? areaHref(`/activos/${activoId}#capacitaciones`, area) : areaHref("/capacitaciones", area);
 ---
 
@@ -31,6 +38,12 @@ const volver = activoId ? areaHref(`/activos/${activoId}#capacitaciones`, area) 
     <h1 class="mt-1 text-2xl font-bold">Registrar capacitación</h1>
     <p class="mt-1 text-sm text-slate-500">Tema, instructor, equipos y asistentes. Puedes imprimir la hoja de asistencia y subir la lista firmada después.</p>
   </div>
+  {equipoDeBaja && (
+    <p class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-aviso-baja>
+      El equipo {equipoDeBaja.codigo} — {equipoDeBaja.nombre} está dado de baja: no se le registran capacitaciones nuevas.
+      Las que ya tiene siguen en su ficha.
+    </p>
+  )}
   <CapacitacionForm
     modo="nueva"
     inicial={{ fecha: hoySV(), tipo: "uso_seguro", instructorTipo: "interno", equipoIds: preelegido }}

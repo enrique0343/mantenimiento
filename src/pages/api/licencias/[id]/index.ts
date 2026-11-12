@@ -50,8 +50,9 @@ export const PATCH: APIRoute = async (ctx) => {
 
   const v = validarLicencia(body, { modo: "editar", estadoActual: actual.estado });
   if (!v.ok) return errorJson(400, v.error);
-  const ref = await completarReferenciasLicencia(db, v.datos);
-  if (!ref.ok) return errorJson(400, ref.error);
+  // El equipo que ya tenía vale aunque se haya dado de baja; cambiar a otro equipo de baja, no (409).
+  const ref = await completarReferenciasLicencia(db, v.datos, actual.activoId);
+  if (!ref.ok) return errorJson(ref.status, ref.error);
   const datos = ref.datos;
 
   const pasaAActiva = actual.estado === "en_tramite" && datos.estado === "activa";

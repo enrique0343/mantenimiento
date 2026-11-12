@@ -150,10 +150,16 @@ export interface FilaLicencia {
   id: number; entidad: string; entidadOtra: string | null; tipo: string; nombre: string; numero: string | null;
   ambito: string; sucursalId: number | null; sede: string | null; servicio: string | null;
   activoId: number | null; equipoCodigo: string | null; equipoNombre: string | null; titular: string | null;
+  /** Estado del equipo (ámbito «equipo»): «baja» = no se le registran renovaciones. */
+  equipoEstado?: string | null;
   fechaEmision: string | null; fechaVencimiento: string | null; responsableId: number | null; responsable: string | null;
   estado: string; reemplazaAId: number | null; notas: string | null; archivos: number; renovacionEnTramite: boolean;
   createdAt: string | null;
 }
+
+/** ¿La licencia es de un equipo dado de baja? Entonces no se renueva (no recibe licencias nuevas). */
+export const esDeEquipoDeBaja = (l: Pick<FilaLicencia, "ambito" | "activoId" | "equipoEstado">): boolean =>
+  l.ambito === "equipo" && !!l.activoId && l.equipoEstado === "baja";
 
 export const SITUACIONES_FILTRO = {
   actuales: "Activas y en trámite",

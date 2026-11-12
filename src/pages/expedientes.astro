@@ -177,7 +177,8 @@ const vence = (r: (typeof filas)[number]) => {
     <p class="doc-nota">
       Expediente completo = manual de operación; manual de mantenimiento o de servicio técnico; ficha técnica o especificaciones del fabricante;
       registro sanitario o inscripción; y acta de instalación o aceptación (también vale la inspección de aceptación registrada en la ficha).
-      Un documento vencido no cuenta; el día del vencimiento todavía vale. «No aplica» se marca por requisito y con motivo.
+      Un documento vencido no cuenta; el día del vencimiento todavía vale. «No aplica» se marca por requisito y con motivo;
+      el registro sanitario también es «No aplica» si el inventario marca que el equipo no lo requiere.
       El protocolo de limpieza y la garantía son recomendados: se muestran, pero no restan.
     </p>
     <p class="doc-nota">{filas.length} equipo{filas.length === 1 ? "" : "s"} · {describir} · Corte: {fechaCorta(hoy)}.</p>

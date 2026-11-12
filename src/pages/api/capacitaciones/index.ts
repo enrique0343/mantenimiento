@@ -1,6 +1,7 @@
 // Registrar una capacitación con sus asistentes y equipos (Fase 59 · WP-D).
 // Admin, jefe y técnico. La sesión se inserta primero; asistentes y equipos van en un
 // solo lote (≤ 90 parámetros por sentencia) y, si el lote falla, la sesión se borra.
+// Un equipo dado de baja no se enlaza a una capacitación nueva (409).
 import type { APIRoute } from "astro";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -22,7 +23,7 @@ export const POST: APIRoute = async (ctx) => {
   if (!v.ok) return Response.json({ error: v.error, ...(v.errores ? { errores: v.errores } : {}) }, { status: 400 });
   const db = getDb(ctx);
   const ref = await revisarReferenciasCapacitacion(db, v.datos, v.equipoIds);
-  if (ref) return errorJson(400, ref);
+  if (ref) return errorJson(ref.status, ref.error);
 
   const [cap] = await db.insert(capacitaciones).values({ ...v.datos, usuarioId: user.id }).returning({ id: capacitaciones.id });
   const hijos = insercionesCapacitacion(db, cap.id, v.asistentes, v.equipoIds);

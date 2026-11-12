@@ -3,7 +3,8 @@
 // las activas y en trámite con su situación; siempre en biomédicos y, en otras áreas,
 // solo si hay alguna. En la hoja de vida (variante «hoja», sin botones ni scripts), todas,
 // y la sección sale siempre que la hoja la coloque (aunque esté vacía: la hoja la numera).
-// Solo admin, jefe, técnico y visualizador.
+// Un equipo dado de baja no recibe licencias nuevas: sin «+ Registrar licencia», con su
+// historial a la vista. Solo admin, jefe, técnico y visualizador.
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
@@ -27,13 +28,15 @@ const ver = !!user && puedeVerBio(user.rol);
 const ficha = variante !== "hoja";
 const hoy = hoySV();
 const db = ver ? getDb(Astro) : null;
-const [equipo] = db ? await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
+const [equipo] = db
+  ? await db.select({ rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, activoId)).limit(1)
+  : [];
 const area = equipo ? rubroDeActivo(equipo.rubro, equipo.tipo) : null;
 const todas = db && equipo ? await licenciasDeActivo(db, activoId) : [];
 const conSituacion = todas.map((l) => ({ ...l, s: situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite }) }));
 const actuales = conSituacion.filter((l) => l.estado === "activa" || l.estado === "en_tramite");
 const mostrar = !!equipo && (!ficha || area === "biomedico" || todas.length > 0);
-const puedeRegistrar = !!user && puedeGestionarBio(user.rol) && ficha;
+const puedeRegistrar = !!user && puedeGestionarBio(user.rol) && ficha && equipo?.estado !== "baja";
 const enlace = (ruta: string) => areaHref(ruta, area);
 const tituloHoja = partirTitulo(titulo, "Licencias y permisos");
 ---

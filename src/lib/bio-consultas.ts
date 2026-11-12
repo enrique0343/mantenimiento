@@ -57,7 +57,11 @@ export async function documentosDeActivo(db: Db, activoId: number): Promise<Docu
 export interface NoAplicaExpediente { requisito: string; motivo: string; usuario: string | null; fecha: string }
 
 export interface ExpedienteActivo {
-  activo: { id: number; codigo: string; nombre: string; area: string; estado: string; aceptacionFecha: string | null };
+  activo: {
+    id: number; codigo: string; nombre: string; area: string; estado: string; aceptacionFecha: string | null;
+    /** El inventario marca «No requiere registro sanitario»: ese requisito es «No aplica» sin fila en activo_expediente_na. */
+    registroSanitarioNoRequiere: boolean;
+  };
   esBio: boolean;
   documentos: DocumentoEquipo[];
   /** Solo biomédicos. */
@@ -70,7 +74,7 @@ export async function expedienteDeActivo(db: Db, activoId: number, hoy: string):
   const [a] = await db
     .select({
       id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo,
-      estado: activos.estado, aceptacionFecha: activos.aceptacionFecha,
+      estado: activos.estado, aceptacionFecha: activos.aceptacionFecha, registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere,
     })
     .from(activos).where(eq(activos.id, activoId)).limit(1);
   if (!a) return null;
@@ -83,9 +87,12 @@ export async function expedienteDeActivo(db: Db, activoId: number, hoy: string):
       .leftJoin(usuarios, eq(usuarios.id, activoExpedienteNa.usuarioId))
       .where(eq(activoExpedienteNa.activoId, activoId)),
   ]);
-  const completitud = esBio ? completitudExpediente({ documentos, aceptacionFecha: a.aceptacionFecha, noAplica, hoy }) : null;
+  const registroSanitarioNoRequiere = !!a.registroSanitarioNoRequiere;
+  const completitud = esBio
+    ? completitudExpediente({ documentos, aceptacionFecha: a.aceptacionFecha, noAplica, registroSanitarioNoRequiere, hoy })
+    : null;
   return {
-    activo: { id: a.id, codigo: a.codigo, nombre: a.nombre, area, estado: a.estado, aceptacionFecha: a.aceptacionFecha },
+    activo: { id: a.id, codigo: a.codigo, nombre: a.nombre, area, estado: a.estado, aceptacionFecha: a.aceptacionFecha, registroSanitarioNoRequiere },
     esBio, documentos, completitud, noAplica,
   };
 }
@@ -101,8 +108,8 @@ export async function expedientesBiomedicos(db: Db, opciones: { hoy: string; inc
     db.select({
       activoId: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo,
       serial: activos.serial, estado: activos.estado, subcategoria: activos.subcategoria, criticidad: activos.criticidadOperacional,
-      aceptacionFecha: activos.aceptacionFecha, ubicacionTexto: activos.ubicacion, sucursalId: ubicaciones.sucursalId,
-      sede: sucursales.nombre, ubicacion: ubicaciones.nombre,
+      aceptacionFecha: activos.aceptacionFecha, registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere,
+      ubicacionTexto: activos.ubicacion, sucursalId: ubicaciones.sucursalId, sede: sucursales.nombre, ubicacion: ubicaciones.nombre,
     })
       .from(activos)
       .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
@@ -122,7 +129,11 @@ export async function expedientesBiomedicos(db: Db, opciones: { hoy: string; inc
   return equipos
     .map((e) => {
       const documentos = docsPor.get(e.activoId) ?? [];
-      const completitud = completitudExpediente({ documentos, aceptacionFecha: e.aceptacionFecha, noAplica: naPor.get(e.activoId) ?? [], hoy });
+      // «No requiere registro sanitario» del inventario cuenta como «No aplica» (MOTIVO_SIN_REGISTRO).
+      const completitud = completitudExpediente({
+        documentos, aceptacionFecha: e.aceptacionFecha, noAplica: naPor.get(e.activoId) ?? [],
+        registroSanitarioNoRequiere: e.registroSanitarioNoRequiere, hoy,
+      });
       const vencimientos = vencimientosVigentes(documentos).map((v) => ({ ...v, dias: diasEntre(hoy, v.fecha) }));
       const proximo = vencimientos[0] ?? null;
       return {
@@ -158,6 +169,12 @@ export async function documentosBiomedicos(db: Db, opciones: { incluirBajas?: bo
 
 // ═══ Licencias ══════════════════════════════════════════════════════════════
 
+/**
+ * Un equipo dado de baja no recibe licencias ni capacitaciones nuevas (409). Lo que ya tenía
+ * enlazado se sigue viendo y se puede editar.
+ */
+export const MENSAJE_EQUIPO_DE_BAJA = "El equipo está dado de baja: no se le registran licencias ni capacitaciones nuevas.";
+
 const responsableLic = alias(usuarios, "lic_responsable");
 
 function selectLicencias(db: Db) {
@@ -166,7 +183,7 @@ function selectLicencias(db: Db) {
       id: licencias.id, entidad: licencias.entidad, entidadOtra: licencias.entidadOtra, tipo: licencias.tipo,
       nombre: licencias.nombre, numero: licencias.numero, ambito: licencias.ambito, sucursalId: licencias.sucursalId,
       sede: sucursales.nombre, servicio: licencias.servicio, activoId: licencias.activoId, equipoCodigo: activos.codigo,
-      equipoNombre: activos.nombre, titular: licencias.titular, fechaEmision: licencias.fechaEmision,
+      equipoNombre: activos.nombre, equipoEstado: activos.estado, titular: licencias.titular, fechaEmision: licencias.fechaEmision,
       fechaVencimiento: licencias.fechaVencimiento, responsableId: licencias.responsableId, responsable: responsableLic.nombre,
       estado: licencias.estado, reemplazaAId: licencias.reemplazaAId, notas: licencias.notas, createdAt: licencias.createdAt,
       archivos: sql<number>`(SELECT COUNT(*) FROM licencia_archivos la WHERE la.licencia_id = ${licencias.id})`,
@@ -181,6 +198,7 @@ function selectLicencias(db: Db) {
 type FilaLicenciaCruda = Awaited<ReturnType<typeof selectLicencias>>[number];
 const aFilaLicencia = (r: FilaLicenciaCruda): FilaLicencia => ({
   ...r, sede: r.sede ?? null, equipoCodigo: r.equipoCodigo ?? null, equipoNombre: r.equipoNombre ?? null,
+  equipoEstado: r.equipoEstado ?? null,
   responsable: r.responsable ?? null, archivos: Number(r.archivos) || 0, renovacionEnTramite: !!Number(r.renovacionEnTramite),
 });
 
@@ -196,24 +214,28 @@ export async function licenciasDeActivo(db: Db, activoId: number): Promise<FilaL
 
 /**
  * Revisa que el equipo, la sede y el responsable existan. En el ámbito «equipo», la sede
- * sale de la ubicación del equipo.
+ * sale de la ubicación del equipo. Un equipo dado de baja no recibe licencias nuevas (409),
+ * salvo `activoIdActual`: el que la licencia que se edita ya tenía (editarla sigue funcionando).
  */
-export async function completarReferenciasLicencia(db: Db, datos: DatosLicencia): Promise<{ ok: true; datos: DatosLicencia } | { ok: false; error: string }> {
+export async function completarReferenciasLicencia(
+  db: Db, datos: DatosLicencia, activoIdActual?: number | null,
+): Promise<{ ok: true; datos: DatosLicencia } | { ok: false; status: 400 | 409; error: string }> {
   const d: DatosLicencia = { ...datos };
   if (d.ambito === "equipo" && d.activoId) {
-    const [e] = await db.select({ id: activos.id, sucursalId: ubicaciones.sucursalId })
+    const [e] = await db.select({ id: activos.id, estado: activos.estado, sucursalId: ubicaciones.sucursalId })
       .from(activos).leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
       .where(eq(activos.id, d.activoId)).limit(1);
-    if (!e) return { ok: false, error: "El equipo ya no existe. Recarga la página." };
+    if (!e) return { ok: false, status: 400, error: "El equipo ya no existe. Recarga la página." };
+    if (e.estado === "baja" && e.id !== activoIdActual) return { ok: false, status: 409, error: MENSAJE_EQUIPO_DE_BAJA };
     d.sucursalId = e.sucursalId ?? null;
   }
   if (d.sucursalId) {
     const [s] = await db.select({ id: sucursales.id }).from(sucursales).where(eq(sucursales.id, d.sucursalId)).limit(1);
-    if (!s) return { ok: false, error: "La sede ya no existe. Recarga la página." };
+    if (!s) return { ok: false, status: 400, error: "La sede ya no existe. Recarga la página." };
   }
   if (d.responsableId) {
     const [u] = await db.select({ id: usuarios.id }).from(usuarios).where(eq(usuarios.id, d.responsableId)).limit(1);
-    if (!u) return { ok: false, error: "El responsable ya no existe. Recarga la página." };
+    if (!u) return { ok: false, status: 400, error: "El responsable ya no existe. Recarga la página." };
   }
   return { ok: true, datos: d };
 }
@@ -450,9 +472,10 @@ export async function proveedoresParaElegir(db: Db, incluirId?: number | null) {
 
 /**
  * Equipos sin baja para elegir en una capacitación (solo biomédicos) o en una licencia, más los
- * que ya están enlazados aunque se hayan dado de baja (así editar no los quita sin querer).
- * El equipo de `activoId` (el que viene de la ficha) entra aunque esté de baja, pero en una
- * capacitación solo si es biomédico: el servidor no acepta otros.
+ * que ya están enlazados aunque se hayan dado de baja (así editar no los quita sin querer): los de
+ * `capacitacionId` y el de `activoId` (el equipo que ya tiene la licencia que se edita; en una
+ * capacitación, solo si es biomédico, porque el servidor no acepta otros). Las páginas de alta no
+ * pasan `activoId`: un equipo de baja no recibe licencias ni capacitaciones nuevas.
  */
 export async function equiposParaElegir(db: Db, opciones: { soloBiomedicos: boolean; capacitacionId?: number | null; activoId?: number | null }) {
   const base = opciones.soloBiomedicos ? and(activoAreaCondition("biomedico"), ne(activos.estado, "baja"))! : ne(activos.estado, "baja");
@@ -498,36 +521,46 @@ async function enTandas<T>(db: Db, ids: readonly number[], consulta: (parte: num
   return ((await db.batch(partes as [any, ...any[]])) as T[][]).flat();
 }
 
+interface EquipoParaCapacitacion { bio: boolean; baja: boolean; enlazado: boolean }
+
 /**
- * De estos ids, los equipos que existen y son biomédicos (en tandas de 90). Con `capacitacionId`
- * valen también los que ya están enlazados a esa capacitación aunque después se hayan pasado a
- * otra área: si no, la capacitación no se podría editar sin quitarlos.
+ * Cómo está cada uno de estos equipos (en tandas de 90; cada consulta usa 92 parámetros como
+ * máximo): si es biomédico, si está dado de baja y si ya está enlazado a `capacitacionId` (al
+ * editar). Los que no existen no salen en el mapa.
  */
-export async function idsBiomedicosExistentes(db: Db, ids: readonly number[], capacitacionId?: number | null): Promise<Set<number>> {
-  const valido = capacitacionId
-    ? or(activoAreaCondition("biomedico"), sql`${activos.id} IN (SELECT ce.activo_id FROM capacitacion_equipos ce WHERE ce.capacitacion_id = ${capacitacionId})`)
-    : activoAreaCondition("biomedico");
-  const filas = await enTandas<{ id: number }>(db, ids, (parte) =>
-    db.select({ id: activos.id }).from(activos).where(and(inArray(activos.id, parte), valido)));
-  return new Set(filas.map((f) => f.id));
+async function equiposDeCapacitacion(db: Db, ids: readonly number[], capacitacionId?: number | null): Promise<Map<number, EquipoParaCapacitacion>> {
+  const enlazado = capacitacionId
+    ? sql<number>`EXISTS (SELECT 1 FROM capacitacion_equipos ce WHERE ce.capacitacion_id = ${capacitacionId} AND ce.activo_id = ${activos.id})`.as("enlazado")
+    : sql<number>`0`.as("enlazado");
+  const filas = await enTandas<{ id: number; esBio: number; estado: string; enlazado: number }>(db, ids, (parte) =>
+    db.select({ id: activos.id, esBio: sql<number>`(${activoAreaCondition("biomedico")})`.as("es_bio"), estado: activos.estado, enlazado })
+      .from(activos).where(inArray(activos.id, parte)));
+  return new Map(filas.map((f) => [f.id, { bio: !!Number(f.esBio), baja: f.estado === "baja", enlazado: !!Number(f.enlazado) }]));
 }
 
 /**
- * Los equipos tienen que existir y ser biomédicos (al editar, también valen los que ya estaban
- * enlazados); el proveedor y la sede, existir.
+ * Los equipos tienen que existir y ser biomédicos (400); al editar también valen los que ya
+ * estaban enlazados aunque después se hayan pasado a otra área (si no, la capacitación no se
+ * podría editar sin quitarlos). Un equipo dado de baja no se enlaza a una capacitación nueva ni se
+ * suma a una existente (409); el que ya estaba enlazado se conserva al editar. El proveedor y la
+ * sede tienen que existir (400).
  */
 export async function revisarReferenciasCapacitacion(
   db: Db, datos: { proveedorId: number | null; sucursalId: number | null }, equipoIds: readonly number[], capacitacionId?: number | null,
-): Promise<string | null> {
-  const existentes = await idsBiomedicosExistentes(db, equipoIds, capacitacionId);
-  if (equipoIds.some((id) => !existentes.has(id))) return "Uno de los equipos ya no existe. Recarga la página.";
+): Promise<{ status: 400 | 409; error: string } | null> {
+  const equipos = await equiposDeCapacitacion(db, equipoIds, capacitacionId);
+  const falla = (status: 400 | 409, error: string) => ({ status, error });
+  if (equipoIds.some((id) => { const e = equipos.get(id); return !e || (!e.bio && !e.enlazado); })) {
+    return falla(400, "Uno de los equipos ya no existe. Recarga la página.");
+  }
+  if (equipoIds.some((id) => { const e = equipos.get(id); return !!e && e.baja && !e.enlazado; })) return falla(409, MENSAJE_EQUIPO_DE_BAJA);
   if (datos.proveedorId) {
     const [p] = await db.select({ id: proveedores.id }).from(proveedores).where(eq(proveedores.id, datos.proveedorId)).limit(1);
-    if (!p) return "El proveedor ya no existe. Recarga la página.";
+    if (!p) return falla(400, "El proveedor ya no existe. Recarga la página.");
   }
   if (datos.sucursalId) {
     const [s] = await db.select({ id: sucursales.id }).from(sucursales).where(eq(sucursales.id, datos.sucursalId)).limit(1);
-    if (!s) return "La sede ya no existe. Recarga la página.";
+    if (!s) return falla(400, "La sede ya no existe. Recarga la página.");
   }
   return null;
 }

@@ -3,7 +3,8 @@
 // solo equipos biomédicos: el resumen y las cinco más recientes. En la hoja de vida
 // (variante «hoja», sin botones ni scripts), todas, y la sección sale siempre que la hoja la
 // coloque, también en un equipo que se pasó a otra área con capacitaciones (la hoja la numera).
-// Solo admin, jefe, técnico y visualizador.
+// Un equipo dado de baja no recibe capacitaciones nuevas: sin «+ Registrar capacitación», con
+// las que ya tiene a la vista. Solo admin, jefe, técnico y visualizador.
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
@@ -27,11 +28,13 @@ const ver = !!user && puedeVerBio(user.rol);
 const ficha = variante !== "hoja";
 const hoy = hoySV();
 const db = ver ? getDb(Astro) : null;
-const [equipo] = db ? await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
+const [equipo] = db
+  ? await db.select({ rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, activoId)).limit(1)
+  : [];
 const esBio = !!equipo && rubroDeActivo(equipo.rubro, equipo.tipo) === "biomedico";
 const datos = db && equipo && (esBio || !ficha) ? await capacitacionesDeActivo(db, activoId, hoy) : null;
 const filas = (datos?.filas ?? []).map((f) => ({ ...f, ev: evidenciaCapacitacion(f, hoy) }));
-const puedeRegistrar = !!user && puedeRegistrarBio(user.rol) && ficha;
+const puedeRegistrar = !!user && puedeRegistrarBio(user.rol) && ficha && equipo?.estado !== "baja";
 const enlace = (ruta: string) => areaHref(ruta, "biomedico");
 const tituloHoja = partirTitulo(titulo, "Capacitaciones al personal");
 ---

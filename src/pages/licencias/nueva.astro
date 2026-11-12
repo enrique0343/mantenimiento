@@ -1,13 +1,14 @@
 ---
 // Fase 59 · WP-D: registrar una licencia (?activo={id} la deja ligada al equipo) o la
-// renovación de una activa (?renueva={id}). Solo admin y jefe.
+// renovación de una activa (?renueva={id}). Solo admin y jefe. Un equipo dado de baja no
+// recibe licencias nuevas: con ?activo= no se preelige (y se avisa) y su licencia no se renueva.
 import { eq } from "drizzle-orm";
 import Layout from "@/layouts/Layout.astro";
 import LicenciaForm from "@/components/bio/LicenciaForm.astro";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
 import { equiposParaElegir, licenciaConDetalle, responsablesLicencia, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
-import { licenciaParaRenovar } from "@/lib/licencias";
+import { esDeEquipoDeBaja, licenciaParaRenovar } from "@/lib/licencias";
 import { puedeGestionarBio } from "@/lib/biomedico";
 import { idPositivo } from "@/lib/bio-archivos";
 import { areaHref } from "@/lib/areas";
@@ -23,28 +24,34 @@ const activoParam = idPositivo(params.get("activo") ?? params.get("equipo"));
 
 let renueva: { id: number; nombre: string; numero: string | null; fechaVencimiento: string | null } | null = null;
 let inicial: Record<string, unknown> = { estado: "activa" };
+// El equipo de ?activo=, si existe (de baja: no se preelige y se avisa).
+let equipoParam: { id: number; codigo: string; nombre: string; estado: string } | null = null;
 if (renuevaId) {
   const d = await licenciaConDetalle(db, renuevaId);
   if (!d) return new Response("Licencia no encontrada", { status: 404 });
-  if (d.licencia.estado !== "activa") return Astro.redirect(areaHref(`/licencias/${renuevaId}`, area));
+  // La licencia explica por qué no se renueva (estado o equipo de baja).
+  if (d.licencia.estado !== "activa" || esDeEquipoDeBaja(d.licencia)) return Astro.redirect(areaHref(`/licencias/${renuevaId}`, area));
   const enTramite = d.renovaciones.find((r) => r.estado === "en_tramite");
   if (enTramite) return Astro.redirect(areaHref(`/licencias/${enTramite.id}`, area));
   renueva = { id: d.licencia.id, nombre: d.licencia.nombre, numero: d.licencia.numero, fechaVencimiento: d.licencia.fechaVencimiento };
   inicial = licenciaParaRenovar(d.licencia);
 } else if (activoParam) {
-  const [e] = await db.select({ id: activos.id }).from(activos).where(eq(activos.id, activoParam)).limit(1);
-  if (e) inicial = { estado: "activa", ambito: "equipo", activoId: e.id };
+  const [e] = await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado })
+    .from(activos).where(eq(activos.id, activoParam)).limit(1);
+  equipoParam = e ?? null;
+  if (e && e.estado !== "baja") inicial = { estado: "activa", ambito: "equipo", activoId: e.id };
 }
-const activoInicial = typeof inicial.activoId === "number" ? inicial.activoId : null;
+const equipoDeBaja = equipoParam?.estado === "baja" ? equipoParam : null;
 const numeroDe = (v: unknown) => (typeof v === "number" ? v : null);
-// En la renovación, la sede y el responsable de la anterior entran aunque estén inactivos.
+// En la renovación, la sede y el responsable de la anterior entran aunque estén inactivos. Los
+// equipos son los que no están de baja: el de la renovación y el de ?activo= ya están entre ellos.
 const [sedes, equipos, responsables, servicios] = await Promise.all([
   sedesActivas(db, numeroDe(inicial.sucursalId)),
-  equiposParaElegir(db, { soloBiomedicos: false, activoId: activoInicial }),
+  equiposParaElegir(db, { soloBiomedicos: false }),
   responsablesLicencia(db, numeroDe(inicial.responsableId)),
   sugerenciasServicio(db),
 ]);
-const volver = renueva ? areaHref(`/licencias/${renueva.id}`, area) : activoInicial ? areaHref(`/activos/${activoInicial}#licencias`, area) : areaHref("/licencias", area);
+const volver = renueva ? areaHref(`/licencias/${renueva.id}`, area) : equipoParam ? areaHref(`/activos/${equipoParam.id}#licencias`, area) : areaHref("/licencias", area);
 const titulo = renueva ? "Registrar renovación" : "Registrar licencia";
 ---
 
@@ -56,6 +63,12 @@ const titulo = renueva ? "Registrar renovación" : "Registrar licencia";
       <p class="mt-1 text-sm text-slate-500">Licencia o permiso de funcionamiento, de radiación o de inscripción, con su vencimiento.</p>
     </div>
   </div>
+  {equipoDeBaja && (
+    <p class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800" data-aviso-baja>
+      El equipo {equipoDeBaja.codigo} — {equipoDeBaja.nombre} está dado de baja: no se le registran licencias nuevas.
+      Su historial sigue en la ficha del equipo.
+    </p>
+  )}
   <LicenciaForm
     modo={renueva ? "renovar" : "nueva"}
     inicial={inicial}
