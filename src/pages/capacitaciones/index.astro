@@ -28,8 +28,10 @@ const porDefecto = filtros.desde === haceUnAnio && !filtros.hasta && filtros.act
 const [lista, sedes, [equipoFiltro]] = await Promise.all([
   listarCapacitaciones(db, filtros),
   sedesActivas(db),
-  filtros.activo ? db.select({ codigo: activos.codigo, nombre: activos.nombre }).from(activos).where(eq(activos.id, filtros.activo)).limit(1) : Promise.resolve([]),
+  filtros.activo ? db.select({ codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado }).from(activos).where(eq(activos.id, filtros.activo)).limit(1) : Promise.resolve([]),
 ]);
+// «+ Registrar capacitación» deja marcado el equipo del filtro, salvo que esté de baja (no recibe capacitaciones nuevas).
+const activoParaNueva = filtros.activo !== null && equipoFiltro?.estado !== "baja" ? filtros.activo : null;
 const anio = porDefecto ? lista : await listarCapacitaciones(db, { desde: haceUnAnio, hasta: null, activo: null });
 const realizadas = anio.filter((c) => c.fecha <= hoy);
 const tarjetas = {
@@ -67,7 +69,7 @@ const equiposTexto = (c: (typeof filas)[number]) => {
       <p class="mt-1 text-sm text-slate-500">Capacitaciones al personal médico y de enfermería sobre el uso de los equipos.</p>
     </div>
     <div class="flex flex-wrap gap-2">
-      {puedeRegistrarBio(user.rol) && <a href={enlace(`/capacitaciones/nueva${filtros.activo ? `?activo=${filtros.activo}` : ""}`)} class="btn-primary">+ Registrar capacitación</a>}
+      {puedeRegistrarBio(user.rol) && <a href={enlace(`/capacitaciones/nueva${activoParaNueva ? `?activo=${activoParaNueva}` : ""}`)} class="btn-primary">+ Registrar capacitación</a>}
       <a href={`/api/capacitaciones/exportar?${qs}`} class="btn-secondary">CSV por sesión</a>
       <a href={`/api/capacitaciones/exportar?${qs}&detalle=asistentes`} class="btn-secondary">CSV de asistentes</a>
       <button type="button" class="btn-secondary" onclick="window.print()">Imprimir evidencia</button>
@@ -110,7 +112,7 @@ const equiposTexto = (c: (typeof filas)[number]) => {
 
   {filtros.activo !== null && (
     <p class="no-print mt-3 text-sm text-slate-600">
-      Mostrando las capacitaciones de {equipoFiltro ? `${equipoFiltro.codigo} — ${equipoFiltro.nombre}` : "este equipo"}. <a class="text-brand-700 underline" href={sinActivo()}>Quitar filtro</a>
+      Mostrando las capacitaciones de {equipoFiltro ? `${equipoFiltro.codigo} — ${equipoFiltro.nombre}` : "este equipo"}{equipoFiltro?.estado === "baja" ? " (dado de baja: no recibe capacitaciones nuevas)" : ""}. <a class="text-brand-700 underline" href={sinActivo()}>Quitar filtro</a>
     </p>
   )}
 

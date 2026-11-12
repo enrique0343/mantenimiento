@@ -1,6 +1,7 @@
 ---
 // Fase 59 · WP-D: una licencia o permiso con sus datos, situación, renovaciones, archivos
 // e historial. Editar, renovar, anular y archivos: admin y jefe; eliminar: solo admin.
+// La licencia de un equipo dado de baja se puede editar, pero no renovar (no recibe licencias nuevas).
 import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
@@ -8,7 +9,8 @@ import LicenciaForm from "@/components/bio/LicenciaForm.astro";
 import { getDb } from "@/lib/db";
 import { equiposParaElegir, licenciaConDetalle, responsablesLicencia, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
 import {
-  CATEGORIAS_ARCHIVO_LICENCIA, aplicaA, codigoLicencia, etiquetaAmbito, etiquetaEntidad, etiquetaEstadoLicencia, etiquetaTipoLicencia,
+  CATEGORIAS_ARCHIVO_LICENCIA, aplicaA, codigoLicencia, esDeEquipoDeBaja, etiquetaAmbito, etiquetaEntidad, etiquetaEstadoLicencia,
+  etiquetaTipoLicencia,
 } from "@/lib/licencias";
 import { ARCHIVO_ACCEPT, fechaCorta, fechaHoraSV, hoySV, puedeGestionarBio, puedeVerBio, situacionLicencia } from "@/lib/biomedico";
 import { idPositivo } from "@/lib/bio-archivos";
@@ -31,6 +33,7 @@ const gestiona = puedeGestionarBio(user.rol);
 const editable = l.estado === "activa" || l.estado === "en_tramite";
 const renovacionEnCurso = d.renovaciones.find((r) => r.estado === "en_tramite") ?? null;
 const reemplazadaPor = d.renovaciones.find((r) => r.estado === "activa" || r.estado === "reemplazada") ?? null;
+const equipoDeBaja = esDeEquipoDeBaja(l);
 const enlace = (ruta: string) => areaHref(ruta, area);
 // La sede y el responsable que ya tiene van en la lista aunque estén inactivos: si no, editar los borraría.
 const [sedes, equipos, responsables, servicios] = gestiona && editable
@@ -48,7 +51,7 @@ const ACCION: Record<string, string> = { create: "Registro", update: "Cambio", d
     <div class="flex flex-wrap gap-2">
       <button type="button" class="btn-secondary" onclick="window.print()">Imprimir</button>
       {gestiona && editable && <button type="button" class="btn-secondary" data-editar>Editar</button>}
-      {gestiona && l.estado === "activa" && !renovacionEnCurso && <a class="btn-primary" href={enlace(`/licencias/nueva?renueva=${l.id}`)}>Registrar renovación</a>}
+      {gestiona && l.estado === "activa" && !renovacionEnCurso && !equipoDeBaja && <a class="btn-primary" href={enlace(`/licencias/nueva?renueva=${l.id}`)}>Registrar renovación</a>}
       {gestiona && renovacionEnCurso && <a class="btn-secondary" href={enlace(`/licencias/${renovacionEnCurso.id}`)}>Ver la renovación en trámite</a>}
       {gestiona && editable && <button type="button" class="btn-secondary" data-anular>Anular</button>}
       {user.rol === "admin" && (
@@ -77,7 +80,14 @@ const ACCION: Record<string, string> = { create: "Registro", update: "Cambio", d
         <tbody>
           <tr><th>Entidad</th><td>{etiquetaEntidad(l.entidad, l.entidadOtra)}</td><th>Número</th><td>{l.numero ?? "—"}</td></tr>
           <tr><th>Tipo</th><td>{etiquetaTipoLicencia(l.tipo)}</td><th>Estado</th><td>{etiquetaEstadoLicencia(l.estado)}</td></tr>
-          <tr><th>Ámbito</th><td>{etiquetaAmbito(l.ambito)}</td><th>Aplica a</th><td>{l.ambito === "equipo" && l.activoId ? <a href={`/activos/${l.activoId}#licencias`}>{aplicaA(l)}</a> : aplicaA(l)}</td></tr>
+          <tr>
+            <th>Ámbito</th><td>{etiquetaAmbito(l.ambito)}</td>
+            <th>Aplica a</th>
+            <td>
+              {l.ambito === "equipo" && l.activoId ? <a href={`/activos/${l.activoId}#licencias`}>{aplicaA(l)}</a> : aplicaA(l)}
+              {equipoDeBaja && <span class="doc-nota-celda" data-equipo-baja>Equipo dado de baja: no se registran renovaciones.</span>}
+            </td>
+          </tr>
           <tr><th>Sede</th><td>{l.sede ?? "—"}</td><th>Servicio</th><td>{l.servicio ?? "—"}</td></tr>
           <tr><th>Titular</th><td>{l.titular ?? "—"}</td><th>Responsable</th><td>{l.responsable ?? "—"}</td></tr>
           <tr><th>Emisión</th><td>{fechaCorta(l.fechaEmision)}</td><th>Vence</th><td>{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td></tr>

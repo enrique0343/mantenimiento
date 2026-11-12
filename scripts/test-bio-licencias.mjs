@@ -136,4 +136,11 @@ es([L.filaCsvLicencia(todas[5], hoy).situacion, L.filaCsvLicencia(todas[5], hoy)
 es([L.filaCsvLicencia(todas[7], hoy).situacion, L.filaCsvLicencia(todas[7], hoy).dias, L.filaCsvLicencia(todas[7], hoy).estado], ['Reemplazada', '', 'Reemplazada'], 'reemplazada: sin días');
 es(L.COLUMNAS_CSV_LICENCIAS.length, 19, '19 columnas');
 
-console.log(`PASS test-bio-licencias: ${n} casos; validación, renovación, filtros acumulados, búsqueda, orden y CSV.`);
+// ── Ronda 2: la licencia de un equipo dado de baja no se renueva ─────────────
+const deEquipo = { ambito: 'equipo', activoId: 7, equipoEstado: 'baja' };
+es(L.esDeEquipoDeBaja(deEquipo), true, 'equipo de baja');
+es([L.esDeEquipoDeBaja({ ...deEquipo, equipoEstado: 'operativo' }), L.esDeEquipoDeBaja({ ...deEquipo, equipoEstado: undefined }), L.esDeEquipoDeBaja({ ...deEquipo, activoId: null })],
+  [false, false, false], 'equipo en servicio, sin el dato o sin equipo');
+es(L.esDeEquipoDeBaja({ ...deEquipo, ambito: 'servicio' }), false, 'otro ámbito no depende del equipo');
+
+console.log(`PASS test-bio-licencias: ${n} casos; validación, renovación, filtros acumulados, búsqueda, orden, CSV y licencias de equipos de baja.`);

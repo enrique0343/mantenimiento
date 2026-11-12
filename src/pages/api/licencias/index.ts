@@ -1,6 +1,7 @@
 // Registrar una licencia o permiso, o la renovación de una (Fase 59 · WP-D).
 // Renovar = licencia nueva con reemplaza_a_id; si nace «Activa», la anterior pasa a
-// «Reemplazada» en el mismo lote. Solo admin y jefe.
+// «Reemplazada» en el mismo lote. Solo admin y jefe. Un equipo dado de baja no recibe
+// licencias nuevas, tampoco renovaciones (409).
 import type { APIRoute } from "astro";
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -22,7 +23,7 @@ export const POST: APIRoute = async (ctx) => {
   if (!v.ok) return errorJson(400, v.error);
   const db = getDb(ctx);
   const ref = await completarReferenciasLicencia(db, v.datos);
-  if (!ref.ok) return errorJson(400, ref.error);
+  if (!ref.ok) return errorJson(ref.status, ref.error);
   const datos = ref.datos;
 
   let anterior: { id: number; estado: string; nombre: string } | null = null;

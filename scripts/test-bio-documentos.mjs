@@ -132,4 +132,11 @@ es(J.filaCsvDocumento({ codigo: 'BIO-001', equipo: 'Monitor', categoria: 'otro',
 es([J.marcaCsvSV('2026-11-12 15:30:00'), J.marcaCsvSV('2026-11-12T06:00:00.000Z'), J.marcaCsvSV('2026-11-12'), J.marcaCsvSV(null), J.marcaCsvSV('ayer')],
   ['2026-11-12 09:30', '2026-11-12 00:00', '2026-11-12', '', ''], 'marcaCsvSV');
 
-console.log(`PASS test-bio-documentos: ${n} casos; metadatos del documento, vencimientos que mandan y filtros y CSV de expedientes.`);
+// ── Ronda 2: el inventario marca «No requiere registro sanitario» ───────────
+const sinRegistro = { ...fila(5, {}, [doc(10, 'manual_operacion')]), completitud: J.completitudExpediente({ documentos: [doc(10, 'manual_operacion')], registroSanitarioNoRequiere: true, hoy }) };
+const csv5 = J.filaCsvExpediente(sinRegistro, etq);
+es([csv5.avance, csv5.req_registro_sanitario, csv5.falta.includes('Registro sanitario')],
+  ['2/5', 'No aplica: El inventario marca que el equipo no requiere registro sanitario.', false], 'CSV: «No aplica» con el motivo del inventario y sin «Registro sanitario» en «Falta»');
+es(J.filtrarExpedientes([...filas, sinRegistro], f('falta=registro_sanitario')).map((r) => r.activoId), [], '«Falta: Registro sanitario» no lo lista');
+
+console.log(`PASS test-bio-documentos: ${n} casos; metadatos del documento, vencimientos que mandan, filtros y CSV de expedientes (también sin registro sanitario).`);
