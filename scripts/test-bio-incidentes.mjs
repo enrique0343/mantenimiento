@@ -232,6 +232,19 @@ try {
   es(cap.lotes[0].every((l) => /^OT eliminada en borrado por lote \(2\): OT-MB\d{4} "/.test(l.resumen)), true, 'las dos con su código');
   es(uno('SELECT count(*) AS n FROM ordenes WHERE id IN (901, 902)').n, 0, 'borradas');
 
+  // Un lote de 150 órdenes se borra y ninguna consulta pasa de 100 parámetros (límite de D1).
+  const idsLote = Array.from({ length: 150 }, (_, i) => 2000 + i);
+  sqlite.exec(`INSERT INTO ordenes(id, titulo, rubro, tipo, estado, creado_por) VALUES ${idsLote.map((id) => `(${id}, 'Lote ${id}', 'biomedico', 'correctivo', 'abierta', 1)`).join(', ')}`);
+  sqlite.exec(`INSERT INTO tickets(tracking_token, solicitante_nombre, solicitante_email, asunto, descripcion, ot_id, rubro) VALUES ('lote-2149', 'Prueba', 'p@example.invalid', 'Vinculado', 'Conservar el ticket', 2149, 'biomedico')`);
+  const desdeConsulta = h.queries.length;
+  cap.lotes.length = 0;
+  es((await st(llamar(R.lote.POST, '/api/ordenes/bulk-delete', { method: 'POST', data: { ids: idsLote }, rol: 'admin' }), 200, 'lote de 150')).body, { ok: true, borradas: 150 }, '150 borradas');
+  const maxParametros = Math.max(...h.queries.slice(desdeConsulta).map((q) => (q.sql.match(/\?/g) ?? []).length));
+  es(maxParametros <= 100, true, `ninguna consulta pasa de 100 parámetros (máximo ${maxParametros})`);
+  es([cap.lotes.length, cap.lotes[0].length], [1, 150], 'una llamada con 150 líneas');
+  es(uno('SELECT count(*) AS n FROM ordenes WHERE id BETWEEN 2000 AND 2149').n, 0, 'las 150 se borraron');
+  es(uno("SELECT ot_id FROM tickets WHERE tracking_token = 'lote-2149'").ot_id, null, 'el ticket queda sin orden');
+
   // ── Formulario público: equipos de una ubicación ──────────────────────────
   const equipos = (qs) => llamar(R.equipos.GET, `/api/tickets/publico/equipos${qs}`, { rol: null });
   for (const qs of ['', '?ubicacionId=abc', '?ubicacionId=0', '?ubicacionId=-1', '?ubicacionId=1.5']) {
