@@ -3,7 +3,7 @@
 import type { APIRoute } from "astro";
 import { getDb } from "@/lib/db";
 import { toCsv, csvResponse } from "@/lib/csv";
-import { ESTADO_ACTIVO_LABEL, ROLES_BIO_VER, diaSV, hoySV } from "@/lib/biomedico";
+import { ESTADO_ACTIVO_LABEL, ROLES_BIO_VER, hoySV } from "@/lib/biomedico";
 import { SUBCAT_KEYS, subcatLabel } from "@/lib/rubros";
 import {
   COLUMNAS_CSV_DOCUMENTOS, COLUMNAS_CSV_EXPEDIENTES, CRITICIDAD_LABEL, filaCsvDocumento, filaCsvExpediente, filtrarExpedientes,
@@ -32,7 +32,8 @@ export const GET: APIRoute = async (ctx) => {
   if (params.get("detalle") === "documentos") {
     const ids = new Set(filas.map((f) => f.activoId));
     const docs = (await documentosBiomedicos(db, { incluirBajas: filtros.bajas })).filter((d) => ids.has(d.activoId));
-    const csv = toCsv(docs.map((d) => filaCsvDocumento({ ...d, subidoEl: diaSV(d.createdAt) }, hoy)), [...COLUMNAS_CSV_DOCUMENTOS]);
+    // «Subido el» es una marca: 'AAAA-MM-DD HH:MM' en hora de El Salvador (§f.5).
+    const csv = toCsv(docs.map((d) => filaCsvDocumento({ ...d, subidoEl: d.createdAt }, hoy)), [...COLUMNAS_CSV_DOCUMENTOS]);
     return csvResponse(`expedientes_documentos_${sufijo}.csv`, csv);
   }
   return csvResponse(`expedientes_${sufijo}.csv`, toCsv(filas.map((f) => filaCsvExpediente(f, etiquetas)), [...COLUMNAS_CSV_EXPEDIENTES]));

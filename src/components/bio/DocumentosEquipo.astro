@@ -6,6 +6,7 @@
 import { getDb } from "@/lib/db";
 import { expedienteDeActivo } from "@/lib/bio-consultas";
 import { vencimientosVigentes } from "@/lib/inventario-jci";
+import { partirTitulo } from "./hoja";
 import {
   ARCHIVO_ACCEPT, CATEGORIAS_DOCUMENTO, REQUISITOS_EXPEDIENTE, TRAMO_VIGENCIA, categoriasDocumentoPara, fechaCorta, hoySV,
   puedeGestionarBio, puedeRegistrarBio, puedeVerBio, vigenciaDe,
@@ -24,6 +25,8 @@ const ver = !!user && puedeVerBio(user.rol);
 const hoy = hoySV();
 const exp = ver ? await expedienteDeActivo(getDb(Astro), activoId, hoy) : null;
 const ficha = variante !== "hoja";
+// Hoja de vida: sección con las clases del documento controlado y el número en <span>.
+const tituloHoja = partirTitulo(titulo, "Documentos del equipo");
 const puedeSubir = !!user && puedeRegistrarBio(user.rol) && ficha;
 const puedeGestionar = !!user && puedeGestionarBio(user.rol) && ficha;
 
@@ -222,42 +225,40 @@ const vigenciaDoc = (d: (typeof docs)[number]) => {
 )}
 
 {exp && !ficha && (
-  <section id="documentos">
-    <h3 class="mt-6 text-base font-bold text-slate-900">{titulo ?? "Documentos del equipo"}</h3>
+  <section id="documentos" class="doc-seccion">
+    <h2 class="doc-h">{tituloHoja.numero ? <><span>{tituloHoja.numero}</span> {tituloHoja.texto}</> : tituloHoja.texto}</h2>
     {c && (
       <>
-        <p class="mt-1 text-xs text-slate-600">Expediente técnico: {c.cumplidos} de {c.total} requisitos · {c.completo ? "Completo" : "Incompleto"}</p>
-        <ul class="mt-1 grid grid-cols-1 gap-x-6 text-xs sm:grid-cols-2">
-          {c.requisitos.map((r) => <li><span class={colorRequisito(r)}>{cumple(r) ? "✓" : "✗"}</span> {r.etiqueta}: {textoRequisito(r).replace(/^✓ /, "")}</li>)}
-          {c.recomendados.map((x) => <li class="text-slate-500">{x.tiene ? "✓" : "—"} {x.etiqueta} (recomendado)</li>)}
-        </ul>
+        <p class="doc-texto">Expediente técnico: {c.cumplidos} de {c.total} requisitos · {c.completo ? "Completo" : "Incompleto"}.</p>
+        <table class="doc-tabla">
+          <thead><tr><th>Requisito</th><th>Estado</th></tr></thead>
+          <tbody>
+            {c.requisitos.map((r) => (
+              <tr><td>{r.etiqueta}</td><td class:list={{ "doc-critico": !cumple(r) }}>{textoRequisito(r).replace(/^✓ /, "")}</td></tr>
+            ))}
+            {c.recomendados.map((x) => (
+              <tr><td>{x.etiqueta}<span class="doc-nota-celda">Recomendado</span></td><td>{x.tiene ? "Sí" : "Falta"}</td></tr>
+            ))}
+          </tbody>
+        </table>
       </>
     )}
     {docs.length === 0 ? (
-      <p class="mt-2 text-sm text-slate-400">Sin documentos cargados.</p>
+      <p class="doc-nota">Sin documentos cargados.</p>
     ) : (
-      <table class="mt-2 w-full text-left text-xs">
-        <thead class="border-b border-slate-200 text-slate-500">
-          <tr>
-            <th class="px-2 py-1.5 font-medium">Categoría</th>
-            <th class="px-2 py-1.5 font-medium">Documento</th>
-            <th class="px-2 py-1.5 font-medium">Versión</th>
-            <th class="px-2 py-1.5 font-medium">Fecha</th>
-            <th class="px-2 py-1.5 font-medium">Vence</th>
-            <th class="px-2 py-1.5 font-medium">Subido</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
+      <table class="doc-tabla">
+        <thead><tr><th>Categoría</th><th>Documento</th><th>Versión</th><th>Fecha</th><th>Vence</th><th>Subido</th></tr></thead>
+        <tbody>
           {docs.map((d) => {
             const vig = vigenciaDoc(d);
             return (
               <tr>
-                <td class="px-2 py-1.5">{d.etiquetaCategoria}</td>
-                <td class="px-2 py-1.5 break-words">{d.nombre}{d.nota && <span class="block text-[10px] text-slate-500">{d.nota}</span>}</td>
-                <td class="px-2 py-1.5">{d.version ?? "—"}</td>
-                <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(d.fechaDocumento)}</td>
-                <td class="px-2 py-1.5 whitespace-nowrap">{d.fechaVencimiento ? <>{fechaCorta(d.fechaVencimiento)}<span class="block text-[10px] text-slate-500">{vig?.texto}</span></> : "—"}</td>
-                <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(d.subidoEn)}{d.subidoPor && <span class="block text-[10px] text-slate-500">{d.subidoPor}</span>}</td>
+                <td>{d.etiquetaCategoria}</td>
+                <td>{d.nombre}{d.nota && <span class="doc-nota-celda">{d.nota}</span>}</td>
+                <td>{d.version ?? "—"}</td>
+                <td class="tn">{fechaCorta(d.fechaDocumento)}</td>
+                <td class="tn">{d.fechaVencimiento ? <>{fechaCorta(d.fechaVencimiento)}<span class="doc-nota-celda">{vig?.texto}</span></> : "—"}</td>
+                <td class="tn">{fechaCorta(d.subidoEn)}{d.subidoPor && <span class="doc-nota-celda">{d.subidoPor}</span>}</td>
               </tr>
             );
           })}

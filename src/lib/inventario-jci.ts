@@ -4,8 +4,8 @@
 // y filtros del listado de expedientes técnicos. Sigue siendo puro: lo usan el
 // servidor, el navegador y las pruebas.
 import {
-  CATEGORIAS_DOCUMENTO, RECOMENDADOS_EXPEDIENTE, REQUISITOS_EXPEDIENTE, diasEntre, esCategoriaDocumento, esFechaISO,
-  etiquetaCategoriaDocumento, hoySV, normalizarTexto, sumarMeses,
+  CATEGORIAS_DOCUMENTO, RECOMENDADOS_EXPEDIENTE, REQUISITOS_EXPEDIENTE, diaSV, diasEntre, esCategoriaDocumento, esFechaISO,
+  etiquetaCategoriaDocumento, horaSV, hoySV, normalizarTexto, sumarMeses,
   type CategoriaDocumento, type CompletitudExpediente,
 } from "./biomedico";
 
@@ -318,6 +318,15 @@ export const COLUMNAS_CSV_DOCUMENTOS: ReadonlyArray<{ key: string; label: string
   { key: "subidoPor", label: "Subido por" }, { key: "subidoEl", label: "Subido el" },
 ];
 
+/** Marca de tiempo para el CSV (§f.5): 'AAAA-MM-DD HH:MM' en hora de El Salvador; fecha sola sin hora; ilegible → ''. */
+export function marcaCsvSV(valor: string | null | undefined): string {
+  const dia = diaSV(valor);
+  if (!dia) return "";
+  const hora = horaSV(valor);
+  return hora ? `${dia} ${hora}` : dia;
+}
+
+/** Una fila del CSV de documentos. `subidoEl` es la marca guardada (created_at, UTC de SQLite). */
 export function filaCsvDocumento(
   d: { codigo: string; equipo: string; categoria: string | null; nombre: string; version: string | null; fechaVersion: string | null; fechaVencimiento: string | null; nota: string | null; subidoPor: string | null; subidoEl: string | null },
   hoy: string,
@@ -326,6 +335,6 @@ export function filaCsvDocumento(
     codigo: d.codigo, equipo: d.equipo, categoria: etiquetaCategoriaDocumento(d.categoria), archivo: d.nombre,
     version: d.version ?? "", fecha: d.fechaVersion ?? "", vence: d.fechaVencimiento ?? "",
     diasVence: esFechaISO(d.fechaVencimiento) ? diasEntre(hoy, d.fechaVencimiento) : "",
-    nota: d.nota ?? "", subidoPor: d.subidoPor ?? "", subidoEl: d.subidoEl ?? "",
+    nota: d.nota ?? "", subidoPor: d.subidoPor ?? "", subidoEl: marcaCsvSV(d.subidoEl),
   };
 }

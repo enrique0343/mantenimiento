@@ -120,5 +120,10 @@ es(J.COLUMNAS_CSV_EXPEDIENTES.map((c) => c.key).filter((k) => k.startsWith('req_
 es(J.filaCsvDocumento({ codigo: 'BIO-001', equipo: 'Monitor', categoria: 'registro_sanitario', nombre: 'RS.pdf', version: null, fechaVersion: '2025-12-01', fechaVencimiento: '2026-12-01', nota: null, subidoPor: 'Ana', subidoEl: '2026-11-10' }, hoy),
   { codigo: 'BIO-001', equipo: 'Monitor', categoria: 'Registro sanitario o inscripción', archivo: 'RS.pdf', version: '', fecha: '2025-12-01', vence: '2026-12-01', diasVence: 19, nota: '', subidoPor: 'Ana', subidoEl: '2026-11-10' },
   'fila del CSV de documentos: fechas AAAA-MM-DD');
+// «Subido el» es una marca (created_at de SQLite, en UTC): en el CSV va 'AAAA-MM-DD HH:MM' de El Salvador (§f.5).
+es(J.filaCsvDocumento({ codigo: 'BIO-001', equipo: 'Monitor', categoria: 'otro', nombre: 'a.pdf', version: null, fechaVersion: null, fechaVencimiento: null, nota: null, subidoPor: null, subidoEl: '2026-11-11 02:30:00' }, hoy).subidoEl,
+  '2026-11-10 20:30', 'subido de noche en El Salvador: el día de SV y su hora, no el día UTC');
+es([J.marcaCsvSV('2026-11-12 15:30:00'), J.marcaCsvSV('2026-11-12T06:00:00.000Z'), J.marcaCsvSV('2026-11-12'), J.marcaCsvSV(null), J.marcaCsvSV('ayer')],
+  ['2026-11-12 09:30', '2026-11-12 00:00', '2026-11-12', '', ''], 'marcaCsvSV');
 
 console.log(`PASS test-bio-documentos: ${n} casos; metadatos del documento, vencimientos que mandan y filtros y CSV de expedientes.`);

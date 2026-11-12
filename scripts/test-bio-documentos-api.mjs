@@ -271,6 +271,39 @@ try {
   es(await status(llamar(A.cap.DELETE, `/api/capacitaciones/${capId}`, { method: 'DELETE', id: capId, rol: 'jefe' })), 200, 'el jefe elimina');
   es([sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_asistentes').get().n, sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_equipos').get().n, objetos.has(claveCap)],
     [0, 0, false], 'sin hijos ni archivo');
+
+  // ── Revisión: un equipo que pasa a otra área no bloquea editar su capacitación ──
+  sq.exec("INSERT INTO activos (id, codigo, nombre, tipo, rubro) VALUES (400, 'BIO-400', 'DESFIBRILADOR', 'biomedico', 'biomedico'), (401, 'BIO-401', 'DESFIBRILADOR', 'biomedico', 'biomedico')");
+  const capArea = (await cuerpo(await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [400, 401], asistentesTexto: asistentes(2) }) }))).capacitacion.id;
+  const capOtra = (await cuerpo(await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [400], asistentesTexto: asistentes(1) }) }))).capacitacion.id;
+  sq.exec("UPDATE activos SET rubro = 'equipo_general', tipo = 'general' WHERE id = 401");
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capArea}`, { method: 'PATCH', id: capArea, rol: 'tecnico', json: capacitacion({ tema: 'Uso del desfibrilador', equipoIds: [400, 401], asistentesTexto: asistentes(2) }) });
+  es([res.status, sq.prepare('SELECT COUNT(*) AS n FROM capacitacion_equipos WHERE capacitacion_id = ?').get(capArea).n, sq.prepare('SELECT tema FROM capacitaciones WHERE id = ?').get(capArea).tema],
+    [200, 2, 'Uso del desfibrilador'], 'editar con un equipo enlazado que pasó a otra área: se guarda y lo conserva');
+  res = await llamar(A.cap.PATCH, `/api/capacitaciones/${capOtra}`, { method: 'PATCH', id: capOtra, rol: 'tecnico', json: capacitacion({ equipoIds: [400, 401], asistentesTexto: asistentes(1) }) });
+  es([res.status, (await cuerpo(res)).error], [400, 'Uno de los equipos ya no existe. Recarga la página.'], 'otra capacitación no puede sumar un equipo que ya no es biomédico');
+  res = await llamar(A.caps.POST, '/api/capacitaciones', { method: 'POST', rol: 'tecnico', json: capacitacion({ equipoIds: [401], asistentesTexto: '' }) });
+  es([res.status, (await cuerpo(res)).error], [400, 'Uno de los equipos ya no existe. Recarga la página.'], 'ni una capacitación nueva');
+  const ids = (lista) => lista.map((e) => e.id);
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: true, capacitacionId: capArea })).includes(401), true, 'el formulario de edición ofrece el equipo enlazado de otra área');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: true, activoId: 200 })).includes(200), false, 'capacitación nueva con ?activo= de un equipo no biomédico: no se ofrece (el servidor lo rechazaría)');
+  es(ids(await A.consultas.equiposParaElegir(db, { soloBiomedicos: false, activoId: 200 })).includes(200), true, 'licencia: equipo de cualquier área');
+
+  // ── Revisión: editar no borra el responsable, la sede ni el proveedor que se desactivaron ──
+  sq.exec("INSERT INTO sucursales (id, nombre, activa) VALUES (2, 'Sede cerrada', 0)");
+  sq.exec("INSERT INTO usuarios (id, nombre, email, password_hash, rol, activo) VALUES (50, 'Juan Inactivo', 'juan@example.invalid', 'x', 'jefe', 0)");
+  sq.exec("INSERT INTO proveedores (id, nombre, activo) VALUES (7, 'Proveedor retirado', 0)");
+  es(ids(await A.consultas.responsablesLicencia(db)).includes(50), false, 'responsables para una licencia nueva: sin los inactivos');
+  es((await A.consultas.responsablesLicencia(db, 50)).find((u) => u.id === 50)?.nombre, 'Juan Inactivo (inactivo)', 'al editar: el responsable que ya tiene, aunque esté inactivo');
+  es((await A.consultas.sedesActivas(db)).map((s) => s.nombre), ['Central'], 'sedes activas');
+  es((await A.consultas.sedesActivas(db, 2)).map((s) => s.nombre), ['Central', 'Sede cerrada (inactiva)'], 'al editar: la sede que ya tiene');
+  es((await A.consultas.proveedoresParaElegir(db)).length, 0, 'proveedores activos');
+  es((await A.consultas.proveedoresParaElegir(db, 7)).map((p) => p.nombre), ['Proveedor retirado (inactivo)'], 'al editar: el proveedor que ya tiene');
+
+  // ── Revisión: «Subido el» del CSV de documentos es una marca en hora de El Salvador (§f.5) ──
+  sq.prepare("UPDATE activo_documentos SET created_at = '2026-11-11 02:30:00' WHERE id = ?").run(subido.id);
+  const csvDocs = (await csv(A.expCsv.GET, '/api/expedientes/exportar?detalle=documentos')).texto.split('\r\n');
+  es([csvDocs.length, csvDocs[1].endsWith(',Prueba tecnico,2026-11-10 20:30')], [2, true], 'CSV de documentos: subido el 2026-11-10 20:30 (no el día UTC ni sin hora)');
 } finally {
   await h.close();
 }

@@ -36,10 +36,12 @@ if (renuevaId) {
   if (e) inicial = { estado: "activa", ambito: "equipo", activoId: e.id };
 }
 const activoInicial = typeof inicial.activoId === "number" ? inicial.activoId : null;
+const numeroDe = (v: unknown) => (typeof v === "number" ? v : null);
+// En la renovación, la sede y el responsable de la anterior entran aunque estén inactivos.
 const [sedes, equipos, responsables, servicios] = await Promise.all([
-  sedesActivas(db),
+  sedesActivas(db, numeroDe(inicial.sucursalId)),
   equiposParaElegir(db, { soloBiomedicos: false, activoId: activoInicial }),
-  responsablesLicencia(db),
+  responsablesLicencia(db, numeroDe(inicial.responsableId)),
   sugerenciasServicio(db),
 ]);
 const volver = renueva ? areaHref(`/licencias/${renueva.id}`, area) : activoInicial ? areaHref(`/activos/${activoInicial}#licencias`, area) : areaHref("/licencias", area);

@@ -32,8 +32,12 @@ const editable = l.estado === "activa" || l.estado === "en_tramite";
 const renovacionEnCurso = d.renovaciones.find((r) => r.estado === "en_tramite") ?? null;
 const reemplazadaPor = d.renovaciones.find((r) => r.estado === "activa" || r.estado === "reemplazada") ?? null;
 const enlace = (ruta: string) => areaHref(ruta, area);
+// La sede y el responsable que ya tiene van en la lista aunque estén inactivos: si no, editar los borraría.
 const [sedes, equipos, responsables, servicios] = gestiona && editable
-  ? await Promise.all([sedesActivas(db), equiposParaElegir(db, { soloBiomedicos: false, activoId: l.activoId }), responsablesLicencia(db), sugerenciasServicio(db)])
+  ? await Promise.all([
+    sedesActivas(db, l.sucursalId), equiposParaElegir(db, { soloBiomedicos: false, activoId: l.activoId }),
+    responsablesLicencia(db, l.responsableId), sugerenciasServicio(db),
+  ])
   : [[], [], [], []];
 const ACCION: Record<string, string> = { create: "Registro", update: "Cambio", delete: "Eliminación", estado: "Cambio de estado" };
 ---

@@ -1,7 +1,8 @@
 ---
 // Fase 59 · WP-D: licencias y permisos del equipo (requisito 11). En la ficha muestra
-// las activas y en trámite con su situación; en la hoja de vida (variante «hoja», sin
-// botones ni scripts) todas. Siempre en biomédicos; en otras áreas, solo si hay alguna.
+// las activas y en trámite con su situación; siempre en biomédicos y, en otras áreas,
+// solo si hay alguna. En la hoja de vida (variante «hoja», sin botones ni scripts), todas,
+// y la sección sale siempre que la hoja la coloque (aunque esté vacía: la hoja la numera).
 // Solo admin, jefe, técnico y visualizador.
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -11,6 +12,7 @@ import { codigoLicencia, etiquetaEntidad, etiquetaTipoLicencia } from "@/lib/lic
 import { fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, situacionLicencia } from "@/lib/biomedico";
 import { rubroDeActivo } from "@/lib/rubros";
 import { areaHref } from "@/lib/areas";
+import { partirTitulo } from "./hoja";
 
 interface Props {
   activoId: number;
@@ -30,9 +32,10 @@ const area = equipo ? rubroDeActivo(equipo.rubro, equipo.tipo) : null;
 const todas = db && equipo ? await licenciasDeActivo(db, activoId) : [];
 const conSituacion = todas.map((l) => ({ ...l, s: situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite }) }));
 const actuales = conSituacion.filter((l) => l.estado === "activa" || l.estado === "en_tramite");
-const mostrar = !!equipo && (area === "biomedico" || todas.length > 0);
+const mostrar = !!equipo && (!ficha || area === "biomedico" || todas.length > 0);
 const puedeRegistrar = !!user && puedeGestionarBio(user.rol) && ficha;
 const enlace = (ruta: string) => areaHref(ruta, area);
+const tituloHoja = partirTitulo(titulo, "Licencias y permisos");
 ---
 
 {mostrar && ficha && (
@@ -69,31 +72,22 @@ const enlace = (ruta: string) => areaHref(ruta, area);
 )}
 
 {mostrar && !ficha && (
-  <section id="licencias">
-    <h3 class="mt-6 text-base font-bold text-slate-900">{titulo ?? "Licencias y permisos"}</h3>
+  <section id="licencias" class="doc-seccion">
+    <h2 class="doc-h">{tituloHoja.numero ? <><span>{tituloHoja.numero}</span> {tituloHoja.texto}</> : tituloHoja.texto}</h2>
     {todas.length === 0 ? (
-      <p class="mt-2 text-sm text-slate-400">Sin licencias registradas.</p>
+      <p class="doc-nota">Sin licencias registradas.</p>
     ) : (
-      <table class="mt-2 w-full text-left text-xs">
-        <thead class="border-b border-slate-200 text-slate-500">
-          <tr>
-            <th class="px-2 py-1.5 font-medium">Entidad</th>
-            <th class="px-2 py-1.5 font-medium">Tipo</th>
-            <th class="px-2 py-1.5 font-medium">Número</th>
-            <th class="px-2 py-1.5 font-medium">Emisión</th>
-            <th class="px-2 py-1.5 font-medium">Vence</th>
-            <th class="px-2 py-1.5 font-medium">Situación</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
+      <table class="doc-tabla">
+        <thead><tr><th>Entidad</th><th>Tipo</th><th>Número</th><th>Emisión</th><th>Vence</th><th>Situación</th></tr></thead>
+        <tbody>
           {conSituacion.map((l) => (
             <tr>
-              <td class="px-2 py-1.5">{etiquetaEntidad(l.entidad, l.entidadOtra)}</td>
-              <td class="px-2 py-1.5">{etiquetaTipoLicencia(l.tipo)}<span class="block text-[10px] text-slate-500">{l.nombre}</span></td>
-              <td class="px-2 py-1.5">{l.numero ?? "—"}</td>
-              <td class="px-2 py-1.5 whitespace-nowrap">{fechaCorta(l.fechaEmision)}</td>
-              <td class="px-2 py-1.5 whitespace-nowrap">{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td>
-              <td class="px-2 py-1.5">{l.s.texto}</td>
+              <td>{etiquetaEntidad(l.entidad, l.entidadOtra)}</td>
+              <td>{etiquetaTipoLicencia(l.tipo)}<span class="doc-nota-celda">{codigoLicencia(l.id)} · {l.nombre}</span></td>
+              <td>{l.numero ?? "—"}</td>
+              <td class="tn">{fechaCorta(l.fechaEmision)}</td>
+              <td class="tn">{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td>
+              <td class:list={{ "doc-critico": l.s.clave === "vencida" }}>{l.s.texto}</td>
             </tr>
           ))}
         </tbody>

@@ -33,7 +33,8 @@ export const PATCH: APIRoute = async (ctx) => {
   if (!body) return errorJson(400, "Datos no válidos.");
   const v = validarCapacitacion(body);
   if (!v.ok) return Response.json({ error: v.error, ...(v.errores ? { errores: v.errores } : {}) }, { status: 400 });
-  const ref = await revisarReferenciasCapacitacion(db, v.datos, v.equipoIds);
+  // Los equipos que ya estaban enlazados valen aunque después se hayan pasado a otra área.
+  const ref = await revisarReferenciasCapacitacion(db, v.datos, v.equipoIds, actual.id);
   if (ref) return errorJson(400, ref);
 
   await db.batch([
