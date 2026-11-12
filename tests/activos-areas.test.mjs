@@ -91,6 +91,6 @@ const plannedMoved = await expect(item.PATCH, ctx('PATCH', '/api/activos/'+plann
 assert.equal(plannedMoved.activo.rubro, 'infraestructura');
 await expect(collection.GET,ctx('GET','/api/activos',undefined,null),401);
 await expect(collection.POST,ctx('POST','/api/activos',{codigo:'UNAUTHORIZED',nombre:'No'},'solicitante'),403);
-await expect(collection.POST,ctx('POST','/api/activos',{codigo:'JEFE',nombre:'No'},'jefe'),403);
+await expect(collection.POST,ctx('POST','/api/activos',{codigo:'JEFE',nombre:'No'},'jefe'),201);
 assert.equal(JSON.stringify(sqlite.prepare('SELECT * FROM usuarios').all()),usersBefore);
 console.log('PASS: '+checks+' comprobaciones API; cuatro áreas, JSON técnico, criticidad, cambio de área protegido con trabajo vinculado, legado, importación y permisos. Usuarios intactos.');

@@ -4,18 +4,23 @@ import { getDb } from "@/lib/db";
 import {
   ordenes, activos, usuarios, items, stock, movimientosInventario,
   requisiciones, requisicionItems, proveedores, encuestasSatisfaccion,
-  ubicaciones, sucursales,
+  ubicaciones, sucursales, centrosCosto, activoBajas,
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { toCsv, csvResponse, rangoFechas } from "@/lib/csv";
 import { consolidadoMantenimiento } from "@/lib/reporte-mantenimiento";
+import { activoAreaCondition } from "@/lib/areas";
+import { ROLES_BIO_VER, hoySV } from "@/lib/biomedico";
+import { aFilaInventario, leerFiltrosInventario, pasaFiltros } from "@/lib/inventario-filtros";
+import { columnasExportacion, filaExportacion } from "@/lib/importar-equipos";
 
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
-  if (!user) return response;
   const tipo = ctx.params.tipo!;
+  // Fase 59: el inventario de equipos lo descargan también técnico y visualizador (D14).
+  const { user, response } = await requireUser(ctx, tipo === "equipos" ? ROLES_BIO_VER : ["admin", "jefe"]);
+  if (!user) return response;
   const url = new URL(ctx.request.url);
   const { desde, hasta } = rangoFechas(url);
   const db = getDb(ctx);
@@ -288,61 +293,51 @@ export const GET: APIRoute = async (ctx) => {
   }
 
   if (tipo === "equipos") {
+    // Fase 59: los mismos filtros que la lista y la impresión (contrato K-A2). Por
+    // defecto «todos», como lo descargaba Reportes. Columnas elegidas: activos más
+    // ubicación, sede, centro, proveedor y baja pasaría el límite de 100 de D1.
+    const filtros = leerFiltrosInventario(url.searchParams, { estadoPorDefecto: "todos" });
+    const hoy = hoySV();
     const rows = await db
       .select({
-        codigo: activos.codigo,
-        nombre: activos.nombre,
-        tipo: activos.tipo,
-        categoria: activos.categoria,
-        marca: activos.marca,
-        modelo: activos.modelo,
-        serial: activos.serial,
-        anio: activos.anio,
-        estado: activos.estado,
-        ubicacion: ubicaciones.nombre,
-        sucursal: sucursales.nombre,
-        slaUrgenteHoras: activos.slaUrgenteHoras,
-        slaAltaHoras: activos.slaAltaHoras,
-        slaMediaHoras: activos.slaMediaHoras,
-        slaBajaHoras: activos.slaBajaHoras,
-        registroSanitario: activos.registroSanitario,
-        claseRiesgo: activos.claseRiesgo,
-        ultimaCalibracion: activos.ultimaCalibracion,
-        proximaCalibracion: activos.proximaCalibracion,
+        id: activos.id, codigo: activos.codigo, numeroActivo: activos.numeroActivo, nombre: activos.nombre,
+        rubro: activos.rubro, tipo: activos.tipo, categoria: activos.categoria, subcategoria: activos.subcategoria,
+        marca: activos.marca, modelo: activos.modelo, serial: activos.serial, anio: activos.anio, estado: activos.estado,
+        criticidadOperacional: activos.criticidadOperacional, claseRiesgo: activos.claseRiesgo, centroCostoId: activos.centroCostoId,
+        ubicacionId: activos.ubicacionId, ubicacionDetalle: activos.ubicacion, datosTecnicos: activos.datosTecnicos,
+        registroSanitario: activos.registroSanitario, registroSanitarioEntidad: activos.registroSanitarioEntidad,
+        registroSanitarioEmision: activos.registroSanitarioEmision, registroSanitarioVencimiento: activos.registroSanitarioVencimiento,
+        registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere, fechaAdquisicion: activos.fechaAdquisicion,
+        vidaUtilAnios: activos.vidaUtilAnios, valorAdquisicion: activos.valorAdquisicion,
+        ultimaCalibracion: activos.ultimaCalibracion, proximaCalibracion: activos.proximaCalibracion,
+        slaUrgenteHoras: activos.slaUrgenteHoras, slaAltaHoras: activos.slaAltaHoras, slaMediaHoras: activos.slaMediaHoras, slaBajaHoras: activos.slaBajaHoras,
+        ubicacionNombre: ubicaciones.nombre, sucursalId: sucursales.id, sucursal: sucursales.nombre,
+        centroCodigo: centrosCosto.codigo, centroNombre: centrosCosto.nombre, proveedor: proveedores.nombre,
+        bajaId: activoBajas.id, bajaFecha: activoBajas.fechaBaja, bajaMotivo: activoBajas.motivo, bajaDestino: activoBajas.destinoFinal,
       })
       .from(activos)
       .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
       .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+      .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
+      .leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
+      .leftJoin(activoBajas, and(eq(activoBajas.activoId, activos.id), eq(activoBajas.estado, "vigente")))
+      .where(filtros.area ? activoAreaCondition(filtros.area) : undefined)
       .orderBy(activos.codigo);
 
-    const cols = [
-      { key: "codigo", label: "Código" },
-      { key: "nombre", label: "Nombre" },
-      { key: "tipo", label: "Tipo" },
-      { key: "categoria", label: "Categoría" },
-      { key: "marca", label: "Marca" },
-      { key: "modelo", label: "Modelo" },
-      { key: "serial", label: "Serial" },
-      { key: "anio", label: "Año" },
-      { key: "estado", label: "Estado" },
-      { key: "sucursal", label: "Sucursal" },
-      { key: "ubicacion", label: "Ubicación" },
-      { key: "slaUrgenteHoras", label: "SLA Urgente (h)" },
-      { key: "slaAltaHoras", label: "SLA Alta (h)" },
-      { key: "slaMediaHoras", label: "SLA Media (h)" },
-      { key: "slaBajaHoras", label: "SLA Baja (h)" },
-      { key: "registroSanitario", label: "Registro DNM" },
-      { key: "claseRiesgo", label: "Clase riesgo" },
-      { key: "ultimaCalibracion", label: "Última calibración" },
-      { key: "proximaCalibracion", label: "Próxima calibración" },
-    ];
-    return csvResponse(`equipos_${stamp()}.csv`, toCsv(rows, cols));
+    const filas = rows.filter((r) => pasaFiltros(aFilaInventario({
+      a: { ...r, ubicacion: r.ubicacionDetalle },
+      ub: r.ubicacionId != null ? { id: r.ubicacionId, nombre: r.ubicacionNombre ?? "" } : null,
+      suc: r.sucursalId != null ? { id: r.sucursalId, nombre: r.sucursal ?? "" } : null,
+      cc: r.centroCostoId != null && r.centroCodigo ? { id: r.centroCostoId, codigo: r.centroCodigo, nombre: r.centroNombre ?? "" } : null,
+    }), filtros, hoy)).map((r) => filaExportacion(r, hoy));
+    const nombre = `equipos_${filtros.area ?? "todas"}_${filtros.estado}_${stamp()}.csv`;
+    return csvResponse(nombre, toCsv(filas, columnasExportacion()));
   }
 
   return Response.json({ error: "Tipo de reporte no válido" }, { status: 404 });
 };
 
+/** AAAAMMDD de hoy en El Salvador (no la fecha UTC). */
 function stamp(): string {
-  const d = new Date();
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  return hoySV().replaceAll("-", "");
 }

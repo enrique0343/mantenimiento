@@ -1,195 +1,165 @@
 import type { APIRoute } from "astro";
+import type { BatchItem } from "drizzle-orm/batch";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { activos, ubicaciones, sucursales } from "@/lib/schema";
+import { activos, auditLog, centrosCosto, proveedores, sucursales, ubicaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
-import { AREA_KEYS } from "@/lib/areas";
-import { rubroDeActivo } from "@/lib/rubros";
-import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
-import { textoRegistro } from "@/lib/registro-activos";
+import { AREA_KEYS, parseArea } from "@/lib/areas";
+import { csvResponse } from "@/lib/csv";
+import { hoySV } from "@/lib/biomedico";
+import {
+  planificarImportacion, plantillaCsv, resumenActualizacionCarga, resumenAltaCarga,
+  LOTE_FILAS_IMPORTACION, TANDA_FILAS_IMPORTACION, type ResultadoFila,
+} from "@/lib/importar-equipos";
 
 export const prerender = false;
 
-// Importación masiva desde CSV. Formato esperado de columnas:
-// codigo, nombre, tipo (general/biomedico), categoria, marca, modelo, serial,
-// anio, estado, ubicacion_nombre, sucursal_nombre, descripcion
-// Cualquier columna extra se ignora. Solo codigo + nombre son obligatorias.
+// Carga masiva de equipos (Fase 59). El navegador simula el archivo completo y
+// después lo graba por tandas de hasta 200 filas (desde/hasta). Cada solicitud
+// vuelve a leer el archivo con la base actual, así que repetir una tanda no
+// duplica nada: lo ya grabado sale como «ya existe» o «sin cambios».
+// El alta y su línea de bitácora van en el mismo lote (son atómicas).
 
-const itemSchema = z.object({
-  codigo: z.string().trim().toUpperCase().min(1),
-  nombre: z.string().trim().toUpperCase().min(1),
-  tipo: z.enum(["general", "biomedico"]).optional(),
-  rubro: z.enum(AREA_KEYS).optional(),
-  criticidadOperacional: z.enum(["alta", "media", "baja"]).default("media"),
-  datosTecnicos: datosTecnicosSchema,
-  categoria: textoRegistro,
-  marca: textoRegistro,
-  modelo: textoRegistro,
-  serial: textoRegistro,
-  anio: z.number().int().optional().nullable(),
-  estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
-  ubicacion_nombre: z.string().optional().nullable(),
-  sucursal_nombre: z.string().optional().nullable(),
-  descripcion: textoRegistro,
-});
-
-function parseCsv(text: string): Array<Record<string, string>> {
-  // Quita BOM
-  text = text.replace(/^﻿/, "");
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return [];
-  const headers = parseLine(lines[0]).map((h) => h.toLowerCase().trim());
-  const rows: Array<Record<string, string>> = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseLine(lines[i]);
-    const r: Record<string, string> = {};
-    headers.forEach((h, j) => { r[h] = (cols[j] ?? "").trim(); });
-    rows.push(r);
-  }
-  return rows;
-}
-
-function parseLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQ) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
-        else inQ = false;
-      } else cur += c;
-    } else {
-      if (c === '"') inQ = true;
-      else if (c === ",") { out.push(cur); cur = ""; }
-      else cur += c;
-    }
-  }
-  out.push(cur);
-  return out;
-}
+/** GET ?plantilla=1&area= → plantilla CSV con las columnas del área. */
+export const GET: APIRoute = async (ctx) => {
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  if (!user) return response;
+  const url = new URL(ctx.request.url);
+  if (url.searchParams.get("plantilla") !== "1") return Response.json({ error: "Pide la plantilla con ?plantilla=1." }, { status: 400 });
+  const area = parseArea(url.searchParams.get("area"));
+  return csvResponse(`plantilla_equipos_${area ?? "todas"}.csv`, plantillaCsv(area));
+};
 
 const bodySchema = z.object({
-  csv: z.string().min(10),
+  csv: z.string().min(10).max(5_000_000),
+  modo: z.enum(["crear", "actualizar"]).default("crear"),
   dryRun: z.boolean().optional(),
   area: z.enum(AREA_KEYS).nullable().optional(),
+  desde: z.number().int().min(0).optional(),
+  hasta: z.number().int().min(0).optional(),
+  archivo: z.string().max(200).optional(),
 });
 
+/** Mensaje corto de un error de la base. */
+function mensajeCorto(error: unknown): string {
+  let texto = "";
+  for (let actual: unknown = error, i = 0; actual && i < 5; i++) {
+    texto = String((actual as Error).message ?? actual);
+    actual = (actual as { cause?: unknown }).cause;
+  }
+  if (/UNIQUE constraint failed: activos\.(codigo|qr_code)/i.test(texto)) return "el código ya está en uso.";
+  if (/FOREIGN KEY/i.test(texto)) return "una ubicación, centro o proveedor ya no existe.";
+  return texto.replace(/\s+/g, " ").slice(0, 120) || "error de la base de datos.";
+}
+
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin"]);
+  // Fase 59: admin y jefe (D2).
+  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
-
-  const db = getDb(ctx);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const error = issue?.path[0] === "csv"
+      ? issue.code === "too_big" ? "El archivo es demasiado grande: divídelo en partes." : "El archivo está vacío."
+      : "Datos de la carga no válidos.";
+    return Response.json({ error }, { status: 400 });
+  }
+  const { csv, modo, area = null } = parsed.data;
   const dryRun = parsed.data.dryRun ?? false;
+  const archivo = parsed.data.archivo?.replace(/[\u0000-\u001f\u007f]/g, "").trim() || null;
+  const db = getDb(ctx);
 
-  const filas = parseCsv(parsed.data.csv);
-  if (filas.length === 0) return Response.json({ error: "CSV vacío o sin encabezados" }, { status: 400 });
+  // ── Cinco consultas de contexto ──
+  const [activosCtx, ubicacionesCtx, sucursalesCtx, centrosCtx, proveedoresCtx] = await Promise.all([
+    db.select({
+      id: activos.id, codigo: activos.codigo, nombre: activos.nombre, numeroActivo: activos.numeroActivo, serial: activos.serial,
+      estado: activos.estado, rubro: activos.rubro, tipo: activos.tipo, categoria: activos.categoria, subcategoria: activos.subcategoria,
+      marca: activos.marca, modelo: activos.modelo, descripcion: activos.descripcion, anio: activos.anio,
+      criticidadOperacional: activos.criticidadOperacional, claseRiesgo: activos.claseRiesgo, centroCostoId: activos.centroCostoId,
+      ubicacionId: activos.ubicacionId, ubicacion: activos.ubicacion, registroSanitario: activos.registroSanitario,
+      registroSanitarioEntidad: activos.registroSanitarioEntidad, registroSanitarioEmision: activos.registroSanitarioEmision,
+      registroSanitarioVencimiento: activos.registroSanitarioVencimiento, registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere,
+      fechaAdquisicion: activos.fechaAdquisicion, vidaUtilAnios: activos.vidaUtilAnios, valorAdquisicion: activos.valorAdquisicion,
+      proveedorId: activos.proveedorId, datosTecnicos: activos.datosTecnicos,
+    }).from(activos),
+    db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, activa: ubicaciones.activa }).from(ubicaciones),
+    db.select({ id: sucursales.id, nombre: sucursales.nombre, codigo: sucursales.codigo }).from(sucursales),
+    db.select({ id: centrosCosto.id, codigo: centrosCosto.codigo, nombre: centrosCosto.nombre, sucursalId: centrosCosto.sucursalId, activo: centrosCosto.activo }).from(centrosCosto),
+    db.select({ id: proveedores.id, nombre: proveedores.nombre, activo: proveedores.activo }).from(proveedores),
+  ]);
 
-  // Cache de ubicaciones y sucursales por nombre (case-insensitive)
-  const ubsAll = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId }).from(ubicaciones);
-  const sucsAll = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales);
-  const ubsByNombre = new Map(ubsAll.map((u) => [u.nombre.toLowerCase(), u]));
-  const sucsByNombre = new Map(sucsAll.map((s) => [s.nombre.toLowerCase(), s]));
-
-  // Códigos existentes (para skip)
-  const existRows = await db.select({ codigo: activos.codigo }).from(activos);
-  const codigosExist = new Set(existRows.map((e) => e.codigo.toUpperCase()));
-
-  const errores: Array<{ fila: number; codigo?: string; error: string }> = [];
-  const aInsertar: any[] = [];
-
-  filas.forEach((row, idx) => {
-    const filaNum = idx + 2; // +1 por encabezado, +1 base 1
-    const dataRaw = {
-      codigo: row.codigo,
-      nombre: row.nombre,
-      tipo: (row.tipo as any) || undefined,
-      rubro: row.rubro || row.area || parsed.data.area || undefined,
-      criticidadOperacional: row.criticidad || row.criticidad_operacional || undefined,
-      datosTecnicos: {
-        tipoUnidad: row.tipo_unidad || null,
-        capacidadBtuH: row.capacidad_btu_h ? Number(row.capacidad_btu_h) : null,
-        refrigerante: row.refrigerante || null,
-        tipoInstalacion: row.tipo_instalacion || null,
-        sector: row.sector || null,
-        servicio: row.servicio || null,
-      },
-      categoria: row.categoria || null,
-      marca: row.marca || null,
-      modelo: row.modelo || null,
-      serial: row.serial || null,
-      anio: row.anio ? Number(row.anio) : null,
-      estado: (row.estado as any) || undefined,
-      ubicacion_nombre: row.ubicacion_nombre || null,
-      sucursal_nombre: row.sucursal_nombre || null,
-      descripcion: row.descripcion || null,
-    };
-    const v = itemSchema.safeParse(dataRaw);
-    if (!v.success) { errores.push({ fila: filaNum, codigo: row.codigo, error: v.error.errors[0]?.message ?? "datos inválidos" }); return; }
-    const d = v.data;
-    const rubro = rubroDeActivo(d.rubro, d.tipo);
-    const tipo = rubro === "biomedico" ? "biomedico" : "general";
-    if (parsed.data.area && rubro !== parsed.data.area) { errores.push({ fila: filaNum, codigo: d.codigo, error: "El área de la fila no corresponde al inventario seleccionado" }); return; }
-    if (d.tipo && d.tipo !== tipo) { errores.push({ fila: filaNum, codigo: d.codigo, error: "El tipo de equipo no corresponde al área" }); return; }
-    if (!datosTecnicosValidosParaArea(rubro, d.datosTecnicos)) { errores.push({ fila: filaNum, codigo: d.codigo, error: "Los datos técnicos no corresponden al área" }); return; }
-
-    if (codigosExist.has(d.codigo)) { errores.push({ fila: filaNum, codigo: d.codigo, error: "código ya existe" }); return; }
-
-    let ubicacionId: number | null = null;
-    if (d.ubicacion_nombre) {
-      const u = ubsByNombre.get(d.ubicacion_nombre.toLowerCase());
-      if (!u) { errores.push({ fila: filaNum, codigo: d.codigo, error: `ubicación '${d.ubicacion_nombre}' no existe` }); return; }
-      ubicacionId = u.id;
-    }
-
-    aInsertar.push({
-      codigo: d.codigo,
-      nombre: d.nombre,
-      tipo,
-      rubro,
-      criticidadOperacional: d.criticidadOperacional,
-      datosTecnicos: serializarDatosTecnicos(rubro, d.datosTecnicos),
-      categoria: d.categoria,
-      marca: d.marca,
-      modelo: d.modelo,
-      serial: d.serial,
-      anio: d.anio,
-      estado: d.estado ?? "operativo",
-      descripcion: d.descripcion,
-      ubicacionId,
-      qrCode: `QR-${d.codigo}`,
-    });
-    codigosExist.add(d.codigo);
+  const plan = planificarImportacion(csv, {
+    modo, area, hoy: hoySV(), activos: activosCtx, ubicaciones: ubicacionesCtx, sucursales: sucursalesCtx,
+    centros: centrosCtx, proveedores: proveedoresCtx,
   });
+  if (plan.error) return Response.json({ error: plan.error }, { status: 400 });
 
-  if (dryRun) {
-    return Response.json({
-      dryRun: true,
-      filas: filas.length,
-      aInsertar: aInsertar.length,
-      errores,
-      muestra: aInsertar.slice(0, 5),
-    });
+  const total = plan.resultados.length;
+  const desde = Math.min(parsed.data.desde ?? 0, total);
+  const hasta = Math.min(Math.max(parsed.data.hasta ?? total, desde), total);
+  const rango = plan.resultados.slice(desde, hasta);
+  if (!dryRun && rango.length > TANDA_FILAS_IMPORTACION) {
+    return Response.json({ error: `Graba por partes de hasta ${TANDA_FILAS_IMPORTACION} filas.` }, { status: 400 });
   }
 
+  // ── Grabación: lotes de 20 filas (equipo + bitácora); si un lote falla, fila por fila ──
   let insertados = 0;
-  for (const v of aInsertar) {
-    try {
-      await db.insert(activos).values(v);
-      insertados++;
-    } catch (e: any) {
-      errores.push({ fila: 0, codigo: v.codigo, error: String(e?.message ?? e).slice(0, 100) });
+  let actualizados = 0;
+  const fallos = new Map<number, string>();
+  if (!dryRun) {
+    const sentencias = (r: ResultadoFila): BatchItem<"sqlite">[] => {
+      if (r.accion === "crear") {
+        return [
+          db.insert(activos).values(r.nuevo!),
+          db.insert(auditLog).values({
+            entidad: "activo", entidadId: sql`(SELECT id FROM activos WHERE codigo = ${r.codigo})`, accion: "create",
+            usuarioId: user.id, cambios: null, resumen: resumenAltaCarga(archivo),
+          }),
+        ];
+      }
+      const set = Object.fromEntries(Object.entries(r.cambios ?? {}).map(([campo, c]) => [campo, c.despues]));
+      return [
+        db.update(activos).set(set).where(and(eq(activos.id, r.activoId!), "estado" in set ? ne(activos.estado, "baja") : undefined)),
+        db.insert(auditLog).values({
+          entidad: "activo", entidadId: r.activoId!, accion: "update", usuarioId: user.id,
+          cambios: JSON.stringify(r.cambiosBitacora ?? r.cambios ?? {}), resumen: resumenActualizacionCarga(r.cambiosLegibles ?? []),
+        }),
+      ];
+    };
+    const contar = (filas: ResultadoFila[]) => {
+      for (const r of filas) { if (r.accion === "crear") insertados++; else actualizados++; }
+    };
+    const grabar = (lista: BatchItem<"sqlite">[]) => db.batch(lista as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+    const aplicar = rango.filter((r) => r.accion === "crear" || r.accion === "actualizar");
+    for (let i = 0; i < aplicar.length; i += LOTE_FILAS_IMPORTACION) {
+      const lote = aplicar.slice(i, i + LOTE_FILAS_IMPORTACION);
+      try {
+        await grabar(lote.flatMap(sentencias));
+        contar(lote);
+      } catch {
+        for (const r of lote) {
+          try { await grabar(sentencias(r)); contar([r]); }
+          catch (error) { fallos.set(r.fila, `No se pudo grabar: ${mensajeCorto(error)}`); }
+        }
+      }
     }
   }
 
+  const resultados = rango.map((r) => {
+    const fallo = fallos.get(r.fila);
+    return fallo
+      ? { fila: r.fila, codigo: r.codigo, accion: "error" as const, detalle: [fallo], avisos: r.avisos }
+      : { fila: r.fila, codigo: r.codigo, accion: r.accion, detalle: r.detalle, avisos: r.avisos };
+  });
+  const cuenta = (accion: ResultadoFila["accion"]) => rango.filter((r) => r.accion === accion).length;
   return Response.json({
-    filas: filas.length,
-    insertados,
-    errores,
+    dryRun, modo, filas: plan.filas, desde, hasta,
+    aInsertar: cuenta("crear"), aActualizar: cuenta("actualizar"), sinCambios: cuenta("sin_cambios"),
+    insertados, actualizados,
+    errores: resultados.filter((r) => r.accion === "error").map((r) => ({ fila: r.fila, codigo: r.codigo, error: r.detalle.join(" ") })),
+    avisos: resultados.filter((r) => r.avisos.length).map((r) => ({ fila: r.fila, codigo: r.codigo, aviso: r.avisos.join(" ") })),
+    resultados, columnasIgnoradas: plan.columnasIgnoradas, notas: plan.notas, separador: plan.separador,
   });
 };

@@ -1,15 +1,20 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento } from "@/lib/schema";
+import { activos, planesMantenimiento, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
-import { desc, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { activoAreaCondition, parseArea, AREA_KEYS } from "@/lib/areas";
-import { rubroDeActivo } from "@/lib/rubros";
+import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos } from "@/lib/activo-area";
-import { textoRegistro, generarCodigoActivo, nombrePendienteActivo, esCodigoDuplicado } from "@/lib/registro-activos";
+import {
+  textoRegistro, generarCodigoActivo, nombrePendienteActivo, esCodigoDuplicado, errorCodigoActivo, mensajeCodigoDuplicado,
+  errorDeDatos, errorCentroCostoEquipo, MENSAJE_SOLO_BIOMEDICOS,
+} from "@/lib/registro-activos";
 import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
+import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, esFechaISO } from "@/lib/biomedico";
+import { logAudit } from "@/lib/audit";
 
 export const prerender = false;
 
@@ -24,12 +29,19 @@ export const GET: APIRoute = async (ctx) => {
   return Response.json({ activos: rows });
 };
 
+/** Fecha 'AAAA-MM-DD' real o vacía (null). */
+const fechaOpcional = (mensaje: string) =>
+  z.preprocess((v) => (v === "" ? null : v), z.string().refine((v) => esFechaISO(v), mensaje).nullable().optional());
+
+// Fase 59: las fechas de calibración (ultimaCalibracion, proximaCalibracion), el
+// equipo patrón y «no requiere calibración» ya no se reciben aquí: zod los
+// descarta sin error. Solo los escribe Calibraciones (contrato K-A4).
 const baseSchema = {
   codigo: textoRegistro,
   nombre: textoRegistro,
   descripcion: textoRegistro,
   ubicacion: textoRegistro,
-  estado: z.enum(["operativo", "averiado", "mantenimiento", "baja"]).optional(),
+  estado: z.enum(ESTADOS_ACTIVO).optional(),
   tipo: z.enum(["general", "biomedico"]).optional(),
   rubro: z.enum(AREA_KEYS).optional(),
   datosTecnicos: datosTecnicosSchema,
@@ -40,10 +52,14 @@ const baseSchema = {
   serial: textoRegistro,
   anio: z.number().int().nullable().optional(),
   registroSanitario: textoRegistro,
-  claseRiesgo: z.enum(["I", "IIa", "IIb", "III"]).nullable().optional(),
-  ultimaCalibracion: z.string().nullable().optional(),
-  proximaCalibracion: z.string().nullable().optional(),
-  fechaAdquisicion: z.string().nullable().optional(),
+  registroSanitarioEntidad: z.string().trim().toUpperCase().max(60).nullable().optional(),
+  registroSanitarioEmision: fechaOpcional("La fecha de emisión del registro no es válida."),
+  registroSanitarioVencimiento: fechaOpcional("La fecha de vencimiento del registro no es válida."),
+  registroSanitarioNoRequiere: z.boolean().optional(),
+  claseRiesgo: z.enum(CLASES_RIESGO_VALORES).nullable().optional(),
+  subcategoria: z.enum(SUBCAT_KEYS as [SubcatKey, ...SubcatKey[]]).nullable().optional(),
+  centroCostoId: z.number().int().positive().nullable().optional(),
+  fechaAdquisicion: fechaOpcional("La fecha de adquisición no es válida."),
   vidaUtilAnios: z.number().int().nonnegative().nullable().optional(),
   valorAdquisicion: z.number().nonnegative().nullable().optional(),
   responsableId: z.number().int().nullable().optional(),
@@ -71,11 +87,12 @@ const createSchema = z.object({
   "Selecciona una ficha con su versión actual");
 
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "tecnico"]);
+  // Fase 59: el jefe también registra equipos (D2).
+  const { user, response } = await requireUser(ctx, ["admin", "jefe", "tecnico"]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return Response.json({ error: errorDeDatos(parsed.error) }, { status: 400 });
   const db = getDb(ctx);
   const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad,
     modeloAireId, modeloAireVersion, ...datosUnidad } = parsed.data;
@@ -99,12 +116,38 @@ export const POST: APIRoute = async (ctx) => {
     } catch (error) { return respuestaErrorCatalogoAire(error); }
   }
   if (!datosTecnicosValidosParaArea(rubro, activoData.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
+
+  // ── Fase 59: estado, datos biomédicos, registro sanitario y centro de costo ──
+  if (activoData.estado === "baja") return Response.json({ error: "Un equipo nuevo no se registra dado de baja." }, { status: 400 });
+  const r = activoData;
+  const traeRegistro = !!(r.registroSanitario || r.registroSanitarioEntidad || r.registroSanitarioEmision || r.registroSanitarioVencimiento || r.registroSanitarioNoRequiere);
+  if (rubro !== "biomedico" && (r.claseRiesgo || r.subcategoria || traeRegistro)) {
+    return Response.json({ error: MENSAJE_SOLO_BIOMEDICOS }, { status: 400 });
+  }
+  if (r.registroSanitarioNoRequiere) {
+    activoData = { ...activoData, registroSanitario: null, registroSanitarioEntidad: null, registroSanitarioEmision: null, registroSanitarioVencimiento: null };
+  } else if (r.registroSanitarioEmision && r.registroSanitarioVencimiento && r.registroSanitarioVencimiento < r.registroSanitarioEmision) {
+    return Response.json({ error: "El vencimiento del registro no puede ser anterior a su emisión." }, { status: 400 });
+  }
+  if (r.centroCostoId != null) {
+    const [centro] = await db.select({ id: centrosCosto.id, codigo: centrosCosto.codigo, activo: centrosCosto.activo, sucursalId: centrosCosto.sucursalId, sedeNombre: sucursales.nombre })
+      .from(centrosCosto).leftJoin(sucursales, eq(sucursales.id, centrosCosto.sucursalId)).where(eq(centrosCosto.id, r.centroCostoId)).limit(1);
+    const [ubic] = r.ubicacionId != null
+      ? await db.select({ sucursalId: ubicaciones.sucursalId, sedeNombre: sucursales.nombre })
+        .from(ubicaciones).leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId)).where(eq(ubicaciones.id, r.ubicacionId)).limit(1)
+      : [];
+    const errorCentro = errorCentroCostoEquipo(centro, ubic, null);
+    if (errorCentro) return Response.json({ error: errorCentro }, { status: 400 });
+  }
+
   const automatico = !activoData.codigo;
   if (!automatico) {
+    const errorCodigo = errorCodigoActivo(activoData.codigo!);
+    if (errorCodigo) return Response.json({ error: errorCodigo }, { status: 400 });
     // SQLite upper() handles ASCII only. Legacy identifiers may contain Ñ or
     // accented letters, so compare with the same Unicode rules as new values.
     const existentes = await db.select({ codigo: activos.codigo }).from(activos);
-    if (existentes.some(a => a.codigo.trim().toUpperCase() === activoData.codigo)) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
+    if (existentes.some(a => a.codigo.trim().toUpperCase() === activoData.codigo)) return Response.json({ error: mensajeCodigoDuplicado(activoData.codigo!) }, { status: 409 });
   }
   for (let intento = 0; intento < 3; intento++) {
     const codigo = activoData.codigo || generarCodigoActivo(rubro);
@@ -130,12 +173,16 @@ export const POST: APIRoute = async (ctx) => {
       } else {
         [row] = await registro;
       }
+      await logAudit(ctx, {
+        entidad: "activo", entidadId: row.id, accion: "create",
+        resumen: automatico ? "Alta del equipo" : "Alta del equipo con código institucional",
+      });
       return Response.json({ activo: row }, { status: 201 });
     } catch (error) {
       const catalogoError = errorCatalogoAire(error);
       if (catalogoError) return respuestaErrorCatalogoAire(catalogoError);
       if (!esCodigoDuplicado(error)) throw error;
-      if (!automatico) return Response.json({ error: "Codigo o QR ya existe" }, { status: 409 });
+      if (!automatico) return Response.json({ error: mensajeCodigoDuplicado(activoData.codigo!) }, { status: 409 });
     }
   }
   return Response.json({ error: "No se pudo asignar un código único. Vuelve a guardar el equipo." }, { status: 409 });
