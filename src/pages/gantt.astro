@@ -151,7 +151,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
 
 <Layout title="Cronograma Gantt">
   <DocCabecera soloImpresion titulo="Cronograma de 12 meses" subtitulo={`${sedeActiva ? sedeActiva.nombre : "Todas las sedes"}${dominio ? ` · ${rubroLabel(dominio)}` : ""}`} fecha={hoy} />
-  <div class="flex flex-wrap items-center justify-between gap-3">
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Cronograma Gantt — 12 meses</h1>
       <p class="mt-1 text-sm text-slate-500">

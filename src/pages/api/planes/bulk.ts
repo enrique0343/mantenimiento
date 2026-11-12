@@ -51,17 +51,14 @@ export const POST: APIRoute = async (ctx) => {
     return Response.json({ ok: true, afectados: ids.length, omitidos: 0 });
   }
 
-  // Activar: las rutinas de equipos dados de baja se quedan inactivas.
-  const activables = seleccion.filter((s) => s.estadoEquipo !== "baja").map((s) => s.id);
-  const omitidos = ids.length - activables.length;
-  for (const tanda of enTandas(activables, TANDA)) await db.update(planesMantenimiento).set({ activo: true }).where(inArray(planesMantenimiento.id, tanda));
-  if (activables.length > 0) {
-    await logAudit(ctx, { entidad: "plan", entidadId: 0, accion: "update", resumen: `Bulk: ${activables.length} planes activados${omitidos ? ` (${omitidos} de equipos dados de baja quedaron inactivos)` : ""}` });
+  // Activar: una rutina de un equipo dado de baja no se activa (contrato K-E1 y §e.4: 409).
+  const deBaja = seleccion.filter((s) => s.estadoEquipo === "baja").length;
+  if (deBaja > 0) {
+    return Response.json({
+      error: `${deBaja} rutina(s) de la selección son de equipos dados de baja y no se pueden activar. Quítalas de la selección.`,
+    }, { status: 409 });
   }
-  return Response.json({
-    ok: true,
-    afectados: activables.length,
-    omitidos,
-    ...(omitidos ? { aviso: `${omitidos} rutina(s) no se activaron: el equipo está dado de baja.` } : {}),
-  });
+  for (const tanda of enTandas(ids, TANDA)) await db.update(planesMantenimiento).set({ activo: true }).where(inArray(planesMantenimiento.id, tanda));
+  await logAudit(ctx, { entidad: "plan", entidadId: 0, accion: "update", resumen: `Bulk: ${ids.length} planes activados` });
+  return Response.json({ ok: true, afectados: ids.length, omitidos: 0 });
 };

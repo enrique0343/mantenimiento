@@ -102,6 +102,8 @@ es(hall(r, 'calibracion').map((h) => [h.codigo, h.nivel, h.detalle]), [
   [c6.codigo, 'aviso', 'Por vencer · vence el 01/12/2026 (en 19 días)'],
 ], 'detalle con la etiqueta de WP-B y la fecha');
 es(hall(r, 'patron').map((h) => h.codigo), [c4.codigo], 'el patrón vencido también sale en «patrón»');
+const patronNoRequiere = equipo({ esPatron: true, calibracionNoAplica: true });
+es(ind(C.armarCumplimiento(datos({ equipos: [c4, patronNoRequiere], calibraciones: calibs })), 'patron').universo, 1, 'un patrón «no requiere calibración» no entra en el universo');
 es([ind(r, 'patron').universo, ind(r, 'calibracion').pct], [1, 40], 'universo de patrones y pct de calibración');
 es(hall(r, 'calibracion')[0].enlace, `/activos/${c4.id}#calibraciones`, 'enlace a la ficha, sección calibraciones');
 

@@ -181,7 +181,7 @@ export function armarCumplimiento(d: DatosCumplimiento): { indicadores: Indicado
 
   // Calibración (regla de WP-B; universo = el de /calibraciones sin filtros) y patrones.
   const calibrables = d.equipos.filter((e) => aplicaCalibracion(e));
-  const patrones = d.equipos.filter((e) => e.esPatron && e.estado !== "baja");
+  const patrones = calibrables.filter((e) => e.esPatron);
   anotar("calibracion", calibrables.length);
   anotar("patron", patrones.length);
   const detalleCal = (e: EquipoCumplimiento) => {
@@ -205,7 +205,6 @@ export function armarCumplimiento(d: DatosCumplimiento): { indicadores: Indicado
   for (const e of patrones) {
     const { info, detalle, fecha } = detalleCal(e);
     const enlace = `/activos/${e.id}#calibraciones`;
-    if (info.estado === "no_aplica") continue;
     if (!estaAlDia(info.estado)) deEquipo("patron", "falla", e, detalle, fecha, enlace);
     else if (info.estado === "por_vencer") deEquipo("patron", "aviso", e, detalle, fecha, enlace);
   }

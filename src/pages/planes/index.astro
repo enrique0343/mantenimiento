@@ -228,12 +228,10 @@ const fmt = (s: string) => fechaCorta(s);
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ accion, ids }),
       });
-      const j = await r.json().catch(() => null) as { error?: unknown; aviso?: unknown } | null;
-      if (r.ok) {
-        // Las rutinas de equipos dados de baja no se activan: el aviso lo dice.
-        if (typeof j?.aviso === "string") alert(j.aviso);
-        location.reload();
-      } else {
+      if (r.ok) location.reload();
+      else {
+        // Por ejemplo: rutinas de equipos dados de baja en la selección (409).
+        const j = await r.json().catch(() => null) as { error?: unknown } | null;
         alert(typeof j?.error === "string" ? j.error : "No se pudo completar la acción.");
       }
     }
