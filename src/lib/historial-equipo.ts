@@ -9,7 +9,8 @@
 import {
   APLICABILIDAD_LABEL, DESTINOS_BAJA, ESTADO_ALERTA_LABEL, FUENTE_ALERTA_LABEL, MOTIVOS_BAJA,
   RESULTADO_SE_LABEL, TIPO_ALERTA_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL,
-  diaSV, esFechaISO, etiquetaCategoriaDocumento, fechaCorta, folioActaBaja, horaSV,
+  aplicaCalibracion, diaSV, esFechaISO, etiquetaCategoriaDocumento, fechaCorta, fechaHoraSV, folioActaBaja, horaSV,
+  puedeRegistrarBio, puedeVerBio, type EquipoCalibracion,
 } from "./biomedico";
 import { etiquetaOT } from "./orden-codigo";
 
@@ -168,6 +169,11 @@ function textoCantidad(n: number): string {
 /** Opciones: cómo se escriben las fechas dentro de los textos (pantalla DD/MM/AAAA; CSV AAAA-MM-DD). */
 export interface OpcionesEventos {
   fecha?: (valor: string | null | undefined) => string;
+  /**
+   * Cómo se escribe un valor de la bitácora («antes → después»). Por defecto, a la vista
+   * (valorBitacoraVista: fechas DD/MM/AAAA, marcas en hora de El Salvador); el CSV lo deja como se guardó.
+   */
+  valor?: (texto: string) => string;
   /** Hoy en El Salvador ('AAAA-MM-DD'): una capacitación con fecha posterior está programada, todavía no pasó. */
   hoy?: string;
 }
@@ -175,9 +181,16 @@ export interface OpcionesEventos {
 /** Formato de fechas para el CSV: AAAA-MM-DD (día de El Salvador). */
 export const fechaCsv = (valor: string | null | undefined): string => diaSV(valor) ?? "";
 
+/** El CSV: fechas de los textos en AAAA-MM-DD y valores de la bitácora tal como se guardaron (también AAAA-MM-DD). */
+export const OPCIONES_CSV: Required<Pick<OpcionesEventos, "fecha" | "valor">> = {
+  fecha: fechaCsv,
+  valor: (texto: string) => texto,
+};
+
 /** Todos los eventos del equipo, sin ordenar (usa ordenarEventos). */
 export function construirEventos(h: HistorialEquipo, opciones: OpcionesEventos = {}): EventoHistorial[] {
   const F = opciones.fecha ?? ((v: string | null | undefined) => fechaCorta(v));
+  const V = opciones.valor ?? valorBitacoraVista;
   const ev: EventoHistorial[] = [];
   const base = { subtipo: null, responsable: null, orden: null, resultado: null, incidente: null, link: null, anulado: false };
   const otPorId = new Map(h.ots.map((o) => [o.id, o]));
@@ -374,7 +387,7 @@ export function construirEventos(h: HistorialEquipo, opciones: OpcionesEventos =
     ev.push({
       ...base, fecha: r.createdAt, tipo: "bitacora", subtipo: r.accion,
       titulo: r.resumen?.trim() || etiquetaDe(ACCION_BITACORA, r.accion) || "Cambio",
-      detalle: r.cambios.map((c) => `${c.etiqueta}: ${c.antes} → ${c.despues}`).join("; "),
+      detalle: r.cambios.map((c) => `${c.etiqueta}: ${V(c.antes)} → ${V(c.despues)}`).join("; "),
       responsable: r.usuario ?? "Sistema", resultado: etiquetaDe(ACCION_BITACORA, r.accion),
     });
   }
@@ -431,6 +444,76 @@ export function textoPeriodo(desde: string | null, hasta: string | null): string
   if (desde) return `desde el ${fechaCorta(desde)}`;
   if (hasta) return `hasta el ${fechaCorta(hasta)}`;
   return "";
+}
+
+// ═══ Bitácora (audit_log del equipo) ═════════════════════════════════════════
+
+/** Valor guardado en la bitácora, en texto y tal como se guardó: vacío → «(vacío)», sí/no, objetos en JSON. */
+export function textoValorBitacora(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "(vacío)";
+  if (typeof v === "boolean") return v ? "Sí" : "No";
+  if (typeof v === "object") { try { return JSON.stringify(v); } catch { return String(v); } }
+  return String(v);
+}
+
+/**
+ * El mismo valor a la vista. Una fecha 'AAAA-MM-DD' sale DD/MM/AAAA, partida como texto (sin correr
+ * el día); una marca de tiempo ('AAAA-MM-DD HH:MM[:SS]' de SQLite, que es UTC, o ISO con zona) sale
+ * 'DD/MM/AAAA HH:MM' en hora de El Salvador. Lo demás no cambia. El CSV no lo usa: ahí siguen en AAAA-MM-DD.
+ */
+export function valorBitacoraVista(texto: string): string {
+  const s = String(texto ?? "").trim();
+  if (esFechaISO(s)) return fechaCorta(s);
+  if (RE_MARCA.test(s) && diaSV(s)) return fechaHoraSV(s);
+  return texto;
+}
+
+/** Cambios de audit_log.cambios ({campo: {antes, despues}}) en texto, con la etiqueta de cada campo. Ilegible → []. */
+export function leerCambiosBitacora(json: string | null | undefined, etiqueta: (campo: string) => string): CambioH[] {
+  if (!json) return [];
+  try {
+    const obj = JSON.parse(json) as Record<string, { antes?: unknown; despues?: unknown } | null>;
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+    return Object.entries(obj).map(([campo, val]) => ({
+      campo, etiqueta: etiqueta(campo), antes: textoValorBitacora(val?.antes), despues: textoValorBitacora(val?.despues),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Fila de audit_log para la tarjeta de la ficha (columnas elegidas; `usuario` = nombre de quien lo hizo). */
+export interface FilaBitacoraFicha { accion: string; resumen: string | null; cambios: string | null; createdAt: string; usuario: string | null }
+export interface EntradaHistorialCambios {
+  accion: string; accionLabel: string; accionColor: string; usuario: string; resumen: string | null;
+  /** 'DD/MM/AAAA HH:MM' en hora de El Salvador. */
+  cuando: string;
+  /** Valores a la vista (valorBitacoraVista). */
+  cambios: Array<{ etiqueta: string; antes: string; despues: string }>;
+}
+
+/**
+ * Tarjeta «Historial de cambios» de la ficha. La bitácora del equipo lleva calibraciones, documentos,
+ * bajas y pruebas eléctricas (con la copia de lo borrado), así que solo la ve quien ve lo biomédico
+ * (h.19): para proveedor, solicitante y motorista devuelve null y la ficha no pinta la tarjeta.
+ */
+export function tarjetaHistorialCambios(
+  rol: string | null | undefined,
+  filas: readonly FilaBitacoraFicha[],
+  etiqueta: (campo: string) => string,
+): EntradaHistorialCambios[] | null {
+  if (!puedeVerBio(rol)) return null;
+  return filas.map((f) => ({
+    accion: f.accion,
+    accionLabel: f.accion === "create" ? "Creó" : f.accion === "delete" ? "Eliminó" : "Modificó",
+    accionColor: f.accion === "create" ? "bg-emerald-50 text-emerald-700" : f.accion === "delete" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700",
+    usuario: f.usuario?.trim() || "Sistema",
+    resumen: f.resumen?.trim() || null,
+    cuando: fechaHoraSV(f.createdAt),
+    cambios: leerCambiosBitacora(f.cambios, etiqueta).map((c) => ({
+      etiqueta: c.etiqueta, antes: valorBitacoraVista(c.antes), despues: valorBitacoraVista(c.despues),
+    })),
+  }));
 }
 
 // ═══ CSV ═════════════════════════════════════════════════════════════════════
@@ -536,15 +619,31 @@ export function enlaceEvento(link: string | null, rol: string | null | undefined
   return link;
 }
 
+/** Enlace a Incidentes del equipo (marca de incidente en la hoja de vida y el historial); null para el técnico y los demás roles que no la abren. */
+export const enlaceIncidentes = (activoId: number, rol: string | null | undefined): string | null =>
+  enlaceEvento(`/incidentes?activo=${activoId}`, rol);
+
 /**
- * Tarjeta «Expediente técnico» de la ficha: los requisitos que faltan y los vencidos. Un requisito
- * vencido es el que solo tiene documentos vencidos; si se subió la versión renovada, ya no cuenta
- * (el documento viejo queda como reemplazado, igual que en la sección de documentos).
+ * «Imprimir viñeta» en la ficha (pedido de WP-B): quien registra, en un equipo al que le aplica la
+ * calibración (aplicaCalibracion: ni de baja ni «No requiere calibración») y que tiene alguna calibración.
+ * Es la regla con que /calibraciones/vinetas arma las viñetas: sin calibraciones o «No requiere», no hay.
  */
-export function lineasExpediente(c: { requisitos: ReadonlyArray<{ corta: string; estado: string }> }): { faltan: string[]; vencidos: string[] } {
+export function puedeImprimirVineta(rol: string | null | undefined, equipo: EquipoCalibracion, calibraciones: number): boolean {
+  return puedeRegistrarBio(rol) && aplicaCalibracion(equipo) && calibraciones > 0;
+}
+
+/**
+ * Tarjeta «Expediente técnico» de la ficha: los requisitos que faltan, los vencidos y los que no
+ * aplican. Un requisito vencido es el que solo tiene documentos vencidos; si se subió la versión
+ * renovada, ya no cuenta (el documento viejo queda como reemplazado, igual que en la sección de
+ * documentos). «No aplica»: el marcado en el expediente o el registro sanitario de un equipo que el
+ * inventario marca «No requiere registro sanitario».
+ */
+export function lineasExpediente(c: { requisitos: ReadonlyArray<{ corta: string; estado: string }> }): { faltan: string[]; vencidos: string[]; noAplica: string[] } {
   return {
     faltan: c.requisitos.filter((r) => r.estado === "falta").map((r) => r.corta),
     vencidos: c.requisitos.filter((r) => r.estado === "vencido").map((r) => r.corta),
+    noAplica: c.requisitos.filter((r) => r.estado === "no_aplica").map((r) => r.corta),
   };
 }
 

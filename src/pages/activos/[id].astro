@@ -22,11 +22,11 @@ import {
   ESTADO_ALERTA_LABEL, ESTADO_CALIBRACION_COLOR, ESTADO_CALIBRACION_LABEL, ESTADO_REGISTRO_COLOR, ESTADO_REGISTRO_LABEL,
   ESTADO_SEG_ELEC_COLOR, ESTADO_SEG_ELEC_LABEL, FRECUENCIAS_RUTINA_EQUIPO, HISTORIAL_ACTIVO, MOTIVOS_BAJA, RESULTADO_SE_COLOR,
   RESULTADO_SE_LABEL, TIPO_ALERTA_LABEL, completitudExpediente, diasEntre, esFechaISO, estadoRegistroSanitario,
-  estadoSeguridadElectrica, etiquetaCentroCosto, etiquetaClaseRiesgo, etiquetaFrecuencia, fechaCorta, fechaHoraSV, folioActaBaja,
+  estadoSeguridadElectrica, etiquetaCentroCosto, etiquetaClaseRiesgo, etiquetaFrecuencia, fechaCorta, folioActaBaja,
   hoySV, infoCalibracion, opcionesLaboratorio, patronVigenteEn, puedeGestionarBio, puedeRegistrarBio, puedeVerBio, sumarMeses,
   textoAcreditacion, textoVence, type CalMin,
 } from "@/lib/biomedico";
-import { lineasExpediente, textoLabAcreditado } from "@/lib/historial-equipo";
+import { lineasExpediente, puedeImprimirVineta, tarjetaHistorialCambios, textoLabAcreditado } from "@/lib/historial-equipo";
 import {
   NIVELES_JERARQUIA, NIVEL_LABEL, NIVEL_COLOR, PROFUNDIDAD_MAXIMA,
   ROLES_UBICACION_SERVIDA, ROL_SERVIDA_LABEL, ROL_SERVIDA_COLOR, ROL_SERVIDA_AYUDA,
@@ -115,34 +115,28 @@ const registraBio = puedeRegistrarBio(user.rol);
 const gestionaBio = puedeGestionarBio(user.rol);
 
 // Historial de cambios (bitácora del equipo): ahí quedan calibraciones, documentos, bajas y pruebas
-// eléctricas, así que es de quien ve lo biomédico, igual que el historial completo (K-C1).
+// eléctricas, así que es de quien ve lo biomédico, igual que el historial completo (K-C1). Para los
+// demás roles ni se consulta y tarjetaHistorialCambios devuelve null (la tarjeta no se pinta).
+const LIMITE_BITACORA_FICHA = 50;
 const auditRows = verBio
   ? await db
-      .select({ a: auditLog, u: usuarios })
+      .select({
+        accion: auditLog.accion, resumen: auditLog.resumen, cambios: auditLog.cambios, createdAt: auditLog.createdAt,
+        usuario: usuarios.nombre,
+      })
       .from(auditLog)
       .leftJoin(usuarios, eq(usuarios.id, auditLog.usuarioId))
       .where(and(eq(auditLog.entidad, "activo"), eq(auditLog.entidadId, id)))
       .orderBy(desc(auditLog.id))
-      .limit(50)
+      .limit(LIMITE_BITACORA_FICHA)
   : [];
+// Valores a la vista: fechas DD/MM/AAAA y marcas en hora de El Salvador (el CSV del historial las deja en AAAA-MM-DD).
+const historialCambios = tarjetaHistorialCambios(user.rol, auditRows, labelCampo);
 
 // Fechas en El Salvador: una fecha sola se parte como texto (sin el día de menos);
 // una marca de tiempo se pasa a la hora de El Salvador.
 const fmt = (s: string | null | undefined) => fechaCorta(s);
-const fmtFull = (s: string | null | undefined) => fechaHoraSV(s);
 const hoy = hoySV();
-
-function parsearCambios(json: string | null) {
-  if (!json) return [];
-  try {
-    const obj = JSON.parse(json);
-    return Object.entries(obj).map(([campo, val]: any) => ({
-      campo, label: labelCampo(campo),
-      antes: val?.antes ?? "(vacío)",
-      despues: val?.despues ?? "(vacío)",
-    }));
-  } catch { return []; }
-}
 const isBio = area === "biomedico";
 
 // Contratos vigentes/por vencer que cubren este equipo
@@ -307,6 +301,9 @@ const ultimaCalRow = calibracionesRows.find((r) => r.c.id === infoCal.calibracio
 // Días para la próxima: no se cuentan en un equipo de baja.
 const diasCal = a.estado === "baja" ? null : infoCal.dias;
 const mostrarCal = verBio && (llevaCal || calibracionesRows.length > 0);
+// «Imprimir viñeta» (pedido de WP-B): solo si al equipo le aplica la calibración y ya tiene alguna;
+// un equipo de baja o con «No requiere calibración» no tiene viñeta en /calibraciones/vinetas.
+const vinetaVisible = puedeImprimirVineta(user.rol, equipoCal, calibracionesRows.length);
 const puedeRegistrarCal = mostrarCal && registraBio && a.estado !== "baja" && !a.calibracionNoAplica;
 const puedeCorregirCal = mostrarCal && gestionaBio;
 const necesitaFormularioCal = puedeRegistrarCal || (puedeCorregirCal && calibracionesRows.length > 0);
@@ -371,9 +368,13 @@ const calibracionesJs = puedeCorregirCal
     }))
   : [];
 
-// Expediente (WP-D: 5 requisitos con «No aplica»), seguridad eléctrica (K-F2) y alertas.
+// Expediente (WP-D: 5 requisitos con «No aplica»), seguridad eléctrica (K-F2) y alertas. Si el
+// inventario marca «No requiere registro sanitario», ese requisito no aplica (MOTIVO_SIN_REGISTRO).
 const expediente = verBio && isBio
-  ? completitudExpediente({ documentos: docsExpediente, aceptacionFecha: a.aceptacionFecha, noAplica: naExpediente, hoy })
+  ? completitudExpediente({
+      documentos: docsExpediente, aceptacionFecha: a.aceptacionFecha, noAplica: naExpediente,
+      registroSanitarioNoRequiere: a.registroSanitarioNoRequiere, hoy,
+    })
   : null;
 // Por requisito: un documento vencido que ya se renovó no se cuenta como vencido.
 const lineasExp = expediente ? lineasExpediente(expediente) : null;
@@ -609,9 +610,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       {verBio && <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>}
       {verBio && <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>}
       {canEdit && <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>}
-      {verBio && registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && (
-        <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary">Imprimir viñeta</a>
-      )}
+      {vinetaVisible && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary">Imprimir viñeta</a>}
       {gestionaBio && a.estado !== "baja" && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="btn-secondary">Dar de baja</a>}
       {verBio && a.estado === "baja" && bajaVigente && (
         <a href={areaHref(`/activos/${a.id}/acta-baja?baja=${bajaVigente.id}`, area)} class="btn-secondary">Acta de baja</a>
@@ -1132,6 +1131,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <p>{expediente.cumplidos} de {expediente.total} requisitos</p>
               {lineasExp && lineasExp.faltan.length > 0 && <p class="text-xs text-amber-700">Falta: {lineasExp.faltan.join(", ")}.</p>}
               {lineasExp && lineasExp.vencidos.length > 0 && <p class="text-xs text-red-700">Vencido: {lineasExp.vencidos.join(", ")}.</p>}
+              {lineasExp && lineasExp.noAplica.length > 0 && <p class="text-xs text-slate-500">No aplica: {lineasExp.noAplica.join(", ")}.</p>}
             </div>
             <a href="#documentos" class="mt-2 inline-block text-xs font-medium text-brand-600 hover:underline">Ver documentos</a>
           </div>
@@ -1706,7 +1706,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           )}
         </div>
         <div class="flex flex-wrap gap-2">
-          {registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary text-sm">Imprimir viñeta</a>}
+          {vinetaVisible && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary text-sm">Imprimir viñeta</a>}
           {puedeRegistrarCal && <button id="calNewBtn" type="button" class="btn-primary text-sm">+ Registrar calibración</button>}
         </div>
       </div>
@@ -2102,53 +2102,47 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     )}
   </div>
 
-  <!-- Historial de cambios (bitácora): solo quien ve lo biomédico (lleva calibraciones, documentos y bajas) -->
-  {verBio && (
+  <!-- Historial de cambios (bitácora): solo quien ve lo biomédico (lleva calibraciones, documentos y bajas);
+       para proveedor, solicitante y motorista historialCambios es null. Valores a la vista (DD/MM/AAAA). -->
+  {historialCambios && (
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="font-semibold">Historial de cambios</h2>
       <div class="flex items-center gap-3">
-        <span class="text-xs text-slate-500">{auditRows.length === 50 ? "Los 50 más recientes" : `${auditRows.length} ${auditRows.length === 1 ? "evento" : "eventos"}`}</span>
+        <span class="text-xs text-slate-500">{historialCambios.length === LIMITE_BITACORA_FICHA ? `Los ${LIMITE_BITACORA_FICHA} más recientes` : `${historialCambios.length} ${historialCambios.length === 1 ? "evento" : "eventos"}`}</span>
         <a href={areaHref(`/activos/${a.id}/historial`, area)} class="text-xs font-medium text-brand-600 hover:underline">Ver historial completo</a>
       </div>
     </div>
-    {auditRows.length === 0 ? (
+    {historialCambios.length === 0 ? (
       <p class="mt-2 text-sm text-slate-500">Sin cambios registrados todavía.</p>
     ) : (
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
-        {auditRows.map((r) => {
-          const cambios = parsearCambios(r.a.cambios);
-          const accionLabel = r.a.accion === "create" ? "Creó" : r.a.accion === "delete" ? "Eliminó" : "Modificó";
-          const accionColor = r.a.accion === "create" ? "bg-emerald-50 text-emerald-700"
-            : r.a.accion === "delete" ? "bg-red-50 text-red-700"
-            : "bg-blue-50 text-blue-700";
-          return (
-            <li class="py-3">
-              <div class="flex items-start justify-between gap-2">
-                <div>
-                  <span class={`badge ${accionColor}`}>{accionLabel}</span>
-                  <span class="ml-2 text-sm font-medium">{r.u?.nombre ?? "Sistema"}</span>
-                  {r.a.resumen && <span class="ml-2 text-sm text-slate-600">— {r.a.resumen}</span>}
-                </div>
-                <span class="whitespace-nowrap text-xs text-slate-400">{fmtFull(r.a.createdAt)}</span>
+        {historialCambios.map((r) => (
+          <li class="py-3">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <span class={`badge ${r.accionColor}`}>{r.accionLabel}</span>
+                <span class="ml-2 text-sm font-medium">{r.usuario}</span>
+                {r.resumen && <span class="ml-2 text-sm text-slate-600">— {r.resumen}</span>}
               </div>
-              {cambios.length > 0 && (
-                <table class="mt-2 ml-2 text-xs text-slate-600">
-                  <tbody>
-                    {cambios.map((c) => (
-                      <tr>
-                        <td class="pr-3 font-medium text-slate-500">{c.label}:</td>
-                        <td class="pr-2 text-red-600 line-through">{String(c.antes)}</td>
-                        <td class="pr-2">→</td>
-                        <td class="text-emerald-700">{String(c.despues)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </li>
-          );
-        })}
+              <span class="whitespace-nowrap text-xs text-slate-400">{r.cuando}</span>
+            </div>
+            {r.cambios.length > 0 && (
+              <table class="mt-2 ml-2 text-xs text-slate-600">
+                <tbody>
+                  {r.cambios.map((c) => (
+                    <tr>
+                      <td class="pr-3 font-medium text-slate-500">{c.etiqueta}:</td>
+                      <td class="pr-2 text-red-600 line-through">{c.antes}</td>
+                      <td class="pr-2">→</td>
+                      <td class="text-emerald-700">{c.despues}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </li>
+        ))}
       </ul>
     )}
   </div>

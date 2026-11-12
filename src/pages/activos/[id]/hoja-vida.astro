@@ -26,7 +26,7 @@ import {
   etiquetaFrecuencia, fechaCorta, folioActaBaja, horaSV, hoySV, infoCalibracion, puedeVerBio, sumarMeses, textoVence,
 } from "@/lib/biomedico";
 import {
-  PRIORIDAD_LABEL, RESULTADO_CALIBRACION_LABEL, enPeriodo, otsDelPeriodo, periodoValido, puedeVerIncidentes, quienEjecuto, resumenOts,
+  PRIORIDAD_LABEL, RESULTADO_CALIBRACION_LABEL, enPeriodo, enlaceIncidentes, otsDelPeriodo, periodoValido, quienEjecuto, resumenOts,
   seccionesHojaVida, textoIncidente, textoLabAcreditado, textoPeriodo, textoRepuestos,
 } from "@/lib/historial-equipo";
 import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
@@ -187,7 +187,7 @@ const { presentes, num } = seccionesHojaVida({
   licencias: nLicencias, alertas: historial.alertas.length, bajas: historial.bajas.length,
 });
 // Incidentes no es del técnico (K-G2): para él, el texto sin enlace.
-const verIncidentes = puedeVerIncidentes(user.rol);
+const hrefIncidentes = enlaceIncidentes(a.id, user.rol);
 
 const ahora = new Date().toISOString();
 const qs = new URLSearchParams();
@@ -322,8 +322,8 @@ if (hasta) qs.set("hasta", hasta);
                     <td colspan="8">
                       {detalle.length === 0 && !inc && <span class="doc-nota-celda">Sin detalle registrado.</span>}
                       {detalle.map((d) => <span class="doc-nota-celda" style="white-space: pre-wrap">{d}</span>)}
-                      {inc && (verIncidentes
-                        ? <a href={`/incidentes?activo=${a.id}`} class="doc-nota-celda doc-critico">{textoIncidente(inc)}</a>
+                      {inc && (hrefIncidentes
+                        ? <a href={hrefIncidentes} class="doc-nota-celda doc-critico">{textoIncidente(inc)}</a>
                         : <span class="doc-nota-celda doc-critico">{textoIncidente(inc)}</span>)}
                     </td>
                   </tr>
