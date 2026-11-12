@@ -61,7 +61,11 @@ export const POST: APIRoute = async (ctx) => {
   const env = getEnv(ctx);
   const r2Key = `seguridad-electrica/${p.activoId}/${Date.now()}-${crypto.randomUUID()}-${nombreSeguroR2(archivo.name)}`;
   const nombre = (archivo.name || `informe.${revisado.extension}`).slice(0, 200);
-  await env.R2.put(r2Key, bytes, { httpMetadata: { contentType: revisado.contentType } });
+  try {
+    await env.R2.put(r2Key, bytes, { httpMetadata: { contentType: revisado.contentType } });
+  } catch {
+    return errorJson(500, "No se pudo subir el informe. Intenta de nuevo.");
+  }
   let guardadas: { id: number }[];
   try {
     // Solo si sigue sin informe y válida: dos envíos a la vez no se pisan.

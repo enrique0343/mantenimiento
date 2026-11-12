@@ -217,6 +217,16 @@ try {
   si(g5.informe_r2_key.startsWith('seguridad-electrica/1001/') && g5.informe_r2_key.endsWith('-informe_ESA615.pdf'), 'llave de R2 con el equipo y el nombre seguro');
   es([g5.informe_nombre, g5.informe_tipo, g5.informe_tamano, r2.get(g5.informe_r2_key)?.contentType], ['informe ESA615.pdf', 'application/pdf', PDF.length, 'application/pdf'], 'informe guardado con el tipo detectado');
 
+  // Fallas: R2 caído al subir; la base falla después de subir (el archivo no queda huérfano).
+  const filasAntes = fila('SELECT COUNT(*) AS c FROM pruebas_seguridad_electrica').c, objetosAntes = r2.size;
+  const putReal = R2.put;
+  R2.put = async () => { throw new Error('R2 sin servicio'); };
+  es(await error(1001, { tipo: 'aceptacion', informe: pdf() }), [500, 'No se pudo subir el informe. Intenta de nuevo.'], 'R2 caído: error en texto');
+  R2.put = putReal;
+  h.faults.beforeStatement = { matches: (q) => /insert into "pruebas_seguridad_electrica"/i.test(q), run: async () => { throw new Error('D1 sin servicio'); } };
+  es(await error(1001, { tipo: 'aceptacion', informe: pdf() }), [500, 'No se pudo guardar la prueba. Intenta de nuevo.'], 'la base falla: error en texto');
+  es([fila('SELECT COUNT(*) AS c FROM pruebas_seguridad_electrica').c, r2.size], [filasAntes, objetosAntes], 'sin fila y sin archivo huérfano en R2');
+
   // Periodicidad
   es((await llamar(h.app.config.GET, '/api/seguridad-electrica/config', { rol: 'visualizador' })).body, { meses: 12 }, 'periodicidad de la siembra');
   es((await llamar(h.app.config.POST, '/api/seguridad-electrica/config', { method: 'POST', rol: 'tecnico', json: { meses: 6 } })).status, 403, 'el técnico no cambia la periodicidad');

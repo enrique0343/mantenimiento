@@ -212,7 +212,13 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const env = getEnv(ctx);
-  if (informe) await env.R2.put(informe.r2Key, informe.bytes, { httpMetadata: { contentType: informe.tipo } });
+  if (informe) {
+    try {
+      await env.R2.put(informe.r2Key, informe.bytes, { httpMetadata: { contentType: informe.tipo } });
+    } catch {
+      return errorJson(500, "No se pudo subir el informe. Intenta de nuevo.");
+    }
+  }
   let id: number;
   try {
     const [fila] = await db.insert(pruebasSeguridadElectrica).values({

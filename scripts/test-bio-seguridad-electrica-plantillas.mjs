@@ -63,7 +63,7 @@ try {
   es(pasosIec.length, 8, 'la plantilla IEC 62353 de la base de prueba');
 
   // Crear
-  es((await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'tecnico', data: { nombre: 'X' } })).status, 403, 'el técnico no crea plantillas');
+  es(await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'tecnico', data: { nombre: 'X' } }), { status: 403, body: { error: 'No tienes permiso para esto.' } }, 'el técnico no crea plantillas (error en texto)');
   es(await h.call(h.app.lista.POST, '/api/checklist-plantillas', { method: 'POST', rol: 'jefe', data: { nombre: '', items: [] } }), { status: 400, body: { error: 'Escribe el nombre de la plantilla.' } }, 'error en texto, no el objeto de zod');
   const antesQ = h.queries.length;
   const items = Array.from({ length: 20 }, (_, i) => (i === 4 ? { texto: 'Medir voltaje', requiereValor: true, unidad: 'V', valorEsperadoMin: 110, valorEsperadoMax: 130, bloqueante: true } : `Paso ${i + 1}`));

@@ -72,7 +72,7 @@ const registroHref = (id: number) => areaHref(`/seguridad-electrica/${id}`, "bio
 ---
 
 <Layout title="Seguridad eléctrica">
-  <div class="print-doc se-hoja">
+  <div class="print-doc doc-hoja doc-ancha">
     <DocCabecera soloImpresion titulo="Seguridad eléctrica de equipos biomédicos" subtitulo={subtitulo} fecha={hoy} />
 
     <div class="no-print flex flex-wrap items-start justify-between gap-3">
@@ -203,7 +203,6 @@ const registroHref = (id: number) => areaHref(`/seguridad-electrica/${id}`, "bio
   </div>
 
   <style is:global>
-    .se-hoja { page: apaisada; }
     @media print {
       .se-tabla { overflow: visible !important; }
     }

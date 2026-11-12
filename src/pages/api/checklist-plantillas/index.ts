@@ -4,6 +4,7 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { getDb } from "@/lib/db";
 import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { exigirRol } from "@/lib/seguridad-electrica";
 import { logAudit } from "@/lib/audit";
 import { crearPlantillaSchema, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas } from "@/lib/plantillas-checklist";
 
@@ -45,7 +46,7 @@ export const GET: APIRoute = async (ctx) => {
 
 // POST: crear plantilla (admin y jefe), con sus pasos y su constancia.
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
   const parsed = crearPlantillaSchema.safeParse(body);

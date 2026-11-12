@@ -4,6 +4,7 @@ import type { BatchItem } from "drizzle-orm/batch";
 import { getDb } from "@/lib/db";
 import { checklistPlantillas, checklistPlantillaItems } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { exigirRol } from "@/lib/seguridad-electrica";
 import { logAudit, calcularDiff } from "@/lib/audit";
 import { editarPlantillaSchema, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas, tieneVinculos } from "@/lib/plantillas-checklist";
 
@@ -34,7 +35,7 @@ export const GET: APIRoute = async (ctx) => {
 // PATCH: nombre, descripción, activa y, si vienen, los pasos (se reemplazan todos
 // en un solo lote y conservan su lectura, unidad y rango). Admin y jefe.
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const id = idDe(ctx.params.id);
   if (id === null) return NO_ENCONTRADA();
@@ -100,7 +101,7 @@ export const PATCH: APIRoute = async (ctx) => {
 // DELETE: ya no borra. La plantilla queda inactiva (no se ofrece al crear rutinas
 // ni órdenes) y conserva sus pasos; se vuelve a activar con PATCH { activa: true }.
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
   if (!user) return response;
   const id = idDe(ctx.params.id);
   if (id === null) return NO_ENCONTRADA();
