@@ -1,6 +1,8 @@
 ---
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import {
   procedimientos,
@@ -21,9 +23,8 @@ import {
   SEMANAS_VALIDACION,
   SISTEMAS,
   SISTEMAS_PROC,
-  TIPOS_PROC,
-  TIPO_PROC,
   colorProgreso,
+  estadoInfo,
   hoyISO,
   progresoValidacion,
   puedeAdministrarProcedimientos,
@@ -31,8 +32,13 @@ import {
   sistemaInfo,
   type EstadoProc,
   type SistemaProc,
-  type TipoProc,
 } from "@/lib/procedimientos";
+// Fase 59 · WP-G: protocolos institucionales, PDF aprobado, impresión y CSV.
+import {
+  ETIQUETA_SISTEMA_PROTOCOLO, PROTOCOLOS_SUGERIDOS, TIPOS_BIBLIOTECA, TIPO_PROTOCOLO, infoTipoBiblioteca,
+} from "@/lib/protocolos";
+import { diaSV, hoySV } from "@/lib/biomedico";
+import { csvResponse, toCsv } from "@/lib/csv";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -85,13 +91,66 @@ const filas = filasTodas.filter((f) => {
 });
 
 const conteosTipo: Record<string, number> = {};
-for (const t of TIPOS_PROC) conteosTipo[t] = filasTodas.filter((f) => f.p.tipo === t).length;
+for (const t of TIPOS_BIBLIOTECA) conteosTipo[t] = filasTodas.filter((f) => f.p.tipo === t).length;
 
 const sedes = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre })
   .from(sucursales)
   .where(eq(sucursales.activa, true))
   .orderBy(asc(sucursales.nombre));
+
+// La columna Sistema: el protocolo institucional no es de un sistema crítico.
+const sistemaTxt = (p: { tipo: string; sistema: string }) =>
+  p.tipo === TIPO_PROTOCOLO ? ETIQUETA_SISTEMA_PROTOCOLO : sistemaInfo(p.sistema as SistemaProc).label;
+const sedeFiltroTxt = fSede === "0" ? "Modelo (sin sede)" : fSede ? sedes.find((s) => String(s.id) === fSede)?.nombre ?? `Sede ${fSede}` : null;
+// Los filtros en texto, para la cabecera impresa.
+const filtrosTxt = [
+  fTipo ? `Tipo: ${infoTipoBiblioteca(fTipo).nombre}` : null,
+  fSistema ? `Sistema: ${sistemaInfo(fSistema as SistemaProc).label}` : null,
+  fEstado ? `Estado: ${estadoInfo(fEstado).label}` : null,
+  sedeFiltroTxt ? `Sede: ${sedeFiltroTxt}` : null,
+].filter(Boolean).join(" · ") || "Todos los documentos";
+
+// CSV con los mismos filtros que la pantalla (quien ve la biblioteca lo descarga).
+if (url.searchParams.get("formato") === "csv") {
+  const nombres = new Map((await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios)).map((u) => [u.id, u.nombre]));
+  const columnas = [
+    { key: "codigo", label: "Código" },
+    { key: "codigoInstitucional", label: "Código institucional" },
+    { key: "titulo", label: "Título" },
+    { key: "tipo", label: "Tipo" },
+    { key: "sistema", label: "Sistema" },
+    { key: "sede", label: "Sede" },
+    { key: "version", label: "Versión" },
+    { key: "estado", label: "Estado" },
+    { key: "dueno", label: "Dueño" },
+    { key: "aprobadoEl", label: "Aprobado el" },
+    { key: "aprobo", label: "Aprobó" },
+    { key: "proximaRevision", label: "Próxima revisión" },
+    { key: "pdf", label: "PDF" },
+    { key: "pdfVersion", label: "Versión del PDF" },
+  ];
+  const filasCsv = filas.map(({ p, resp, suc }) => ({
+    codigo: p.codigoCorto,
+    codigoInstitucional: p.codigoInstitucional ?? "",
+    titulo: p.titulo,
+    tipo: infoTipoBiblioteca(p.tipo).nombre,
+    sistema: sistemaTxt(p),
+    sede: suc?.nombre ?? "Modelo (sin sede)",
+    version: p.version,
+    estado: estadoInfo(p.estado).label,
+    dueno: resp?.nombre ?? "",
+    aprobadoEl: diaSV(p.aprobadoEn) ?? "",
+    aprobo: p.aprobadoPor ? nombres.get(p.aprobadoPor) ?? "" : "",
+    proximaRevision: diaSV(p.proximaRevision) ?? "",
+    pdf: p.r2Key ? "Sí" : "No",
+    pdfVersion: p.r2Key ? p.pdfVersion ?? "" : "",
+  }));
+  return csvResponse(`biblioteca_${hoySV().replace(/-/g, "")}.csv`, toCsv(filasCsv, columnas));
+}
+const csvParams = new URLSearchParams(url.search);
+csvParams.set("formato", "csv");
+const csvHref = `/procedimientos?${csvParams}`;
 
 const responsables = esAdmin
   ? await db
@@ -118,25 +177,32 @@ function qs(cambios: Record<string, string | null>) {
 
 const matrizJson = JSON.stringify(MATRIZ_CAP08);
 const semanasJson = JSON.stringify(SEMANAS_VALIDACION);
+const protosJson = JSON.stringify(PROTOCOLOS_SUGERIDOS);
 const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
 ---
 
 <Layout title="Biblioteca de procedimientos">
+  <DocCabecera soloImpresion titulo="Biblioteca de procedimientos y protocolos" subtitulo={filtrosTxt} />
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">Biblioteca de procedimientos</h1>
-      <p class="mt-1 max-w-3xl text-sm text-slate-500">
+      <h1 class="no-print text-2xl font-bold">Biblioteca de procedimientos</h1>
+      <p class="no-print mt-1 max-w-3xl text-sm text-slate-500">
         Los veinticinco documentos modelo de Mantenimiento General (GO-GUI-011-2026) como catálogo vivo:
         <strong>SCP</strong> configuración, <strong>SOP</strong> rutina, <strong>MOP</strong> intervención,
         <strong>EOP</strong> emergencia y <strong>AOP</strong> condición anormal.
         Ninguno entra en vigor por haber sido escrito.
+        También guarda los <strong>protocolos institucionales</strong> de Calidad (incidentes, limpieza y desinfección, bajas) con su PDF aprobado.
       </p>
     </div>
-    {esAdmin && <button id="nuevoBtn" class="btn-primary">+ Nuevo documento</button>}
+    <div class="no-print flex flex-wrap gap-2">
+      <button type="button" onclick="window.print()" class="btn-secondary">Imprimir lista</button>
+      <a href={csvHref} class="btn-secondary">Descargar CSV</a>
+      {esAdmin && <button id="nuevoBtn" class="btn-primary">+ Nuevo documento</button>}
+    </div>
   </div>
 
   <!-- Contadores por estado -->
-  <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+  <div class="no-print mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
     <a href={qs({ estado: null })}
        class:list={["card p-3 transition hover:border-slate-400", !fEstado && "ring-2 ring-brand-500"]}>
       <div class="text-[11px] uppercase tracking-wide text-slate-500">Documentos</div>
@@ -156,15 +222,15 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
   </div>
 
   <!-- Filtros -->
-  <div class="card mt-4 p-4">
+  <div class="no-print card mt-4 p-4">
     <div class="flex flex-wrap items-end gap-3">
       <div class="min-w-[9rem]">
         <label class="label text-xs" for="fTipo">Tipo</label>
         <select id="fTipo" class="input">
           <option value="">Todos los tipos</option>
-          {TIPOS_PROC.map((t) => (
+          {TIPOS_BIBLIOTECA.map((t) => (
             <option value={t} selected={fTipo === t}>
-              {TIPO_PROC[t].label} · {TIPO_PROC[t].nombre} ({conteosTipo[t]})
+              {infoTipoBiblioteca(t).label} · {infoTipoBiblioteca(t).nombre} ({conteosTipo[t]})
             </option>
           ))}
         </select>
@@ -237,10 +303,13 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
         </thead>
         <tbody class="divide-y divide-slate-100">
           {filas.map(({ p, resp, suc, progreso }) => {
-            const t = TIPO_PROC[p.tipo as TipoProc];
+            const t = infoTipoBiblioteca(p.tipo);
             const sis = sistemaInfo(p.sistema as SistemaProc);
             const est = ESTADO_PROC[p.estado as EstadoProc];
             const revisionVencida = p.proximaRevision != null && p.proximaRevision < hoy;
+            // Retirado: el PDF solo lo abren admin y jefe (la API también lo revisa).
+            const verPdf = !!p.r2Key && (p.estado !== "retirado" || esAdmin);
+            const pdfOtraVersion = verPdf && p.pdfVersion !== p.version;
             return (
               <tr class="hover:bg-slate-50">
                 <td class="px-4 py-3 align-top">
@@ -260,11 +329,19 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
                       <span class="ml-1 text-red-600">· revisión vencida {fmtFechaSoloCompacta(p.proximaRevision)}</span>
                     )}
                   </div>
+                  {verPdf && (
+                    <div class="mt-0.5 text-[11px]">
+                      <a href={`/api/procedimientos/${p.id}/pdf?v=${encodeURIComponent(p.pdfSubidoEn ?? "0")}`} target="_blank" rel="noopener" class="font-medium text-brand-700 hover:underline">PDF v{p.pdfVersion ?? "?"}</a>
+                      {pdfOtraVersion && <span class="text-amber-700"> · PDF de otra versión</span>}
+                    </div>
+                  )}
                 </td>
                 <td class="px-4 py-3 align-top">
                   <span class:list={["badge", t.color]}>{t.label}</span>
                 </td>
-                <td class="px-4 py-3 align-top text-xs text-slate-600">{sis.icono} {sis.label}</td>
+                <td class="px-4 py-3 align-top text-xs text-slate-600">
+                  {p.tipo === TIPO_PROTOCOLO ? ETIQUETA_SISTEMA_PROTOCOLO : <Fragment>{sis.icono} {sis.label}</Fragment>}
+                </td>
                 <td class="px-4 py-3 align-top text-center font-mono text-xs text-slate-600">{p.version}</td>
                 <td class="px-4 py-3 align-top">
                   <span class:list={["badge", est.color]}>{est.icono} {est.label}</span>
@@ -303,6 +380,8 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
     Un documento no pasa a vigente con un campo en azul vacío ni con un área sin confirmar.
   </p>
 
+  <DocFolio soloImpresion codigo="Biblioteca de procedimientos" />
+
   {esAdmin && (
     <div id="nuevoModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
       <div class="card max-h-[92vh] w-full max-w-3xl overflow-y-auto p-5">
@@ -318,6 +397,7 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
             <input id="n_codigo" class="input font-mono" list="codigosVolumen" placeholder="SCP-ELE-01" />
             <datalist id="codigosVolumen">
               {CODIGOS_VOLUMEN.map((c) => <option value={c}>{MATRIZ_CAP08[c].titulo}</option>)}
+              {Object.entries(PROTOCOLOS_SUGERIDOS).map(([c, s]) => <option value={c}>{s.titulo}</option>)}
             </datalist>
             <p id="n_sug" class="mt-1 hidden text-[11px] text-brand-700"></p>
           </div>
@@ -332,11 +412,11 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
           <div>
             <label class="label text-xs" for="n_tipo">Tipo *</label>
             <select id="n_tipo" class="input">
-              {TIPOS_PROC.map((t) => <option value={t}>{TIPO_PROC[t].label} · {TIPO_PROC[t].nombre}</option>)}
+              {TIPOS_BIBLIOTECA.map((t) => <option value={t}>{infoTipoBiblioteca(t).label} · {infoTipoBiblioteca(t).nombre}</option>)}
             </select>
             <p id="n_semanaTxt" class="mt-1 text-[11px] text-slate-500"></p>
           </div>
-          <div>
+          <div id="n_sistemaBox">
             <label class="label text-xs" for="n_sistema">Sistema *</label>
             <select id="n_sistema" class="input">
               {SISTEMAS_PROC.map((s) => (
@@ -362,7 +442,7 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
               {sedes.map((s) => <option value={String(s.id)}>{s.nombre}</option>)}
             </select>
           </div>
-          <div>
+          <div id="n_riesgoBox">
             <label class="label text-xs" for="n_riesgo">Nivel de riesgo</label>
             <select id="n_riesgo" class="input">
               <option value="">Sin clasificar</option>
@@ -379,7 +459,7 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
             <label class="label text-xs" for="n_proposito">Propósito</label>
             <textarea id="n_proposito" class="input" rows="2" placeholder="Qué pregunta responde este documento"></textarea>
           </div>
-          <div>
+          <div id="n_semanaBox">
             <label class="label text-xs" for="n_semana">Semana de validación</label>
             <select id="n_semana" class="input">
               <option value="1">Semana 1 · SCP</option>
@@ -431,8 +511,8 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
   )}
 </Layout>
 
-<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ matrizJson, semanasJson, esAdmin }) }}>
-  const { matrizJson, semanasJson, esAdmin } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+<script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ matrizJson, semanasJson, protosJson, esAdmin }) }}>
+  const { matrizJson, semanasJson, protosJson, esAdmin } = JSON.parse(decodeURIComponent(__encodedScriptVars));
   const $ = (id) => document.getElementById(id);
 
   // Filtros: recargan con querystring (SSR, igual que /ordenes).
@@ -451,10 +531,20 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
   if (esAdmin) {
     const MATRIZ = JSON.parse(matrizJson);
     const SEMANAS = JSON.parse(semanasJson);
+    // Protocolos institucionales sugeridos (Fase 59): código → título, áreas y qué confirman.
+    const PROTOS = JSON.parse(protosJson);
     const SEM_POR_TIPO = { scp: 1, sop: 2, aop: 2, eop: 3, mop: 4 };
     const modal = $("nuevoModal");
+    const esProtocolo = () => $("n_tipo").value === "protocolo";
 
     function pintarSemana() {
+      // El protocolo lo aprueba Calidad: sin sistema crítico, nivel de riesgo ni semana.
+      const proto = esProtocolo();
+      ["n_sistemaBox", "n_riesgoBox", "n_semanaBox"].forEach((id) => $(id)?.classList.toggle("hidden", proto));
+      if (proto) {
+        $("n_semanaTxt").textContent = "Protocolo institucional: lo aprueba Calidad; no sigue el calendario de cuatro semanas.";
+        return;
+      }
       const sem = SEM_POR_TIPO[$("n_tipo").value] ?? 1;
       $("n_semana").value = String(sem);
       const info = SEMANAS[String(sem)];
@@ -531,8 +621,24 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
     $("n_codigo")?.addEventListener("change", () => {
       const cod = ($("n_codigo").value || "").trim().toUpperCase();
       $("n_codigo").value = cod;
-      const fila = MATRIZ[cod];
+      // Solo claves propias: «CONSTRUCTOR» escrito a mano no es un código del volumen.
+      const propia = (obj) => Object.prototype.hasOwnProperty.call(obj, cod) ? obj[cod] : null;
+      const fila = propia(MATRIZ);
       const sug = $("n_sug");
+      const proto = propia(PROTOS);
+      if (proto) {
+        // Protocolo institucional sugerido: tipo, título y una fila por área validadora.
+        $("n_tipo").value = "protocolo";
+        if (!$("n_titulo").value) $("n_titulo").value = proto.titulo;
+        pintarSemana();
+        $("n_areas").innerHTML = "";
+        proto.areas.forEach((a) => filaArea({ area: a, queConfirma: proto.queConfirma }));
+        $("n_campos").innerHTML = "";
+        sug.textContent =
+          "Sugerencia para protocolos: " + proto.areas.length + " área(s) validadora(s). Cambia el código si Calidad usa otro.";
+        sug.classList.remove("hidden");
+        return;
+      }
       if (!fila) { sug.classList.add("hidden"); return; }
       if (!$("n_titulo").value) $("n_titulo").value = fila.titulo;
       $("n_tipo").value = fila.tipo;
@@ -594,19 +700,21 @@ const AREAS = [...AREAS_VALIDADORAS, ...AREAS_ADICIONALES];
         });
       });
 
+      const proto = esProtocolo();
       const payload = {
         codigoCorto,
         codigoInstitucional: ($("n_inst").value || "").trim() || null,
         titulo,
         tipo: $("n_tipo").value,
-        sistema: $("n_sistema").value,
+        // El protocolo institucional va con sistema «otro», sin riesgo ni semana (lo repite la API).
+        sistema: proto ? "otro" : $("n_sistema").value,
         responsableId,
         suplenteCargo: ($("n_suplente").value || "").trim() || null,
         sucursalId: $("n_sede").value ? Number($("n_sede").value) : null,
-        nivelRiesgo: $("n_riesgo").value || null,
+        nivelRiesgo: proto ? null : $("n_riesgo").value || null,
         normaAdoptada: ($("n_norma").value || "").trim() || null,
         proposito: ($("n_proposito").value || "").trim() || null,
-        semanaValidacion: Number($("n_semana").value) || null,
+        semanaValidacion: proto ? null : Number($("n_semana").value) || null,
         validaciones,
         campos,
       };

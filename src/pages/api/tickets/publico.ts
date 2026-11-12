@@ -12,6 +12,10 @@ import { rubroLabel } from "@/lib/rubros";
 
 export const prerender = false;
 
+// Lo que escribe el público entra a correos HTML que leen los jefes: se escapa.
+const esc = (s: unknown) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
 const createSchema = z.object({
   rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
   solicitanteNombre: z.string().min(2),
@@ -38,6 +42,17 @@ export const POST: APIRoute = async (ctx) => {
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   const contextError = validarContextoArea(ctx.request, areaResult.rubro);
   if (contextError) return contextError;
+  // Fase 59: un equipo dado de baja ya no recibe solicitudes; el formulario no lo ofrece.
+  let equipo: { codigo: string; nombre: string } | null = null;
+  if (parsed.data.activoId != null) {
+    const [a] = await db
+      .select({ codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado })
+      .from(activos).where(eq(activos.id, parsed.data.activoId)).limit(1);
+    if (a?.estado === "baja") {
+      return Response.json({ error: "Ese equipo está dado de baja. Quita la selección y descríbelo en la descripción." }, { status: 400 });
+    }
+    equipo = a ? { codigo: a.codigo, nombre: a.nombre } : null;
+  }
   const trackingToken = generateTrackingToken();
   const { slaHoras, vencimiento } = calcularVencimientoSla(parsed.data.prioridad);
 
@@ -86,14 +101,15 @@ export const POST: APIRoute = async (ctx) => {
           subject: `[Soporte ${tipoLabel}] Nuevo ticket #${row.id}: ${row.asunto}`,
           html: emailLayout(
             `Nuevo ticket de soporte`,
-            `<h2 style="margin:0 0 8px 0;color:#23417D;font-size:18px">${row.asunto}</h2>
-             <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 16px 0">${row.descripcion}</p>
+            `<h2 style="margin:0 0 8px 0;color:#23417D;font-size:18px">${esc(row.asunto)}</h2>
+             <p style="white-space:pre-wrap;background:#F2F4F7;padding:12px;border-left:3px solid #23417D;border-radius:2px;margin:0 0 16px 0">${esc(row.descripcion)}</p>
              <table style="width:100%;font-size:13px;border-collapse:collapse;margin:8px 0">
-               <tr><td style="padding:4px 0;color:#6B7280;width:130px">Solicitante:</td><td><strong>${row.solicitanteNombre}</strong> &lt;${row.solicitanteEmail}&gt;</td></tr>
-               ${row.solicitanteTelefono ? `<tr><td style="padding:4px 0;color:#6B7280">Teléfono:</td><td>${row.solicitanteTelefono}</td></tr>` : ""}
+               <tr><td style="padding:4px 0;color:#6B7280;width:130px">Solicitante:</td><td><strong>${esc(row.solicitanteNombre)}</strong> &lt;${esc(row.solicitanteEmail)}&gt;</td></tr>
+               ${row.solicitanteTelefono ? `<tr><td style="padding:4px 0;color:#6B7280">Teléfono:</td><td>${esc(row.solicitanteTelefono)}</td></tr>` : ""}
                <tr><td style="padding:4px 0;color:#6B7280">Tipo:</td><td>${tipoLabel}</td></tr>
-               ${sucursalNombre ? `<tr><td style="padding:4px 0;color:#6B7280">Sucursal:</td><td>${sucursalNombre}</td></tr>` : ""}
-               ${row.ubicacion ? `<tr><td style="padding:4px 0;color:#6B7280">Ubicación:</td><td>${row.ubicacion}</td></tr>` : ""}
+               ${equipo ? `<tr><td style="padding:4px 0;color:#6B7280">Equipo:</td><td>${esc(equipo.codigo)} · ${esc(equipo.nombre)}</td></tr>` : ""}
+               ${sucursalNombre ? `<tr><td style="padding:4px 0;color:#6B7280">Sucursal:</td><td>${esc(sucursalNombre)}</td></tr>` : ""}
+               ${row.ubicacion ? `<tr><td style="padding:4px 0;color:#6B7280">Ubicación:</td><td>${esc(row.ubicacion)}</td></tr>` : ""}
                <tr><td style="padding:4px 0;color:#6B7280">Prioridad:</td><td><strong>${row.prioridad}</strong></td></tr>
                <tr><td style="padding:4px 0;color:#6B7280">SLA:</td><td>${row.slaHoras}h</td></tr>
              </table>
@@ -115,7 +131,7 @@ export const POST: APIRoute = async (ctx) => {
         subject: `Recibimos tu solicitud — Ticket #${row.id}`,
         html: emailLayout(
           `Recibimos tu solicitud`,
-          `<p>Hola <strong>${row.solicitanteNombre}</strong>,</p>
+          `<p>Hola <strong>${esc(row.solicitanteNombre)}</strong>,</p>
            <p>Gracias por tomarte el tiempo de reportarnos lo que está ocurriendo. Tu solicitud ya quedó en manos del equipo de Operaciones y la atenderemos con el cuidado que merece.</p>
            <p>La registramos con el código <a href="${trackUrl}" style="font-variant-numeric:tabular-nums;background:#F2F4F7;padding:2px 8px;border-radius:2px;color:#23417D;text-decoration:none;font-weight:600">${row.trackingToken}</a>, para que puedas darle seguimiento cuando lo necesites.</p>
            <p>Trabajaremos para darte una respuesta dentro de las próximas <strong>${row.slaHoras} horas</strong>. Si el caso lo requiere, te contactaremos antes.</p>

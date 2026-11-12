@@ -44,7 +44,8 @@ const patchSchema = z.object({
   nivelRiesgo: z.enum(["bajo", "medio", "alto"]).nullable().optional(),
   semanaValidacion: z.number().int().min(1).max(4).nullable().optional(),
   proximaRevision: z.string().regex(FECHA).nullable().optional(),
-  r2Key: z.string().nullable().optional(),
+  // r2Key ya no se acepta aquí (zod lo descarta): solo /api/procedimientos/[id]/pdf
+  // escribe el PDF aprobado, revisado por su firma y con su versión.
   /** Nota para el historial de versiones (se guarda si cambia la versión o el estado). */
   cambio: z.string().nullable().optional(),
 });
