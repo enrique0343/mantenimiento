@@ -20,4 +20,19 @@ es(celda(null), '', 'vacío');
 es(celda('a, b'), '"a, b"', 'coma entre comillas');
 es(toCsv([], [{ key: 'v', label: 'V' }]).charCodeAt(0), 0xfeff, 'BOM para Excel');
 
-console.log(`PASS test-bio-csv: ${n} casos; marcas de SV con espacio y de SQLite en ISO.`);
+// Fórmulas de Excel: el texto que empieza con =, +, -, @, tabulador o retorno queda como texto.
+es(celda('=1+1'), "'=1+1", 'igual');
+es(celda('=HYPERLINK("http://x","y")'), `"'=HYPERLINK(""http://x"",""y"")"`, 'fórmula con comillas y coma');
+es(celda('@SUMA(A1)'), "'@SUMA(A1)", 'arroba');
+es(celda('+503 2537 6161'), "'+503 2537 6161", 'teléfono con +: sin #NULL! en Excel');
+es(celda('-2+3+cmd|x'), "'-2+3+cmd|x", 'menos seguido de fórmula');
+es(celda('\t=1'), "'\t=1", 'tabulador delante');
+es(celda('-2.5'), '-2.5', 'negativo escrito como texto');
+es(celda('-1,5'), '"-1,5"', 'negativo con coma decimal');
+es(celda('+5'), '+5', 'positivo con signo');
+es(celda('-'), '-', 'guion solo');
+es(celda(-3), '-3', 'número');
+es(celda("'=ya protegido"), "'=ya protegido", 'no se protege dos veces');
+es(celda('Laboratorio = Metrología'), 'Laboratorio = Metrología', 'igual en medio');
+
+console.log(`PASS test-bio-csv: ${n} casos; marcas de SV con espacio, de SQLite en ISO y fórmulas de Excel como texto.`);

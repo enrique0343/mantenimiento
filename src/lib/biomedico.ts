@@ -342,6 +342,11 @@ export const HISTORIAL_ACTIVO: ReadonlyArray<{ tabla: string; columna: string; e
   { tabla: "capacitacion_equipos", columna: "activo_id", etiqueta: "capacitaciones" },
   { tabla: "pruebas_seguridad_electrica", columna: "activo_id", etiqueta: "pruebas de seguridad eléctrica" },
   { tabla: "pruebas_seguridad_electrica", columna: "analizador_activo_id", etiqueta: "pruebas donde se usó como analizador" },
+  // Llaves foráneas sin cascada: sin nombrarlas, el DELETE chocaría con la base (500 en vez de 409).
+  { tabla: "activos", columna: "padre_id", etiqueta: "equipos que dependen de él" },
+  { tabla: "orden_conjuntos", columna: "activo_id", etiqueta: "órdenes de conjuntos donde se usó" },
+  { tabla: "checklist_plantilla_items", columna: "activo_id", etiqueta: "pasos de plantillas de checklist" },
+  { tabla: "rondas_proposals", columna: "asset_id", etiqueta: "propuestas de ronda" },
 ];
 
 /** Lo que le falta al registro de un biomédico, en este orden. Completo → []. */
@@ -597,11 +602,16 @@ export interface CompletitudExpediente {
  * Por requisito: documento sin vencer → con_documento; aceptación registrada en la ficha
  * (solo «aceptacion») → aceptacion_registrada; «No aplica» → no_aplica; solo vencidos → vencido;
  * nada → falta. Cumplen los tres primeros. Un documento sin vencimiento no vence.
+ * Si el inventario marca el equipo «No requiere registro sanitario», ese requisito es
+ * no_aplica con MOTIVO_SIN_REGISTRO, sin marcarlo aparte en el expediente.
  */
+export const MOTIVO_SIN_REGISTRO = "El inventario marca que el equipo no requiere registro sanitario.";
 export function completitudExpediente(entrada: {
   documentos: ReadonlyArray<{ categoria: string | null; fechaVencimiento?: string | null }>;
   aceptacionFecha?: string | null;
   noAplica?: ReadonlyArray<{ requisito: string; motivo?: string | null }>;
+  /** activos.registro_sanitario_no_requiere */
+  registroSanitarioNoRequiere?: boolean | number | null;
   hoy: string;
 }): CompletitudExpediente {
   const { documentos, hoy } = entrada;
@@ -610,12 +620,15 @@ export function completitudExpediente(entrada: {
   const requisitos = REQUISITOS_EXPEDIENTE.map((r) => {
     const docs = documentos.filter((d) => (r.categorias as readonly string[]).includes(d.categoria ?? ""));
     const na = entrada.noAplica?.find((n) => n.requisito === r.clave);
+    const sinRegistro = r.clave === "registro_sanitario" && !!entrada.registroSanitarioNoRequiere;
     let estado: EstadoRequisito;
+    let motivoNoAplica: string | null = null;
     if (docs.some(sinVencer)) estado = "con_documento";
     else if (r.clave === "aceptacion" && entrada.aceptacionFecha) estado = "aceptacion_registrada";
-    else if (na) estado = "no_aplica";
+    else if (na) { estado = "no_aplica"; motivoNoAplica = na.motivo ?? null; }
+    else if (sinRegistro) { estado = "no_aplica"; motivoNoAplica = MOTIVO_SIN_REGISTRO; }
     else estado = docs.length ? "vencido" : "falta";
-    return { clave: r.clave, etiqueta: r.etiqueta, corta: r.corta, estado, documentos: docs.length, motivoNoAplica: na ? na.motivo ?? null : null };
+    return { clave: r.clave, etiqueta: r.etiqueta, corta: r.corta, estado, documentos: docs.length, motivoNoAplica };
   });
   const cumplidos = requisitos.filter((r) => r.estado === "con_documento" || r.estado === "aceptacion_registrada" || r.estado === "no_aplica").length;
   const total = REQUISITOS_EXPEDIENTE.length;

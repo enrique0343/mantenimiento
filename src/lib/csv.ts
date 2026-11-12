@@ -27,7 +27,18 @@ function formatCell(v: any): string {
     return v.replace(" ", "T");
   }
   if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "string") return sinFormula(v);
   return String(v);
+}
+
+// Excel abre como fórmula el texto que empieza con =, +, -, @, tabulador o retorno
+// («=HYPERLINK(…)», «+503 2537 6161» → #NULL!). Se antepone «'» para que quede como texto.
+// Los números escritos como texto («-2.5», «-1,5», «+5») y un «-» o «+» solos no cambian.
+const NUMERO_TEXTO = /^[-+]?\d+(?:[.,]\d+)?$/;
+export function sinFormula(s: string): string {
+  if (/^[=@\t\r]/.test(s)) return `'${s}`;
+  if (/^[+-]/.test(s) && s.length > 1 && !NUMERO_TEXTO.test(s)) return `'${s}`;
+  return s;
 }
 
 export function csvResponse(filename: string, csv: string): Response {

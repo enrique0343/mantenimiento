@@ -241,6 +241,14 @@ const soloManual = exp([{ categoria: 'manual' }]);
 es([soloManual.requisitos[0].estado, soloManual.sinClasificar], ['falta', 1], 'manual sin clasificar no cuenta');
 es(exp([{ categoria: 'ficha_tecnica' }]).requisitos[2].estado, 'con_documento', 'ficha técnica cumple especificaciones');
 es(exp([{ categoria: 'registro_sanitario' }], { noAplica: [{ requisito: 'registro_sanitario', motivo: 'x' }] }).requisitos[3].estado, 'con_documento', 'documento gana a no aplica');
+// «No requiere registro sanitario» en el inventario: el requisito queda «No aplica» sin marcarlo aparte.
+const sinReg = exp(cinco.filter((d) => d.categoria !== 'registro_sanitario'), { registroSanitarioNoRequiere: 1 });
+es([sinReg.completo, sinReg.requisitos[3].estado, sinReg.requisitos[3].motivoNoAplica, sinReg.faltan], [true, 'no_aplica', B.MOTIVO_SIN_REGISTRO, []], 'no requiere registro: no aplica');
+es(exp([], { registroSanitarioNoRequiere: true }).requisitos.map((r) => r.estado), ['falta', 'falta', 'falta', 'no_aplica', 'falta'], 'solo toca el registro sanitario');
+es(exp([], { registroSanitarioNoRequiere: 0 }).requisitos[3].estado, 'falta', '0 = sí requiere');
+es(exp([], { registroSanitarioNoRequiere: true, noAplica: [{ requisito: 'registro_sanitario', motivo: 'Marcado a mano' }] }).requisitos[3].motivoNoAplica, 'Marcado a mano', 'el «No aplica» del expediente conserva su motivo');
+es(exp([{ categoria: 'registro_sanitario', fechaVencimiento: '2026-01-01' }], { registroSanitarioNoRequiere: true }).requisitos[3].estado, 'no_aplica', 'registro vencido de un equipo que ya no lo requiere');
+es(exp([{ categoria: 'registro_sanitario' }], { registroSanitarioNoRequiere: true }).requisitos[3].estado, 'con_documento', 'el documento sigue ganando');
 es(exp([{ categoria: 'garantia', fechaVencimiento: '2026-01-01' }, { categoria: 'limpieza_desinfeccion' }]).recomendados.map((r) => r.tiene), [true, false], 'recomendados');
 
 // ── Archivos ────────────────────────────────────────────────────────────────

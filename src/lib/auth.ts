@@ -116,13 +116,15 @@ export async function getCurrentUser(ctx: APIContext) {
   return { id: u.id, email: u.email, nombre: u.nombre, rol: u.rol, especialidad: u.especialidad ?? null };
 }
 
+// 401 y 403 en JSON { error }, como el middleware y el resto de las APIs: las pantallas
+// leen j.error. Mismo código y mismas palabras que antes; solo cambia el formato.
 export async function requireUser(ctx: APIContext, roles?: Array<Rol>) {
   const user = await getCurrentUser(ctx);
   if (!user) {
-    return { user: null as null, response: new Response("No autenticado", { status: 401 }) };
+    return { user: null as null, response: Response.json({ error: "No autenticado" }, { status: 401 }) };
   }
   if (roles && !roles.includes(user.rol as any)) {
-    return { user: null as null, response: new Response("Sin permisos", { status: 403 }) };
+    return { user: null as null, response: Response.json({ error: "Sin permisos" }, { status: 403 }) };
   }
   return { user, response: null as null };
 }
