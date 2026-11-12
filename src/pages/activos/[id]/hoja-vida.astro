@@ -1,260 +1,515 @@
 ---
+// Hoja de vida del equipo (JCI FMS.07, requisito 9): documento controlado que se imprime
+// y se archiva. Secciones numeradas sin huecos. Lo que tiene historia (órdenes,
+// calibraciones, pruebas, alertas, baja) sale del cargador único que usan también el
+// historial y su CSV; el expediente, las licencias y las capacitaciones los pinta WP-D.
 import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
+import DocumentosEquipo from "@/components/bio/DocumentosEquipo.astro";
+import LicenciasEquipo from "@/components/bio/LicenciasEquipo.astro";
+import CapacitacionesEquipo from "@/components/bio/CapacitacionesEquipo.astro";
 import { getDb } from "@/lib/db";
-import {
-  activos, ubicaciones, sucursales, proveedores, usuarios,
-  planesMantenimiento, ordenes, calibraciones,
-} from "@/lib/schema";
-import { eq, desc, asc } from "drizzle-orm";
-import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
-import { rubroLabel, rubroIcono, subcatLabel, subcatIcono, rubroDeActivo, MODALIDAD_LABEL } from "@/lib/rubros";
+import { activos, ubicaciones, sucursales, proveedores, usuarios, centrosCosto, planesMantenimiento, licencias } from "@/lib/schema";
+import { eq, asc, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
+import { rubroLabel, subcatLabel, rubroDeActivo, MODALIDAD_LABEL } from "@/lib/rubros";
 import { areaHref, parseArea } from "@/lib/areas";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { leerDatosTecnicos } from "@/lib/activo-area";
+import { CRITICIDAD_LABEL } from "@/lib/inventario-jci";
+import {
+  APLICABILIDAD_LABEL, DESTINOS_BAJA, ESTADO_ACTIVO_LABEL, ESTADO_ALERTA_LABEL, ESTADO_CALIBRACION_LABEL,
+  ESTADO_REGISTRO_LABEL, ESTADO_SEG_ELEC_LABEL, FUENTE_ALERTA_LABEL, MOTIVOS_BAJA, RESULTADO_SE_LABEL,
+  TIPO_ALERTA_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL,
+  esFechaISO, estadoRegistroSanitario, estadoSeguridadElectrica, etiquetaCentroCosto, etiquetaClaseRiesgo,
+  etiquetaFrecuencia, fechaCorta, folioActaBaja, horaSV, hoySV, infoCalibracion, puedeVerBio, sumarMeses, textoVence,
+} from "@/lib/biomedico";
+import {
+  PRIORIDAD_LABEL, RESULTADO_CALIBRACION_LABEL, enPeriodo, otsDelPeriodo, periodoValido, quienEjecuto, resumenOts,
+  textoIncidente, textoLabAcreditado, textoPeriodo, textoRepuestos,
+} from "@/lib/historial-equipo";
+import { cargarHistorialEquipo } from "@/lib/historial-equipo-db";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect("/");
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
 const db = getDb(Astro);
 
 const id = Number(Astro.params.id);
-if (!Number.isInteger(id)) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+if (!Number.isInteger(id) || id <= 0) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 
+// Columnas elegidas: activos (53) más lo justo de las demás tablas (D1 corta a 100).
+const responsable = alias(usuarios, "responsable");
 const [row] = await db
-  .select({ a: activos, ub: ubicaciones, s: sucursales, prov: proveedores, resp: usuarios })
+  .select({
+    a: activos, ubicacion: ubicaciones.nombre, sede: sucursales.nombre, proveedor: proveedores.nombre,
+    responsable: responsable.nombre, ccCodigo: centrosCosto.codigo, ccNombre: centrosCosto.nombre,
+  })
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
-  .leftJoin(usuarios, eq(usuarios.id, activos.responsableId))
-  .where(eq(activos.id, id));
+  .leftJoin(responsable, eq(responsable.id, activos.responsableId))
+  .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
+  .where(eq(activos.id, id))
+  .limit(1);
 
 if (!row) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const a = row.a;
 const datosTecnicos = leerDatosTecnicos(a.datosTecnicos);
 const area = rubroDeActivo(a.rubro, a.tipo);
 if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
+const esBio = area === "biomedico";
 
-const planes = await db
-  .select()
-  .from(planesMantenimiento)
-  .where(eq(planesMantenimiento.activoId, id))
-  .orderBy(asc(planesMantenimiento.proximaFecha));
+// Período (opcional): filtra las secciones con fecha. Con error no se filtra.
+const desdeTxt = Astro.url.searchParams.get("desde") ?? "";
+const hastaTxt = Astro.url.searchParams.get("hasta") ?? "";
+const periodo = periodoValido(desdeTxt, hastaTxt);
+const { desde, hasta } = periodo;
+const periodoTxt = textoPeriodo(desde, hasta);
+const conPeriodo = !!(desde || hasta);
 
-const ots = await db
-  .select({ o: ordenes, tec: usuarios })
-  .from(ordenes)
-  .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(eq(ordenes.activoId, id))
-  .orderBy(desc(ordenes.id))
-  .limit(200);
+const [planes, conteoLicencias, historial] = await Promise.all([
+  db.select({ p: planesMantenimiento, tecnico: usuarios.nombre })
+    .from(planesMantenimiento)
+    .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
+    .where(eq(planesMantenimiento.activoId, id))
+    .orderBy(asc(planesMantenimiento.proximaFecha)),
+  db.select({ n: sql<number>`count(*)` }).from(licencias).where(eq(licencias.activoId, id)),
+  cargarHistorialEquipo(db, id),
+]);
+const nLicencias = Number(conteoLicencias[0]?.n ?? 0);
+const hoy = hoySV();
 
-const calibs = await db
-  .select({ c: calibraciones, lab: proveedores })
-  .from(calibraciones)
-  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
-  .where(eq(calibraciones.activoId, id))
-  .orderBy(desc(calibraciones.fechaCalibracion));
+// ─── Identificación ──────────────────────────────────────────────────────────
+const calMin = historial.calibraciones.map((c) => ({
+  id: c.id, fechaCalibracion: c.fechaCalibracion, proximaCalibracion: c.proximaCalibracion, resultado: c.resultado,
+  certificadoR2Key: c.tieneCertificado ? "archivo" : null,
+}));
+const infoCal = infoCalibracion(
+  { tipo: a.tipo, rubro: a.rubro, estado: a.estado, requiereCalibracion: a.requiereCalibracion, esPatron: a.esPatron, calibracionNoAplica: a.calibracionNoAplica },
+  calMin, hoy,
+);
+const llevaCal = esBio || a.requiereCalibracion || a.esPatron;
+const bajaVigente = historial.bajas.find((b) => b.estado === "vigente") ?? null;
+const bajasRevertidas = historial.bajas.filter((b) => b.estado === "revertida");
 
-const hoy = new Date().toISOString().slice(0, 10);
-const fmt = (s: string | null | undefined) => (s ? fmtFechaSoloCompacta(s.slice(0, 10)) : "—");
-const fmtDT = (s: string | null | undefined) =>
-  s ? new Date(s).toLocaleString("es", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/El_Salvador" }) : "—";
+function textoRegistro(): string {
+  if (a.registroSanitarioNoRequiere) return "No requiere registro sanitario";
+  const estado = estadoRegistroSanitario(a, hoy);
+  const partes = [
+    a.registroSanitario?.trim() ? `N.º ${a.registroSanitario.trim()}` : "Sin número",
+    a.registroSanitarioEntidad,
+    a.registroSanitarioEmision ? `emitido ${fechaCorta(a.registroSanitarioEmision)}` : null,
+    a.registroSanitarioVencimiento ? `vence ${fechaCorta(a.registroSanitarioVencimiento)}` : null,
+  ].filter(Boolean);
+  return `${partes.join(" · ")} (${ESTADO_REGISTRO_LABEL[estado]})`;
+}
+function textoCalibracion(): string {
+  if (a.calibracionNoAplica) return `No requiere calibración${a.calibracionNoAplicaMotivo ? `: ${a.calibracionNoAplicaMotivo}` : ""}`;
+  // De baja la regla dice «no aplica»: aquí se dice que está de baja, no que «no requiere».
+  const estado = a.estado === "baja" ? "Equipo dado de baja" : ESTADO_CALIBRACION_LABEL[infoCal.estado];
+  if (!calMin.length) {
+    const aMano = [a.ultimaCalibracion && `última ${fechaCorta(a.ultimaCalibracion)}`, a.proximaCalibracion && `próxima ${fechaCorta(a.proximaCalibracion)}`].filter(Boolean);
+    return `${estado}${aMano.length ? ` (fechas escritas a mano, sin calibración registrada: ${aMano.join(", ")})` : ""}`;
+  }
+  return [
+    estado,
+    `última ${fechaCorta(infoCal.ultima)}`,
+    infoCal.proxima ? `próxima ${fechaCorta(infoCal.proxima)}${infoCal.dias != null && a.estado !== "baja" ? ` (${textoVence(infoCal.dias)})` : ""}` : null,
+  ].filter(Boolean).join(" · ");
+}
+const finVida = a.vidaUtilAnios && esFechaISO(a.fechaAdquisicion) ? sumarMeses(a.fechaAdquisicion, 12 * a.vidaUtilAnios) : null;
+const ACEPTACION_LABEL: Record<string, string> = { aprobado: "Aprobado", condicionado: "Aprobado con condiciones", rechazado: "Rechazado" };
 
-const dominio = rubroDeActivo(a.rubro, a.tipo);
-const esBio = dominio === "biomedico";
+const identificacion: Array<[string, string]> = [
+  ["Nombre", a.nombre],
+  ["Código", a.codigo],
+  ["Marca y modelo", [a.marca, a.modelo].filter(Boolean).join(" ") || "—"],
+  ["Serie", a.serial || "—"],
+  ["N.º de activo", a.numeroActivo || "—"],
+  ["Año", a.anio != null ? String(a.anio) : "—"],
+  ["Sede y ubicación", [row.sede, row.ubicacion, a.ubicacion].filter(Boolean).join(" · ") || "—"],
+  ["Centro de costo", row.ccCodigo ? etiquetaCentroCosto({ codigo: row.ccCodigo, nombre: row.ccNombre ?? "" }) : "—"],
+  ["Área", rubroLabel(area)],
+  ...(area === "equipo_general" || esBio ? [["Servicio o función", datosTecnicos.servicio || "—"] as [string, string]] : []),
+  ...(esBio ? [["Subcategoría", subcatLabel(a.subcategoria)] as [string, string], ["Clase de riesgo", etiquetaClaseRiesgo(a.claseRiesgo)] as [string, string]] : []),
+  ["Criticidad", a.criticidadOperacional ? CRITICIDAD_LABEL[a.criticidadOperacional] : "—"],
+  ["Estado", `${ESTADO_ACTIVO_LABEL[a.estado]}${a.estado === "baja" && bajaVigente ? ` el ${fechaCorta(bajaVigente.fechaBaja)}` : ""}`],
+  ...(esBio ? [["Registro sanitario", textoRegistro()] as [string, string]] : []),
+  ["Inspección de aceptación", a.aceptacionFecha ? `${ACEPTACION_LABEL[a.aceptacionResultado ?? ""] ?? "Registrada"} · ${fechaCorta(a.aceptacionFecha)}` : "Sin registro"],
+  ["Adquisición", fechaCorta(a.fechaAdquisicion)],
+  ["Vida útil", a.vidaUtilAnios ? `${a.vidaUtilAnios} años${finVida ? ` (fin ${fechaCorta(finVida)})` : ""}` : "—"],
+  ["Proveedor", row.proveedor ?? "—"],
+  ["Responsable", row.responsable ?? "—"],
+  ...(llevaCal || calMin.length ? [["Calibración", textoCalibracion()] as [string, string]] : []),
+  ...(a.esPatron ? [["Equipo patrón", "Sí"] as [string, string]] : []),
+  ...(area === "aires" ? [
+    ["Tipo de unidad", datosTecnicos.tipoUnidad || "—"] as [string, string],
+    ["Capacidad (BTU/h)", datosTecnicos.capacidadBtuH?.toLocaleString("es-SV") || "—"] as [string, string],
+    ["Refrigerante", datosTecnicos.refrigerante || "—"] as [string, string],
+  ] : []),
+  ...(area === "infraestructura" ? [
+    ["Tipo de instalación", datosTecnicos.tipoInstalacion || "—"] as [string, string],
+    ["Sector", datosTecnicos.sector || "—"] as [string, string],
+  ] : []),
+];
+const filasIdent: Array<Array<[string, string]>> = [];
+for (let i = 0; i < identificacion.length; i += 2) filasIdent.push(identificacion.slice(i, i + 2));
 
-const ESTADO_OT: Record<string, string> = {
-  abierta: "Abierta", en_proceso: "En proceso", en_espera: "En espera",
-  completada: "Completada", verificada: "Verificada", cerrada: "Cerrada", cancelada: "Cancelada",
+// ─── Intervenciones ──────────────────────────────────────────────────────────
+const TOPE_OTS = 1000;
+const otsPeriodo = otsDelPeriodo(historial.ots, desde, hasta, TOPE_OTS);
+const resumen = resumenOts(historial.ots.filter((o) => enPeriodo(o.createdAt, desde, hasta)));
+const repuestosPorOt = new Map<number, typeof historial.repuestos>();
+for (const r of historial.repuestos) {
+  const lista = repuestosPorOt.get(r.ordenId) ?? [];
+  lista.push(r);
+  repuestosPorOt.set(r.ordenId, lista);
+}
+
+// ─── Calibraciones, seguridad eléctrica y alertas (con fecha: se filtran) ────
+const calibs = historial.calibraciones.filter((c) => enPeriodo(c.fechaCalibracion, desde, hasta));
+const pruebasValidas = historial.pruebasSE.filter((p) => p.estado === "valida");
+const ultimaSE = pruebasValidas[0] ?? null;
+const estadoSE = estadoSeguridadElectrica(ultimaSE ? { resultado: ultimaSE.resultado, proximaFecha: ultimaSE.proximaFecha } : null, hoy);
+const aceptacionSE = pruebasValidas.find((p) => p.tipo === "aceptacion") ?? null;
+const pruebas = historial.pruebasSE.filter((p) => enPeriodo(p.fecha, desde, hasta));
+const alertas = historial.alertas.filter((x) => enPeriodo(x.fechaAlerta, desde, hasta));
+const etq = (mapa: Record<string, string>, clave: string | null | undefined) => (clave ? mapa[clave] ?? clave : "—");
+
+// ─── Secciones presentes y su número (sin huecos) ────────────────────────────
+const presentes = {
+  cal: llevaCal || historial.calibraciones.length > 0,
+  se: esBio || historial.pruebasSE.length > 0,
+  docs: esBio || historial.documentos.length > 0,
+  lic: esBio || nLicencias > 0,
+  cap: esBio || historial.capacitaciones.length > 0,
+  alertas: historial.alertas.length > 0,
+  baja: a.estado === "baja" || historial.bajas.length > 0,
 };
-const CRIT_LABEL: Record<string, string> = { alta: "Alta", media: "Media", baja: "Baja" };
-const FREC_LABEL: Record<string, string> = {
-  diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal", mensual: "Mensual",
-  bimestral: "Bimestral", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual",
-};
-const RESULTADO_CALIB: Record<string, string> = {
-  conforme: "Conforme", conforme_con_ajuste: "Conforme con ajuste", no_conforme: "NO conforme",
-};
+const secciones = ["ident", "planes", "ots", ...(Object.entries(presentes).filter(([, v]) => v).map(([k]) => k))];
+const num: Record<string, number> = Object.fromEntries(secciones.map((k, i) => [k, i + 1]));
 
-const otsCerradas = ots.filter((r) => ["completada", "verificada", "cerrada"].includes(r.o.estado));
-const correctivas = ots.filter((r) => r.o.tipo === "correctivo");
+const ahora = new Date().toISOString();
+const qs = new URLSearchParams();
+if (desde) qs.set("desde", desde);
+if (hasta) qs.set("hasta", hasta);
 ---
 
 <Layout title={`Hoja de vida — ${a.codigo}`}>
-  <div class="no-print flex flex-wrap items-center justify-between gap-3">
-    <div>
-      <a href={areaHref(`/activos/${a.id}`, area)} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
-      <h1 class="mt-1 text-2xl font-bold">Hoja de vida del equipo</h1>
+  <div class="no-print">
+    <div class="doc-barra">
+      <div>
+        <a href={areaHref(`/activos/${a.id}`, area)} class="text-xs text-slate-400 hover:text-slate-600">← Volver al equipo</a>
+        <h1 class="mt-1 text-2xl font-bold">Hoja de vida del equipo</h1>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href={areaHref(`/activos/${a.id}/historial${qs.toString() ? `?${qs}` : ""}`, area)} class="btn-secondary">Historial</a>
+        <button type="button" onclick="window.print()" class="btn-primary">Imprimir / PDF</button>
+      </div>
     </div>
-    <button onclick="window.print()" class="btn-primary">Imprimir / PDF</button>
+    <form method="get" class="card mt-4 flex flex-wrap items-end gap-3 p-4">
+      <input type="hidden" name="area" value={area} />
+      <div>
+        <label class="label text-xs" for="f_desde">Desde</label>
+        <input id="f_desde" name="desde" type="date" class="input" value={desde ?? desdeTxt} />
+      </div>
+      <div>
+        <label class="label text-xs" for="f_hasta">Hasta</label>
+        <input id="f_hasta" name="hasta" type="date" class="input" value={hasta ?? hastaTxt} />
+      </div>
+      <button type="submit" class="btn-primary">Aplicar</button>
+      {(desdeTxt || hastaTxt) && <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Quitar filtro</a>}
+      <p class="w-full text-xs text-slate-500">Sin período, la hoja trae toda la vida del equipo.</p>
+      {periodo.error && <p class="w-full text-sm font-medium text-red-600">{periodo.error} No se aplicó el filtro.</p>}
+    </form>
   </div>
 
-  <div class="print-doc card mt-4 p-6 sm:p-8">
-    <DocCabecera titulo={`Hoja de vida ${area === "infraestructura" ? "de instalación" : area === "aires" ? "de unidad" : "del equipo"}`} subtitulo="JCI FMS.07: historial de inspección, prueba y mantenimiento" codigo={a.codigo} fecha={hoy} />
+  <article class="print-doc doc-hoja">
+    <DocCabecera
+      titulo={`Hoja de vida ${area === "infraestructura" ? "de la instalación" : area === "aires" ? "de la unidad" : "del equipo"}`}
+      subtitulo={`${a.nombre} · JCI FMS.07: inspección, prueba, mantenimiento y calibración`}
+      codigo={a.codigo}
+      fecha={hoy}
+    />
+    {conPeriodo && (
+      <p class="doc-nota">
+        Período: {periodoTxt}. Las intervenciones, calibraciones, pruebas eléctricas y alertas muestran solo ese período;
+        la identificación, los planes, el expediente, las licencias y las capacitaciones muestran su estado actual.
+      </p>
+    )}
 
-    <!-- 1. Identificación -->
-    <h3 class="mt-6 text-base font-bold text-slate-900">1. Identificación {area === "infraestructura" ? "de la instalación" : area === "aires" ? "de la unidad" : "del equipo"}</h3>
-    <div class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-3">
-      <div><span class="text-xs text-slate-400 block">Nombre</span><span class="font-medium text-slate-800">{a.nombre}</span></div>
-      <div><span class="text-xs text-slate-400 block">Marca / Modelo</span>{a.marca ?? "—"} {a.modelo ?? ""}</div>
-      <div><span class="text-xs text-slate-400 block">Serie</span><span class="font-mono text-xs">{a.serial ?? "—"}</span></div>
-      <div><span class="text-xs text-slate-400 block">Sede / Ubicación</span>{row.s?.nombre ?? "—"}{row.ub?.nombre ? ` · ${row.ub.nombre}` : ""}</div>
-      <div><span class="text-xs text-slate-400 block">Área de mantenimiento</span>{rubroIcono(dominio)} {rubroLabel(dominio)}</div>
-      {area === "aires" && <>
-        <div><span class="text-xs text-slate-400 block">Tipo de unidad</span>{datosTecnicos.tipoUnidad || "—"}</div>
-        <div><span class="text-xs text-slate-400 block">Capacidad (BTU/h)</span>{datosTecnicos.capacidadBtuH?.toLocaleString("es-SV") || "—"}</div>
-        <div><span class="text-xs text-slate-400 block">Refrigerante</span>{datosTecnicos.refrigerante || "—"}</div>
-      </>}
-      {area === "infraestructura" && <>
-        <div><span class="text-xs text-slate-400 block">Tipo de instalación</span>{datosTecnicos.tipoInstalacion || "—"}</div>
-        <div><span class="text-xs text-slate-400 block">Sector</span>{datosTecnicos.sector || "—"}</div>
-      </>}
-      {(area === "equipo_general" || area === "biomedico") && <div><span class="text-xs text-slate-400 block">Servicio / función</span>{datosTecnicos.servicio || "—"}</div>}
-      {esBio && <div><span class="text-xs text-slate-400 block">Subcategoría clínica</span>{subcatIcono(a.subcategoria)} {subcatLabel(a.subcategoria)}</div>}
-      <div><span class="text-xs text-slate-400 block">Criticidad</span>{a.criticidadOperacional ? CRIT_LABEL[a.criticidadOperacional] : "—"}</div>
-      {esBio && <div><span class="text-xs text-slate-400 block">Clase de riesgo</span>{a.claseRiesgo ?? "—"}</div>}
-      {esBio && <div><span class="text-xs text-slate-400 block">Registro sanitario</span>{a.registroSanitario ?? "—"}</div>}
-      <div><span class="text-xs text-slate-400 block">Estado actual</span><span class="capitalize">{a.estado}</span></div>
-      <div>
-        <span class="text-xs text-slate-400 block">Inspección de aceptación</span>
-        {a.aceptacionFecha ? (
-          <span class={a.aceptacionResultado === "aprobado" ? "text-emerald-700" : a.aceptacionResultado === "condicionado" ? "text-amber-700" : "text-red-700"}>
-            {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "Condicionado" : "✕ Rechazado"} · {fmt(a.aceptacionFecha)}
-          </span>
-        ) : (
-          <span class="text-slate-400">Sin registro</span>
-        )}
-      </div>
-      <div><span class="text-xs text-slate-400 block">Adquisición</span>{fmt(a.fechaAdquisicion)}</div>
-      <div><span class="text-xs text-slate-400 block">Vida útil</span>{a.vidaUtilAnios ? `${a.vidaUtilAnios} años` : "—"}</div>
-      <div><span class="text-xs text-slate-400 block">Proveedor</span>{row.prov?.nombre ?? "—"}</div>
-      <div><span class="text-xs text-slate-400 block">Responsable</span>{row.resp?.nombre ?? "—"}</div>
-      {a.requiereCalibracion && <div><span class="text-xs text-slate-400 block">Próxima calibración</span><span class={a.proximaCalibracion && a.proximaCalibracion.slice(0,10) <= hoy ? "text-red-600 font-semibold" : ""}>{fmt(a.proximaCalibracion)}</span></div>}
-    </div>
-
-    <!-- 2. Planes preventivos -->
-    <h3 class="mt-6 text-base font-bold text-slate-900">2. Planes de mantenimiento preventivo</h3>
-    {planes.length === 0 ? (
-      <p class="mt-2 text-sm text-red-600">Este equipo no tiene planes preventivos registrados.</p>
-    ) : (
-      <table class="mt-2 w-full text-left text-xs">
-        <thead class="text-slate-500 border-b border-slate-200">
-          <tr>
-            <th class="px-2 py-1.5 font-medium">Plan</th>
-            <th class="px-2 py-1.5 font-medium">Frecuencia</th>
-            <th class="px-2 py-1.5 font-medium">Modalidad</th>
-            <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
-            <th class="px-2 py-1.5 font-medium">Estado</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {planes.map((p) => (
+    <!-- Identificación -->
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>{num.ident}.</span> Identificación</h2>
+      <table class="doc-kv">
+        <tbody>
+          {filasIdent.map((fila) => (
             <tr>
-              <td class="px-2 py-1.5 font-medium text-slate-800">{p.titulo}</td>
-              <td class="px-2 py-1.5">{FREC_LABEL[p.frecuencia] ?? p.frecuencia}</td>
-              <td class="px-2 py-1.5">{MODALIDAD_LABEL[p.modalidad] ?? p.modalidad}</td>
-              <td class={`px-2 py-1.5 font-medium ${p.activo && p.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fmt(p.proximaFecha)}</td>
-              <td class="px-2 py-1.5">{p.activo ? "Activo" : "Inactivo"}</td>
+              {fila.map(([k, v]) => <><th>{k}</th><td>{v}</td></>)}
+              {fila.length === 1 && <><th></th><td></td></>}
             </tr>
           ))}
         </tbody>
       </table>
-    )}
+    </section>
 
-    <!-- 3. Historial de intervenciones -->
-    <h3 class="mt-6 text-base font-bold text-slate-900">3. Historial de intervenciones (órdenes de trabajo)</h3>
-    <p class="mt-1 text-xs text-slate-500">
-      {ots.length} intervención(es) registradas · {otsCerradas.length} concluidas · {correctivas.length} correctivas
-      {ots.length === 200 && " · mostrando las 200 más recientes"}
-    </p>
-    {ots.length === 0 ? (
-      <p class="mt-2 text-sm text-slate-400">Sin intervenciones registradas.</p>
-    ) : (
-      <table class="mt-2 w-full text-left text-xs">
-        <thead class="text-slate-500 border-b border-slate-200">
-          <tr>
-            <th class="px-2 py-1.5 font-medium">OT</th>
-            <th class="px-2 py-1.5 font-medium">Tipo</th>
-            <th class="px-2 py-1.5 font-medium">Trabajo</th>
-            <th class="px-2 py-1.5 font-medium">Técnico</th>
-            <th class="px-2 py-1.5 font-medium">Creada</th>
-            <th class="px-2 py-1.5 font-medium">Concluida</th>
-            <th class="px-2 py-1.5 font-medium">Estado</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {ots.map(({ o, tec }) => (
-            <tr>
-              <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400 whitespace-nowrap">{etiquetaOT(o)}</td>
-              <td class="px-2 py-1.5 capitalize">{o.tipo}</td>
-              <td class="px-2 py-1.5">
-                <span class="font-medium text-slate-800">{o.titulo}</span>
-                {o.trabajosRealizados && <span class="block text-[10px] text-slate-500 max-w-[300px]">{o.trabajosRealizados.slice(0, 160)}{o.trabajosRealizados.length > 160 ? "…" : ""}</span>}
-              </td>
-              <td class="px-2 py-1.5 text-slate-600">{tec?.nombre ?? "—"}</td>
-              <td class="px-2 py-1.5 whitespace-nowrap">{fmt(o.createdAt)}</td>
-              <td class="px-2 py-1.5 whitespace-nowrap">{fmt(o.completadaEn)}</td>
-              <td class="px-2 py-1.5">{ESTADO_OT[o.estado] ?? o.estado}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )}
-
-    <!-- 4. Calibraciones -->
-    {(esBio || a.requiereCalibracion || calibs.length > 0) && (
-      <>
-        <h3 class="mt-6 text-base font-bold text-slate-900">4. Historial de calibraciones</h3>
-        {calibs.length === 0 ? (
-          <p class="mt-2 text-sm text-slate-400">Sin calibraciones registradas.</p>
-        ) : (
-          <table class="mt-2 w-full text-left text-xs">
-            <thead class="text-slate-500 border-b border-slate-200">
+    <!-- Planes de mantenimiento preventivo -->
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>{num.planes}.</span> Planes de mantenimiento preventivo</h2>
+      {planes.length === 0 ? (
+        <p class="doc-texto">Este equipo no tiene planes preventivos registrados.</p>
+      ) : (
+        <table class="doc-tabla">
+          <thead>
+            <tr><th>Plan</th><th>Frecuencia</th><th>Modalidad</th><th class="n">Horas</th><th>Técnico asignado</th><th>Próxima fecha</th><th>Estado</th></tr>
+          </thead>
+          <tbody>
+            {planes.map(({ p, tecnico }) => (
               <tr>
-                <th class="px-2 py-1.5 font-medium">Fecha</th>
-                <th class="px-2 py-1.5 font-medium">Laboratorio</th>
-                <th class="px-2 py-1.5 font-medium">Certificado</th>
-                <th class="px-2 py-1.5 font-medium">Patrón</th>
-                <th class="px-2 py-1.5 font-medium">Resultado</th>
-                <th class="px-2 py-1.5 font-medium">Próxima</th>
+                <td>{p.titulo}</td>
+                <td>{etiquetaFrecuencia(p.frecuencia)}</td>
+                <td>{MODALIDAD_LABEL[p.modalidad] ?? p.modalidad}</td>
+                <td class="n">{p.horasEstimadas ?? "—"}</td>
+                <td>{tecnico ?? "—"}</td>
+                <td class:list={["tn", { "text-red-600 font-semibold": p.activo && p.proximaFecha < hoy }]}>{fechaCorta(p.proximaFecha)}</td>
+                <td>{p.activo ? "Activo" : "Pausado"}</td>
               </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <!-- Intervenciones -->
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>{num.ots}.</span> Intervenciones (órdenes de trabajo)</h2>
+      <p class="doc-texto">
+        {resumen.total} {resumen.total === 1 ? "intervención" : "intervenciones"} · {resumen.concluidas} concluidas · {resumen.correctivas} correctivas · {resumen.emergencias} emergencias{conPeriodo ? ` (${periodoTxt})` : ""}
+      </p>
+      {otsPeriodo.filas.length === 0 ? (
+        <p class="doc-nota">Sin intervenciones registradas{conPeriodo ? " en el período" : ""}.</p>
+      ) : (
+        <table class="doc-tabla">
+          <thead>
+            <tr><th>OT</th><th>Tipo</th><th>Título</th><th>Creada</th><th>Concluida</th><th>Estado</th><th>Ejecutó</th><th>Verificó</th></tr>
+          </thead>
+          <tbody>
+            {otsPeriodo.filas.map((o) => {
+              const ej = quienEjecuto(o);
+              const verifico = o.verificador ? `${o.verificador}${o.verificadoEn ? ` · ${fechaCorta(o.verificadoEn)}` : ""}`
+                : o.cerrador ? `${o.cerrador}${o.cerradoEn ? ` · ${fechaCorta(o.cerradoEn)}` : ""}` : "—";
+              const reps = textoRepuestos(repuestosPorOt.get(o.id) ?? []);
+              const inc = o.incidente ? { numero: o.incidente.numeroReporte, fecha: o.incidente.fechaNotificacion } : null;
+              const detalle = [
+                o.trabajosRealizados && `Trabajos realizados: ${o.trabajosRealizados}`,
+                o.causaRaiz && `Causa raíz: ${o.causaRaiz}`,
+                o.solucionAplicada && `Solución aplicada: ${o.solucionAplicada}`,
+                reps && `Repuestos: ${reps}`,
+              ].filter((x): x is string => !!x);
+              return (
+                <>
+                  <tr>
+                    <td class="tn"><a href={`/ordenes/${o.id}/reporte`}>{etiquetaOT(o)}</a></td>
+                    <td>{o.tipoLabel}</td>
+                    <td>{o.titulo}<span class="doc-nota-celda">Prioridad {(PRIORIDAD_LABEL[o.prioridad] ?? o.prioridad).toLowerCase()}</span></td>
+                    <td class="tn">{fechaCorta(o.createdAt)}</td>
+                    <td class="tn">{fechaCorta(o.completadaEn)}</td>
+                    <td>{o.estadoLabel}</td>
+                    <td>{ej.nombre ? `${ej.nombre}${ej.fuente === "asignado" ? " (asignado)" : ""}` : "—"}</td>
+                    <td>{verifico}</td>
+                  </tr>
+                  <tr>
+                    <td colspan="8">
+                      {detalle.length === 0 && !inc && <span class="doc-nota-celda">Sin detalle registrado.</span>}
+                      {detalle.map((d) => <span class="doc-nota-celda" style="white-space: pre-wrap">{d}</span>)}
+                      {inc && <a href={`/incidentes?activo=${a.id}`} class="doc-nota-celda doc-critico">{textoIncidente(inc)}</a>}
+                    </td>
+                  </tr>
+                </>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {otsPeriodo.recortado && <p class="doc-nota">Se muestran las {TOPE_OTS} más recientes del período; usa el filtro de fechas para ver las anteriores.</p>}
+      <p class="doc-nota">Pasos, lecturas, fotos y firmas de cada orden: ver su Reporte de mantenimiento.</p>
+    </section>
+
+    <!-- Calibraciones -->
+    {presentes.cal && (
+      <section class="doc-seccion">
+        <h2 class="doc-h"><span>{num.cal}.</span> Calibraciones</h2>
+        <p class="doc-texto">Estado actual: {textoCalibracion()}.</p>
+        {calibs.length === 0 ? (
+          <p class="doc-nota">Sin calibraciones registradas{conPeriodo ? " en el período" : ""}.</p>
+        ) : (
+          <table class="doc-tabla">
+            <thead>
+              <tr><th>Fecha</th><th>Laboratorio</th><th>Acreditación</th><th>Certificado</th><th>Patrón</th><th>Incertidumbre</th><th>Resultado</th><th>Próxima</th></tr>
             </thead>
-            <tbody class="divide-y divide-slate-100">
-              {calibs.map(({ c, lab }) => (
+            <tbody>
+              {calibs.map((c) => {
+                const notas = [
+                  c.realizadoPor && `Realizado por: ${c.realizadoPor}`,
+                  c.notas && `Notas: ${c.notas}`,
+                  c.corregidaEn && `Corregida el ${fechaCorta(c.corregidaEn)}${c.corregidaPor ? ` por ${c.corregidaPor}` : ""}`,
+                ].filter((x): x is string => !!x);
+                return (
+                  <>
+                    <tr>
+                      <td class="tn">{fechaCorta(c.fechaCalibracion)}</td>
+                      <td>{c.laboratorio ?? "—"}</td>
+                      <td>{textoLabAcreditado(c.labAcreditado)}{c.labAcreditacionRef && <span class="doc-nota-celda">{c.labAcreditacionRef}</span>}</td>
+                      <td>{c.numeroCertificado ? `N.º ${c.numeroCertificado}` : "Sin número"} {c.tieneCertificado ? "(archivo)" : "(sin archivo)"}</td>
+                      <td>
+                        {c.patron ? (
+                          <>
+                            {c.patron.codigo} {c.patron.nombre}{c.patron.serial ? `, serie ${c.patron.serial}` : ""}
+                            <span class:list={["doc-nota-celda", { "doc-critico": c.patronVigente === false }]}>
+                              {c.patronVigente ? `vigente hasta ${fechaCorta(c.patronHasta)}` : "sin calibración vigente a la fecha"}
+                            </span>
+                          </>
+                        ) : !c.patronReferencia && "—"}
+                        {c.patronReferencia && <span class="doc-nota-celda">{c.patronReferencia}</span>}
+                      </td>
+                      <td>{c.incertidumbre ?? "—"}</td>
+                      <td class:list={{ "doc-critico": c.resultado === "no_conforme" }}>{RESULTADO_CALIBRACION_LABEL[c.resultado] ?? c.resultado}</td>
+                      <td class="tn">{fechaCorta(c.proximaCalibracion)}</td>
+                    </tr>
+                    {notas.length > 0 && (
+                      <tr><td colspan="8"><span class="doc-nota-celda">{notas.join(" · ")}</span></td></tr>
+                    )}
+                  </>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+    )}
+
+    <!-- Seguridad eléctrica -->
+    {presentes.se && (
+      <section class="doc-seccion">
+        <h2 class="doc-h"><span>{num.se}.</span> Seguridad eléctrica (IEC 62353)</h2>
+        <p class="doc-texto">
+          Estado: {ESTADO_SEG_ELEC_LABEL[estadoSE]}{ultimaSE ? ` · última ${fechaCorta(ultimaSE.fecha)} (${RESULTADO_SE_LABEL[ultimaSE.resultado as "pasa" | "no_pasa"] ?? ultimaSE.resultado}) · próxima ${fechaCorta(ultimaSE.proximaFecha)}` : ""}.
+          {aceptacionSE
+            ? ` Prueba de aceptación: ${RESULTADO_SE_LABEL[aceptacionSE.resultado as "pasa" | "no_pasa"] ?? aceptacionSE.resultado} · ${fechaCorta(aceptacionSE.fecha)}.`
+            : " Sin prueba eléctrica de aceptación registrada."}
+        </p>
+        {pruebas.length === 0 ? (
+          <p class="doc-nota">Sin pruebas registradas{conPeriodo ? " en el período" : ""}.</p>
+        ) : (
+          <table class="doc-tabla">
+            <thead>
+              <tr><th>Fecha</th><th>Tipo</th><th>Resultado</th><th>Analizador</th><th>Realizó</th><th>Próxima</th><th>Informe</th></tr>
+            </thead>
+            <tbody>
+              {pruebas.map((p) => (
                 <tr>
-                  <td class="px-2 py-1.5 whitespace-nowrap">{fmt(c.fechaCalibracion)}</td>
-                  <td class="px-2 py-1.5">{lab?.nombre ?? c.laboratorioExterno ?? "—"}</td>
-                  <td class="px-2 py-1.5 font-mono text-[10px]">{c.numeroCertificado ?? "—"}</td>
-                  <td class="px-2 py-1.5">{c.patronReferencia ?? "—"}</td>
-                  <td class={`px-2 py-1.5 font-medium ${c.resultado === "no_conforme" ? "text-red-600" : "text-emerald-700"}`}>{RESULTADO_CALIB[c.resultado] ?? c.resultado}</td>
-                  <td class="px-2 py-1.5 whitespace-nowrap">{fmt(c.proximaCalibracion)}</td>
+                  <td class="tn">{fechaCorta(p.fecha)}</td>
+                  <td>{TIPO_PRUEBA_ELECTRICA_LABEL[p.tipo as keyof typeof TIPO_PRUEBA_ELECTRICA_LABEL] ?? p.tipo}</td>
+                  <td class:list={{ "doc-critico": p.estado === "valida" && p.resultado === "no_pasa" }}>
+                    {p.estado === "anulada"
+                      ? `Anulada${p.motivoAnulacion ? `: ${p.motivoAnulacion}` : ""}`
+                      : RESULTADO_SE_LABEL[p.resultado as "pasa" | "no_pasa"] ?? p.resultado}
+                  </td>
+                  <td>{p.analizadorDescripcion}{p.analizadorSerie ? `, S/N ${p.analizadorSerie}` : ""}</td>
+                  <td>{p.realizadoPor}{p.empresaExterna ? ` (${p.empresaExterna})` : ""}</td>
+                  <td class="tn">{fechaCorta(p.proximaFecha)}</td>
+                  <td>{p.tieneInforme ? "Sí" : "No"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </>
+      </section>
     )}
 
-    <!-- Pie -->
-    <div class="mt-8 border-t border-slate-200 pt-3 text-[10px] text-slate-400">
-      Hoja de vida generada desde la plataforma de mantenimiento el {fmtDT(new Date().toISOString())} por {user.nombre} ·
-      Equipo {a.codigo} · Documento de evidencia del programa de gestión de equipo (JCI FMS.07).
-    </div>
-    <DocFolio codigo={a.codigo} />
-  </div>
+    <!-- Expediente, licencias y capacitaciones: los pinta WP-D (estado actual, sin período) -->
+    {presentes.docs && <DocumentosEquipo activoId={a.id} variante="hoja" titulo={`${num.docs}. Expediente técnico`} />}
+    {presentes.lic && <LicenciasEquipo activoId={a.id} variante="hoja" titulo={`${num.lic}. Licencias y permisos`} />}
+    {presentes.cap && <CapacitacionesEquipo activoId={a.id} variante="hoja" titulo={`${num.cap}. Capacitaciones al personal`} />}
 
-  <style is:global>
-    @media print {
-      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
-      main { padding: 0 !important; }
-      .print-doc { border: none !important;  margin-top: 0 !important; }
-      body { background: white !important; }
-      table { break-inside: auto; }
-      tr { break-inside: avoid; }
-    }
-  </style>
+    <!-- Alertas y retiros -->
+    {presentes.alertas && (
+      <section class="doc-seccion">
+        <h2 class="doc-h"><span>{num.alertas}.</span> Alertas y retiros</h2>
+        {alertas.length === 0 ? (
+          <p class="doc-nota">Sin alertas en el período.</p>
+        ) : (
+          <table class="doc-tabla">
+            <thead>
+              <tr><th>Fecha</th><th>Tipo</th><th>Fuente</th><th>Referencia</th><th>Título</th><th>Aplicabilidad</th><th>Estado</th><th>Acción tomada</th><th>Cierre</th></tr>
+            </thead>
+            <tbody>
+              {alertas.map((x) => (
+                <tr>
+                  <td class="tn">{fechaCorta(x.fechaAlerta)}</td>
+                  <td>{etq(TIPO_ALERTA_LABEL, x.tipo)}</td>
+                  <td>{etq(FUENTE_ALERTA_LABEL, x.fuente)}</td>
+                  <td>{x.referencia ?? "—"}</td>
+                  <td><a href={`/alertas/${x.id}`}>{x.titulo}</a></td>
+                  <td>{etq(APLICABILIDAD_LABEL, x.aplicabilidad)}</td>
+                  <td>{etq(ESTADO_ALERTA_LABEL, x.estado)}</td>
+                  <td>{x.accionTomada ?? "—"}</td>
+                  <td class="tn">{x.estado === "cerrada" ? fechaCorta(x.fechaCierre ?? x.cerradaEn) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    )}
+
+    <!-- Baja -->
+    {presentes.baja && (
+      <section class="doc-seccion">
+        <h2 class="doc-h"><span>{num.baja}.</span> Baja del equipo</h2>
+        {bajaVigente ? (
+          <table class="doc-kv">
+            <tbody>
+              <tr><th>Fecha de baja</th><td>{fechaCorta(bajaVigente.fechaBaja)}</td><th>Acta</th><td>{folioActaBaja(bajaVigente.id)}</td></tr>
+              <tr><th>Motivo</th><td>{etq(MOTIVOS_BAJA, bajaVigente.motivo)}</td><th>Detalle</th><td>{bajaVigente.motivoDetalle}</td></tr>
+              <tr><th>Evaluación técnica</th><td>{bajaVigente.evaluacionTecnica}</td><th>Evaluó</th><td>{bajaVigente.evaluadoPor}</td></tr>
+              <tr><th>Autorizó</th><td>{[bajaVigente.autorizaNombre, bajaVigente.autorizaCargo].filter(Boolean).join(", ")}</td><th>Registró</th><td>{bajaVigente.registradoPorNombre} · {fechaCorta(bajaVigente.createdAt)}</td></tr>
+              <tr><th>Destino final</th><td>{etq(DESTINOS_BAJA, bajaVigente.destinoFinal)}</td><th>Detalle del destino</th><td>{bajaVigente.destinoDetalle ?? "—"}</td></tr>
+            </tbody>
+          </table>
+        ) : a.estado === "baja" ? (
+          <p class="doc-texto">Figura como dado de baja, sin acta registrada.</p>
+        ) : (
+          <p class="doc-texto">El equipo está en servicio.</p>
+        )}
+        {bajasRevertidas.map((b) => (
+          <p class="doc-nota">
+            Baja {folioActaBaja(b.id)} del {fechaCorta(b.fechaBaja)} revertida el {fechaCorta(b.revertidaEn)}{b.revertidaPorNombre ? ` por ${b.revertidaPorNombre}` : ""}{b.reversionMotivo ? `: ${b.reversionMotivo}` : ""}.
+          </p>
+        ))}
+      </section>
+    )}
+
+    <section class="doc-seccion doc-firmas">
+      <div>
+        <div class="doc-firma-vacia"></div>
+        <span class="doc-etq">Elaboró</span>
+        <span>{user.nombre}</span>
+      </div>
+      <div>
+        <div class="doc-firma-vacia"></div>
+        <span class="doc-etq">Revisó</span>
+        <span>Nombre y cargo</span>
+      </div>
+    </section>
+
+    <p class="doc-nota">
+      Hoja de vida generada desde la plataforma de mantenimiento el {fechaCorta(ahora)} a las {horaSV(ahora)} por {user.nombre} ·
+      Equipo {a.codigo} · Documento de evidencia del programa de gestión de equipo (JCI FMS.07).
+    </p>
+    <DocFolio codigo={a.codigo} />
+  </article>
 </Layout>

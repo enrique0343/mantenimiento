@@ -7,16 +7,26 @@ import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { etiquetaOT } from "@/lib/orden-codigo";
-import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos, procedimientos, activoUbicacionesServidas, variablesPredictivas } from "@/lib/schema";
-import { eq, asc, desc, and, inArray, ne } from "drizzle-orm";
+import { activos, planesMantenimiento, ordenes, usuarios, sucursales, ubicaciones, proveedores, auditLog, contratosMantenimiento, contratoEquipos, calibraciones, activoDocumentos, activoRespaldos, procedimientos, activoUbicacionesServidas, variablesPredictivas, centrosCosto, activoBajas, activoExpedienteNa, alertasEquipo, alertasEquipoActivos, pruebasSeguridadElectrica } from "@/lib/schema";
+import { eq, asc, desc, and, inArray, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { FRECUENCIAS } from "@/lib/frecuencias";
 import { labelCampo } from "@/lib/audit";
 import { ESTADO_CONTRATO_LABEL, ESTADO_CONTRATO_COLOR, diasParaVencer } from "@/lib/contratos";
+import { CRITICIDAD_LABEL, CRITICIDAD_COLOR, RESULTADO_CALIB_LABEL, RESULTADO_CALIB_COLOR } from "@/lib/inventario-jci";
+import DocumentosEquipo from "@/components/bio/DocumentosEquipo.astro";
+import LicenciasEquipo from "@/components/bio/LicenciasEquipo.astro";
+import CapacitacionesEquipo from "@/components/bio/CapacitacionesEquipo.astro";
 import {
-  CRITICIDAD_LABEL, CRITICIDAD_COLOR, RESULTADO_CALIB_LABEL, RESULTADO_CALIB_COLOR,
-  CATEGORIA_DOC_LABEL, vidaUtilRemanente, vidaUtilVencida, finVidaUtil, llevaCalibracion,
-} from "@/lib/inventario-jci";
+  ALERTA_BADGE, APLICABILIDAD_LABEL, ARCHIVO_ACCEPT, ARCHIVO_MAX_BYTES, DESTINOS_BAJA, ESTADO_ACTIVO_COLOR, ESTADO_ACTIVO_LABEL,
+  ESTADO_ALERTA_LABEL, ESTADO_CALIBRACION_COLOR, ESTADO_CALIBRACION_LABEL, ESTADO_REGISTRO_COLOR, ESTADO_REGISTRO_LABEL,
+  ESTADO_SEG_ELEC_COLOR, ESTADO_SEG_ELEC_LABEL, FRECUENCIAS_RUTINA_EQUIPO, HISTORIAL_ACTIVO, MOTIVOS_BAJA, RESULTADO_SE_COLOR,
+  RESULTADO_SE_LABEL, TIPO_ALERTA_LABEL, completitudExpediente, diasEntre, esFechaISO, estadoRegistroSanitario,
+  estadoSeguridadElectrica, etiquetaCentroCosto, etiquetaClaseRiesgo, etiquetaFrecuencia, fechaCorta, fechaHoraSV, folioActaBaja,
+  hoySV, infoCalibracion, opcionesLaboratorio, patronVigenteEn, puedeGestionarBio, puedeRegistrarBio, puedeVerBio, sumarMeses,
+  textoAcreditacion, textoVence, type CalMin,
+} from "@/lib/biomedico";
+import { textoLabAcreditado } from "@/lib/historial-equipo";
 import {
   NIVELES_JERARQUIA, NIVEL_LABEL, NIVEL_COLOR, PROFUNDIDAD_MAXIMA,
   ROLES_UBICACION_SERVIDA, ROL_SERVIDA_LABEL, ROL_SERVIDA_COLOR, ROL_SERVIDA_AYUDA,
@@ -24,7 +34,6 @@ import {
   valorNominalTexto, rutaAscendente, hijosConOrdenesAbiertas, descendientesDe,
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
-import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import {
   queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
   SISTEMA_LABEL, type Sistema,
@@ -106,11 +115,19 @@ const user = Astro.locals.user!;
 const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tecnico";
 const conjuntosHistorial = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
   ? await getConjuntosDelActivo(Astro, id) : [];
-const canDelete = user.rol === "admin" && conjuntosHistorial.length === 0;
 const canJefe = user.rol === "admin" || user.rol === "jefe";
+// Fase 59: lo biomédico de la ficha (resumen JCI, baja, calibraciones, documentos) solo
+// para quien ve biomédico; registrar para admin, jefe y técnico; corregir y dar de baja,
+// admin y jefe. El resto de la ficha sigue abierta como antes.
+const verBio = puedeVerBio(user.rol);
+const registraBio = puedeRegistrarBio(user.rol);
+const gestionaBio = puedeGestionarBio(user.rol);
 
-const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "-");
-const fmtFull = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
+// Fechas en El Salvador: una fecha sola se parte como texto (sin el día de menos);
+// una marca de tiempo se pasa a la hora de El Salvador.
+const fmt = (s: string | null | undefined) => fechaCorta(s);
+const fmtFull = (s: string | null | undefined) => fechaHoraSV(s);
+const hoy = hoySV();
 
 function parsearCambios(json: string | null) {
   if (!json) return [];
@@ -159,26 +176,223 @@ if (a.responsableId) {
 }
 
 const criticidad = (a.criticidadOperacional ?? "media") as "alta" | "media" | "baja";
-const finVida = finVidaUtil(a.fechaAdquisicion, a.vidaUtilAnios);
-const vidaRem = vidaUtilRemanente(a.fechaAdquisicion, a.vidaUtilAnios);
-const vidaVencida = vidaUtilVencida(a.fechaAdquisicion, a.vidaUtilAnios);
+// Vida útil con aritmética de fechas en texto (sin new Date('AAAA-MM-DD')).
+const finVida = a.vidaUtilAnios && esFechaISO(a.fechaAdquisicion) ? sumarMeses(a.fechaAdquisicion, 12 * a.vidaUtilAnios) : null;
+const diasVida = finVida ? diasEntre(hoy, finVida) : null;
+const vidaRem = diasVida != null ? diasVida / 365.25 : null;
+const vidaVencida = diasVida != null && diasVida < 0;
 
-const requiereCal = llevaCalibracion(a.tipo, a.requiereCalibracion);
-const calibracionesRows = requiereCal ? await db
-  .select({ c: calibraciones, lab: proveedores, u: usuarios })
-  .from(calibraciones)
-  .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
-  .leftJoin(usuarios, eq(usuarios.id, calibraciones.usuarioId))
-  .where(eq(calibraciones.activoId, id))
-  .orderBy(desc(calibraciones.fechaCalibracion))
+// ─── Fase 59 · centro de costo, registro sanitario, calibración, JCI y baja ──
+const centroCosto = a.centroCostoId
+  ? (await db.select({ codigo: centrosCosto.codigo, nombre: centrosCosto.nombre }).from(centrosCosto).where(eq(centrosCosto.id, a.centroCostoId)).limit(1))[0] ?? null
+  : null;
+const registroEstado = estadoRegistroSanitario(a, hoy);
+const estadoActivoLabel = (ESTADO_ACTIVO_LABEL as Record<string, string>)[a.estado] ?? a.estado;
+const estadoActivoColor = (ESTADO_ACTIVO_COLOR as Record<string, string>)[a.estado] ?? "bg-slate-100 text-slate-600";
+
+// Calibración: el universo es biomédico, patrón o «Requiere calibración». La baja y
+// «No requiere» se muestran con su texto. El estado sale de biomedico.ts (regla de WP-B).
+const llevaCal = isBio || a.requiereCalibracion || a.esPatron;
+const equipoCal = { tipo: a.tipo, rubro: a.rubro, estado: a.estado, requiereCalibracion: a.requiereCalibracion, esPatron: a.esPatron, calibracionNoAplica: a.calibracionNoAplica };
+const patronCal = alias(activos, "patron_cal");
+const registroCal = alias(usuarios, "registro_cal");
+const correctorCal = alias(usuarios, "corrector_cal");
+const equipoCalibrado = alias(activos, "equipo_calibrado");
+// Todas las consultas por activo_id (JOIN o subconsulta), con columnas elegidas (límites de D1).
+const [
+  calibracionesRows, calsPatronesUsados, usadoComoPatron, usadoComoPatronConteo,
+  docsExpediente, naExpediente, pruebasValidas, alertasRows, bajaVigenteRows, vinculosHistorial,
+] = await Promise.all([
+  verBio
+    ? db.select({
+        c: {
+          id: calibraciones.id, fechaCalibracion: calibraciones.fechaCalibracion, proximaCalibracion: calibraciones.proximaCalibracion,
+          laboratorioId: calibraciones.laboratorioId, laboratorioExterno: calibraciones.laboratorioExterno,
+          numeroCertificado: calibraciones.numeroCertificado, patronActivoId: calibraciones.patronActivoId,
+          patronReferencia: calibraciones.patronReferencia, resultado: calibraciones.resultado, incertidumbre: calibraciones.incertidumbre,
+          certificadoR2Key: calibraciones.certificadoR2Key, realizadoPor: calibraciones.realizadoPor, notas: calibraciones.notas,
+          labAcreditado: calibraciones.labAcreditado, labAcreditacionRef: calibraciones.labAcreditacionRef,
+          corregidaEn: calibraciones.corregidaEn,
+        },
+        labNombre: proveedores.nombre,
+        patron: { id: patronCal.id, codigo: patronCal.codigo, nombre: patronCal.nombre, rubro: patronCal.rubro, tipo: patronCal.tipo },
+        registro: registroCal.nombre,
+        corrector: correctorCal.nombre,
+      })
+        .from(calibraciones)
+        .leftJoin(proveedores, eq(proveedores.id, calibraciones.laboratorioId))
+        .leftJoin(patronCal, eq(patronCal.id, calibraciones.patronActivoId))
+        .leftJoin(registroCal, eq(registroCal.id, calibraciones.usuarioId))
+        .leftJoin(correctorCal, eq(correctorCal.id, calibraciones.corregidaPor))
+        .where(eq(calibraciones.activoId, id))
+        .orderBy(desc(calibraciones.fechaCalibracion), desc(calibraciones.id))
+    : [],
+  // Calibraciones de los patrones usados con este equipo: su vigencia en cada fecha.
+  verBio
+    ? db.select({
+        id: calibraciones.id, activoId: calibraciones.activoId, fechaCalibracion: calibraciones.fechaCalibracion,
+        proximaCalibracion: calibraciones.proximaCalibracion, resultado: calibraciones.resultado, certificadoR2Key: calibraciones.certificadoR2Key,
+      })
+        .from(calibraciones)
+        .where(sql`${calibraciones.activoId} in (select patron_activo_id from calibraciones where activo_id = ${id} and patron_activo_id is not null)`)
+    : [],
+  verBio && a.esPatron
+    ? db.select({
+        id: calibraciones.id, fechaCalibracion: calibraciones.fechaCalibracion,
+        equipo: { id: equipoCalibrado.id, codigo: equipoCalibrado.codigo, nombre: equipoCalibrado.nombre, rubro: equipoCalibrado.rubro, tipo: equipoCalibrado.tipo },
+      })
+        .from(calibraciones)
+        .innerJoin(equipoCalibrado, eq(equipoCalibrado.id, calibraciones.activoId))
+        .where(eq(calibraciones.patronActivoId, id))
+        .orderBy(desc(calibraciones.fechaCalibracion), desc(calibraciones.id))
+        .limit(10)
+    : [],
+  verBio && a.esPatron
+    ? db.select({ n: sql<number>`count(*)` }).from(calibraciones).where(eq(calibraciones.patronActivoId, id))
+    : [],
+  verBio && isBio
+    ? db.select({ categoria: activoDocumentos.categoria, fechaVencimiento: activoDocumentos.fechaVencimiento }).from(activoDocumentos).where(eq(activoDocumentos.activoId, id))
+    : [],
+  verBio && isBio
+    ? db.select({ requisito: activoExpedienteNa.requisito, motivo: activoExpedienteNa.motivo }).from(activoExpedienteNa).where(eq(activoExpedienteNa.activoId, id))
+    : [],
+  // K-F2: última prueba válida = estado 'valida', la de fecha mayor (empate: id mayor).
+  verBio
+    ? db.select({
+        id: pruebasSeguridadElectrica.id, fecha: pruebasSeguridadElectrica.fecha, tipo: pruebasSeguridadElectrica.tipo,
+        resultado: pruebasSeguridadElectrica.resultado, proximaFecha: pruebasSeguridadElectrica.proximaFecha,
+      })
+        .from(pruebasSeguridadElectrica)
+        .where(and(eq(pruebasSeguridadElectrica.activoId, id), eq(pruebasSeguridadElectrica.estado, "valida")))
+        .orderBy(desc(pruebasSeguridadElectrica.fecha), desc(pruebasSeguridadElectrica.id))
+    : [],
+  verBio
+    ? db.select({
+        id: alertasEquipo.id, tipo: alertasEquipo.tipo, titulo: alertasEquipo.titulo, fechaAlerta: alertasEquipo.fechaAlerta,
+        estado: alertasEquipo.estado, aplicabilidad: alertasEquipo.aplicabilidad, fechaCierre: alertasEquipo.fechaCierre,
+      })
+        .from(alertasEquipoActivos)
+        .innerJoin(alertasEquipo, eq(alertasEquipo.id, alertasEquipoActivos.alertaId))
+        .where(eq(alertasEquipoActivos.activoId, id))
+        .orderBy(desc(alertasEquipo.fechaAlerta), desc(alertasEquipo.id))
+    : [],
+  verBio && a.estado === "baja"
+    ? db.select({
+        id: activoBajas.id, fechaBaja: activoBajas.fechaBaja, motivo: activoBajas.motivo, motivoDetalle: activoBajas.motivoDetalle,
+        evaluacionTecnica: activoBajas.evaluacionTecnica, evaluadoPor: activoBajas.evaluadoPor, autorizaNombre: activoBajas.autorizaNombre,
+        autorizaCargo: activoBajas.autorizaCargo, destinoFinal: activoBajas.destinoFinal, destinoDetalle: activoBajas.destinoDetalle,
+        registradoPorNombre: activoBajas.registradoPorNombre, createdAt: activoBajas.createdAt,
+      })
+        .from(activoBajas)
+        .where(and(eq(activoBajas.activoId, id), eq(activoBajas.estado, "vigente")))
+        .limit(1)
+    : [],
+  // Solo el administrador elimina: ¿tiene algo de HISTORIAL_ACTIVO? Una sola consulta.
+  user.rol === "admin"
+    ? db.get<Record<string, number>>(sql`SELECT ${sql.join(
+        HISTORIAL_ACTIVO.map((v, i) => sql`EXISTS(SELECT 1 FROM ${sql.raw(v.tabla)} WHERE ${sql.raw(v.columna)} = ${id}) AS ${sql.raw(`h${i}`)}`),
+        sql`, `,
+      )}`)
+    : null,
+]);
+
+const calMin: CalMin[] = calibracionesRows.map((r) => ({
+  id: r.c.id, fechaCalibracion: r.c.fechaCalibracion, proximaCalibracion: r.c.proximaCalibracion, resultado: r.c.resultado, certificadoR2Key: r.c.certificadoR2Key,
+}));
+const infoCal = infoCalibracion(equipoCal, calMin, hoy);
+const ultimaCalRow = calibracionesRows.find((r) => r.c.id === infoCal.calibracionId) ?? null;
+// Días para la próxima: no se cuentan en un equipo de baja.
+const diasCal = a.estado === "baja" ? null : infoCal.dias;
+const mostrarCal = verBio && (llevaCal || calibracionesRows.length > 0);
+const puedeRegistrarCal = mostrarCal && registraBio && a.estado !== "baja" && !a.calibracionNoAplica;
+const puedeCorregirCal = mostrarCal && gestionaBio;
+const necesitaFormularioCal = puedeRegistrarCal || (puedeCorregirCal && calibracionesRows.length > 0);
+const calsPorPatronUsado = new Map<number, CalMin[]>();
+for (const c of calsPatronesUsados) {
+  const lista = calsPorPatronUsado.get(c.activoId) ?? [];
+  lista.push({ id: c.id, fechaCalibracion: c.fechaCalibracion, proximaCalibracion: c.proximaCalibracion, resultado: c.resultado, certificadoR2Key: c.certificadoR2Key });
+  calsPorPatronUsado.set(c.activoId, lista);
+}
+const vigenciaPatron = (patronActivoId: number | null, fecha: string) =>
+  patronActivoId == null ? null : patronVigenteEn(calsPorPatronUsado.get(patronActivoId) ?? [], fecha);
+const usadoComoPatronTotal = Number(usadoComoPatronConteo[0]?.n ?? 0);
+
+// Listas del formulario de calibración: laboratorios por acreditación y equipos patrón
+// con su vigencia hoy (el servidor revisa la vigencia en la fecha de la calibración).
+const [provsLab, patronesLista, calsDePatrones] = necesitaFormularioCal
+  ? await Promise.all([
+      db.select({
+        id: proveedores.id, nombre: proveedores.nombre, esLaboratorioAcreditado: proveedores.esLaboratorioAcreditado,
+        acreditacionVigencia: proveedores.acreditacionVigencia, acreditacionOrgano: proveedores.acreditacionOrgano,
+        acreditacionNumero: proveedores.acreditacionNumero,
+      }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre)),
+      db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo, serial: activos.serial })
+        .from(activos)
+        .where(and(eq(activos.esPatron, true), ne(activos.estado, "baja"), ne(activos.id, id)))
+        .orderBy(asc(activos.codigo)),
+      db.select({
+        id: calibraciones.id, activoId: calibraciones.activoId, fechaCalibracion: calibraciones.fechaCalibracion,
+        proximaCalibracion: calibraciones.proximaCalibracion, resultado: calibraciones.resultado, certificadoR2Key: calibraciones.certificadoR2Key,
+      }).from(calibraciones).where(sql`${calibraciones.activoId} in (select id from activos where es_patron = 1)`),
+    ])
+  : [[], [], []];
+const gruposLab = opcionesLaboratorio(provsLab, hoy);
+const provPorId = new Map(provsLab.map((p) => [p.id, p]));
+const avisoNoAcreditado = "Este laboratorio no tiene acreditación vigente. Puedes guardar, pero la calibración quedará como «laboratorio no acreditado».";
+const avisoLab = (labId: number, acreditado: boolean) => {
+  const p = provPorId.get(labId);
+  return acreditado && p ? `Acreditado: ${textoAcreditacion(p)}.` : avisoNoAcreditado;
+};
+const calsPorPatron = new Map<number, CalMin[]>();
+for (const c of calsDePatrones) {
+  const lista = calsPorPatron.get(c.activoId) ?? [];
+  lista.push({ id: c.id, fechaCalibracion: c.fechaCalibracion, proximaCalibracion: c.proximaCalibracion, resultado: c.resultado, certificadoR2Key: c.certificadoR2Key });
+  calsPorPatron.set(c.activoId, lista);
+}
+const patronesOpciones = patronesLista.map((p) => {
+  const calibs = calsPorPatron.get(p.id) ?? [];
+  const v = patronVigenteEn(calibs, hoy);
+  const nombre = [p.codigo, p.nombre, [p.marca, p.modelo].filter(Boolean).join(" "), p.serial ? `S/N ${p.serial}` : ""].filter(Boolean).join(" · ");
+  const estado = v.vigente ? `vigente hasta ${fechaCorta(v.hasta)}` : calibs.length ? "sin calibración vigente" : "sin calibración registrada";
+  return { id: p.id, etiqueta: `${nombre} — ${estado}` };
+});
+// Datos de cada calibración para «Corregir» (solo admin y jefe).
+const calibracionesJs = puedeCorregirCal
+  ? calibracionesRows.map((r) => ({
+      id: r.c.id, fechaCalibracion: r.c.fechaCalibracion, fechaTexto: fechaCorta(r.c.fechaCalibracion),
+      proximaCalibracion: r.c.proximaCalibracion, laboratorioId: r.c.laboratorioId, labNombre: r.labNombre,
+      laboratorioExterno: r.c.laboratorioExterno, numeroCertificado: r.c.numeroCertificado, patronActivoId: r.c.patronActivoId,
+      patronEtiqueta: r.patron ? `${r.patron.codigo} · ${r.patron.nombre}` : null, patronReferencia: r.c.patronReferencia,
+      resultado: r.c.resultado, incertidumbre: r.c.incertidumbre, realizadoPor: r.c.realizadoPor, notas: r.c.notas,
+      tieneCertificado: !!r.c.certificadoR2Key,
+    }))
   : [];
 
-const laboratorios = requiereCal ? await db
-  .select({ id: proveedores.id, nombre: proveedores.nombre, acred: proveedores.esLaboratorioAcreditado })
-  .from(proveedores).where(eq(proveedores.activo, true)).orderBy(asc(proveedores.nombre))
-  : [];
+// Expediente (WP-D: 5 requisitos con «No aplica»), seguridad eléctrica (K-F2) y alertas.
+const expediente = verBio && isBio
+  ? completitudExpediente({ documentos: docsExpediente, aceptacionFecha: a.aceptacionFecha, noAplica: naExpediente, hoy })
+  : null;
+const ultimaSE = pruebasValidas[0] ?? null;
+const estadoSE = estadoSeguridadElectrica(ultimaSE ? { resultado: ultimaSE.resultado, proximaFecha: ultimaSE.proximaFecha } : null, hoy);
+const aceptacionSE = pruebasValidas.find((p) => p.tipo === "aceptacion") ?? null;
+const mostrarSE = verBio && (isBio || pruebasValidas.length > 0);
+const alertasOrdenadas = [...alertasRows].sort((x, y) => Number(x.estado === "cerrada") - Number(y.estado === "cerrada"));
+const alertasAbiertas = alertasRows.filter((x) => x.estado !== "cerrada").length;
+const retiroAbierto = alertasRows.some((x) => x.tipo === "retiro" && x.estado !== "cerrada");
+const mostrarAlertas = verBio && (isBio || alertasRows.length > 0);
+const hayResumenJci = mostrarCal || !!expediente || mostrarSE || mostrarAlertas;
+const bajaVigente = bajaVigenteRows[0] ?? null;
+const etqMotivoBaja = (m: string) => (MOTIVOS_BAJA as Record<string, string>)[m] ?? m;
+const etqDestinoBaja = (d: string) => (DESTINOS_BAJA as Record<string, string>)[d] ?? d;
 
-const documentosRows = await db.select().from(activoDocumentos).where(eq(activoDocumentos.activoId, id)).orderBy(desc(activoDocumentos.id));
+// Eliminar: solo un equipo registrado por error y sin historial (el servidor lo vuelve a revisar, K-A3).
+const etiquetasHistorial = vinculosHistorial ? HISTORIAL_ACTIVO.filter((_, i) => Number(vinculosHistorial[`h${i}`]) === 1).map((v) => v.etiqueta) : [];
+const canDelete = user.rol === "admin" && conjuntosHistorial.length === 0 && !!vinculosHistorial && etiquetasHistorial.length === 0;
+
+// Rutinas: las frecuencias que acepta la API de rutinas (sin «Por turno»).
+const etiquetaFrecuenciaForm = (v: string) => FRECUENCIAS.find((f) => f.value === v)?.label ?? etiquetaFrecuencia(v);
+const OPCIONES_FRECUENCIA = FRECUENCIAS_RUTINA_EQUIPO.map((v) => ({ value: v, label: etiquetaFrecuenciaForm(v) }));
+const frecuenciaOfrecida = (f: string) => (FRECUENCIAS_RUTINA_EQUIPO as readonly string[]).includes(f);
 
 // ─── Fase 37: contingencia (equipos de respaldo) ─────────────────────────────
 const respaldoAlias = alias(activos, "respaldo_alias");
@@ -375,29 +589,31 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     {ancestros.length > 0 && <span class="font-medium text-slate-700">{a.nombre}</span>}
   </nav>
 
-  <div class="mt-2 flex items-start justify-between gap-4">
+  <div class="mt-2 flex flex-wrap items-start justify-between gap-4">
     <div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <h1 class="text-2xl font-bold">{a.nombre}</h1>
         <span class="badge bg-brand-50 text-brand-700">{AREAS[area].label}</span>
         <span class={`badge ${CRITICIDAD_COLOR[criticidad]}`} title="Criticidad operacional">{CRITICIDAD_LABEL[criticidad]}</span>
+        {a.estado === "baja" && <span class="badge bg-slate-200 text-slate-600">Dado de baja</span>}
+        {a.esPatron && <span class="badge bg-indigo-100 text-indigo-700" title="Instrumento patrón: se usa para calibrar otros equipos">Equipo patrón</span>}
       </div>
       <p class="text-sm text-slate-500 font-mono">{a.codigo} {a.numeroActivo && `· ${a.numeroActivo}`}</p>
     </div>
-    {canEdit && (
-      <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
-        <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>
-        {canDelete && <button id="deleteBtn" class="btn-secondary text-red-600 hover:bg-red-50">Eliminar</button>}
-      </div>
-    )}
-    {!canEdit && (
-      <div class="flex flex-wrap gap-2">
-        <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>
-        <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>
-      </div>
-    )}
+    <div class="flex flex-wrap gap-2">
+      {verBio && <a href={areaHref(`/activos/${a.id}/hoja-vida`, area)} class="btn-secondary">Hoja de vida</a>}
+      {verBio && <a href={areaHref(`/activos/${a.id}/historial`, area)} class="btn-secondary">Historial</a>}
+      {canEdit && <a href={areaHref(`/activos/${a.id}/editar`, area)} class="btn-primary">Editar</a>}
+      {verBio && registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && (
+        <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary">Imprimir viñeta</a>
+      )}
+      {gestionaBio && a.estado !== "baja" && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="btn-secondary">Dar de baja</a>}
+      {verBio && a.estado === "baja" && (
+        <a href={areaHref(`/activos/${a.id}/acta-baja${bajaVigente ? `?baja=${bajaVigente.id}` : ""}`, area)} class="btn-secondary">Acta de baja</a>
+      )}
+      {gestionaBio && a.estado === "baja" && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="btn-secondary">Revertir baja</a>}
+      {canDelete && <button id="deleteBtn" type="button" class="btn-secondary text-red-600 hover:bg-red-50">Eliminar</button>}
+    </div>
   </div>
 
   <!-- ══ Fase 48 · Qué sigue AHORA: el equipo ya está fuera de servicio ══════ -->
@@ -708,7 +924,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div><div class="text-xs uppercase text-slate-500">Marca / Modelo</div><div>{[a.marca, a.modelo].filter(Boolean).join(" / ") || "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Serie</div><div class="font-mono text-xs">{a.serial ?? "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Año</div><div>{a.anio ?? "-"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Categoria</div><div>{a.categoria ?? "-"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Categoría</div><div>{a.categoria ?? "-"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">Centro de costo</div><div>{centroCosto ? etiquetaCentroCosto(centroCosto) : "—"}</div></div>
         <div>
           <div class="text-xs uppercase text-slate-500">Sucursal</div>
           <div>{sucursalInfo ? <span class="font-medium">{sucursalInfo.nombre}</span> : "-"}</div>
@@ -740,7 +957,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
       {vidaVencida && (
         <div class="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Considere evaluar su reemplazo.
+          Este equipo superó su vida útil estimada ({a.vidaUtilAnios} años desde {fmt(a.fechaAdquisicion)}). Evalúa su reemplazo.
         </div>
       )}
 
@@ -756,12 +973,48 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
       {isBio && (
         <div class="mt-5 border-t border-slate-200 pt-4">
-          <h3 class="font-semibold text-purple-700">Datos biomedicos</h3>
+          <h3 class="font-semibold text-purple-700">Datos biomédicos</h3>
           <div class="mt-2 grid grid-cols-2 gap-3 text-sm">
-            <div><div class="text-xs uppercase text-slate-500">Registro DNM</div><div>{a.registroSanitario ?? "-"}</div></div>
-            <div><div class="text-xs uppercase text-slate-500">Clase de riesgo</div><div>{a.claseRiesgo ?? "-"}</div></div>
-            <div><div class="text-xs uppercase text-slate-500">Ultima calibracion</div><div>{fmt(a.ultimaCalibracion)}</div></div>
-            <div><div class="text-xs uppercase text-slate-500">Proxima calibracion</div><div>{fmt(a.proximaCalibracion)}</div></div>
+            <div class="col-span-2">
+              <div class="text-xs uppercase text-slate-500">Registro sanitario</div>
+              {a.registroSanitarioNoRequiere ? (
+                <div>No requiere registro sanitario</div>
+              ) : (
+                <div>
+                  <span class="font-medium">{a.registroSanitario?.trim() || "Sin número"}</span>
+                  <span class={`badge ml-2 text-[10px] ${ESTADO_REGISTRO_COLOR[registroEstado]}`}>{ESTADO_REGISTRO_LABEL[registroEstado]}</span>
+                  {(a.registroSanitarioEntidad || a.registroSanitarioEmision || a.registroSanitarioVencimiento) && (
+                    <div class="text-xs text-slate-500">
+                      {[
+                        a.registroSanitarioEntidad,
+                        a.registroSanitarioEmision && `emitido ${fmt(a.registroSanitarioEmision)}`,
+                        a.registroSanitarioVencimiento && `vence ${fmt(a.registroSanitarioVencimiento)}`,
+                      ].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div><div class="text-xs uppercase text-slate-500">Clase de riesgo</div><div>{etiquetaClaseRiesgo(a.claseRiesgo)}</div></div>
+            {verBio && (
+              <div>
+                <div class="text-xs uppercase text-slate-500">Calibración</div>
+                <div>
+                  {a.estado === "baja"
+                    ? <span class={`badge text-[10px] ${ESTADO_ACTIVO_COLOR.baja}`}>Equipo dado de baja</span>
+                    : <span class={`badge text-[10px] ${ESTADO_CALIBRACION_COLOR[infoCal.estado]}`}>{ESTADO_CALIBRACION_LABEL[infoCal.estado]}</span>}
+                </div>
+              </div>
+            )}
+            {verBio && calMin.length > 0 && <>
+              <div><div class="text-xs uppercase text-slate-500">Última calibración</div><div>{fmt(infoCal.ultima)}</div></div>
+              <div><div class="text-xs uppercase text-slate-500">Próxima calibración</div><div>{fmt(infoCal.proxima)}{diasCal != null && <span class="text-xs text-slate-500"> · {textoVence(diasCal)}</span>}</div></div>
+            </>}
+            {verBio && calMin.length === 0 && (a.ultimaCalibracion || a.proximaCalibracion) && <>
+              <div><div class="text-xs uppercase text-slate-500">Última calibración</div><div>{fmt(a.ultimaCalibracion)}</div></div>
+              <div><div class="text-xs uppercase text-slate-500">Próxima calibración</div><div>{fmt(a.proximaCalibracion)}</div></div>
+              <p class="col-span-2 text-xs text-amber-700">Fechas escritas a mano, sin calibración registrada.</p>
+            </>}
           </div>
         </div>
       )}
@@ -778,7 +1031,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         : <p class="mt-3 text-xs text-slate-500">Etiqueta GS1 Data Matrix: pendiente. Por ahora el equipo se encuentra por sede y ubicación.</p>}
       <div class="mt-3">
         <div class="text-xs uppercase text-slate-500">Estado</div>
-        <div class="capitalize">{a.estado}</div>
+        <div><span class={`badge ${estadoActivoColor}`}>{estadoActivoLabel}</span></div>
       </div>
     </div>
 
@@ -800,6 +1053,142 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       </div>
     )}
   </div>
+
+  <!-- ══ Fase 59 · Equipo dado de baja (datos del acta, WP-A) ══════════════════ -->
+  {verBio && a.estado === "baja" && (
+    <div class="card mt-4 border-l-4 border-slate-500 p-5" id="baja">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <h2 class="font-semibold text-slate-900">Equipo dado de baja</h2>
+        <div class="flex flex-wrap gap-2">
+          {bajaVigente && (
+            <a href={areaHref(`/activos/${a.id}/acta-baja?baja=${bajaVigente.id}`, area)} class="btn-secondary btn-sm">Imprimir acta de baja</a>
+          )}
+          {gestionaBio && bajaVigente && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="btn-secondary btn-sm">Revertir baja</a>}
+        </div>
+      </div>
+      {bajaVigente ? (
+        <div class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div><div class="text-xs uppercase text-slate-500">Fecha de baja</div><div>{fmt(bajaVigente.fechaBaja)} · acta {folioActaBaja(bajaVigente.id)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Autorizó</div><div>{[bajaVigente.autorizaNombre, bajaVigente.autorizaCargo].filter(Boolean).join(", ")}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Motivo</div><div>{etqMotivoBaja(bajaVigente.motivo)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Detalle del motivo</div><div class="whitespace-pre-wrap">{bajaVigente.motivoDetalle}</div></div>
+          <div class="sm:col-span-2"><div class="text-xs uppercase text-slate-500">Evaluación técnica</div><div class="whitespace-pre-wrap">{bajaVigente.evaluacionTecnica}{bajaVigente.evaluadoPor && <span class="text-xs text-slate-500"> · evaluó {bajaVigente.evaluadoPor}</span>}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Destino final</div><div>{etqDestinoBaja(bajaVigente.destinoFinal)}</div></div>
+          <div><div class="text-xs uppercase text-slate-500">Detalle del destino</div><div>{bajaVigente.destinoDetalle || "—"}</div></div>
+          <div class="sm:col-span-2 text-xs text-slate-500">Registró {bajaVigente.registradoPorNombre} el {fmt(bajaVigente.createdAt)}.</div>
+        </div>
+      ) : (
+        <p class="mt-2 text-sm text-slate-600">
+          Figura como dado de baja, sin acta registrada.
+          {gestionaBio && <a href={areaHref(`/activos/${a.id}/baja`, area)} class="ml-1 font-medium text-brand-600 hover:underline">Completar datos de baja</a>}
+        </p>
+      )}
+    </div>
+  )}
+
+  <!-- ══ Fase 59 · Resumen de cumplimiento (requisito 9 y JCI FMS.07/08) ═══════ -->
+  {verBio && hayResumenJci && (
+    <div id="resumen-jci" class="mt-4">
+      <h2 class="font-semibold text-slate-900">Resumen de cumplimiento</h2>
+      <div class="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {mostrarCal && (
+          <div class="card p-4">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-semibold text-slate-900">Calibración</h3>
+              {a.estado === "baja"
+                ? <span class={`badge text-[10px] ${ESTADO_ACTIVO_COLOR.baja}`}>Dado de baja</span>
+                : <span class={`badge text-[10px] ${ESTADO_CALIBRACION_COLOR[infoCal.estado]}`}>{ESTADO_CALIBRACION_LABEL[infoCal.estado]}</span>}
+            </div>
+            <div class="mt-2 space-y-1 text-sm text-slate-700">
+              {a.calibracionNoAplica && <p>No requiere calibración{a.calibracionNoAplicaMotivo ? `: ${a.calibracionNoAplicaMotivo}` : "."}</p>}
+              {!a.calibracionNoAplica && infoCal.proxima && <p>Próxima: {fmt(infoCal.proxima)}{diasCal != null && <span class="text-xs text-slate-500"> · {textoVence(diasCal)}</span>}</p>}
+              {ultimaCalRow && <p class="text-xs text-slate-500">Última: {fmt(ultimaCalRow.c.fechaCalibracion)}{(ultimaCalRow.labNombre || ultimaCalRow.c.laboratorioExterno) ? ` · ${ultimaCalRow.labNombre ?? ultimaCalRow.c.laboratorioExterno}` : ""}</p>}
+              {!ultimaCalRow && !a.calibracionNoAplica && <p class="text-xs text-slate-500">Sin calibraciones registradas.</p>}
+              {infoCal.estado === "no_conforme" && <p class="text-xs font-semibold text-red-700">La última calibración salió no conforme. Revisa el equipo antes de usarlo.</p>}
+              {infoCal.estado === "sin_certificado" && <p class="text-xs font-medium text-amber-700">Falta adjuntar el certificado de la última calibración.</p>}
+            </div>
+            <a href="#calibraciones" class="mt-2 inline-block text-xs font-medium text-brand-600 hover:underline">Ver calibraciones</a>
+          </div>
+        )}
+        {expediente && (
+          <div class="card p-4">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-semibold text-slate-900">Expediente técnico</h3>
+              <span class:list={["badge text-[10px]", expediente.completo ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"]}>
+                {expediente.completo ? "Completo" : "Incompleto"}
+              </span>
+            </div>
+            <div class="mt-2 space-y-1 text-sm text-slate-700">
+              <p>{expediente.cumplidos} de {expediente.total} requisitos</p>
+              {expediente.faltan.length > 0 && <p class="text-xs text-amber-700">Falta: {expediente.faltan.join(", ")}.</p>}
+              {expediente.documentosVencidos > 0 && <p class="text-xs text-red-700">{expediente.documentosVencidos} {expediente.documentosVencidos === 1 ? "documento vencido" : "documentos vencidos"}.</p>}
+            </div>
+            <a href="#documentos" class="mt-2 inline-block text-xs font-medium text-brand-600 hover:underline">Ver documentos</a>
+          </div>
+        )}
+        {mostrarSE && (
+          <div class="card p-4">
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-semibold text-slate-900">Seguridad eléctrica</h3>
+              <span class={`badge text-[10px] ${ESTADO_SEG_ELEC_COLOR[estadoSE]}`}>{ESTADO_SEG_ELEC_LABEL[estadoSE]}</span>
+            </div>
+            <div class="mt-2 space-y-1 text-sm text-slate-700">
+              {ultimaSE ? (
+                <>
+                  <p>
+                    {fmt(ultimaSE.fecha)}
+                    <span class={`badge ml-1 text-[10px] ${RESULTADO_SE_COLOR[ultimaSE.resultado as "pasa" | "no_pasa"] ?? "bg-slate-100 text-slate-700"}`}>{RESULTADO_SE_LABEL[ultimaSE.resultado as "pasa" | "no_pasa"] ?? ultimaSE.resultado}</span>
+                  </p>
+                  <p class="text-xs text-slate-500">Próxima: {fmt(ultimaSE.proximaFecha)}</p>
+                </>
+              ) : (
+                <p class="text-xs text-slate-500">Sin pruebas registradas.</p>
+              )}
+              {aceptacionSE ? (
+                <p class="text-xs text-slate-500">
+                  Aceptación: <a href={`/seguridad-electrica/${aceptacionSE.id}`} class="text-brand-600 hover:underline">{RESULTADO_SE_LABEL[aceptacionSE.resultado as "pasa" | "no_pasa"] ?? aceptacionSE.resultado} · {fmt(aceptacionSE.fecha)}</a>
+                </p>
+              ) : (
+                <p class="text-xs text-slate-500">Sin prueba eléctrica de aceptación.</p>
+              )}
+            </div>
+            <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs font-medium">
+              <a href={`/activos/${a.id}/seguridad-electrica`} class="text-brand-600 hover:underline">Ver pruebas</a>
+              {registraBio && a.estado !== "baja" && <a href={`/activos/${a.id}/seguridad-electrica/nueva`} class="text-brand-600 hover:underline">+ Registrar</a>}
+              {registraBio && a.estado !== "baja" && !aceptacionSE && (
+                <a href={`/activos/${a.id}/seguridad-electrica/nueva?tipo=aceptacion`} class="text-brand-600 hover:underline">Registrar prueba de aceptación</a>
+              )}
+            </div>
+          </div>
+        )}
+        {mostrarAlertas && (
+          <div class:list={["card p-4", { "border-2 border-red-400": retiroAbierto }]}>
+            <div class="flex items-start justify-between gap-2">
+              <h3 class="font-semibold text-slate-900">Alertas y retiros</h3>
+              {retiroAbierto && <span class="badge bg-red-100 text-[10px] text-red-700">Retiro abierto</span>}
+            </div>
+            <p class="mt-2 text-sm text-slate-700">{alertasAbiertas} {alertasAbiertas === 1 ? "abierta" : "abiertas"} · {alertasRows.length} en total</p>
+            {alertasRows.length === 0 ? (
+              <p class="mt-1 text-xs text-slate-500">Ninguna alerta registrada para este equipo.</p>
+            ) : (
+              <ul class="mt-1 space-y-1.5 text-xs">
+                {alertasOrdenadas.slice(0, 5).map((x) => (
+                  <li>
+                    <span class={`badge text-[10px] ${ALERTA_BADGE[x.tipo] ?? "bg-slate-100 text-slate-700"}`}>{TIPO_ALERTA_LABEL[x.tipo] ?? x.tipo}</span>
+                    <a href={`/alertas/${x.id}`} class="ml-1 font-medium text-brand-700 hover:underline">{x.titulo}</a>
+                    <div class="text-slate-500">
+                      {fmt(x.fechaAlerta)} · {ESTADO_ALERTA_LABEL[x.estado] ?? x.estado}{x.estado === "cerrada" && x.fechaCierre ? ` el ${fmt(x.fechaCierre)}` : ""} · {APLICABILIDAD_LABEL[x.aplicabilidad] ?? x.aplicabilidad}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <a href="/alertas" class="mt-2 inline-block text-xs font-medium text-brand-600 hover:underline">Ir a Alertas</a>
+          </div>
+        )}
+      </div>
+    </div>
+  )}
 
   <div class="mt-4 flex flex-wrap gap-2">
     <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">Mantenimiento predictivo</a>
@@ -844,7 +1233,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             </div>
             <div>
               <div class="uppercase">Próxima revisión</div>
-              <div class="text-slate-700">{fmtFechaSoloCompacta(scpInfo.proximaRevision)}</div>
+              <div class="text-slate-700">{fmt(scpInfo.proximaRevision)}</div>
             </div>
           </div>
         </div>
@@ -1124,7 +1513,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <span class={`badge ${a.aceptacionResultado === "aprobado" ? "bg-emerald-100 text-emerald-700" : a.aceptacionResultado === "condicionado" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"}`}>
           {a.aceptacionResultado === "aprobado" ? "✓ Aprobado" : a.aceptacionResultado === "condicionado" ? "Aprobado con condiciones" : "✕ Rechazado"}
         </span>
-        <span class="text-slate-600">Fecha: <span class="font-medium">{a.aceptacionFecha.split("-").reverse().join("/")}</span></span>
+        <span class="text-slate-600">Fecha: <span class="font-medium">{fmt(a.aceptacionFecha)}</span></span>
         {aceptadoPorNombre && <span class="text-slate-500 text-xs">Registrado por {aceptadoPorNombre}</span>}
         {a.aceptacionNotas && <span class="w-full text-xs text-slate-500 mt-1">{a.aceptacionNotas}</span>}
       </div>
@@ -1143,7 +1532,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div class="mt-4 space-y-3">
           <div>
             <label class="label text-xs">Fecha de la inspección *</label>
-            <input id="acep_fecha" type="date" class="input" value={a.aceptacionFecha ?? new Date().toISOString().slice(0, 10)} />
+            <input id="acep_fecha" type="date" class="input" value={a.aceptacionFecha ?? hoy} />
           </div>
           <div>
             <label class="label text-xs">Resultado *</label>
@@ -1194,74 +1583,21 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             }),
           });
           if (res.ok) { window.showToast?.("Inspección de aceptación registrada", "success"); location.reload(); }
-          else { err.textContent = "Error al guardar"; err.classList.remove("hidden"); }
+          else {
+            const j = await res.json().catch(() => ({}));
+            err.textContent = typeof j.error === "string" ? j.error : "No se pudo guardar la inspección.";
+            err.classList.remove("hidden");
+          }
         });
       })();
     </script>
   )}
 
-  <!-- Documentos del equipo (ficha técnica, manual, garantía…) -->
-  <div class="card mt-6 p-5">
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="font-semibold">Documentos del equipo</h2>
-        <p class="text-xs text-slate-500">Planos, unifilares y diagramas de válvulas se adjuntan al activo; los <strong>as-built</strong> son la configuración vigente del SCP.</p>
-      </div>
-      {canEdit && <button id="docUploadBtn" class="btn-primary text-sm">+ Subir documento</button>}
-    </div>
-
-    {canEdit && (
-      <div id="docForm" class="mt-4 hidden rounded-md border border-slate-200 bg-slate-50 p-4">
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div class="sm:col-span-2">
-            <label class="label">Archivo (PDF o imagen, máx 15MB) *</label>
-            <input id="docFile" type="file" accept=".pdf,image/*" class="input" />
-          </div>
-          <div>
-            <label class="label">Categoría</label>
-            <select id="docCategoria" class="input">
-              <option value="ficha_tecnica">Ficha técnica</option>
-              <option value="manual">Manual</option>
-              <option value="garantia">Garantía</option>
-              <option value="instalacion">Acta de instalación</option>
-              <option value="otro">Otro</option>
-            </select>
-          </div>
-        </div>
-        <p id="docMsg" class="mt-2 hidden text-sm"></p>
-        <div class="mt-3 flex gap-2">
-          <button id="docSave" class="btn-primary text-sm">Subir</button>
-          <button id="docCancel" class="btn-secondary text-sm">Cancelar</button>
-        </div>
-      </div>
-    )}
-
-    {documentosRows.length === 0 ? (
-      <p class="mt-3 text-sm text-slate-500">Sin documentos cargados. {canEdit && "Agrega la ficha técnica, manuales o garantías del equipo."}</p>
-    ) : (
-      <ul class="mt-3 divide-y divide-slate-100 text-sm">
-        {documentosRows.map((d) => (
-          <li class="flex items-center justify-between gap-3 py-2">
-            <div class="min-w-0 flex-1">
-              <a href={`/api/activos/documento/${d.id}`} target="_blank" class="font-medium text-brand-700 hover:underline">{d.nombre}</a>
-              {d.asBuilt && (
-                <span class="badge ml-2 bg-indigo-100 text-[10px] text-indigo-700" title="Plano o esquema as-built: refleja la instalación tal como está construida (SCP)">
-                  As-built
-                </span>
-              )}
-              <div class="text-xs text-slate-500">
-                <span class="rounded bg-slate-100 px-1.5 py-0.5">{CATEGORIA_DOC_LABEL[d.categoria ?? "otro"] ?? d.categoria}</span>
-                {d.version && <span class="ml-2 font-mono">v{d.version}</span>}
-                {d.fechaVersion && <span class="ml-1">({fmtFechaSoloCompacta(d.fechaVersion)})</span>}
-                <span class="ml-2">{(d.tamano / 1024).toFixed(0)} KB · {fmt(d.createdAt)}</span>
-              </div>
-            </div>
-            {canJefe && <button class="doc-del text-xs text-red-600 hover:underline" data-id={d.id}>Eliminar</button>}
-          </li>
-        ))}
-      </ul>
-    )}
-  </div>
+  <!-- Documentos y expediente, licencias y capacitaciones: los pinta WP-D (K-BASE-2).
+       Cada componente revisa el rol y consulta la base; anclas #documentos, #licencias y #capacitaciones. -->
+  <DocumentosEquipo activoId={a.id} />
+  <LicenciasEquipo activoId={a.id} />
+  <CapacitacionesEquipo activoId={a.id} />
 
   <!-- Contingencia / equipos de respaldo -->
   <div class="card mt-6 p-5" id="contingencia">
@@ -1333,48 +1669,98 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     </div>
   </div>
 
-  {requiereCal && (
+  {mostrarCal && (
     <div class="card mt-6 p-5" id="calibraciones">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 class="font-semibold text-purple-700">Calibraciones</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-semibold text-purple-700">Calibraciones</h2>
+            {a.estado === "baja"
+              ? <span class={`badge text-[10px] ${ESTADO_ACTIVO_COLOR.baja}`}>Dado de baja</span>
+              : <span class={`badge text-[10px] ${ESTADO_CALIBRACION_COLOR[infoCal.estado]}`}>{ESTADO_CALIBRACION_LABEL[infoCal.estado]}</span>}
+            {a.esPatron && <a href="/calibraciones/patrones" class="badge bg-indigo-100 text-[10px] text-indigo-700 hover:underline">Equipo patrón</a>}
+          </div>
           <p class="text-xs text-slate-500">Trazabilidad metrológica (JCI FMS.8 / MINSAL): certificado, laboratorio acreditado, patrón y resultado.</p>
+          {infoCal.ultima && (
+            <p class="mt-1 text-xs text-slate-600">
+              Última {fmt(infoCal.ultima)}{infoCal.proxima ? ` · Próxima ${fmt(infoCal.proxima)}` : ""}{diasCal != null ? ` · ${textoVence(diasCal)}` : ""}
+            </p>
+          )}
+          {a.calibracionNoAplica && (
+            <p class="mt-1 text-xs text-slate-600">No requiere calibración{a.calibracionNoAplicaMotivo ? `: ${a.calibracionNoAplicaMotivo}` : "."}</p>
+          )}
         </div>
-        {canEdit && <button id="calNewBtn" class="btn-primary text-sm">+ Registrar calibración</button>}
+        <div class="flex flex-wrap gap-2">
+          {registraBio && a.estado !== "baja" && calibracionesRows.length > 0 && <a href={`/calibraciones/vinetas?activos=${a.id}`} class="btn-secondary text-sm">Imprimir viñeta</a>}
+          {puedeRegistrarCal && <button id="calNewBtn" type="button" class="btn-primary text-sm">+ Registrar calibración</button>}
+        </div>
       </div>
 
-      {canEdit && (
+      {a.esPatron && (
+        <div class="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+          {usadoComoPatronTotal === 0
+            ? "Este equipo es un patrón. Todavía no se usó en ninguna calibración."
+            : `Este equipo es un patrón. Se usó en ${usadoComoPatronTotal} ${usadoComoPatronTotal === 1 ? "calibración" : "calibraciones"}:`}
+          {usadoComoPatron.length > 0 && (
+            <ul class="mt-1 space-y-0.5 text-xs">
+              {usadoComoPatron.map((u) => (
+                <li>
+                  <a href={areaHref(`/activos/${u.equipo.id}`, rubroDeActivo(u.equipo.rubro, u.equipo.tipo))} class="hover:underline">
+                    {fmt(u.fechaCalibracion)} · {u.equipo.codigo} · {u.equipo.nombre}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          {usadoComoPatronTotal > usadoComoPatron.length && <p class="mt-1 text-xs">Se muestran las {usadoComoPatron.length} más recientes.</p>}
+          <a href="/calibraciones/patrones" class="mt-1 inline-block text-xs font-medium underline">Ver lista de patrones</a>
+        </div>
+      )}
+
+      {necesitaFormularioCal && (
         <div id="calForm" class="mt-4 hidden rounded-md border border-purple-200 bg-purple-50/40 p-4">
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <h3 id="calTitulo" class="font-semibold text-slate-900">Registrar calibración</h3>
+          <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <label class="label">Fecha de calibración *</label>
-              <input id="c_fecha" type="date" class="input" />
+              <label class="label" for="c_fecha">Fecha de calibración *</label>
+              <input id="c_fecha" type="date" class="input" max={hoy} />
             </div>
             <div>
-              <label class="label">Próxima calibración</label>
+              <label class="label" for="c_proxima">Próxima calibración <span class="font-normal text-slate-400">(obligatoria salvo «No conforme»)</span></label>
               <input id="c_proxima" type="date" class="input" />
             </div>
             <div>
-              <label class="label">Laboratorio</label>
+              <label class="label" for="c_lab">Laboratorio</label>
               <select id="c_lab" class="input">
-                <option value="">— Externo / no listado —</option>
-                {laboratorios.map((l) => <option value={l.id}>{l.nombre}{l.acred ? " ✓ acreditado" : ""}</option>)}
+                <option value="" data-aviso="">— Externo / no listado —</option>
+                {gruposLab.acreditados.length > 0 && (
+                  <optgroup label="Laboratorios con acreditación vigente">
+                    {gruposLab.acreditados.map((l) => <option value={l.id} data-aviso={avisoLab(l.id, true)} data-ok="1">{l.etiqueta}</option>)}
+                  </optgroup>
+                )}
+                {gruposLab.vencidos.length > 0 && (
+                  <optgroup label="Acreditación vencida o sin vigencia">
+                    {gruposLab.vencidos.map((l) => <option value={l.id} data-aviso={avisoLab(l.id, false)}>{l.etiqueta}</option>)}
+                  </optgroup>
+                )}
+                {gruposLab.otros.length > 0 && (
+                  <optgroup label="Otros proveedores (sin acreditación)">
+                    {gruposLab.otros.map((l) => <option value={l.id} data-aviso={avisoLab(l.id, false)}>{l.etiqueta}</option>)}
+                  </optgroup>
+                )}
               </select>
+              <p id="c_lab_aviso" class="mt-1 hidden text-xs"></p>
             </div>
             <div>
-              <label class="label">Laboratorio externo (si no está en la lista)</label>
-              <input id="c_labext" class="input" placeholder="Nombre del laboratorio" />
+              <label class="label" for="c_labext">Laboratorio externo (si no está en la lista)</label>
+              <input id="c_labext" class="input" placeholder="Nombre del laboratorio" maxlength="200" />
             </div>
             <div>
-              <label class="label">N.º de certificado</label>
-              <input id="c_cert" class="input" />
+              <label class="label" for="c_cert">N.º de certificado</label>
+              <input id="c_cert" class="input" maxlength="100" />
             </div>
             <div>
-              <label class="label">Patrón de referencia</label>
-              <input id="c_patron" class="input" placeholder="Ej: trazable a CENAM / NIST" />
-            </div>
-            <div>
-              <label class="label">Resultado *</label>
+              <label class="label" for="c_resultado">Resultado *</label>
               <select id="c_resultado" class="input">
                 <option value="conforme">Conforme</option>
                 <option value="conforme_con_ajuste">Conforme con ajuste</option>
@@ -1382,28 +1768,68 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               </select>
             </div>
             <div>
-              <label class="label">Incertidumbre</label>
-              <input id="c_incert" class="input" placeholder="Ej: ±0.5 °C (k=2)" />
+              <label class="label" for="c_patron_id">Equipo patrón usado (de la lista)</label>
+              <select id="c_patron_id" class="input">
+                <option value="">— Ninguno de la lista —</option>
+                {patronesOpciones.map((p) => <option value={p.id}>{p.etiqueta}</option>)}
+              </select>
             </div>
             <div>
-              <label class="label">Realizado por</label>
-              <input id="c_realizado" class="input" placeholder="Técnico / empresa" />
+              <label class="label" for="c_patron">Patrón o trazabilidad del certificado</label>
+              <input id="c_patron" class="input" placeholder="Ej.: trazable a CENAM / NIST" maxlength="300" />
             </div>
             <div>
-              <label class="label">Certificado (PDF, máx 15MB)</label>
-              <input id="c_file" type="file" accept=".pdf,image/*" class="input" />
+              <label class="label" for="c_incert">Incertidumbre</label>
+              <input id="c_incert" class="input" placeholder="Ej.: ±0.5 °C (k=2)" maxlength="100" />
+            </div>
+            <div>
+              <label class="label" for="c_realizado">Realizado por</label>
+              <input id="c_realizado" class="input" placeholder="Técnico o empresa" maxlength="200" />
             </div>
             <div class="sm:col-span-2">
-              <label class="label">Notas <span class="text-slate-400 font-normal">(obligatorias si No conforme)</span></label>
+              <label class="label" for="c_file" id="c_file_label">Certificado (PDF o imagen JPG, PNG o WEBP; máx. 15 MB)</label>
+              <input id="c_file" type="file" accept={ARCHIVO_ACCEPT} class="input" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label" for="c_notas">Notas <span class="font-normal text-slate-400">(obligatorias si el resultado es No conforme o Conforme con ajuste)</span></label>
               <textarea id="c_notas" class="input" rows="2"></textarea>
+            </div>
+            <div id="c_motivo_wrap" class="hidden sm:col-span-2">
+              <label class="label" for="c_motivo">Motivo de la corrección *</label>
+              <textarea id="c_motivo" class="input" rows="2" maxlength="500" placeholder="Ej.: el número de certificado estaba mal escrito"></textarea>
             </div>
           </div>
           <p id="c_msg" class="mt-2 hidden text-sm"></p>
+          <div id="c_avisos" class="mt-2 hidden rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+            <p class="font-semibold">Se guardó la calibración, con estos avisos:</p>
+            <ul id="c_avisos_lista" class="mt-1 list-disc pl-5"></ul>
+            <button id="c_avisos_ok" type="button" class="btn-secondary btn-sm mt-2">Entendido</button>
+          </div>
           <div class="mt-3 flex gap-2">
-            <button id="c_save" class="btn-primary text-sm">Guardar calibración</button>
-            <button id="c_cancel" class="btn-secondary text-sm">Cancelar</button>
+            <button id="c_save" type="button" class="btn-primary text-sm">Guardar calibración</button>
+            <button id="c_cancel" type="button" class="btn-secondary text-sm">Cancelar</button>
           </div>
         </div>
+      )}
+
+      {puedeCorregirCal && calibracionesRows.length > 0 && (
+        <div id="calDelModal" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+          <div class="card w-full max-w-md p-5">
+            <h3 class="text-lg font-semibold text-slate-900">Eliminar calibración</h3>
+            <p id="calDelTexto" class="mt-1 text-sm text-slate-600"></p>
+            <label class="label mt-3" for="calDelMotivo">Motivo *</label>
+            <textarea id="calDelMotivo" class="input" rows="3" maxlength="500" placeholder="Ej.: se registró en el equipo equivocado"></textarea>
+            <p class="mt-1 text-xs text-slate-500">El certificado no se borra: la copia queda en la bitácora del equipo.</p>
+            <p id="calDelErr" class="mt-2 hidden text-sm text-red-600"></p>
+            <div class="mt-4 flex justify-end gap-2">
+              <button id="calDelCancel" type="button" class="btn-secondary">Cancelar</button>
+              <button id="calDelOk" type="button" class="btn-primary">Eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {registraBio && calibracionesRows.some((r) => !r.c.certificadoR2Key) && (
+        <input id="c_adj_file" type="file" accept={ARCHIVO_ACCEPT} class="hidden" aria-label="Certificado de calibración" />
       )}
 
       {calibracionesRows.length === 0 ? (
@@ -1418,28 +1844,69 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                 <th class="px-3 py-2">Laboratorio</th>
                 <th class="px-3 py-2">Certificado</th>
                 <th class="px-3 py-2">Patrón</th>
+                <th class="px-3 py-2">Incertidumbre</th>
                 <th class="px-3 py-2">Resultado</th>
-                <th class="px-3 py-2 text-right">Acción</th>
+                <th class="px-3 py-2 text-right">Acciones</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-slate-100">
-              {calibracionesRows.map(({ c, lab }) => (
-                <tr class="hover:bg-slate-50">
-                  <td class="px-3 py-2 font-mono text-xs">{fmt(c.fechaCalibracion)}</td>
-                  <td class="px-3 py-2 font-mono text-xs">{fmt(c.proximaCalibracion)}</td>
-                  <td class="px-3 py-2 text-xs">{lab?.nombre ?? c.laboratorioExterno ?? "—"}</td>
-                  <td class="px-3 py-2 text-xs">
-                    {c.certificadoR2Key
-                      ? <a href={`/api/calibraciones/certificado/${c.id}`} target="_blank" class="text-brand-600 hover:underline">{c.numeroCertificado ?? "Ver"}</a>
-                      : (c.numeroCertificado ?? "—")}
-                  </td>
-                  <td class="px-3 py-2 text-xs">{c.patronReferencia ?? "—"}</td>
-                  <td class="px-3 py-2"><span class={`badge text-[10px] ${RESULTADO_CALIB_COLOR[c.resultado]}`}>{RESULTADO_CALIB_LABEL[c.resultado]}</span></td>
-                  <td class="px-3 py-2 text-right">
-                    {canJefe && <button class="cal-del text-xs text-red-600 hover:underline" data-id={c.id}>Eliminar</button>}
-                  </td>
-                </tr>
-              ))}
+            <tbody>
+              {calibracionesRows.map((r) => {
+                const c = r.c;
+                const vig = vigenciaPatron(c.patronActivoId, c.fechaCalibracion);
+                const segunda = [
+                  c.realizadoPor && `Realizado por: ${c.realizadoPor}`,
+                  c.notas && `Notas: ${c.notas}`,
+                  r.registro && `Registró ${r.registro}`,
+                  c.corregidaEn && `Corregida el ${fmt(c.corregidaEn)}${r.corrector ? ` por ${r.corrector}` : ""}`,
+                ].filter(Boolean).join(" · ");
+                return (
+                  <>
+                    <tr class="border-t border-slate-100 align-top hover:bg-slate-50">
+                      <td class="px-3 py-2 font-mono text-xs">{fmt(c.fechaCalibracion)}</td>
+                      <td class="px-3 py-2 font-mono text-xs">{fmt(c.proximaCalibracion)}</td>
+                      <td class="px-3 py-2 text-xs">
+                        {r.labNombre ?? c.laboratorioExterno ?? "—"}
+                        {(r.labNombre || c.laboratorioExterno) && (
+                          <span
+                            class:list={["badge ml-1 text-[10px]", c.labAcreditado ? "bg-emerald-100 text-emerald-700" : c.labAcreditado === false ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"]}
+                            title={c.labAcreditacionRef ?? undefined}
+                          >{textoLabAcreditado(c.labAcreditado)}</span>
+                        )}
+                      </td>
+                      <td class="px-3 py-2 text-xs">
+                        {c.certificadoR2Key ? (
+                          <a href={`/api/calibraciones/certificado/${c.id}`} target="_blank" class="text-brand-600 hover:underline">{c.numeroCertificado ?? "Ver certificado"}</a>
+                        ) : (
+                          <>
+                            <span>{c.numeroCertificado ?? "—"}</span>
+                            <span class="ml-1 text-amber-700">sin archivo</span>
+                            {registraBio && <button type="button" class="cal-adj ml-1 text-brand-600 hover:underline" data-id={c.id}>Adjuntar</button>}
+                          </>
+                        )}
+                      </td>
+                      <td class="px-3 py-2 text-xs">
+                        {r.patron && (
+                          <a href={areaHref(`/activos/${r.patron.id}`, rubroDeActivo(r.patron.rubro, r.patron.tipo))} class="text-brand-600 hover:underline">{r.patron.codigo} · {r.patron.nombre}</a>
+                        )}
+                        {r.patron && vig && !vig.vigente && <span class="block font-semibold text-red-600">sin calibración vigente en esa fecha</span>}
+                        {c.patronReferencia && <span class="block text-slate-500">{c.patronReferencia}</span>}
+                        {!r.patron && !c.patronReferencia && "—"}
+                      </td>
+                      <td class="px-3 py-2 text-xs">{c.incertidumbre ?? "—"}</td>
+                      <td class="px-3 py-2"><span class={`badge text-[10px] ${RESULTADO_CALIB_COLOR[c.resultado]}`}>{RESULTADO_CALIB_LABEL[c.resultado]}</span></td>
+                      <td class="whitespace-nowrap px-3 py-2 text-right text-xs">
+                        {puedeCorregirCal && <button type="button" class="cal-fix text-brand-600 hover:underline" data-id={c.id}>Corregir</button>}
+                        {puedeCorregirCal && <button type="button" class="cal-del ml-2 text-red-600 hover:underline" data-id={c.id} data-fecha={fmt(c.fechaCalibracion)}>Eliminar</button>}
+                      </td>
+                    </tr>
+                    {segunda && (
+                      <tr class="text-xs text-slate-500">
+                        <td colspan="8" class="whitespace-pre-wrap px-3 pb-2">{segunda}</td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1451,7 +1918,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <div class="card mt-6 p-5">
     <div class="flex items-center justify-between">
       <h2 id="planes" class="font-semibold scroll-mt-24">Cronograma de mantenimiento preventivo</h2>
-      {canEdit && <button id="newPlanBtn" class="btn-primary">+ Agregar al cronograma</button>}
+      {canEdit && a.estado !== "baja" && <button id="newPlanBtn" class="btn-primary">+ Agregar al cronograma</button>}
     </div>
 
     <div id="newPlanForm" class="mt-4 hidden rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -1461,7 +1928,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div>
           <label class="label">Frecuencia *</label>
           <select class="input" id="p_frecuencia">
-            {FRECUENCIAS.map((f) => <option value={f.value}>{f.label}</option>)}
+            {OPCIONES_FRECUENCIA.map((f) => <option value={f.value} selected={f.value === "mensual"}>{f.label}</option>)}
           </select>
         </div>
         <div><label class="label">Proxima ejecucion *</label><input class="input" id="p_proxima" type="date" required /></div>
@@ -1515,7 +1982,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                 <div class="flex-1">
                   <div class="font-medium">{r.p.titulo}</div>
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                    <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">{r.p.frecuencia}</span>
+                    <span class="rounded bg-slate-100 px-2 py-0.5">{etiquetaFrecuencia(r.p.frecuencia)}</span>
                     <span class="rounded bg-blue-100 px-2 py-0.5 text-blue-700">Próxima: <strong>{fmt(r.p.proximaFecha)}</strong></span>
                     {r.u
                       ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">{r.u.nombre}</span>
@@ -1534,7 +2001,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                     <>
                       <button data-id={r.p.id} data-edit class="btn-secondary text-xs">Editar</button>
                       <button data-id={r.p.id} data-pause class="btn-secondary text-xs">{r.p.activo ? "Pausar" : "Activar"}</button>
-                      <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>
+                      {canJefe && <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>}
                     </>
                   )}
                 </div>
@@ -1554,7 +2021,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                     <div>
                       <label class="label">Frecuencia</label>
                       <select class="input edit-frecuencia" data-id={r.p.id}>
-                        {FRECUENCIAS.map((f) => <option value={f.value} selected={f.value === r.p.frecuencia}>{f.label}</option>)}
+                        {!frecuenciaOfrecida(r.p.frecuencia) && <option value={r.p.frecuencia} selected>{etiquetaFrecuencia(r.p.frecuencia)} (no disponible)</option>}
+                        {OPCIONES_FRECUENCIA.map((f) => <option value={f.value} selected={f.value === r.p.frecuencia}>{f.label}</option>)}
                       </select>
                     </div>
                     <div>
@@ -1603,9 +2071,9 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
   <!-- Historial de OT -->
   <div class="card mt-6 p-5">
-    <h2 class="font-semibold">Ultimas ordenes de trabajo</h2>
+    <h2 class="font-semibold">Últimas órdenes de trabajo</h2>
     {ordsRel.length === 0 ? (
-      <p class="mt-2 text-sm text-slate-500">Sin ordenes registradas para este equipo.</p>
+      <p class="mt-2 text-sm text-slate-500">Sin órdenes registradas para este equipo.</p>
     ) : (
       <ul class="mt-3 divide-y divide-slate-100 text-sm">
         {ordsRel.map((o) => (
@@ -1620,9 +2088,12 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
 
   <!-- Historial de cambios (audit) -->
   <div class="card mt-6 p-5">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="font-semibold">Historial de cambios</h2>
-      <span class="text-xs text-slate-500">{auditRows.length} {auditRows.length === 1 ? "evento" : "eventos"}</span>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-slate-500">{auditRows.length === 50 ? "Los 50 más recientes" : `${auditRows.length} ${auditRows.length === 1 ? "evento" : "eventos"}`}</span>
+        {verBio && <a href={areaHref(`/activos/${a.id}/historial`, area)} class="text-xs font-medium text-brand-600 hover:underline">Ver historial completo</a>}
+      </div>
     </div>
     {auditRows.length === 0 ? (
       <p class="mt-2 text-sm text-slate-500">Sin cambios registrados todavía.</p>
@@ -1665,8 +2136,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     )}
   </div>
 
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null }) }}>
-    const { activoId, activoCodigo, activoNombre, ubicacionNombre } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: id, activoCodigo: a.codigo, activoNombre: a.nombre, ubicacionNombre: ubicacionInfo?.nombre ?? null, hoy }) }}>
+    const { activoId, activoCodigo, activoNombre, ubicacionNombre, hoy } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const $ = (id) => document.getElementById(id);
     // Cache de plantillas para repoblar el textarea de checklist
     let plantillasCache = [];
@@ -1731,13 +2202,9 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         if (ubicacionNombre) partes.push(ubicacionNombre);
         tituloEl.value = partes.filter(Boolean).join(" ");
       }
-      // Pre-llenar próxima fecha con hoy (hora SV)
+      // Pre-llenar próxima fecha con hoy en El Salvador (lo calcula el servidor)
       const fechaEl = $("p_proxima");
-      if (fechaEl && !fechaEl.value) {
-        const hoy = new Date();
-        hoy.setHours(hoy.getHours() - 6); // ajuste UTC -> SV
-        fechaEl.value = hoy.toISOString().slice(0, 10);
-      }
+      if (fechaEl && !fechaEl.value) fechaEl.value = hoy;
       // Cargar plantillas si aún no se cargaron
       if (plantillasCache.length === 0) cargarPlantillas();
     });
@@ -1769,7 +2236,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         checklist,
       };
       if (!payload.titulo || !payload.proximaFecha) {
-        err.textContent = "Titulo y proxima fecha son obligatorios";
+        err.textContent = "El título y la próxima fecha son obligatorios.";
         err.classList.remove("hidden");
         return;
       }
@@ -1787,25 +2254,41 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       location.reload();
     });
 
+    // Si la API responde con error, se dice; antes se recargaba como si nada.
+    const avisoRutina = async (res, texto) => {
+      const j = await res.json().catch(() => ({}));
+      const msg = typeof j.error === "string" ? j.error : texto;
+      if (window.showToast) window.showToast(msg, "error"); else alert(msg);
+    };
     document.querySelectorAll("[data-pause]").forEach((b) => {
       b.addEventListener("click", async (e) => {
         const id = e.currentTarget.dataset.id;
         const isActive = e.currentTarget.textContent.trim() === "Pausar";
-        await fetch(`/api/planes/${id}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ activo: !isActive }),
-        });
-        location.reload();
+        try {
+          const res = await fetch(`/api/planes/${id}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ activo: !isActive }),
+          });
+          if (!res.ok) return avisoRutina(res, isActive ? "No se pudo pausar la rutina." : "No se pudo activar la rutina.");
+          location.reload();
+        } catch {
+          alert(isActive ? "No se pudo pausar la rutina." : "No se pudo activar la rutina.");
+        }
       });
     });
 
     document.querySelectorAll("[data-del]").forEach((b) => {
       b.addEventListener("click", async (e) => {
-        if (!confirm("Eliminar este plan de mantenimiento?")) return;
+        if (!confirm("¿Eliminar esta rutina de mantenimiento?")) return;
         const id = e.currentTarget.dataset.id;
-        await fetch(`/api/planes/${id}`, { method: "DELETE" });
-        location.reload();
+        try {
+          const res = await fetch(`/api/planes/${id}`, { method: "DELETE" });
+          if (!res.ok) return avisoRutina(res, "No se pudo eliminar la rutina.");
+          location.reload();
+        } catch {
+          alert("No se pudo eliminar la rutina.");
+        }
       });
     });
 
@@ -1859,76 +2342,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       });
     });
 
-    // ─── Documentos del equipo ──────────────────────────────────────────────
-    $("docUploadBtn")?.addEventListener("click", () => $("docForm")?.classList.toggle("hidden"));
-    $("docCancel")?.addEventListener("click", () => $("docForm")?.classList.add("hidden"));
-    $("docSave")?.addEventListener("click", async () => {
-      const msg = $("docMsg");
-      const fileEl = $("docFile");
-      const setMsg = (t, ok) => { msg.textContent = t; msg.className = `mt-2 text-sm ${ok ? "text-emerald-600" : "text-red-600"}`; msg.classList.remove("hidden"); };
-      if (!fileEl?.files?.length) { setMsg("Selecciona un archivo.", false); return; }
-      const fd = new FormData();
-      fd.append("file", fileEl.files[0]);
-      fd.append("categoria", $("docCategoria").value);
-      const res = await fetch(`/api/activos/${activoId}/documentos`, { method: "POST", body: fd });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); setMsg("Error: " + (typeof j.error === "string" ? j.error : "no se pudo subir"), false); return; }
-      location.reload();
-    });
-    document.querySelectorAll(".doc-del").forEach((b) => {
-      b.addEventListener("click", async (e) => {
-        if (!confirm("¿Eliminar este documento?")) return;
-        const docId = e.currentTarget.dataset.id;
-        const res = await fetch(`/api/activos/${activoId}/documentos?documentoId=${docId}`, { method: "DELETE" });
-        if (res.ok) location.reload(); else alert("Error al eliminar");
-      });
-    });
-
-    // ─── Calibraciones ──────────────────────────────────────────────────────
-    $("calNewBtn")?.addEventListener("click", () => {
-      const f = $("calForm");
-      f?.classList.toggle("hidden");
-      if (f && !f.classList.contains("hidden")) {
-        const hoy = new Date(); hoy.setHours(hoy.getHours() - 6);
-        if (!$("c_fecha").value) $("c_fecha").value = hoy.toISOString().slice(0, 10);
-        if (!$("c_proxima").value) { const n = new Date(hoy); n.setFullYear(n.getFullYear() + 1); $("c_proxima").value = n.toISOString().slice(0, 10); }
-      }
-    });
-    $("c_cancel")?.addEventListener("click", () => $("calForm")?.classList.add("hidden"));
-    $("c_fecha")?.addEventListener("change", () => {
-      if (!$("c_fecha").value) return;
-      const d = new Date($("c_fecha").value); d.setFullYear(d.getFullYear() + 1);
-      $("c_proxima").value = d.toISOString().slice(0, 10);
-    });
-    $("c_save")?.addEventListener("click", async () => {
-      const msg = $("c_msg");
-      const setMsg = (t, ok) => { msg.textContent = t; msg.className = `mt-2 text-sm ${ok ? "text-emerald-600" : "text-red-600"}`; msg.classList.remove("hidden"); };
-      msg.classList.add("hidden");
-      if (!$("c_fecha").value) { setMsg("La fecha de calibración es obligatoria.", false); return; }
-      if ($("c_resultado").value === "no_conforme" && !$("c_notas").value.trim()) { setMsg("Un resultado No conforme requiere una nota.", false); return; }
-      const fd = new FormData();
-      fd.append("fechaCalibracion", $("c_fecha").value);
-      fd.append("proximaCalibracion", $("c_proxima").value || "");
-      fd.append("laboratorioId", $("c_lab").value || "");
-      fd.append("laboratorioExterno", $("c_labext").value || "");
-      fd.append("numeroCertificado", $("c_cert").value || "");
-      fd.append("patronReferencia", $("c_patron").value || "");
-      fd.append("resultado", $("c_resultado").value);
-      fd.append("incertidumbre", $("c_incert").value || "");
-      fd.append("realizadoPor", $("c_realizado").value || "");
-      fd.append("notas", $("c_notas").value || "");
-      if ($("c_file")?.files?.length) fd.append("file", $("c_file").files[0]);
-      const res = await fetch(`/api/activos/${activoId}/calibraciones`, { method: "POST", body: fd });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); setMsg("Error: " + (typeof j.error === "string" ? j.error : "no se pudo guardar"), false); return; }
-      location.reload();
-    });
-    document.querySelectorAll(".cal-del").forEach((b) => {
-      b.addEventListener("click", async (e) => {
-        if (!confirm("¿Eliminar esta calibración?")) return;
-        const calId = e.currentTarget.dataset.id;
-        const res = await fetch(`/api/calibraciones/${calId}`, { method: "DELETE" });
-        if (res.ok) location.reload(); else alert("Error al eliminar");
-      });
-    });
+    // Documentos (WP-D) y calibraciones tienen sus propios scripts: un error ahí no
+    // detiene los demás formularios de la ficha.
 
     // ─── Equipos de respaldo (contingencia) ─────────────────────────────────
     $("respaldoBtn")?.addEventListener("click", () => $("respaldoForm")?.classList.toggle("hidden"));
@@ -2070,12 +2485,301 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       });
     }
 
-    // Eliminar equipo (solo admin)
+    // Eliminar equipo (solo admin y solo sin historial; el servidor lo vuelve a revisar)
     document.getElementById("deleteBtn")?.addEventListener("click", async () => {
-      if (!confirm("¿Eliminar este equipo? Esta acción borra también sus planes de mantenimiento, OTs no se borran.")) return;
-      const res = await fetch(`/api/activos/${activoId}`, { method: "DELETE" });
-      if (res.ok) location.href = `/activos?area=${encodeURIComponent(new URL(location.href).searchParams.get("area") || "")}`;
-      else alert("Error al eliminar");
+      if (!confirm("¿Eliminar este equipo? Solo se elimina un equipo registrado por error y sin historial. Para retirarlo del servicio usa «Dar de baja».")) return;
+      try {
+        const res = await fetch(`/api/activos/${activoId}`, { method: "DELETE" });
+        if (res.ok) {
+          location.href = `/activos?area=${encodeURIComponent(new URL(location.href).searchParams.get("area") || "")}`;
+          return;
+        }
+        const j = await res.json().catch(() => ({}));
+        alert(typeof j.error === "string" ? j.error : "No se pudo eliminar el equipo.");
+      } catch {
+        alert("No hay conexión. Intenta de nuevo.");
+      }
     });
   </script>
+
+  {mostrarCal && registraBio && (
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ activoId: a.id, hoy, maxBytes: ARCHIVO_MAX_BYTES, calibraciones: calibracionesJs }) }}>
+      // Calibraciones (WP-B: K-B1 registrar, K-B2 corregir y eliminar, K-B3 adjuntar el certificado).
+      // Script aparte: si algo falla aquí, los demás formularios de la ficha siguen funcionando.
+      const { activoId, hoy, maxBytes, calibraciones } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+      (function () {
+        const $ = (id) => document.getElementById(id);
+        const avisar = (msg) => { if (window.showToast) window.showToast(msg, "error"); else alert(msg); };
+        const TIPOS = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+        const EXTENSIONES = ["pdf", "jpg", "jpeg", "png", "webp"];
+        // Mismo criterio que el servidor (que además revisa los primeros bytes).
+        function revisarArchivo(f) {
+          if (!f) return null;
+          const ext = String(f.name || "").split(".").pop().toLowerCase();
+          const tipoOk = TIPOS.includes(f.type) || ((!f.type || f.type === "application/octet-stream") && EXTENSIONES.includes(ext));
+          if (!tipoOk) return "El archivo debe ser PDF, JPG, PNG o WEBP.";
+          if (f.size === 0) return "El archivo está vacío.";
+          if (f.size > maxBytes) return "El archivo pesa más de 15 MB. Comprímelo o divídelo en partes.";
+          return null;
+        }
+        // Fechas como texto 'AAAA-MM-DD' (sin new Date): el 29/02 pasa al 28/02 si el año no es bisiesto.
+        const RE_FECHA = /^(\d{4})-(\d{2})-(\d{2})$/;
+        function masAnios(f, n) {
+          const m = RE_FECHA.exec(f || "");
+          if (!m) return "";
+          const anio = Number(m[1]) + n;
+          const bisiesto = (anio % 4 === 0 && anio % 100 !== 0) || anio % 400 === 0;
+          return `${anio}-${m[2]}-${m[2] === "02" && m[3] === "29" && !bisiesto ? "28" : m[3]}`;
+        }
+
+        // ── Adjuntar el certificado que falta (admin, jefe y técnico) ──
+        const inputAdj = $("c_adj_file");
+        let adjuntarId = null;
+        document.querySelectorAll(".cal-adj").forEach((b) => {
+          b.addEventListener("click", (e) => {
+            adjuntarId = Number(e.currentTarget.dataset.id);
+            if (inputAdj) { inputAdj.value = ""; inputAdj.click(); }
+          });
+        });
+        inputAdj?.addEventListener("change", async () => {
+          const f = inputAdj.files && inputAdj.files[0];
+          if (!f || !adjuntarId) return;
+          const error = revisarArchivo(f);
+          if (error) { avisar(error); return; }
+          const fd = new FormData();
+          fd.append("file", f);
+          try {
+            const res = await fetch(`/api/calibraciones/certificado/${adjuntarId}`, { method: "POST", body: fd });
+            const j = await res.json().catch(() => ({}));
+            if (!res.ok) { avisar(typeof j.error === "string" ? j.error : "No se pudo adjuntar el certificado."); return; }
+            location.reload();
+          } catch {
+            avisar("No hay conexión. Intenta de nuevo.");
+          }
+        });
+
+        // ── Eliminar con motivo (admin y jefe) ──
+        const modalDel = $("calDelModal");
+        let borrarId = null;
+        const cerrarDel = () => { modalDel?.classList.add("hidden"); modalDel?.classList.remove("flex"); };
+        document.querySelectorAll(".cal-del").forEach((b) => {
+          b.addEventListener("click", (e) => {
+            if (!modalDel) return;
+            borrarId = Number(e.currentTarget.dataset.id);
+            $("calDelTexto").textContent = `Calibración del ${e.currentTarget.dataset.fecha || ""}. Escribe por qué se elimina: el motivo y una copia de los datos quedan en la bitácora del equipo.`;
+            $("calDelMotivo").value = "";
+            $("calDelErr").classList.add("hidden");
+            $("calDelOk").disabled = false;
+            modalDel.classList.remove("hidden");
+            modalDel.classList.add("flex");
+          });
+        });
+        $("calDelCancel")?.addEventListener("click", cerrarDel);
+        modalDel?.addEventListener("click", (e) => { if (e.target === modalDel) cerrarDel(); });
+        $("calDelOk")?.addEventListener("click", async () => {
+          const err = $("calDelErr");
+          const motivo = $("calDelMotivo").value.trim();
+          const fallo = (t) => { err.textContent = t; err.classList.remove("hidden"); $("calDelOk").disabled = false; };
+          if (motivo.length < 10) return fallo("Escribe el motivo para eliminar la calibración (al menos 10 letras).");
+          $("calDelOk").disabled = true;
+          try {
+            const res = await fetch(`/api/calibraciones/${borrarId}`, {
+              method: "DELETE",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ motivo }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (!res.ok) return fallo(typeof j.error === "string" ? j.error : "No se pudo eliminar la calibración.");
+            location.reload();
+          } catch {
+            fallo("No hay conexión. Intenta de nuevo.");
+          }
+        });
+
+        // ── Registrar o corregir ──
+        const form = $("calForm");
+        if (!form) return;
+        let modo = { tipo: "nuevo", id: null, original: null };
+        let guardado = false;
+        const msg = $("c_msg");
+        const mostrarMsg = (t) => { msg.textContent = t; msg.className = "mt-2 text-sm text-red-600"; };
+        const ocultarMsg = () => { msg.textContent = ""; msg.className = "mt-2 hidden text-sm"; };
+        const TEXTOS = ["c_fecha", "c_proxima", "c_labext", "c_cert", "c_patron", "c_incert", "c_realizado", "c_notas", "c_motivo"];
+
+        function avisoLab() {
+          const sel = $("c_lab");
+          const p = $("c_lab_aviso");
+          if (!sel || !p) return;
+          const opt = sel.options[sel.selectedIndex];
+          let texto = "";
+          let ok = false;
+          if (sel.value) { texto = (opt && opt.dataset.aviso) || ""; ok = !!opt && opt.dataset.ok === "1"; }
+          else if ($("c_labext").value.trim()) texto = "Laboratorio escrito a mano: no se puede comprobar su acreditación.";
+          p.textContent = texto;
+          p.className = `mt-1 text-xs ${ok ? "text-emerald-700" : "text-amber-700"}${texto ? "" : " hidden"}`;
+        }
+        $("c_lab")?.addEventListener("change", avisoLab);
+        $("c_labext")?.addEventListener("input", avisoLab);
+
+        // Una corrección puede traer un laboratorio inactivo o un patrón que ya no está en la lista.
+        function asegurarOpcion(sel, valor, texto) {
+          if (!sel || valor === null || valor === undefined || valor === "") return;
+          const v = String(valor);
+          if (Array.from(sel.options).some((o) => o.value === v)) return;
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = texto;
+          o.dataset.temporal = "1";
+          sel.appendChild(o);
+        }
+        function limpiar() {
+          TEXTOS.forEach((id) => { const el = $(id); if (el) el.value = ""; });
+          form.querySelectorAll("option[data-temporal]").forEach((o) => o.remove());
+          $("c_lab").value = "";
+          $("c_patron_id").value = "";
+          $("c_resultado").value = "conforme";
+          if ($("c_file")) $("c_file").value = "";
+          $("c_avisos").classList.add("hidden");
+          $("c_save").disabled = false;
+          ocultarMsg();
+        }
+        function abrir() {
+          avisoLab();
+          form.classList.remove("hidden");
+          if (form.scrollIntoView) form.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        function abrirNuevo() {
+          limpiar();
+          modo = { tipo: "nuevo", id: null, original: null };
+          $("calTitulo").textContent = "Registrar calibración";
+          $("c_motivo_wrap").classList.add("hidden");
+          $("c_file_label").textContent = "Certificado (PDF o imagen JPG, PNG o WEBP; máx. 15 MB)";
+          $("c_save").textContent = "Guardar calibración";
+          $("c_fecha").value = hoy;
+          $("c_proxima").value = masAnios(hoy, 1);
+          abrir();
+        }
+        function abrirCorregir(id) {
+          const c = calibraciones.find((x) => x.id === id);
+          if (!c) return;
+          limpiar();
+          modo = { tipo: "corregir", id, original: c };
+          $("calTitulo").textContent = `Corregir calibración del ${c.fechaTexto}`;
+          $("c_motivo_wrap").classList.remove("hidden");
+          $("c_file_label").textContent = c.tieneCertificado
+            ? "Reemplazar el certificado (opcional; el anterior queda guardado)"
+            : "Adjuntar el certificado (opcional; PDF, JPG, PNG o WEBP; máx. 15 MB)";
+          $("c_save").textContent = "Guardar corrección";
+          $("c_fecha").value = c.fechaCalibracion || "";
+          $("c_proxima").value = c.proximaCalibracion || "";
+          asegurarOpcion($("c_lab"), c.laboratorioId, `${c.labNombre || "Laboratorio"} (ya no está activo)`);
+          $("c_lab").value = c.laboratorioId != null ? String(c.laboratorioId) : "";
+          $("c_labext").value = c.laboratorioExterno || "";
+          $("c_cert").value = c.numeroCertificado || "";
+          asegurarOpcion($("c_patron_id"), c.patronActivoId, `${c.patronEtiqueta || "Equipo patrón"} (ya no está en la lista)`);
+          $("c_patron_id").value = c.patronActivoId != null ? String(c.patronActivoId) : "";
+          $("c_patron").value = c.patronReferencia || "";
+          $("c_resultado").value = c.resultado || "conforme";
+          $("c_incert").value = c.incertidumbre || "";
+          $("c_realizado").value = c.realizadoPor || "";
+          $("c_notas").value = c.notas || "";
+          abrir();
+        }
+        $("calNewBtn")?.addEventListener("click", () => {
+          if (!form.classList.contains("hidden") && modo.tipo === "nuevo") { form.classList.add("hidden"); return; }
+          abrirNuevo();
+        });
+        document.querySelectorAll(".cal-fix").forEach((b) => {
+          b.addEventListener("click", (e) => abrirCorregir(Number(e.currentTarget.dataset.id)));
+        });
+        $("c_cancel")?.addEventListener("click", () => {
+          if (guardado) { location.reload(); return; }
+          form.classList.add("hidden");
+        });
+        $("c_avisos_ok")?.addEventListener("click", () => location.reload());
+        // Solo al registrar: la próxima pasa al mismo día del año siguiente.
+        $("c_fecha")?.addEventListener("change", () => {
+          if (modo.tipo !== "nuevo") return;
+          const p = masAnios($("c_fecha").value, 1);
+          if (p) $("c_proxima").value = p;
+        });
+
+        const valores = () => ({
+          fechaCalibracion: $("c_fecha").value,
+          proximaCalibracion: $("c_proxima").value,
+          laboratorioId: $("c_lab").value,
+          laboratorioExterno: $("c_labext").value.trim(),
+          numeroCertificado: $("c_cert").value.trim(),
+          patronActivoId: $("c_patron_id").value,
+          patronReferencia: $("c_patron").value.trim(),
+          resultado: $("c_resultado").value,
+          incertidumbre: $("c_incert").value.trim(),
+          realizadoPor: $("c_realizado").value.trim(),
+          notas: $("c_notas").value.trim(),
+        });
+        function validar(v) {
+          if (!v.fechaCalibracion) return "Escribe la fecha de calibración.";
+          if (v.fechaCalibracion > hoy) return "La fecha de calibración no puede ser posterior a hoy.";
+          if (v.resultado !== "no_conforme" && !v.proximaCalibracion) return "Escribe la fecha de la próxima calibración.";
+          if (v.proximaCalibracion && v.proximaCalibracion <= v.fechaCalibracion) return "La próxima calibración debe ser posterior a la fecha de calibración.";
+          if (v.proximaCalibracion && v.proximaCalibracion > masAnios(v.fechaCalibracion, 5)) return "La próxima calibración no puede pasar de 5 años después de la calibración.";
+          if (!v.laboratorioId && !v.laboratorioExterno) return "Elige el laboratorio de la lista o escribe su nombre.";
+          if ((v.resultado === "no_conforme" || v.resultado === "conforme_con_ajuste") && !v.notas) return "Describe en las notas el ajuste o la falla.";
+          const errArchivo = revisarArchivo($("c_file") && $("c_file").files ? $("c_file").files[0] : null);
+          if (errArchivo) return errArchivo;
+          if (modo.tipo === "corregir" && $("c_motivo").value.trim().length < 10) return "Escribe el motivo de la corrección (al menos 10 letras).";
+          return null;
+        }
+        const comoTexto = (x) => (x === null || x === undefined ? "" : String(x).trim());
+
+        $("c_save")?.addEventListener("click", async () => {
+          ocultarMsg();
+          const v = valores();
+          const error = validar(v);
+          if (error) return mostrarMsg(error);
+          const archivo = $("c_file") && $("c_file").files ? $("c_file").files[0] : null;
+          const fd = new FormData();
+          if (modo.tipo === "corregir") {
+            // Solo lo que cambia, más el motivo (la bitácora guarda el antes y el después).
+            let cambios = 0;
+            for (const [k, valor] of Object.entries(v)) {
+              if (valor !== comoTexto(modo.original[k])) { fd.append(k, valor); cambios++; }
+            }
+            if (!cambios && !archivo) return mostrarMsg("No cambiaste ningún dato.");
+            fd.append("motivo", $("c_motivo").value.trim());
+          } else {
+            for (const [k, valor] of Object.entries(v)) fd.append(k, valor);
+          }
+          if (archivo) fd.append("file", archivo);
+          const boton = $("c_save");
+          boton.disabled = true;
+          try {
+            const res = modo.tipo === "corregir"
+              ? await fetch(`/api/calibraciones/${modo.id}`, { method: "PATCH", body: fd })
+              : await fetch(`/api/activos/${activoId}/calibraciones`, { method: "POST", body: fd });
+            const j = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              boton.disabled = false;
+              return mostrarMsg(typeof j.error === "string" ? j.error : "No se pudo guardar la calibración.");
+            }
+            guardado = true;
+            const avisos = Array.isArray(j.advertencias) ? j.advertencias.filter((x) => typeof x === "string" && x) : [];
+            if (!avisos.length) { location.reload(); return; }
+            // Patrón vencido, laboratorio sin acreditación o falta el certificado: se avisa antes de recargar.
+            const ul = $("c_avisos_lista");
+            ul.textContent = "";
+            for (const t of avisos) {
+              const li = document.createElement("li");
+              li.textContent = t;
+              ul.appendChild(li);
+            }
+            $("c_avisos").classList.remove("hidden");
+          } catch {
+            boton.disabled = false;
+            mostrarMsg("No hay conexión. Intenta de nuevo.");
+          }
+        });
+      })();
+    </script>
+  )}
 </Layout>
