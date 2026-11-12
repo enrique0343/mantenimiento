@@ -119,16 +119,22 @@ try {
   const inicioMes = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1, 6, 0, 0)).toISOString();
   const orden = h.sqlite.prepare("INSERT INTO ordenes (id, titulo, estado, creado_por, created_at, cerrado_en) VALUES (?, ?, 'cerrada', 1, ?, ?)");
   for (let i = 0; i < 101; i++) orden.run(500 + i, `OT cerrada ${i}`, inicioMes, inicioMes);
+  // created_at como lo guarda SQLite ('AAAA-MM-DD HH:MM:SS', UTC): una orden del día 1 a
+  // mediodía es del mes (antes la comparación con el ISO con «T» la dejaba fuera) y una
+  // de las 05:00 UTC del día 1 es todavía del mes anterior en El Salvador.
+  const dia1 = inicioMes.slice(0, 10);
   h.sqlite.exec(`
     INSERT INTO ordenes (id, titulo, estado, creado_por, created_at) VALUES (700, 'OT abierta', 'abierta', 1, '${inicioMes}');
+    INSERT INTO ordenes (id, titulo, estado, creado_por, created_at) VALUES (701, 'OT del día 1', 'cerrada', 1, '${dia1} 12:00:00');
+    INSERT INTO ordenes (id, titulo, estado, creado_por, created_at) VALUES (702, 'OT del mes anterior en SV', 'cerrada', 1, '${dia1} 05:00:00');
     INSERT INTO items (id, codigo, nombre) VALUES (1, 'REP-1', 'Sensor');
-    INSERT INTO orden_repuestos (orden_id, item_id, cantidad, precio_unitario) VALUES (550, 1, 2, 7.5), (700, 1, 1, 100);
+    INSERT INTO orden_repuestos (orden_id, item_id, cantidad, precio_unitario) VALUES (550, 1, 2, 7.5), (700, 1, 1, 100), (701, 1, 1, 4.25), (702, 1, 1, 1000);
   `);
   const antes = enviados.length;
   r = await D.enviarDigestDiario(ctxD1, { force: true });
   es(r.enviados, 1, 'el resumen sale con 101 órdenes cerradas en el mes (el admin)');
   const resumen = enviados.slice(antes).find((c) => c.tipo === 'digest_diario')?.html ?? '';
-  si(resumen.includes('Repuestos: <strong>$15.00</strong>'), 'repuestos del mes: solo las órdenes cerradas, sin lista de ids');
+  si(resumen.includes('Repuestos: <strong>$19.25</strong>'), 'repuestos del mes: las cerradas del mes (también la del día 1), sin lista de ids');
   si(resumen.includes('Equipo biomédico: vencimientos'), 'y lleva la sección de vencimientos biomédicos');
   es(h.queries.filter((q) => q.columns.length > 100).length, 0, 'ninguna consulta pasa de 100 columnas');
 } finally {
