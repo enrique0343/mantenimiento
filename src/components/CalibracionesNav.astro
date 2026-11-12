@@ -1,0 +1,29 @@
+---
+// Pestañas de Calibraciones (fase 59, WP-B). No se imprimen. Conservan el área
+// (?area=biomedico) para que el encabezado del área no desaparezca al cambiar de pestaña.
+import { areaHref } from "@/lib/areas";
+import { puedeRegistrarBio } from "@/lib/biomedico";
+
+interface Props {
+  activo: "equipos" | "criticos" | "vinetas" | "patrones" | "laboratorios";
+  rol: string;
+  area?: string | null;
+}
+const { activo, rol, area = null } = Astro.props;
+const pestanas = [
+  { clave: "equipos", etiqueta: "Estado por equipo", href: "/calibraciones", ver: true },
+  { clave: "criticos", etiqueta: "Equipos críticos", href: "/calibraciones?criticos=1", ver: true },
+  { clave: "vinetas", etiqueta: "Viñetas", href: "/calibraciones/vinetas", ver: puedeRegistrarBio(rol) },
+  { clave: "patrones", etiqueta: "Equipos patrón", href: "/calibraciones/patrones", ver: true },
+  { clave: "laboratorios", etiqueta: "Laboratorios", href: "/calibraciones/laboratorios", ver: true },
+].filter((p) => p.ver);
+---
+<nav class="no-print flex flex-wrap gap-2" aria-label="Secciones de Calibraciones">
+  {pestanas.map((p) => (
+    <a
+      href={areaHref(p.href, area)}
+      aria-current={p.clave === activo ? "page" : undefined}
+      class:list={["rounded-lg border px-3 py-2 text-sm", p.clave === activo ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}
+    >{p.etiqueta}</a>
+  ))}
+</nav>

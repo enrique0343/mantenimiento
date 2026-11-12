@@ -1,0 +1,93 @@
+---
+// Laboratorios de calibración (fase 59, WP-B · requisito 8): acreditación de cada
+// laboratorio y su vigencia, con aviso a 60 días. Se edita en Proveedores (admin y jefe).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import CalibracionesNav from "@/components/CalibracionesNav.astro";
+import { getDb } from "@/lib/db";
+import { parseArea } from "@/lib/areas";
+import { ESTADO_ACREDITACION_COLOR, ESTADO_ACREDITACION_LABEL, fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, textoVence } from "@/lib/biomedico";
+import { cargarLaboratorios } from "@/lib/metrologia-db";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const puedeGestionar = puedeGestionarBio(user.rol);
+const hoy = hoySV();
+const labs = await cargarLaboratorios(getDb(Astro), hoy);
+const area = parseArea(Astro.url.searchParams.get("area"));
+const avisos = labs.filter((l) => l.activo && (l.estado === "vencida" || l.estado === "por_vencer"));
+---
+
+<Layout title="Laboratorios de calibración">
+  <div class="no-print">
+    <CalibracionesNav activo="laboratorios" rol={user.rol} area={area} />
+    <div class="doc-barra mt-4">
+      <div>
+        <h1 class="text-2xl font-bold">Laboratorios de calibración</h1>
+        <p class="text-sm text-slate-500">Acreditación de cada laboratorio y su vigencia. Se edita en Proveedores (jefe o administrador).</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary" href="/api/calibraciones/exportar?vista=laboratorios">Descargar CSV</a>
+        <button type="button" class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+      </div>
+    </div>
+    {avisos.length > 0 && (
+      <ul class="mt-4 space-y-2">
+        {avisos.map((l) => (
+          <li class:list={["card border-l-4 px-4 py-2 text-sm", l.estado === "vencida" ? "border-red-500 text-red-700" : "border-amber-500 text-amber-700"]}>
+            {l.estado === "vencida"
+              ? `La acreditación de ${l.nombre} venció el ${fechaCorta(l.acreditacionVigencia)}.`
+              : `La acreditación de ${l.nombre} vence el ${fechaCorta(l.acreditacionVigencia)} (${textoVence(l.dias)}).`}
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+
+  <article class="print-doc doc-hoja doc-ancha mt-4">
+    <DocCabecera titulo="Laboratorios de calibración y su acreditación" subtitulo="Laboratorios acreditados o citados en calibraciones" fecha={hoy} />
+    <section class="doc-seccion">
+      {labs.length === 0 ? <p class="doc-texto">No hay laboratorios. Marca un proveedor como laboratorio acreditado en Proveedores.</p> : (
+        <div class="overflow-x-auto">
+          <table class="doc-tabla">
+            <thead>
+              <tr>
+                <th style="min-width:150px">Laboratorio</th><th>Órgano</th><th>N.º de acreditación</th><th style="min-width:160px">Alcance</th>
+                <th class="c">Vigencia</th><th>Estado</th><th>Certificado</th><th>Calibraciones</th>
+                {puedeGestionar && <th class="no-print">Acción</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {labs.map((l) => (
+                <tr>
+                  <td>
+                    {l.nombre}
+                    {!l.activo && <span class="badge ml-1 bg-slate-100 text-slate-500 text-[10px]">Inactivo</span>}
+                  </td>
+                  <td>{l.acreditacionOrgano ?? "—"}</td>
+                  <td>{l.acreditacionNumero ?? "—"}</td>
+                  <td>{l.acreditacionAlcance ?? "—"}</td>
+                  <td class="c tn">{fechaCorta(l.acreditacionVigencia)}</td>
+                  <td><span class:list={["badge text-[10px]", ESTADO_ACREDITACION_COLOR[l.estado]]}>{ESTADO_ACREDITACION_LABEL[l.estado]}</span></td>
+                  <td>
+                    {!l.esLaboratorioAcreditado ? "—" : l.tieneCertificado
+                      ? <a href={`/api/proveedores/${l.id}/acreditacion`} target="_blank" rel="noopener">Ver</a>
+                      : <span class="text-[11px] font-semibold text-amber-700">Falta</span>}
+                  </td>
+                  <td>{l.calibraciones}{l.ultimaCalibracion ? ` · última ${fechaCorta(l.ultimaCalibracion)}` : ""}</td>
+                  {puedeGestionar && (
+                    <td class="no-print"><a class="text-xs" href={`/proveedores?lab=1&editar=${l.id}`}>Editar</a></td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+    <p class="doc-nota">Corte: {fechaCorta(hoy)}. «Acreditación por vencer» = vence en 60 días o menos. Cada calibración guarda la acreditación que tenía el laboratorio en su fecha.</p>
+    <DocFolio codigo="Laboratorios de calibración" />
+  </article>
+</Layout>

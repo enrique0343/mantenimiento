@@ -1,39 +1,38 @@
+// Proveedores. GET: quien ve lo biomédico (los laboratorios de calibración salen de aquí).
+// POST: admin y jefe, con la acreditación completa si es laboratorio acreditado.
 import type { APIRoute } from "astro";
-import { z } from "zod";
 import { desc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { proveedores } from "@/lib/schema";
-import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+import { ROLES_BIO_GESTIONAR, ROLES_BIO_VER } from "@/lib/biomedico";
+import { leerDatosProveedor, validarAcreditacion, type DatosProveedor } from "@/lib/metrologia";
+import { errorJson, exigirRol } from "@/lib/metrologia-db";
 
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx);
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_VER);
   if (!user) return response;
-  const db = getDb(ctx);
-  const rows = await db.select().from(proveedores).orderBy(desc(proveedores.id));
+  const rows = await getDb(ctx).select().from(proveedores).orderBy(desc(proveedores.id));
   return Response.json({ proveedores: rows });
 };
 
-const createSchema = z.object({
-  nombre: z.string().min(1),
-  nit: z.string().nullable().optional(),
-  contacto: z.string().nullable().optional(),
-  telefono: z.string().nullable().optional(),
-  email: z.string().email().nullable().optional(),
-  notas: z.string().nullable().optional(),
-  esLaboratorioAcreditado: z.boolean().optional(),
-  acreditacionOrgano: z.string().nullable().optional(),
-  acreditacionVigencia: z.string().nullable().optional(),
-});
-
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_GESTIONAR, "Solo el jefe o el administrador registran proveedores.");
   if (!user) return response;
   const body = await ctx.request.json().catch(() => null);
-  const parsed = createSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
-  const db = getDb(ctx);
-  const [row] = await db.insert(proveedores).values(parsed.data).returning();
+  if (!body || typeof body !== "object" || Array.isArray(body)) return errorJson("Datos no válidos.", 400);
+  const leido = leerDatosProveedor(body as Record<string, unknown>, false);
+  if (!leido.ok) return errorJson(leido.error, 400);
+  const datos = { esLaboratorioAcreditado: false, ...leido.datos } as Omit<DatosProveedor, "activo"> & { activo?: boolean };
+  const error = validarAcreditacion(datos);
+  if (error) return errorJson(error, 400);
+
+  const [row] = await getDb(ctx).insert(proveedores).values(datos).returning();
+  await logAudit(ctx, {
+    entidad: "proveedor", entidadId: row.id, accion: "create",
+    resumen: `Proveedor creado: ${row.nombre}${row.esLaboratorioAcreditado ? " (laboratorio acreditado)" : ""}`,
+  });
   return Response.json({ proveedor: row }, { status: 201 });
 };

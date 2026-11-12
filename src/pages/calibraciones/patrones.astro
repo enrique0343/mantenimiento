@@ -1,0 +1,175 @@
+---
+// Equipos patrón (fase 59, WP-B · requisito 7): instrumentos con los que se calibran o
+// verifican los equipos, con su propia calibración. Ver: admin, jefe, técnico y
+// visualizador. Marcar o quitar la marca: admin y jefe.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import CalibracionesNav from "@/components/CalibracionesNav.astro";
+import { and, asc, eq, ne } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import { parseArea } from "@/lib/areas";
+import { ESTADO_CALIBRACION_COLOR, ESTADO_CALIBRACION_LABEL, fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, textoVence } from "@/lib/biomedico";
+import { colorLabAcreditado, etiquetaLabAcreditado } from "@/lib/metrologia";
+import { listarPatrones } from "@/lib/metrologia-db";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const puedeGestionar = puedeGestionarBio(user.rol);
+const hoy = hoySV();
+const db = getDb(Astro);
+const [patrones, candidatos] = await Promise.all([
+  listarPatrones(db, hoy),
+  puedeGestionar
+    ? db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo, serial: activos.serial })
+        .from(activos).where(and(ne(activos.estado, "baja"), eq(activos.esPatron, false))).orderBy(asc(activos.codigo))
+    : Promise.resolve([]),
+]);
+const area = parseArea(Astro.url.searchParams.get("area"));
+const conDias = new Set(["vigente", "por_vencer", "vencida"]);
+const marcaModelo = (p: { marca: string | null; modelo: string | null }) => [p.marca, p.modelo].filter(Boolean).join(" ");
+---
+
+<Layout title="Equipos patrón">
+  <div class="no-print">
+    <CalibracionesNav activo="patrones" rol={user.rol} area={area} />
+    <div class="doc-barra mt-4">
+      <div>
+        <h1 class="text-2xl font-bold">Equipos patrón</h1>
+        <p class="max-w-3xl text-sm text-slate-500">Instrumentos de medición y prueba (analizadores, simuladores, multímetros, termómetros patrón) con los que se calibran o verifican los equipos. Un patrón está vigente si su última calibración es conforme, tiene certificado y su próxima fecha no ha pasado.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary" href="/api/calibraciones/exportar?vista=patrones">Descargar CSV</a>
+        <button type="button" class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+      </div>
+    </div>
+
+    {puedeGestionar && (
+      <div class="card mt-4 p-4">
+        <h2 class="font-semibold">Marcar un equipo como patrón</h2>
+        <div class="mt-2 flex flex-wrap items-end gap-2">
+          <div class="min-w-[16rem] flex-1">
+            <label class="label" for="pt_codigo">Código del equipo</label>
+            <input class="input" id="pt_codigo" list="dlCandidatos" autocomplete="off" placeholder="Escribe el código o el nombre" />
+            <datalist id="dlCandidatos">
+              {candidatos.map((c) => (
+                <option value={c.codigo} data-id={c.id}>{[c.nombre, marcaModelo(c), c.serial ? `S/N ${c.serial}` : ""].filter(Boolean).join(" · ")}</option>
+              ))}
+            </datalist>
+          </div>
+          <button type="button" class="btn-primary" id="pt_marcar">Marcar como patrón</button>
+        </div>
+        <p id="pt_error" class="mt-2 hidden text-sm text-red-700" role="alert"></p>
+        <p class="mt-2 text-xs text-slate-500">¿No está registrado? Regístralo en Equipo general → + Registrar y vuelve aquí.</p>
+      </div>
+    )}
+  </div>
+
+  <article class="print-doc doc-hoja doc-ancha mt-4">
+    <DocCabecera titulo="Equipos patrón y su calibración" subtitulo="Instrumentos de medición y prueba" fecha={hoy} />
+    <section class="doc-seccion">
+      {patrones.length === 0 ? <p class="doc-texto">No hay equipos marcados como patrón.</p> : (
+        <div class="overflow-x-auto">
+          <table class="doc-tabla">
+            <thead>
+              <tr>
+                <th>Código</th><th style="min-width:150px">Instrumento</th><th>Marca</th><th>Modelo</th><th>Serie</th>
+                <th style="min-width:120px">Sede · ubicación</th><th class="c">Última</th><th class="c">Próxima</th><th>N.º de certificado</th>
+                <th style="min-width:120px">Laboratorio</th><th>Estado</th><th class="n">Usado en</th>
+                {puedeGestionar && <th class="no-print">Acción</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {patrones.map((p) => (
+                <tr>
+                  <td class="tn">{p.codigo}</td>
+                  <td><a href={`/activos/${p.activoId}#calibraciones`}>{p.nombre}</a></td>
+                  <td>{p.marca ?? "—"}</td>
+                  <td>{p.modelo ?? "—"}</td>
+                  <td>{p.serial ?? "—"}</td>
+                  <td>{[p.sede, p.ubicacion].filter(Boolean).join(" · ") || "—"}</td>
+                  <td class="c tn">{fechaCorta(p.ultima)}</td>
+                  <td class="c tn">{fechaCorta(p.proxima)}</td>
+                  <td>
+                    {p.cal ? (
+                      p.cal.tieneArchivo
+                        ? <a href={`/api/calibraciones/certificado/${p.cal.id}`} target="_blank" rel="noopener">{p.cal.numeroCertificado ?? "Ver"}</a>
+                        : <span>{p.cal.numeroCertificado && <span class="block">{p.cal.numeroCertificado}</span>}<span class="text-[11px] font-semibold text-orange-700">Sin archivo</span></span>
+                    ) : "—"}
+                  </td>
+                  <td>
+                    {p.cal ? (
+                      <span>
+                        <span class="block">{p.cal.laboratorio ?? "—"}</span>
+                        <span class:list={["badge text-[10px]", colorLabAcreditado(p.cal.labAcreditado)]} title={p.cal.labAcreditacionRef ?? undefined}>{etiquetaLabAcreditado(p.cal.labAcreditado)}</span>
+                      </span>
+                    ) : "—"}
+                  </td>
+                  <td>
+                    <span class:list={["badge text-[10px]", ESTADO_CALIBRACION_COLOR[p.estado]]}>{ESTADO_CALIBRACION_LABEL[p.estado]}</span>
+                    {conDias.has(p.estado) && p.dias !== null && <span class="doc-nota-celda">{textoVence(p.dias)}</span>}
+                  </td>
+                  <td class="n">{p.usos}</td>
+                  {puedeGestionar && (
+                    <td class="no-print">
+                      <button type="button" class="text-xs text-red-700 hover:underline" data-quitar data-id={p.activoId} data-codigo={p.codigo}>Quitar marca</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+    <p class="doc-nota">Corte: {fechaCorta(hoy)}. «Usado en» = calibraciones registradas con ese patrón. No incluye equipos dados de baja.</p>
+    <DocFolio codigo="Equipos patrón" />
+  </article>
+</Layout>
+
+<script>
+  async function marcar(id: string, esPatron: boolean): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/calibraciones/equipo/${encodeURIComponent(id)}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ esPatron }),
+      });
+      if (res.ok) return null;
+      const j = await res.json().catch(() => ({}));
+      return typeof j.error === "string" ? j.error : "No se pudo guardar. Vuelve a intentarlo.";
+    } catch {
+      return "No hay conexión. Vuelve a intentarlo.";
+    }
+  }
+
+  const entrada = document.getElementById("pt_codigo") as HTMLInputElement | null;
+  const lista = document.getElementById("dlCandidatos") as HTMLDataListElement | null;
+  const errorEl = document.getElementById("pt_error");
+  const boton = document.getElementById("pt_marcar") as HTMLButtonElement | null;
+  const mostrar = (t: string) => { if (errorEl) { errorEl.textContent = t; errorEl.classList.toggle("hidden", !t); } };
+  boton?.addEventListener("click", async () => {
+    const codigo = (entrada?.value ?? "").trim().toUpperCase();
+    const opcion = Array.from(lista?.options ?? []).find((o) => o.value.toUpperCase() === codigo);
+    if (!codigo || !opcion?.dataset.id) { mostrar("Elige un equipo de la lista."); return; }
+    mostrar("");
+    boton.disabled = true;
+    const error = await marcar(opcion.dataset.id, true);
+    boton.disabled = false;
+    if (error) { mostrar(error); return; }
+    location.reload();
+  });
+  entrada?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); boton?.click(); } });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-quitar]").forEach((b) => b.addEventListener("click", async () => {
+    const titulo = "¿Quitar la marca de patrón?";
+    const texto = "Dejará de salir en esta lista y en el formulario de calibración. Las calibraciones que ya lo usaron conservan el enlace.";
+    const ok = window.confirmAction ? await window.confirmAction(titulo, texto) : confirm(`${titulo}\n${texto}`);
+    if (!ok) return;
+    b.disabled = true;
+    const error = await marcar(b.dataset.id ?? "", false);
+    b.disabled = false;
+    if (error) { window.showToast ? window.showToast(error, "error") : alert(error); return; }
+    location.reload();
+  }));
+</script>
