@@ -47,7 +47,7 @@ const avisos = labs.filter((l) => l.activo && (l.estado === "vencida" || l.estad
   </div>
 
   <article class="print-doc doc-hoja doc-ancha mt-4">
-    <DocCabecera titulo="Laboratorios de calibración y su acreditación" subtitulo="Laboratorios acreditados o citados en calibraciones" fecha={hoy} />
+    <DocCabecera soloImpresion titulo="Laboratorios de calibración y su acreditación" subtitulo="Laboratorios acreditados o citados en calibraciones" fecha={hoy} />
     <section class="doc-seccion">
       {labs.length === 0 ? <p class="doc-texto">No hay laboratorios. Marca un proveedor como laboratorio acreditado en Proveedores.</p> : (
         <div class="overflow-x-auto">
@@ -88,6 +88,6 @@ const avisos = labs.filter((l) => l.activo && (l.estado === "vencida" || l.estad
       )}
     </section>
     <p class="doc-nota">Corte: {fechaCorta(hoy)}. «Acreditación por vencer» = vence en 60 días o menos. Cada calibración guarda la acreditación que tenía el laboratorio en su fecha.</p>
-    <DocFolio codigo="Laboratorios de calibración" />
+    <DocFolio soloImpresion codigo="Laboratorios de calibración" />
   </article>
 </Layout>

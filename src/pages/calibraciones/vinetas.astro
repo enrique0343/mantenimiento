@@ -10,7 +10,10 @@ import { getDb } from "@/lib/db";
 import { sucursales } from "@/lib/schema";
 import { ESTADO_CALIBRACION_LABEL, estaAlDia, fechaCorta, hoySV, normalizarTexto, puedeRegistrarBio, puedeVerBio } from "@/lib/biomedico";
 import { RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
-import { AREAS_CAL, esResultadoCal, idLimpio, leerFiltrosCal, paginarVinetas, pasaFiltrosCal, tituloVineta, type FilaCal } from "@/lib/metrologia";
+import {
+  AREAS_CAL, esResultadoCal, idLimpio, leerFiltrosCal, opcionesUbicacionVinetas, paginarVinetas, pasaFiltrosCal, tituloVineta,
+  ubicacionVinetas, type FilaCal,
+} from "@/lib/metrologia";
 import { cargarFilasCal } from "@/lib/metrologia-db";
 export const prerender = false;
 
@@ -36,7 +39,7 @@ const porIds = ids.length > 0;
 const filtros = { ...leerFiltrosCal(q), estado: null };
 const estadoTxt = q.get("estado") ?? "";
 const estado = ESTADOS_VINETA.some((e) => e.valor === estadoTxt) ? estadoTxt : "al_dia";
-const ubicacion = idLimpio(q.get("ubicacion"));
+const ubicacionPedida = idLimpio(q.get("ubicacion"));
 const codigo = (q.get("codigo") ?? "").trim();
 const inicioNum = Number(q.get("inicio") ?? "1");
 const inicio = Number.isInteger(inicioNum) && inicioNum >= 1 && inicioNum <= POR_HOJA ? inicioNum : 1;
@@ -48,6 +51,10 @@ const [todas, sedes] = await Promise.all([
 ]);
 // Los equipos sin calibración registrada no tienen viñeta; los «No requiere», tampoco.
 const conVineta = todas.filter((f) => f.estado !== "sin_calibracion" && f.estado !== "no_aplica");
+// Ubicaciones con equipos con viñeta (de la sede elegida, si hay una). Al cambiar de sede el
+// formulario reenvía la ubicación anterior: si es de otra sede, no filtra.
+const ubicaciones = opcionesUbicacionVinetas(conVineta, filtros.sede);
+const ubicacion = ubicacionVinetas(ubicaciones, ubicacionPedida);
 const pasaEstado = (f: FilaCal) => estado === "todas" || (estado === "al_dia" ? estaAlDia(f.estado) : f.estado === estado);
 const idsElegidos = new Set(ids);
 const elegidas = porIds
@@ -60,12 +67,6 @@ const comparar = (a: string | null, b: string | null) => (a === b ? 0 : a === nu
 const filas = [...elegidas].sort((a, b) => comparar(a.sede, b.sede) || comparar(a.ubicacion, b.ubicacion) || a.codigo.localeCompare(b.codigo, "es", { numeric: true }));
 const hojas = paginarVinetas(filas, POR_HOJA, inicio - 1);
 const sinVineta = porIds ? ids.length - filas.length : 0;
-
-// Ubicaciones con equipos con viñeta (de la sede elegida, si hay una).
-const ubicaciones = [...new Map(
-  conVineta.filter((f) => f.ubicacionId !== null && (filtros.sede === null || f.sedeId === filtros.sede))
-    .map((f) => [f.ubicacionId as number, filtros.sede === null && f.sede ? `${f.ubicacion} · ${f.sede}` : f.ubicacion ?? `Ubicación ${f.ubicacionId}`]),
-).entries()].sort((a, b) => a[1].localeCompare(b[1], "es", { numeric: true }));
 const sedesSelect = sedes.filter((s) => s.activa || s.id === filtros.sede);
 const resultadoTxt = (r: string | undefined) => (r && esResultadoCal(r) ? RESULTADO_CALIB_LABEL[r] : "");
 ---

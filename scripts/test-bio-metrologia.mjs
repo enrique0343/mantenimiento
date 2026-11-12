@@ -3,6 +3,7 @@
 // Proveedores contra una base con todas las migraciones reales (sin red, sin R2 real).
 // Lo de biomedico.ts (estado de calibración, patrón vigente, acreditación) lo prueba BASE.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 import { setupConjuntos } from './test-support/conjuntos-app.mjs';
 
@@ -184,6 +185,10 @@ es(prov({ nombre: 'X', acreditacionVigencia: '2027-13-01' }), { ok: false, error
 es(prov({ activo: false }, true), { ok: true, datos: { activo: false } }, 'parcial: solo activo');
 es(prov({ esLaboratorioAcreditado: 'tal vez' }, true), { ok: false, error: 'Datos no válidos.' }, 'booleano raro');
 es(prov({ nombre: '' }, true), { ok: false, error: 'Escribe el nombre del proveedor.' }, 'parcial no deja nombre vacío');
+// Revisión: el error concuerda con el campo («Las notas es muy largo» antes).
+es(prov({ nombre: 'X', notas: 'x'.repeat(2001) }), { ok: false, error: 'Las notas son muy largas (máx. 2000 caracteres).' }, 'notas largas: en plural');
+es(prov({ nombre: 'X', acreditacionAlcance: 'x'.repeat(501) }), { ok: false, error: 'El alcance es muy largo (máx. 500 caracteres).' }, 'alcance largo');
+es(prov({ telefono: '1'.repeat(61) }, true), { ok: false, error: 'El teléfono es muy largo (máx. 60 caracteres).' }, 'teléfono largo (parcial)');
 
 // ── 14. Viñetas ──────────────────────────────────────────────────────────────
 const items = Array.from({ length: 20 }, (_, i) => i + 1);
@@ -198,6 +203,29 @@ es(M.paginarVinetas(items, 18, -3).map((h) => h.length), [18, 2], 'saltar negati
 es(M.paginarVinetas([], 18, 5), [], 'sin viñetas no hay hojas');
 es(['vigente', 'por_vencer', 'vencida', 'no_conforme', 'sin_certificado', 'sin_calibracion', 'no_aplica'].map(M.tituloVineta),
   ['Calibrado', 'Calibrado', 'Calibración vencida', 'No conforme', 'Certificado pendiente', '', ''], 'título por estado');
+// Revisión: filtro «Ubicación» de las viñetas. Al cambiar de sede, el formulario reenvía la
+// ubicación anterior; si es de otra sede no debe dejar la hoja vacía con «Todas» a la vista.
+const filasUb = [
+  { ubicacionId: 1, ubicacion: 'UCI', sedeId: 1, sede: 'Central' },
+  { ubicacionId: 1, ubicacion: 'UCI', sedeId: 1, sede: 'Central' },
+  { ubicacionId: 3, ubicacion: 'Quirófano 2', sedeId: 1, sede: 'Central' },
+  { ubicacionId: 2, ubicacion: 'Emergencia', sedeId: 2, sede: 'Norte' },
+  { ubicacionId: null, ubicacion: 'Bodega (texto)', sedeId: null, sede: null },
+];
+es(M.opcionesUbicacionVinetas(filasUb, null), [[2, 'Emergencia · Norte'], [3, 'Quirófano 2 · Central'], [1, 'UCI · Central']], 'sin sede: todas las ubicaciones con su sede, por nombre');
+es(M.opcionesUbicacionVinetas(filasUb, 1), [[3, 'Quirófano 2'], [1, 'UCI']], 'con sede: solo las de esa sede');
+es(M.opcionesUbicacionVinetas([], 1), [], 'sin viñetas no hay ubicaciones');
+es(M.ubicacionVinetas(M.opcionesUbicacionVinetas(filasUb, 2), 1), null, 'la ubicación de la sede anterior ya no filtra');
+es(M.ubicacionVinetas(M.opcionesUbicacionVinetas(filasUb, 1), 1), 1, 'la ubicación de la sede elegida sí filtra');
+es(M.ubicacionVinetas(M.opcionesUbicacionVinetas(filasUb, null), 2), 2, 'sin sede, cualquier ubicación con viñeta');
+es(M.ubicacionVinetas(M.opcionesUbicacionVinetas(filasUb, null), null), null, 'sin ubicación pedida');
+
+// Revisión (§f.4): las páginas con encabezado propio en pantalla imprimen cabecera y folio
+// solo en papel (soloImpresion), como Cumplimiento.
+for (const pagina of ['src/pages/calibraciones.astro', 'src/pages/calibraciones/patrones.astro', 'src/pages/calibraciones/laboratorios.astro']) {
+  const fuente = readFileSync(pagina, 'utf8');
+  si(/<DocCabecera soloImpresion\b/.test(fuente) && /<DocFolio soloImpresion\b/.test(fuente), `${pagina}: cabecera y folio solo al imprimir`);
+}
 
 // ── Textos ───────────────────────────────────────────────────────────────────
 es([M.siNo(true), M.siNo(false), M.siNo(null), M.siNo(undefined), M.siNo(null, '')], ['Sí', 'No', 'No consta', 'No consta', ''], 'siNo');
@@ -398,6 +426,16 @@ try {
   r = await llamar(A.calId.PATCH, `/api/calibraciones/${cal1}`, { method: 'PATCH', rol: 'admin', id: cal1, form: multipart({ motivo: 'El certificado correcto es el PDF' }, PDF) });
   es(r.status, 200, 'PATCH multipart con archivo nuevo');
   si(objetos.has(claveAntes) && db.prepare('SELECT certificado_r2_key AS k FROM calibraciones WHERE id = ?').get(cal1).k !== claveAntes, 'el archivo reemplazado sigue en R2');
+
+  // Pedido de WP-C: la ficha corrige con multipart y solo las claves que cambian; una clave
+  // presente y vacía borra el dato (no es «no se mandó»).
+  r = await llamar(A.calId.PATCH, `/api/calibraciones/${cal1}`, { method: 'PATCH', rol: 'jefe', id: cal1, form: multipart({ laboratorioId: '', laboratorioExterno: 'Taller externo', patronActivoId: '', motivo: 'Laboratorio y patrón mal elegidos' }) });
+  es([r.status, r.body.calibracion.laboratorioId, r.body.calibracion.patronActivoId], [200, null, null], 'PATCH multipart: «» borra el laboratorio y el patrón de la lista');
+  es(una('SELECT laboratorio_id AS l, laboratorio_externo AS e, patron_activo_id AS p, lab_acreditado AS a, lab_acreditacion_ref AS r FROM calibraciones WHERE id = ?', cal1),
+    { l: null, e: 'Taller externo', p: null, a: null, r: null }, 'la copia de la acreditación pasa a «No consta»');
+  es(r.body.advertencias.slice(0, 2), ['Laboratorio escrito a mano: no se puede comprobar su acreditación.', 'No se indicó el patrón usado.'], 'avisos del laboratorio escrito y sin patrón');
+  r = await llamar(A.calId.PATCH, `/api/calibraciones/${cal1}`, { method: 'PATCH', rol: 'jefe', id: cal1, form: multipart({ laboratorioExterno: '', motivo: 'Quito también el laboratorio escrito' }) });
+  es([r.status, r.body.error], [400, MC.laboratorio], 'PATCH multipart: sin laboratorio de ningún tipo → 400');
 
   // Eliminar: solo jefe y administrador, con motivo; el archivo no se borra.
   r = await llamar(A.calId.DELETE, `/api/calibraciones/${cal1}`, { method: 'DELETE', rol: 'tecnico', id: cal1, data: { motivo: 'Registro duplicado' } });
