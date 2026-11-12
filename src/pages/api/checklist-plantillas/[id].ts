@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { exigirRol } from "@/lib/seguridad-electrica";
 import { logAudit, calcularDiff } from "@/lib/audit";
 import { editarPlantillaSchema, errorRangoDePasos, filasDeReemplazo, mensajeErrorPlantilla, tandasDeFilas, tieneVinculos } from "@/lib/plantillas-checklist";
+import { MENSAJE_PASOS_LIGADOS, ROLES_PLANTILLAS, claveNombre, mensajeNombreRepetido, plantillaConNombre } from "@/lib/plantillas-checklist-editor";
 
 export const prerender = false;
 
@@ -35,7 +36,7 @@ export const GET: APIRoute = async (ctx) => {
 // PATCH: nombre, descripción, activa y, si vienen, los pasos (se reemplazan todos
 // en un solo lote y conservan su lectura, unidad y rango). Admin y jefe.
 export const PATCH: APIRoute = async (ctx) => {
-  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, [...ROLES_PLANTILLAS]);
   if (!user) return response;
   const id = idDe(ctx.params.id);
   if (id === null) return NO_ENCONTRADA();
@@ -46,6 +47,14 @@ export const PATCH: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [antes] = await db.select().from(checklistPlantillas).where(eq(checklistPlantillas.id, id)).limit(1);
   if (!antes) return NO_ENCONTRADA();
+
+  // Un nombre por plantilla (sin contar tildes ni mayúsculas), como al crearla.
+  // Corregir una tilde o una mayúscula del propio nombre no choca con nadie.
+  if (parsed.data.nombre !== undefined && claveNombre(parsed.data.nombre) !== claveNombre(antes.nombre)) {
+    const todas = await db.select({ id: checklistPlantillas.id, nombre: checklistPlantillas.nombre }).from(checklistPlantillas);
+    const otra = plantillaConNombre(todas, parsed.data.nombre, id);
+    if (otra) return Response.json({ error: mensajeNombreRepetido(otra.nombre), id: otra.id }, { status: 409 });
+  }
 
   const data: { nombre?: string; descripcion?: string | null; activa?: boolean } = {};
   if (parsed.data.nombre !== undefined) data.nombre = parsed.data.nombre;
@@ -64,11 +73,7 @@ export const PATCH: APIRoute = async (ctx) => {
       .from(checklistPlantillaItems)
       .where(eq(checklistPlantillaItems.plantillaId, id))
       .orderBy(asc(checklistPlantillaItems.orden), asc(checklistPlantillaItems.id));
-    if (tieneVinculos(actuales)) {
-      return Response.json({
-        error: "Esta plantilla tiene pasos con vínculos (variable, procedimiento, equipo, ubicación o acción si no cumple). Para no perderlos, sus pasos no se reemplazan por esta vía.",
-      }, { status: 409 });
-    }
+    if (tieneVinculos(actuales)) return Response.json({ error: MENSAJE_PASOS_LIGADOS }, { status: 409 });
     const filas = filasDeReemplazo(parsed.data.items, actuales, id);
     // Lo que llega se completa con el paso guardado: el rango final también tiene que ser válido.
     const errorRango = errorRangoDePasos(filas);
@@ -110,7 +115,7 @@ export const PATCH: APIRoute = async (ctx) => {
 // DELETE: ya no borra. La plantilla queda inactiva (no se ofrece al crear rutinas
 // ni órdenes) y conserva sus pasos; se vuelve a activar con PATCH { activa: true }.
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await exigirRol(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, [...ROLES_PLANTILLAS]);
   if (!user) return response;
   const id = idDe(ctx.params.id);
   if (id === null) return NO_ENCONTRADA();
