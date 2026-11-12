@@ -152,13 +152,15 @@ try {
   assert.equal(current.disponibilidad.estado, 'disponible', 'A broken optional position does not block essential operation');
   assert.equal(one('SELECT rubro FROM activos WHERE id=4').rubro, 'equipo_general', 'Cross-area grouping preserves component area');
   for (const estado of ['averiado', 'mantenimiento', 'baja']) {
-    ok(await call(app.assets.PATCH, '/api/activos/2', { method: 'PATCH', id: 2, data: { estado } }));
+    // Fase 59: «baja» solo se pone y se quita desde la pantalla de baja; aquí, por SQL.
+    if (estado === 'baja') sqlite.prepare("UPDATE activos SET estado=? WHERE id=2").run(estado);
+    else ok(await call(app.assets.PATCH, '/api/activos/2', { method: 'PATCH', id: 2, data: { estado } }));
     current = await detail(id);
     assert.equal(current.disponibilidad.estado, 'no_disponible');
     assert(current.disponibilidad.motivos.length > 0);
   }
   assert.equal(one('SELECT estado FROM activos WHERE id=1').estado, 'operativo', 'An unavailable set cannot change other equipment states');
-  ok(await call(app.assets.PATCH, '/api/activos/2', { method: 'PATCH', id: 2, data: { estado: 'operativo' } }));
+  sqlite.prepare("UPDATE activos SET estado=? WHERE id=2").run('operativo');
   current = ok(await change(id, { accion: 'retirar', version: current.conjunto.version, puestoId: head.id, motivo: 'Retiro temporal para revisión' }));
   assert.equal(current.puestos.find((row) => row.id === head.id).componente, null);
   assert.equal(current.disponibilidad.estado, 'no_disponible', 'A vacant essential position prevents availability');

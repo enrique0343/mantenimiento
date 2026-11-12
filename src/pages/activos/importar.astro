@@ -1,96 +1,332 @@
 ---
+// Fase 59 · Carga masiva de equipos: plantilla, simulación fila por fila y
+// grabación por tandas de 200 filas. Admin y jefe.
 import Layout from "@/layouts/Layout.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
+import { columnasPlantilla, MAX_FILAS_IMPORTACION, TANDA_FILAS_IMPORTACION } from "@/lib/importar-equipos";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area"));
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin") return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
+if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/activos", area));
+
+const columnas = columnasPlantilla(area);
+const plantillaHref = areaHref("/api/admin/import-equipos?plantilla=1", area);
+const inventarioHref = areaHref("/activos", area);
 ---
 
-<Layout title="Importar inventario desde CSV">
-  <a href={areaHref("/activos", area)} class="text-sm text-slate-500 hover:underline">← Volver</a>
-  <h1 class="mt-2 text-2xl font-bold">Importar inventario desde CSV</h1>
-  <p class="text-sm text-slate-500">{area ? `Importando en ${AREAS[area].label}.` : "Importación de activos por área."} Podrás simular antes de ejecutar la importación.</p>
+<Layout title="Carga masiva de equipos">
+  <a href={inventarioHref} class="text-sm text-slate-500 hover:underline">← Volver al inventario</a>
+  <h1 class="mt-2 text-2xl font-bold">Carga masiva de equipos</h1>
+  <p class="text-sm text-slate-500">
+    {area ? `Inventario de ${AREAS[area].label.toLowerCase()}.` : "Todas las áreas."}
+    Primero simulas el archivo y ves qué pasa con cada fila; después lo grabas. Hasta {MAX_FILAS_IMPORTACION} filas por archivo.
+  </p>
 
-  <div class="card mt-4 p-5 text-sm">
-    <h2 class="font-semibold">Formato esperado</h2>
-    <p class="mt-1 text-slate-600">Encabezados (primera fila). Solo <code>codigo</code> y <code>nombre</code> son obligatorios:</p>
-    <pre class="mt-2 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200">codigo,nombre,rubro,criticidad,categoria,marca,modelo,serial,anio,estado,ubicacion_nombre,sucursal_nombre,descripcion</pre>
-
-    <ul class="mt-3 list-disc pl-5 text-xs text-slate-600 space-y-1">
-      <li><strong>rubro:</strong> <code>aires</code>, <code>infraestructura</code>, <code>equipo_general</code> o <code>biomedico</code>. {area ? "Si se omite se usa el área seleccionada. Las filas de otras áreas se rechazan." : "Si se omite se deriva del tipo: general o biomédico."}</li>
-      <li><strong>criticidad:</strong> <code>alta</code>, <code>media</code> o <code>baja</code> (predeterminado: media).</li>
-      <li><strong>Datos específicos:</strong> aires: <code>tipo_unidad,capacidad_btu_h,refrigerante</code>; infraestructura: <code>tipo_instalacion,sector</code>; equipos: <code>servicio</code>.</li>
-      <li><strong>tipo:</strong> <code>general</code> o <code>biomedico</code> (opcional; se deriva del área)</li>
-      <li><strong>estado:</strong> <code>operativo</code>, <code>averiado</code>, <code>mantenimiento</code> o <code>baja</code> (default: operativo)</li>
-      <li><strong>ubicacion_nombre:</strong> debe coincidir exactamente con una ubicación existente (mayús/minús no importan)</li>
-      <li>Códigos duplicados se omiten automáticamente</li>
-    </ul>
-  </div>
-
-  <div class="card mt-4 p-5">
-    <h2 class="font-semibold mb-3">Subir archivo</h2>
-    <input id="file" data-area={area ?? ""} type="file" accept=".csv,text/csv" class="block w-full text-sm" />
-    <div class="mt-4 flex flex-wrap gap-2">
-      <button id="simBtn" class="btn-secondary text-sm" disabled>Simular (sin escribir DB)</button>
-      <button id="goBtn" class="btn-primary text-sm" disabled>Ejecutar importación</button>
+  <section class="card mt-4 p-5 text-sm">
+    <h2 class="font-semibold">1. Prepara el archivo</h2>
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      <a class="btn-secondary text-sm" href={plantillaHref} download>Descargar plantilla (CSV)</a>
+      <span class="text-xs text-slate-500">También sirve el CSV que descargas del inventario: corrígelo en Excel y cárgalo en «Actualizar».</span>
     </div>
-    <p id="msg" class="mt-3 hidden text-sm"></p>
-    <pre id="result" class="mt-4 hidden max-h-96 overflow-auto rounded bg-slate-900 p-3 font-mono text-xs text-emerald-200"></pre>
-  </div>
+    <details class="mt-3">
+      <summary class="cursor-pointer font-medium text-brand-700">Columnas ({columnas.length})</summary>
+      <div class="mt-2 overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 uppercase text-slate-500">
+            <tr><th class="px-2 py-1.5">Columna</th><th class="px-2 py-1.5">Qué poner</th><th class="px-2 py-1.5">Ejemplo</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {columnas.map((c) => (
+              <tr>
+                <td class="px-2 py-1.5 font-mono">{c.plantilla}{c.obligatoria && <span class="ml-1 font-sans text-red-600" title={`Obligatoria: ${c.obligatoria}`}>*</span>}</td>
+                <td class="px-2 py-1.5 text-slate-600">{c.ayuda}{c.obligatoria && <span class="text-red-600"> Obligatoria: {c.obligatoria.toLowerCase()}.</span>}</td>
+                <td class="px-2 py-1.5 font-mono text-slate-500">{c.ejemplo}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    <ul class="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">
+      <li>Fechas: DD/MM/AAAA o AAAA-MM-DD.</li>
+      <li>Si dos sedes tienen una ubicación con el mismo nombre, llena la columna sucursal.</li>
+      <li>El centro de costo debe existir en Administración → Centros de costo.</li>
+      <li>Las bajas no se cargan aquí: se registran en la ficha de cada equipo.</li>
+      <li>Las fechas de calibración no se cargan aquí: se registran en Calibraciones.</li>
+      <li>Si tus códigos o series empiezan con cero, al abrir el CSV en Excel marca esas columnas como Texto. Si tu Excel está en inglés, revisa que las fechas queden como DD/MM/AAAA.</li>
+    </ul>
+  </section>
+
+  <section class="card mt-4 p-5 text-sm">
+    <h2 class="font-semibold">2. ¿Qué quieres hacer?</h2>
+    <label class="mt-2 flex items-start gap-2">
+      <input type="radio" name="modo" value="crear" class="mt-1" checked />
+      <span><strong>Agregar equipos nuevos:</strong> si un código ya existe, la fila se informa y no se toca.</span>
+    </label>
+    <label class="mt-2 flex items-start gap-2">
+      <input type="radio" name="modo" value="actualizar" class="mt-1" />
+      <span><strong>Actualizar equipos existentes:</strong> busca cada equipo por su código y cambia solo las celdas con dato; una celda vacía no borra nada.</span>
+    </label>
+  </section>
+
+  <section class="card mt-4 p-5 text-sm">
+    <h2 class="font-semibold">3. Sube el archivo</h2>
+    <input id="file" type="file" accept=".csv,.txt,text/csv" class="mt-2 block w-full text-sm"
+      data-area={area ?? ""} data-tanda={TANDA_FILAS_IMPORTACION} data-inventario={inventarioHref} />
+    <p id="archivoInfo" class="mt-2 hidden text-slate-600"></p>
+    <div class="mt-4 flex flex-wrap gap-2">
+      <button id="simBtn" type="button" class="btn-secondary text-sm" disabled>Simular</button>
+      <button id="goBtn" type="button" class="btn-primary text-sm" disabled>Grabar</button>
+    </div>
+    <p class="mt-1 text-xs text-slate-500">«Grabar» se habilita después de simular el mismo archivo con la misma opción.</p>
+    <p id="msg" class="mt-3 hidden text-sm" role="status"></p>
+    <a id="verInventario" href={inventarioHref} class="mt-2 hidden text-sm font-medium text-brand-700 hover:underline">Ver inventario →</a>
+  </section>
+
+  <section id="resultado" class="card mt-4 hidden p-5 text-sm">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="font-semibold" id="resTitulo">Resultado de la simulación</h2>
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="resFiltro" class="input py-1 text-xs" aria-label="Filas a mostrar">
+          <option value="problemas" selected>Errores y avisos</option>
+          <option value="todas">Todas</option>
+        </select>
+        <button id="resCsv" type="button" class="btn-secondary text-xs">Descargar resultado (CSV)</button>
+      </div>
+    </div>
+    <div id="chips" class="mt-3 flex flex-wrap gap-2 text-xs"></div>
+    <ul id="notas" class="mt-2 hidden list-disc pl-5 text-xs text-amber-700"></ul>
+    <p id="ignoradas" class="mt-2 hidden text-xs text-slate-500"></p>
+    <div class="mt-3 max-h-[32rem] overflow-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="sticky top-0 bg-slate-50 uppercase text-slate-500">
+          <tr><th class="px-2 py-1.5">Fila</th><th class="px-2 py-1.5">Código</th><th class="px-2 py-1.5">Resultado</th><th class="px-2 py-1.5">Detalle</th></tr>
+        </thead>
+        <tbody id="resBody" class="divide-y divide-slate-100"></tbody>
+      </table>
+    </div>
+    <p id="resVacio" class="mt-2 hidden text-xs text-slate-500">No hay errores ni avisos. Elige «Todas» para ver cada fila.</p>
+  </section>
 
   <script>
+    import { hoySV } from "@/lib/biomedico";
+
+    type Accion = "crear" | "actualizar" | "sin_cambios" | "error";
+    type Fila = { fila: number; codigo: string; accion: Accion; detalle: string[]; avisos: string[] };
+    type Respuesta = {
+      filas: number; aInsertar: number; aActualizar: number; sinCambios: number; insertados: number; actualizados: number;
+      errores: unknown[]; avisos: unknown[]; resultados: Fila[]; columnasIgnoradas: string[]; notas?: string[];
+    };
+
     const file = document.getElementById("file") as HTMLInputElement;
     const simBtn = document.getElementById("simBtn") as HTMLButtonElement;
     const goBtn = document.getElementById("goBtn") as HTMLButtonElement;
     const msg = document.getElementById("msg") as HTMLElement;
-    const result = document.getElementById("result") as HTMLElement;
+    const archivoInfo = document.getElementById("archivoInfo") as HTMLElement;
+    const verInventario = document.getElementById("verInventario") as HTMLElement;
+    const resultado = document.getElementById("resultado") as HTMLElement;
+    const resTitulo = document.getElementById("resTitulo") as HTMLElement;
+    const resBody = document.getElementById("resBody") as HTMLElement;
+    const resVacio = document.getElementById("resVacio") as HTMLElement;
+    const resFiltro = document.getElementById("resFiltro") as HTMLSelectElement;
+    const chips = document.getElementById("chips") as HTMLElement;
+    const notas = document.getElementById("notas") as HTMLElement;
+    const ignoradas = document.getElementById("ignoradas") as HTMLElement;
+    const area = file.dataset.area || null;
+    const tanda = Number(file.dataset.tanda) || 200;
 
     let csvText = "";
-    file.addEventListener("change", async () => {
-      if (!file.files?.[0]) return;
-      csvText = await file.files[0].text();
-      simBtn.disabled = false;
-      goBtn.disabled = false;
-      msg.textContent = `Archivo cargado: ${file.files[0].name} (${(csvText.length / 1024).toFixed(1)} KB)`;
-      msg.className = "text-sm text-slate-600";
-      msg.classList.remove("hidden");
-    });
+    let nombreArchivo = "";
+    let simulado: { clave: string; datos: Respuesta } | null = null;
+    let filasMostradas: Fila[] = [];
+    let grabadas = false;
 
-    async function enviar(dryRun: boolean) {
-      msg.textContent = dryRun ? "Simulando..." : "Importando...";
-      msg.className = "text-sm text-blue-600";
+    const modo = () => (document.querySelector<HTMLInputElement>('input[name="modo"]:checked')?.value ?? "crear") as "crear" | "actualizar";
+    const claveActual = () => `${nombreArchivo}|${csvText.length}|${modo()}`;
+
+    function aviso(texto: string, tono: "info" | "ok" | "error" = "info") {
+      msg.textContent = texto;
+      msg.className = `mt-3 text-sm ${tono === "ok" ? "text-emerald-700" : tono === "error" ? "text-red-600" : "text-slate-600"}`;
       msg.classList.remove("hidden");
-      result.classList.add("hidden");
+    }
+
+    /** Filas con algo escrito (sin el encabezado), respetando comillas. */
+    function contarFilas(texto: string): number {
+      let filas = 0, conDato = false, enComillas = false;
+      for (const c of texto.replace(/^﻿/, "")) {
+        if (c === '"') { enComillas = !enComillas; conDato = true; }
+        else if ((c === "\n" || c === "\r") && !enComillas) { if (conDato) filas++; conDato = false; }
+        else if (!enComillas && (c === "," || c === ";" || c === "\t" || c === " ")) continue;
+        else conDato = true;
+      }
+      if (conDato) filas++;
+      return Math.max(0, filas - 1);
+    }
+
+    function actualizarBotones() {
+      const listo = !!csvText;
+      simBtn.disabled = !listo;
+      const mismo = !!simulado && simulado.clave === claveActual() && !grabadas;
+      const aGrabar = mismo ? simulado!.datos.aInsertar + simulado!.datos.aActualizar : 0;
+      goBtn.disabled = !mismo || aGrabar === 0;
+      goBtn.textContent = mismo ? `Grabar ${aGrabar} ${aGrabar === 1 ? "fila" : "filas"}` : "Grabar";
+    }
+
+    file.addEventListener("change", async () => {
+      const f = file.files?.[0];
+      simulado = null; grabadas = false; csvText = ""; nombreArchivo = "";
+      resultado.classList.add("hidden"); verInventario.classList.add("hidden"); msg.classList.add("hidden");
+      if (!f) { archivoInfo.classList.add("hidden"); actualizarBotones(); return; }
+      const bytes = await f.arrayBuffer();
+      // El «CSV» de Excel en Windows suele venir en Windows-1252, no en UTF-8.
+      try { csvText = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      catch { csvText = new TextDecoder("windows-1252").decode(bytes); }
+      nombreArchivo = f.name;
+      archivoInfo.textContent = `Archivo «${f.name}»: ${contarFilas(csvText)} filas.`;
+      archivoInfo.classList.remove("hidden");
+      actualizarBotones();
+    });
+    document.querySelectorAll<HTMLInputElement>('input[name="modo"]').forEach((r) => r.addEventListener("change", () => {
+      grabadas = false;
+      actualizarBotones();
+    }));
+
+    async function enviar(cuerpo: Record<string, unknown>): Promise<{ ok: true; datos: Respuesta } | { ok: false; error: string }> {
       try {
         const r = await fetch("/api/admin/import-equipos", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ csv: csvText, dryRun, area: file.dataset.area || null }),
+          body: JSON.stringify({ csv: csvText, modo: modo(), area, archivo: nombreArchivo, ...cuerpo }),
         });
-        const j = await r.json();
-        if (!r.ok) {
-          msg.textContent = "✕ " + (typeof j.error === "string" ? j.error : "Error");
-          msg.className = "text-sm text-red-600";
-          return;
-        }
-        msg.textContent = dryRun
-          ? `✓ Simulación: ${j.aInsertar} a insertar, ${j.errores.length} errores`
-          : `✓ Importados: ${j.insertados} de ${j.filas} filas. ${j.errores.length} errores.`;
-        msg.className = "text-sm text-emerald-700";
-        result.textContent = JSON.stringify(j, null, 2);
-        result.classList.remove("hidden");
-      } catch (e) {
-        msg.textContent = "✕ Error de red";
-        msg.className = "text-sm text-red-600";
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) return { ok: false, error: typeof j.error === "string" ? j.error : "No se pudo leer el archivo." };
+        return { ok: true, datos: j as Respuesta };
+      } catch {
+        return { ok: false, error: "Sin conexión con el servidor." };
       }
     }
 
-    simBtn.addEventListener("click", () => enviar(true));
-    goBtn.addEventListener("click", () => {
-      if (!confirm("¿Ejecutar importación? Los registros nuevos se crearán en la base de datos.")) return;
-      enviar(false);
+    const ETIQUETA: Record<Accion, string> = { crear: "Se agrega", actualizar: "Se actualiza", sin_cambios: "Sin cambios", error: "Error" };
+    const ETIQUETA_GRABADA: Record<Accion, string> = { crear: "Creado", actualizar: "Actualizado", sin_cambios: "Sin cambios", error: "Error" };
+    const COLOR: Record<Accion, string> = {
+      crear: "bg-emerald-100 text-emerald-700", actualizar: "bg-blue-100 text-blue-700",
+      sin_cambios: "bg-slate-100 text-slate-600", error: "bg-red-100 text-red-700",
+    };
+
+    function chip(texto: string, color: string) {
+      const s = document.createElement("span");
+      s.className = `badge ${color}`;
+      s.textContent = texto;
+      chips.appendChild(s);
+    }
+
+    function pintarTabla() {
+      const etiquetas = grabadas ? ETIQUETA_GRABADA : ETIQUETA;
+      const ver = resFiltro.value === "todas" ? filasMostradas : filasMostradas.filter((f) => f.accion === "error" || f.avisos.length);
+      resBody.replaceChildren(...ver.map((f) => {
+        const tr = document.createElement("tr");
+        const td = (texto: string, clase = "") => { const c = document.createElement("td"); c.className = `px-2 py-1.5 align-top ${clase}`; c.textContent = texto; return c; };
+        const estado = document.createElement("td");
+        estado.className = "px-2 py-1.5 align-top";
+        const badge = document.createElement("span");
+        badge.className = `badge ${COLOR[f.accion]}`;
+        badge.textContent = etiquetas[f.accion];
+        estado.appendChild(badge);
+        const detalle = document.createElement("td");
+        detalle.className = "px-2 py-1.5 align-top";
+        for (const d of f.detalle) { const p = document.createElement("div"); p.className = f.accion === "error" ? "text-red-700" : "text-slate-600"; p.textContent = d; detalle.appendChild(p); }
+        for (const a of f.avisos) { const p = document.createElement("div"); p.className = "text-amber-700"; p.textContent = `Aviso: ${a}`; detalle.appendChild(p); }
+        tr.append(td(String(f.fila), "tabular-nums"), td(f.codigo || "—", "font-mono"), estado, detalle);
+        return tr;
+      }));
+      resVacio.classList.toggle("hidden", ver.length > 0 || resFiltro.value === "todas");
+    }
+
+    function pintarResultado(d: Respuesta, titulo: string) {
+      resultado.classList.remove("hidden");
+      resTitulo.textContent = titulo;
+      filasMostradas = d.resultados;
+      chips.replaceChildren();
+      const conError = d.resultados.filter((f) => f.accion === "error").length;
+      const conAviso = d.resultados.filter((f) => f.avisos.length).length;
+      if (grabadas) {
+        chip(`Creados: ${d.insertados}`, COLOR.crear);
+        chip(`Actualizados: ${d.actualizados}`, COLOR.actualizar);
+      } else {
+        chip(`A crear: ${d.aInsertar}`, COLOR.crear);
+        chip(`A actualizar: ${d.aActualizar}`, COLOR.actualizar);
+      }
+      chip(`Sin cambios: ${d.sinCambios}`, COLOR.sin_cambios);
+      chip(`Con aviso: ${conAviso}`, "bg-amber-100 text-amber-700");
+      chip(`Con error: ${conError}`, COLOR.error);
+      notas.replaceChildren(...(d.notas ?? []).map((n) => { const li = document.createElement("li"); li.textContent = n; return li; }));
+      notas.classList.toggle("hidden", !(d.notas ?? []).length);
+      ignoradas.textContent = d.columnasIgnoradas.length ? `Columnas que no se reconocen y no se cargan: ${d.columnasIgnoradas.join(", ")}.` : "";
+      ignoradas.classList.toggle("hidden", !d.columnasIgnoradas.length);
+      pintarTabla();
+    }
+    resFiltro.addEventListener("change", pintarTabla);
+
+    simBtn.addEventListener("click", async () => {
+      simBtn.disabled = true; goBtn.disabled = true;
+      grabadas = false; verInventario.classList.add("hidden");
+      aviso("Simulando…");
+      const r = await enviar({ dryRun: true });
+      if (!r.ok) { simulado = null; resultado.classList.add("hidden"); aviso(r.error, "error"); actualizarBotones(); return; }
+      simulado = { clave: claveActual(), datos: r.datos };
+      const d = r.datos;
+      const conError = d.resultados.filter((f) => f.accion === "error").length;
+      aviso(`Simulación lista: ${d.filas} filas. ${d.aInsertar} a crear, ${d.aActualizar} a actualizar, ${conError} con error. Nada se grabó todavía.`, conError ? "info" : "ok");
+      pintarResultado(d, "Resultado de la simulación");
+      actualizarBotones();
+    });
+
+    goBtn.addEventListener("click", async () => {
+      if (!simulado || simulado.clave !== claveActual()) return;
+      const s = simulado.datos;
+      const conError = s.resultados.filter((f) => f.accion === "error").length;
+      if (!confirm(`Se crearán ${s.aInsertar} equipos y se actualizarán ${s.aActualizar}. Las ${conError} filas con error no se grabarán. ¿Continuar?`)) return;
+      simBtn.disabled = true; goBtn.disabled = true; file.disabled = true;
+      const total = s.filas;
+      const acumulado: Respuesta = { ...s, insertados: 0, actualizados: 0, sinCambios: 0, errores: [], avisos: [], resultados: [] };
+      let detenido = false;
+      for (let desde = 0; desde < total; desde += tanda) {
+        const hasta = Math.min(desde + tanda, total);
+        aviso(`Grabando filas ${desde + 1} a ${hasta} de ${total}…`);
+        const r = await enviar({ dryRun: false, desde, hasta });
+        if (!r.ok) {
+          aviso(`Se detuvo en las filas ${desde + 1} a ${hasta}: ${r.error} Lo anterior quedó guardado. Simula y graba de nuevo: lo ya grabado no se repite.`, "error");
+          detenido = true;
+          break;
+        }
+        acumulado.insertados += r.datos.insertados;
+        acumulado.actualizados += r.datos.actualizados;
+        acumulado.sinCambios += r.datos.sinCambios;
+        acumulado.resultados.push(...r.datos.resultados);
+      }
+      grabadas = true;
+      simulado = null;
+      file.disabled = false;
+      const conErrorFinal = acumulado.resultados.filter((f) => f.accion === "error").length;
+      if (!detenido) aviso(`Listo: ${acumulado.insertados} creados, ${acumulado.actualizados} actualizados, ${conErrorFinal} con error.`, "ok");
+      verInventario.classList.remove("hidden");
+      pintarResultado(acumulado, detenido ? "Resultado hasta donde se grabó" : "Resultado de la grabación");
+      actualizarBotones();
+    });
+
+    document.getElementById("resCsv")?.addEventListener("click", () => {
+      const etiquetas = grabadas ? ETIQUETA_GRABADA : ETIQUETA;
+      const celda = (v: string | number) => { const t = String(v); return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+      const lineas = [["Fila", "Código", "Resultado", "Detalle", "Avisos"].join(",")];
+      for (const f of filasMostradas) lineas.push([f.fila, f.codigo, etiquetas[f.accion], f.detalle.join(" "), f.avisos.join(" ")].map(celda).join(","));
+      const blob = new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `resultado_carga_${hoySV().replaceAll("-", "")}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     });
   </script>
 </Layout>

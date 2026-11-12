@@ -146,7 +146,7 @@ try {
   for (const codigo of ['legado-ñ-01', 'LEGADO-Ñ-01']) expect(await create({ rubro: 'biomedico', codigo }), 409);
   const imported = expect(await call(app.assetImport.POST, '/api/admin/import-equipos', { method: 'POST', data: {
     area: 'biomedico',
-    csv: 'codigo,nombre,rubro,marca,modelo,serial,categoria,descripcion,servicio\nlegacy-abc,No duplicar,biomedico,,,,,,\nbio-csv-ñ-001,módulo de cámara,biomedico,marca ñ,visión hd,serie-á,cámara,inspección óptica,cirugía',
+    csv: 'codigo,nombre,rubro,marca,modelo,serial,categoria,descripcion,servicio,clase_riesgo\nlegacy-abc,No duplicar,biomedico,,,,,,,\nbio-csv-ñ-001,módulo de cámara,biomedico,marca ñ,visión hd,serie-á,cámara,inspección óptica,cirugía,IIa',
   } }), 200);
   assert.equal(imported.insertados, 1, 'CSV import rejects the lowercase spelling of an existing mixed-case code');
   assert.equal(imported.errores.length, 1);
@@ -229,7 +229,8 @@ try {
   for (const data of [null, [], '']) expect(await create(data), 400);
 
   expect(await create({}, { rol: null }), 401);
-  for (const rol of ['jefe', 'visualizador', 'solicitante', 'motorista', 'bodega']) expect(await create({}, { rol }), 403);
+  for (const rol of ['visualizador', 'solicitante', 'motorista', 'bodega']) expect(await create({}, { rol }), 403);
+  automatic(await created({ rubro: 'biomedico' }, { rol: 'jefe' }), 'biomedico');
   automatic(await created({ rubro: 'biomedico' }, { rol: 'tecnico' }), 'biomedico');
   expect(await edit(biomedical.id, { nombre: 'No permitido' }, { rol: null }), 401);
   for (const rol of ['visualizador', 'solicitante', 'motorista', 'bodega']) expect(await edit(biomedical.id, { nombre: 'No permitido' }, { rol }), 403);
