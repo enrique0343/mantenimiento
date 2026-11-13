@@ -58,7 +58,7 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
   assert.equal(sqlite.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
 
-  const faults = { beforeBatch: null, beforeStatement: null, statement: null, batchCount: 0, rollbackCount: 0, enforceColumnLimit: false };
+  const faults = { beforeBatch: null, beforeStatement: null, statement: null, batchCount: 0, rollbackCount: 0, enforceColumnLimit: false, enforceParameterLimit: false };
   const queries = [];
   function prepared(sql, parameters = []) {
     async function beforeStatement() {
@@ -71,8 +71,9 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
     function execute(mode = 'all') {
       const query = sqlite.prepare(sql);
       const columns = query.columns();
-      queries.push({ sql, columns: columns.map((column) => column.name) });
+      queries.push({ sql, columns: columns.map((column) => column.name), parameters: parameters.length });
       if (faults.enforceColumnLimit && columns.length > 100) throw new Error(`D1 query projection exceeds 100 columns (${columns.length})`);
+      if (faults.enforceParameterLimit && parameters.length > 100) throw new Error(`D1 query binds more than 100 parameters (${parameters.length})`);
       let results;
       if (mode === 'raw') query.setReturnArrays(true);
       if (mode === 'run') { query.run(...parameters); results = []; }

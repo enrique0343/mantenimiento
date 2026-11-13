@@ -26,9 +26,15 @@ export async function setup({ modules, pages = [] }) {
     },
     outfile: bundle, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent',
     plugins: [{ name: 'isolated-effects', setup(builder) {
-      builder.onResolve({ filter: /^@\/lib\/(auth|audit|daily-digest|encuestas-recordatorio)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'test' }));
+      builder.onResolve({ filter: /^@\/lib\/(auth|audit|daily-digest|encuestas-recordatorio|email|telegram|notificaciones|notif-app)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'test' }));
       builder.onLoad({ filter: /.*/, namespace: 'test' }, ({ path: name }) => ({ contents: {
-        auth: `export async function requireUser(ctx, roles) { const user=ctx.testUser; return !user ? {user:null,response:new Response('Unauthorized',{status:401})} : roles && !roles.includes(user.rol) ? {user:null,response:new Response('Forbidden',{status:403})} : {user}; }`,
+        auth: `export async function requireUser(ctx, roles) { const user=ctx.testUser; return !user ? {user:null,response:new Response('Unauthorized',{status:401})} : roles && !roles.includes(user.rol) ? {user:null,response:new Response('Forbidden',{status:403})} : {user}; }
+          export async function requireUserJson(ctx, roles) { const r = await requireUser(ctx, roles); return r.user ? r : {user:null,response:Response.json({error:r.response.status===401?'No autenticado':'Sin permisos'},{status:r.response.status})}; }`,
+        // Sin correo, Telegram ni avisos: nada sale de la prueba.
+        email: 'export async function sendMail() {} export function emailLayout() { return ""; }',
+        telegram: 'export async function sendTelegram() {}',
+        notificaciones: 'export async function disparadorOT() {} export async function jefesNotificar() { return []; } export async function disparadorProyecto() {}',
+        'notif-app': 'export async function crearNotificacion() {}',
         audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; }',
         'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; }',
         'encuestas-recordatorio': 'export async function enviarRecordatoriosEncuestas() { return {enviados:0}; }',

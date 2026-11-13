@@ -1,0 +1,287 @@
+---
+// Tablero de preventivos para la jefatura (admin y jefe): los que vienen, los
+// atrasados de 1 día o más y quién los tiene. Las reglas viven en lib/preventivos.
+import Layout from "@/layouts/Layout.astro";
+import FilaPreventivo from "@/components/FilaPreventivo.astro";
+import { getDb } from "@/lib/db";
+import { datosTablero, leerFiltros, esJefatura, DIAS_POR_DEFECTO, MOTIVO_MINIMO } from "@/lib/preventivos";
+import { AREAS, AREA_KEYS } from "@/lib/areas";
+import { fmtFechaSoloCompacta } from "@/lib/datetime";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+// El técnico sigue con su panel; el tablero es de la jefatura.
+if (!esJefatura(user.rol)) return Astro.redirect(user.rol === "tecnico" ? "/campo" : "/");
+
+const { filtros, error } = leerFiltros(Astro.url.searchParams);
+const d = await datosTablero(getDb(Astro), filtros);
+const progSinAsignar = d.programados.filter((f) => !f.tecnico).length;
+const hayFiltros = ["desde", "hasta", "sede", "area", "q"].some((k) => Astro.url.searchParams.get(k));
+const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "Orden de trabajo", "Técnico", ""];
+---
+
+<Layout title="Tablero de preventivos">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Tablero de preventivos</h1>
+      <p class="text-sm text-slate-500">Hoy, {fmtFechaSoloCompacta(d.hoy)}. Elige el técnico en cada fila o marca varias y asígnalas juntas.</p>
+    </div>
+    <a href="/cronograma" class="btn-secondary">Cronograma</a>
+  </div>
+
+  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <a href="#atrasados-sin" class="card border-l-4 border-red-500 p-4 hover:shadow-md">
+      <div class="text-xs text-slate-500">Atrasados sin asignar</div>
+      <div class="text-3xl font-bold text-red-700 tabular-nums">{d.atrasados.sinAsignar.length}</div>
+    </a>
+    <a href="#atrasados-con" class="card border-l-4 border-amber-500 p-4 hover:shadow-md">
+      <div class="text-xs text-slate-500">Atrasados asignados</div>
+      <div class="text-3xl font-bold text-amber-700 tabular-nums">{d.atrasados.asignados.length}</div>
+    </a>
+    <a href="#programados" class="card p-4 hover:shadow-md">
+      <div class="text-xs text-slate-500">Programados del {fmtFechaSoloCompacta(d.filtros.desde)} al {fmtFechaSoloCompacta(d.filtros.hasta)}</div>
+      <div class="text-3xl font-bold tabular-nums">{d.programados.length}</div>
+    </a>
+    <a href="#programados" class="card p-4 hover:shadow-md">
+      <div class="text-xs text-slate-500">Programados sin asignar</div>
+      <div class="text-3xl font-bold tabular-nums">{progSinAsignar}</div>
+    </a>
+  </div>
+
+  <form class="card mt-4 flex flex-wrap items-end gap-3 p-3" method="get">
+    <div><label class="label text-xs" for="f-desde">Desde</label><input id="f-desde" class="input text-sm" type="date" name="desde" value={d.filtros.desde} /></div>
+    <div><label class="label text-xs" for="f-hasta">Hasta</label><input id="f-hasta" class="input text-sm" type="date" name="hasta" value={d.filtros.hasta} /></div>
+    <div>
+      <label class="label text-xs" for="f-sede">Sede</label>
+      <select id="f-sede" name="sede" class="input text-sm">
+        <option value="">Todas</option>
+        {d.sedes.map((s) => <option value={s.id} selected={s.id === d.filtros.sedeId}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label text-xs" for="f-area">Área de mantenimiento</label>
+      <select id="f-area" name="area" class="input text-sm">
+        <option value="">Todas</option>
+        {AREA_KEYS.map((k) => <option value={k} selected={k === d.filtros.area}>{AREAS[k].label}</option>)}
+      </select>
+    </div>
+    <div class="min-w-[12rem] flex-1"><label class="label text-xs" for="f-q">Buscar</label><input id="f-q" class="input text-sm" type="search" name="q" value={d.filtros.q} placeholder="Código, equipo, ubicación o técnico" /></div>
+    <button class="btn-primary text-sm">Filtrar</button>
+    {hayFiltros && <a href="/preventivos" class="btn-secondary text-sm">Limpiar</a>}
+  </form>
+  {error && <p class="mt-2 text-sm text-red-700" role="alert">{error} Se muestran los próximos {DIAS_POR_DEFECTO} días.</p>}
+  {d.truncado && <p class="mt-2 text-sm text-amber-800">Hay más de 500 preventivos en esta vista: acota el rango o filtra por sede o área.</p>}
+
+  <details class="card mt-4 p-4 text-sm text-slate-700">
+    <summary class="cursor-pointer font-semibold">Cómo se cuenta un atraso</summary>
+    <ul class="mt-2 list-disc space-y-1 pl-5">
+      <li><strong>Fecha programada:</strong> la próxima fecha del preventivo. Ese día, a las 06:00, el sistema crea su orden de trabajo. Mientras la orden está abierta la fecha no se mueve; avanza al siguiente ciclo cuando la orden se verifica y se cierra, contando desde el día en que se ejecutó.</li>
+      <li><strong>Atrasado:</strong> la fecha programada pasó hace 1 día o más (con el día de El Salvador) y el trabajo no se completó: su orden sigue abierta, en proceso o en espera, o el preventivo no tiene orden (no se generó, o la del ciclo se canceló o se borró).</li>
+      <li><strong>Completado:</strong> cuando el técnico envía la orden a verificación («Pendiente de verificación») ya no cuenta como atraso; queda pendiente de la jefatura. Verificada y cerrada, el preventivo pasa a su siguiente fecha.</li>
+      <li><strong>Técnico:</strong> con orden abierta, el de la orden; sin orden, el del preventivo. Al elegir un técnico aquí queda en el preventivo para las próximas órdenes y en la orden abierta, y se le avisa.</li>
+      <li><strong>Vencimiento de la orden:</strong> es la fecha programada más los días de alerta del preventivo. Es otro plazo: aquí el atraso se cuenta desde la fecha programada.</li>
+      <li><strong>Responsabilidad:</strong> cambiar la fecha programada o la frecuencia, desactivar o eliminar un preventivo pide un motivo de al menos {MOTIVO_MINIMO} caracteres y queda en el historial con quién, cuándo, el antes, el después y el motivo. Las asignaciones también quedan.</li>
+    </ul>
+  </details>
+
+  <section id="programados" class="mt-6 scroll-mt-24">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="text-lg font-semibold">Programados <span class="text-sm font-normal text-slate-500">del {fmtFechaSoloCompacta(d.filtros.desde)} al {fmtFechaSoloCompacta(d.filtros.hasta)}</span></h2>
+    </div>
+    <div class="card mt-2 overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo="prog" aria-label="Seleccionar todos los programados" /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {d.programados.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No hay preventivos programados con esos filtros.</td></tr>}
+          {d.programados.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="programado" grupo="prog" />)}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="mt-8">
+    <h2 class="text-lg font-semibold">Atrasados (1 día o más)</h2>
+    <p class="text-xs text-slate-500">Todos los atrasados, sin importar el rango de fechas. Puedes reasignarlos aquí mismo.</p>
+
+    {[
+      { id: "atrasados-sin", grupo: "sin", titulo: "Sin asignar", filas: d.atrasados.sinAsignar, vacio: "Ningún atrasado sin técnico." },
+      { id: "atrasados-con", grupo: "con", titulo: "Asignados", filas: d.atrasados.asignados, vacio: "Ningún atrasado con técnico." },
+    ].map((g) => (
+      <div id={g.id} class="mt-3 scroll-mt-24">
+        <h3 class="font-semibold">{g.titulo} <span class="badge bg-slate-100 text-slate-600">{g.filas.length}</span></h3>
+        <div class="card mt-2 overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo={g.grupo} aria-label={`Seleccionar todos: ${g.titulo}`} /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {g.filas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">{g.vacio}</td></tr>}
+              {g.filas.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="atrasado" grupo={g.grupo} />)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ))}
+  </section>
+
+  <!-- Barra de asignación en lote -->
+  <div id="loteBar" class="fixed inset-x-0 bottom-0 z-[90] hidden border-t border-brand-200 bg-white p-3 shadow-lg">
+    <div class="mx-auto flex max-w-7xl flex-wrap items-center gap-2 text-sm">
+      <span><strong id="loteN">0</strong> seleccionados</span>
+      <label class="sr-only" for="loteTecnico">Técnico para el lote</label>
+      <select id="loteTecnico" class="input text-sm sm:w-64">
+        <option value="">Elige un técnico</option>
+        {d.tecnicos.map((t) => <option value={t.id}>{t.nombre} · {t.abiertas} OT abiertas</option>)}
+      </select>
+      <button id="loteAsignar" type="button" class="btn-primary btn-sm">Asignar</button>
+      <button id="loteQuitar" type="button" class="btn-secondary btn-sm">Quitar asignación</button>
+      <button id="loteLimpiar" type="button" class="btn-secondary btn-sm">Desmarcar</button>
+      <span id="loteMsg" class="text-red-700" role="alert"></span>
+    </div>
+  </div>
+
+  <!-- Historial de un preventivo -->
+  <dialog id="histDialog" class="w-full max-w-2xl rounded-sm p-0 backdrop:bg-slate-900/60" aria-labelledby="histTitulo">
+    <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+      <div><p class="text-xs text-slate-500">Historial del preventivo</p><h2 id="histTitulo" class="font-semibold"></h2></div>
+      <button type="button" class="btn-secondary btn-sm" id="histCerrar">Cerrar</button>
+    </div>
+    <div id="histCuerpo" class="max-h-[70vh] overflow-y-auto px-5 py-4 text-sm"></div>
+  </dialog>
+
+  <div class="h-20"></div>
+
+  <script>
+    type Entrada = { cuandoTexto: string; autor: string; accionTexto: string; resumen: string | null; cambios: { label: string; antes: string; despues: string }[]; motivo: string | null };
+    const toast = (m: string, tipo: "success" | "error" | "warning" = "success") => window.showToast?.(m, tipo);
+    async function enviar(url: string, body: unknown) {
+      const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j: any = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j?.error === "string" ? j.error : "No se pudo guardar. Revisa la conexión e inténtalo de nuevo.");
+      return j;
+    }
+    const avisoOrdenes = (j: any) => { if (j?.errores?.length) toast(`El preventivo quedó asignado, pero una orden no: ${j.errores[0].error}`, "warning"); };
+
+    // ── Técnico por fila ──
+    document.querySelectorAll<HTMLSelectElement>(".tecnico-sel").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const prev = sel.dataset.prev ?? "";
+        const tecnicoId = sel.value ? Number(sel.value) : null;
+        sel.disabled = true;
+        try {
+          const j = await enviar("/api/preventivos/asignar", { planIds: [Number(sel.dataset.plan)], tecnicoId });
+          sel.dataset.prev = sel.value;
+          sel.classList.add("ring-2", "ring-emerald-300");
+          setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
+          toast(tecnicoId ? "Técnico asignado." : "Asignación quitada.");
+          avisoOrdenes(j);
+        } catch (e) {
+          sel.value = prev;
+          toast((e as Error).message, "error");
+        } finally {
+          sel.disabled = false;
+        }
+      });
+    });
+
+    // ── Selección y lote ──
+    const bar = document.getElementById("loteBar")!;
+    const msg = document.getElementById("loteMsg")!;
+    const marcados = () => Array.from(document.querySelectorAll<HTMLInputElement>(".sel-plan:checked")).map((c) => Number(c.dataset.plan));
+    const refrescar = () => {
+      const n = new Set(marcados()).size;
+      document.getElementById("loteN")!.textContent = String(n);
+      bar.classList.toggle("hidden", n === 0);
+      document.querySelectorAll<HTMLInputElement>(".sel-todos").forEach((todos) => {
+        const del = Array.from(document.querySelectorAll<HTMLInputElement>(`.sel-plan[data-grupo="${todos.dataset.grupo}"]`));
+        const m = del.filter((c) => c.checked).length;
+        todos.checked = m > 0 && m === del.length;
+        todos.indeterminate = m > 0 && m < del.length;
+      });
+    };
+    document.querySelectorAll<HTMLInputElement>(".sel-plan").forEach((c) => c.addEventListener("change", refrescar));
+    document.querySelectorAll<HTMLInputElement>(".sel-todos").forEach((todos) => todos.addEventListener("change", () => {
+      document.querySelectorAll<HTMLInputElement>(`.sel-plan[data-grupo="${todos.dataset.grupo}"]`).forEach((c) => (c.checked = todos.checked));
+      refrescar();
+    }));
+    document.getElementById("loteLimpiar")!.addEventListener("click", () => {
+      document.querySelectorAll<HTMLInputElement>(".sel-plan, .sel-todos").forEach((c) => { c.checked = false; c.indeterminate = false; });
+      refrescar();
+    });
+    const botonesLote = ["loteAsignar", "loteQuitar"].map((id) => document.getElementById(id) as HTMLButtonElement);
+    async function lote(tecnicoId: number | null) {
+      msg.textContent = "";
+      const planIds = [...new Set(marcados())];
+      if (!planIds.length) return;
+      botonesLote.forEach((b) => (b.disabled = true));
+      try {
+        const j = await enviar("/api/preventivos/asignar", { planIds, tecnicoId });
+        avisoOrdenes(j);
+        toast(tecnicoId ? `${planIds.length} preventivo(s) asignados.` : `Asignación quitada en ${planIds.length} preventivo(s).`);
+        setTimeout(() => location.reload(), j?.errores?.length ? 2500 : 600);
+      } catch (e) {
+        msg.textContent = (e as Error).message;
+        botonesLote.forEach((b) => (b.disabled = false));
+      }
+    }
+    botonesLote[0].addEventListener("click", () => {
+      const v = (document.getElementById("loteTecnico") as HTMLSelectElement).value;
+      if (!v) { msg.textContent = "Elige el técnico."; return; }
+      lote(Number(v));
+    });
+    botonesLote[1].addEventListener("click", () => lote(null));
+
+    // ── Generar la OT de un atrasado sin orden ──
+    document.querySelectorAll<HTMLButtonElement>("[data-generar]").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const j = await enviar(`/api/planes/${b.dataset.generar}/generar-ot`, {});
+        toast("Orden generada.");
+        setTimeout(() => (location.href = `/ordenes/${j.orden.id}`), 500);
+      } catch (e) {
+        toast((e as Error).message, "error");
+        b.disabled = false;
+      }
+    }));
+
+    // ── Historial ──
+    const dialog = document.getElementById("histDialog") as HTMLDialogElement;
+    const cuerpo = document.getElementById("histCuerpo")!;
+    document.getElementById("histCerrar")!.addEventListener("click", () => dialog.close());
+    const el = (tag: string, clase: string, texto?: string) => { const n = document.createElement(tag); n.className = clase; if (texto !== undefined) n.textContent = texto; return n; };
+    document.querySelectorAll<HTMLButtonElement>("[data-historial]").forEach((b) => b.addEventListener("click", async () => {
+      document.getElementById("histTitulo")!.textContent = b.dataset.titulo ?? "";
+      cuerpo.replaceChildren(el("p", "text-slate-500", "Cargando…"));
+      dialog.showModal();
+      try {
+        const r = await fetch(`/api/preventivos/${b.dataset.historial}/historial`);
+        const j: any = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(typeof j?.error === "string" ? j.error : "No se pudo cargar el historial.");
+        const entradas: Entrada[] = j.entradas ?? [];
+        if (!entradas.length) { cuerpo.replaceChildren(el("p", "text-slate-500", "Sin cambios registrados todavía.")); return; }
+        const lista = el("ul", "divide-y divide-slate-100");
+        for (const e of entradas) {
+          const li = el("li", "py-3");
+          const cab = el("div", "flex flex-wrap items-baseline justify-between gap-2");
+          const quien = el("div", "");
+          quien.append(el("span", "badge bg-blue-50 text-blue-700", e.accionTexto), el("span", "ml-2 font-medium", e.autor));
+          cab.append(quien, el("span", "text-xs text-slate-500", e.cuandoTexto));
+          li.append(cab);
+          if (e.resumen) li.append(el("p", "mt-1 text-slate-600", e.resumen));
+          for (const c of e.cambios) {
+            const p = el("p", "mt-1 text-xs");
+            p.append(el("span", "font-medium text-slate-500", `${c.label}: `), el("span", "text-red-700 line-through", c.antes), el("span", "", " → "), el("span", "text-emerald-700", c.despues));
+            li.append(p);
+          }
+          if (e.motivo) li.append(el("p", "mt-1 rounded bg-slate-50 px-2 py-1 text-xs text-slate-700", `Motivo: ${e.motivo}`));
+          lista.append(li);
+        }
+        cuerpo.replaceChildren(lista);
+      } catch (e) {
+        cuerpo.replaceChildren(el("p", "text-red-700", (e as Error).message));
+      }
+    }));
+  </script>
+</Layout>

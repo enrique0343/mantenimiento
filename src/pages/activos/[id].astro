@@ -25,6 +25,7 @@ import {
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { historialDePlanes, MOTIVO_MINIMO } from "@/lib/preventivos";
 import {
   queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
   SISTEMA_LABEL, type Sistema,
@@ -80,6 +81,10 @@ const planes = await db
   .where(eq(planesMantenimiento.activoId, id))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
+// Historial de cada preventivo (fecha, frecuencia, técnico, activación), junto al preventivo.
+const historialPreventivos = await historialDePlanes(db, { activoId: id });
+const historialDe = (planId: number) => historialPreventivos.filter((e) => e.planId === planId);
+
 const ordsRel = await db
   .select()
   .from(ordenes)
@@ -116,12 +121,16 @@ function parsearCambios(json: string | null) {
   if (!json) return [];
   try {
     const obj = JSON.parse(json);
-    return Object.entries(obj).map(([campo, val]: any) => ({
+    // El motivo no es un campo con antes y después: se muestra aparte.
+    return Object.entries(obj).filter(([campo]) => campo !== "motivo").map(([campo, val]: any) => ({
       campo, label: labelCampo(campo),
       antes: val?.antes ?? "(vacío)",
       despues: val?.despues ?? "(vacío)",
     }));
   } catch { return []; }
+}
+function motivoDe(json: string | null): string | null {
+  try { const m = json ? JSON.parse(json).motivo : null; return typeof m === "string" ? m : null; } catch { return null; }
 }
 const isBio = area === "biomedico";
 
@@ -1516,7 +1525,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                   <div class="font-medium">{r.p.titulo}</div>
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
                     <span class="rounded bg-slate-100 px-2 py-0.5 capitalize">{r.p.frecuencia}</span>
-                    <span class="rounded bg-blue-100 px-2 py-0.5 text-blue-700">Próxima: <strong>{fmt(r.p.proximaFecha)}</strong></span>
+                    <span class="rounded bg-blue-100 px-2 py-0.5 text-blue-700">Próxima: <strong>{fmtFechaSoloCompacta(r.p.proximaFecha)}</strong></span>
                     {r.u
                       ? <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700">{r.u.nombre}</span>
                       : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">Sin asignar</span>
@@ -1525,6 +1534,21 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                   </div>
                   {r.p.ultimaGeneracion && <div class="mt-1 text-xs text-slate-400">Última OT generada: {fmt(r.p.ultimaGeneracion)}</div>}
                   {r.p.descripcion && <div class="mt-1 text-sm text-slate-600">{r.p.descripcion}</div>}
+                  {historialDe(r.p.id).length > 0 && (
+                    <details class="mt-2 text-xs">
+                      <summary class="cursor-pointer text-brand-700">Historial del preventivo ({historialDe(r.p.id).length})</summary>
+                      <ul class="mt-2 space-y-2 border-l-2 border-slate-200 pl-3">
+                        {historialDe(r.p.id).map((e) => (
+                          <li>
+                            <div><span class="font-medium">{e.accionTexto}</span> · {e.autor} · <span class="text-slate-500">{e.cuandoTexto}</span></div>
+                            {e.resumen && <div class="text-slate-600">{e.resumen}</div>}
+                            {e.cambios.map((c) => <div class="text-slate-600">{c.label}: <span class="text-red-600 line-through">{c.antes}</span> → <span class="text-emerald-700">{c.despues}</span></div>)}
+                            {e.motivo && <div class="text-slate-700">Motivo: {e.motivo}</div>}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </div>
                 <div class="flex items-center gap-2">
                   <span class={`badge ${r.p.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
@@ -1586,7 +1610,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                       </select>
                     </div>
                   </div>
-                  <p class="mt-2 text-xs text-slate-500">Si cambias la frecuencia o la próxima fecha, los próximos ciclos se calcularán a partir de aquí.</p>
+                  <p class="mt-2 text-xs text-slate-500">Si cambias la frecuencia o la próxima fecha, los próximos ciclos se calcularán a partir de aquí. Te pediremos el motivo (mínimo {MOTIVO_MINIMO} caracteres): queda en el historial con tu nombre.</p>
                   <p class="edit-msg mt-2 hidden text-xs" data-id={r.p.id}></p>
                   <div class="mt-2 flex gap-2">
                     <button data-id={r.p.id} data-save class="btn-primary text-sm">Guardar</button>
@@ -1644,6 +1668,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                 </div>
                 <span class="whitespace-nowrap text-xs text-slate-400">{fmtFull(r.a.createdAt)}</span>
               </div>
+              {motivoDe(r.a.cambios) && <p class="mt-1 ml-2 text-xs text-slate-700">Motivo: {motivoDe(r.a.cambios)}</p>}
               {cambios.length > 0 && (
                 <table class="mt-2 ml-2 text-xs text-slate-600">
                   <tbody>
@@ -1787,24 +1812,45 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       location.reload();
     });
 
+    // Pausar o eliminar un preventivo pide motivo: si no, sería una forma de mover la fecha sin rastro.
+    const errorDe = async (res) => { const j = await res.json().catch(() => ({})); return typeof j.error === "string" ? j.error : "No se pudo guardar."; };
+    const pedirMotivo = (titulo, mensaje) => window.pedirMotivo ? window.pedirMotivo(titulo, mensaje) : Promise.resolve(prompt(`${titulo}\n${mensaje}\nMotivo (mínimo 10 caracteres):`));
     document.querySelectorAll("[data-pause]").forEach((b) => {
       b.addEventListener("click", async (e) => {
-        const id = e.currentTarget.dataset.id;
-        const isActive = e.currentTarget.textContent.trim() === "Pausar";
-        await fetch(`/api/planes/${id}`, {
+        const boton = e.currentTarget;
+        if (boton.disabled) return;
+        const id = boton.dataset.id;
+        const isActive = boton.textContent.trim() === "Pausar";
+        let motivo = null;
+        if (isActive) {
+          motivo = await pedirMotivo("Pausar el preventivo", "Mientras esté pausado no se generan órdenes.");
+          if (!motivo) return;
+        }
+        boton.disabled = true;
+        const res = await fetch(`/api/planes/${id}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ activo: !isActive }),
-        });
+          body: JSON.stringify({ activo: !isActive, ...(motivo ? { motivo } : {}) }),
+        }).catch(() => null);
+        if (!res || !res.ok) { window.showToast?.(res ? await errorDe(res) : "Sin conexión. Inténtalo de nuevo.", "error"); boton.disabled = false; return; }
         location.reload();
       });
     });
 
     document.querySelectorAll("[data-del]").forEach((b) => {
       b.addEventListener("click", async (e) => {
-        if (!confirm("Eliminar este plan de mantenimiento?")) return;
-        const id = e.currentTarget.dataset.id;
-        await fetch(`/api/planes/${id}`, { method: "DELETE" });
+        const boton = e.currentTarget;
+        if (boton.disabled) return;
+        const id = boton.dataset.id;
+        const motivo = await pedirMotivo("Eliminar el preventivo", "Se borra del cronograma. Si ya tiene órdenes, no se puede eliminar: desactívalo.");
+        if (!motivo) return;
+        boton.disabled = true;
+        const res = await fetch(`/api/planes/${id}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motivo }),
+        }).catch(() => null);
+        if (!res || !res.ok) { window.showToast?.(res ? await errorDe(res) : "Sin conexión. Inténtalo de nuevo.", "error"); boton.disabled = false; return; }
         location.reload();
       });
     });
@@ -1829,6 +1875,17 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         const v = (cls) => get(cls)?.value?.trim() ?? "";
         const num = (cls) => { const x = get(cls)?.value; return x === "" || x == null ? null : Number(x); };
         const asign = get("edit-asignado")?.value;
+        const boton = e.currentTarget;
+        if (boton.disabled) return;
+        // Fecha programada o frecuencia distintas a las guardadas: se pide el motivo.
+        const frecSel = get("edit-frecuencia");
+        const frecAntes = Array.from(frecSel.options).find((o) => o.defaultSelected)?.value ?? frecSel.value;
+        const cambiaProgramacion = v("edit-proxima") !== (get("edit-proxima")?.defaultValue ?? "") || frecSel.value !== frecAntes;
+        let motivo = null;
+        if (cambiaProgramacion) {
+          motivo = await pedirMotivo("Cambiar la fecha o la frecuencia", "La fecha programada y la frecuencia no cambian sin motivo.");
+          if (!motivo) return;
+        }
         const payload = {
           titulo: v("edit-titulo"),
           descripcion: v("edit-descripcion") || null,
@@ -1838,18 +1895,20 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           prioridad: get("edit-prioridad").value,
           horasEstimadas: num("edit-horas"),
           asignadoA: asign ? Number(asign) : null,
+          ...(motivo ? { motivo } : {}),
         };
         const msg = document.querySelector(`.edit-msg[data-id="${id}"]`);
         msg?.classList.add("hidden");
+        boton.disabled = true;
         const res = await fetch(`/api/planes/${id}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
+        }).catch(() => null);
+        if (!res || !res.ok) {
+          boton.disabled = false;
           if (msg) {
-            msg.textContent = typeof j.error === "string" ? j.error : "Error al guardar";
+            msg.textContent = res ? await errorDe(res) : "Sin conexión. Inténtalo de nuevo.";
             msg.className = "edit-msg mt-2 text-xs text-red-600";
             msg.classList.remove("hidden");
           }

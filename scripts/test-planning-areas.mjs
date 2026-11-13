@@ -24,7 +24,7 @@ r=await call(api.assetPlans.POST,'/api/activos/1/planes?area=biomedico',{id:1,me
 r=await call(api.plans.GET,'/api/planes?area=aires');assert.equal(r.body.planes.length,1);const planId=r.body.planes[0].id;assert.equal(r.body.planes[0].activo.rubro,'aires');
 r=await call(api.planGenerate.POST,'/api/planes/1/generar-ot?area=infraestructura',{id:planId,method:'POST'});assert.equal(r.status,404);
 r=await call(api.planGenerate.POST,'/api/planes/1/generar-ot?area=aires',{id:planId,method:'POST'});assert.equal(r.status,201,JSON.stringify(r));assert.equal(r.body.orden.rubro,'aires');
-r=await call(api.planBulk.POST,'/api/planes/bulk?area=aires',{method:'POST',data:{accion:'desactivar',ids:[1,2]}});assert.equal(r.status,400);
+r=await call(api.planBulk.POST,'/api/planes/bulk?area=aires',{method:'POST',data:{accion:'desactivar',ids:[1,2],motivo:'Prueba de área: otro rubro'}});assert.equal(r.status,400);assert.match(r.body.error,/fuera de esta área/);
 assert.equal(sqlite.prepare('SELECT count(*) AS n FROM planes_mantenimiento WHERE activo=1').get().n,4);
 r=await call(api.planConfig.POST,'/api/plan-config?area=aires',{method:'POST',data:{valores:{'plan.codigo':'AA-TEST'}}});assert.equal(r.status,200);assert.equal(sqlite.prepare("SELECT valor FROM app_config WHERE clave='plan.aires.codigo'").get().valor,'AA-TEST');assert.equal(sqlite.prepare("SELECT count(*) AS n FROM app_config WHERE clave='plan.codigo'").get().n,0);
 r=await call(api.planEdit.PATCH,'/api/planes/1?area=aires',{id:planId,method:'PATCH',rol:'solicitante',data:{titulo:'No permitido'}});assert.equal(r.status,403);
