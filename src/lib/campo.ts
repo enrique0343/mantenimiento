@@ -482,8 +482,13 @@ export async function ubicacionesDeSede(db: Db, sedeId: number) {
     for (let i = 0; p && i < 5; i++) { partes.unshift(p.nombre); p = p.padreId ? porId.get(p.padreId) : undefined; }
     return partes.join(" · ");
   };
+  // Conteo por ubicación con un join a la sede: una lista de ids (inArray) pasa el
+  // límite de 100 parámetros de D1 cuando la sede tiene más de 99 ubicaciones.
   const cuenta = filas.length
-    ? await db.select({ ub: activos.ubicacionId, n: sql<number>`count(*)` }).from(activos).where(and(inArray(activos.ubicacionId, filas.map((f) => f.id)), ne(activos.estado, "baja"))).groupBy(activos.ubicacionId)
+    ? await db.select({ ub: activos.ubicacionId, n: sql<number>`count(*)` }).from(activos)
+      .innerJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+      .where(and(eq(ubicaciones.sucursalId, sedeId), eq(ubicaciones.activa, true), ne(activos.estado, "baja")))
+      .groupBy(activos.ubicacionId)
     : [];
   const n = new Map(cuenta.map((c) => [c.ub, Number(c.n)]));
   const lista = filas.map((u) => ({ id: u.id, nombre: ruta(u), equipos: n.get(u.id) ?? 0 })).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
