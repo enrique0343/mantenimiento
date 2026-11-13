@@ -3,6 +3,7 @@
 // del equipo, que pide el motivo antes de mover la fecha y muestra el historial junto al
 // preventivo. Correr después de npm run build. Sin red.
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +14,7 @@ import { fijarReloj } from './test-support/reloj.mjs';
 fijarReloj();
 const require = createRequire(import.meta.url);
 const { JSDOM, VirtualConsole } = require('jsdom');
-const f = await setupConjuntos({ modules: { plan: 'pages/api/planes/[id]' } });
+const f = await setupConjuntos({ modules: { plan: 'pages/api/planes/[id]', asignar: 'pages/api/preventivos/asignar' } });
 const { app, sqlite, call, DB, close } = f;
 const one = (q, ...a) => sqlite.prepare(q).get(...a);
 const modulo = async (ruta) => (await import(pathToFileURL(path.join(process.cwd(), 'dist/_worker.js/pages', ruta)).href)).page().default;
@@ -28,11 +29,11 @@ const MOTIVO = 'El quirófano está ocupado toda la semana por cirugías';
 
 try {
   sqlite.exec(`
-    INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(20,'Técnico Uno','tecnico.uno@prueba.local','x','tecnico');
+    INSERT INTO usuarios(id,nombre,email,password_hash,rol,activo) VALUES(20,'Técnico Uno','tecnico.uno@prueba.local','x','tecnico',1),(30,'Técnico Retirado','tecnico.retirado@prueba.local','x','tecnico',0);
     INSERT INTO sucursales(id,nombre) VALUES(7,'Sede de prueba');
     INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo,padre_id) VALUES(70,7,'Nivel 2','piso',NULL),(71,7,'Bloque quirúrgico','area',70),(72,7,'Quirófano 1','sala',71);
     INSERT INTO activos(id,codigo,nombre,rubro,tipo,ubicacion_id) VALUES(1,'AA-001','Aire del quirófano','aires','general',72),(2,'AA-002','Aire de recuperación','aires','general',72);
-    INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha) VALUES(1,1,'Preventivo mensual HEPA','mensual','${dia(3)}'),(2,2,'Preventivo trimestral','trimestral','${dia(-2)}');
+    INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha,asignado_a) VALUES(1,1,'Preventivo mensual HEPA','mensual','${dia(3)}',NULL),(2,2,'Preventivo trimestral','trimestral','${dia(-2)}',30);
   `);
   const container = await experimental_AstroContainer.create();
   const respuesta = async (componente, ruta, rol, params = {}) => container.renderToResponse(componente, {
@@ -58,8 +59,8 @@ try {
     ok(fila1.textContent.includes('Nivel 2 · Bloque quirúrgico · Quirófano 1'), 'Ruta de la ubicación');
     const opciones = [...fila1.querySelectorAll('select.tecnico-sel option')].map((o) => o.textContent.trim());
     ok(opciones.includes('Sin asignar') && opciones.some((o) => o.startsWith('Técnico Uno · 0 OT abiertas')), `Técnicos con su carga: ${opciones}`);
-    const fila2 = doc.querySelector('#atrasados-sin tr[data-fila="2"]');
-    ok(fila2 && fila2.textContent.includes('2 días de atraso'), 'Atrasado sin asignar');
+    const fila2 = doc.querySelector('#atrasados-con tr[data-fila="2"]');
+    ok(fila2 && fila2.textContent.includes('2 días de atraso'), 'Atrasado con su técnico (aunque ya no esté activo)');
     ok(fila2.querySelector('[data-generar="2"]'), 'Puede generar la OT que falta');
     ok(texto.includes('Cómo se cuenta un atraso') && texto.includes('Fecha programada:') && texto.includes('Pendiente de verificación'), 'Las definiciones en la página');
     ok(doc.querySelector('#loteBar select#loteTecnico'), 'Asignación en lote');
@@ -79,7 +80,7 @@ try {
   {
     const { doc } = await ver(panel, '/', 'jefe');
     const aviso = doc.querySelector('a[href="/preventivos"].card');
-    ok(aviso && /1 atrasados de 1 día o más \(1 sin asignar\)/.test(aviso.textContent), `Aviso en el panel: ${aviso?.textContent}`);
+    ok(aviso && /1 atrasados de 1 día o más \(0 sin asignar\)/.test(aviso.textContent), `Aviso en el panel: ${aviso?.textContent}`);
     const { doc: v } = await ver(panel, '/', 'visualizador');
     ok(!v.querySelector('a[href="/preventivos"].card'), 'El visualizador no lo ve');
   }
@@ -88,12 +89,12 @@ try {
   const ficha = await modulo('activos/_id_.astro.mjs');
   const enviados = [], errores = [], recargas = [];
   // Cada guardado bueno recarga la página: se abre de nuevo, como en el navegador.
-  const abrirFicha = async () => {
-    const html = await (await respuesta(ficha, '/activos/1?area=aires', 'jefe', { id: '1' })).text();
+  const abrirFicha = async (activo = '1', rol = 'jefe') => {
+    const html = await (await respuesta(ficha, `/activos/${activo}?area=aires`, rol, { id: activo })).text();
     const consola = new VirtualConsole();
     consola.on('jsdomError', (e) => { const m = e.detail?.message ?? e.message; if (/navigation/i.test(m)) recargas.push(m); else if (!/Not implemented/.test(e.message)) errores.push(m); });
     const dom = new JSDOM(html, {
-      url: 'https://local.test/activos/1?area=aires', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola,
+      url: `https://local.test/activos/${activo}?area=aires`, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola,
       beforeParse(w) {
         w.prompt = () => null; w.alert = () => {}; w.confirm = () => true;
         w.fetch = async (url, init = {}) => {
@@ -101,7 +102,7 @@ try {
           const data = init.body ? JSON.parse(init.body) : undefined;
           enviados.push({ metodo: init.method ?? 'GET', ruta: u.pathname, data });
           const m = u.pathname.match(/^\/api\/planes\/(\d+)$/);
-          const r = m && init.method === 'PATCH' ? await call(app.plan.PATCH, u.pathname, { method: 'PATCH', id: Number(m[1]), data, rol: 'jefe' }) : { status: 200, body: {} };
+          const r = m && init.method === 'PATCH' ? await call(app.plan.PATCH, u.pathname, { method: 'PATCH', id: Number(m[1]), data, rol }) : { status: 200, body: {} };
           return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
         };
       },
@@ -158,6 +159,78 @@ try {
   ok(hist && hist.textContent.includes('Reprogramación') && hist.textContent.includes(MOTIVO) && hist.textContent.includes(`${ddmm(dia(3))} → ${ddmm(dia(10))}`), `Historial junto al preventivo: ${hist?.textContent.replace(/\s+/g, ' ')}`);
   ok(hist.textContent.includes('Cuenta jefe') || hist.textContent.includes('Prueba jefe'), 'Con la persona');
   ok(texto.includes(`Motivo: ${MOTIVO}`), 'También en el historial del equipo');
+  const historialEquipo = (doc) => [...doc.querySelectorAll('h2')].find((h) => h.textContent.includes('Historial de cambios')).closest('.card').textContent.replace(/\s+/g, ' ');
+  ok(!/\d{4}-\d{2}-\d{2}/.test(historialEquipo(despues)) && historialEquipo(despues).includes(`Próxima fecha: ${ddmm(dia(3))} → ${ddmm(dia(10))}`), `La fecha en DD/MM/AAAA en el historial del equipo: ${historialEquipo(despues).slice(0, 300)}`);
+  // Una asignación se lee con el nombre del técnico, no con su número.
+  ok((await call(app.plan.PATCH, '/api/planes/1', { method: 'PATCH', id: 1, data: { asignadoA: 20 }, rol: 'jefe' })).status === 200);
+  {
+    const { doc } = await ver(ficha, '/activos/1?area=aires', 'jefe', { id: '1' });
+    ok(/Técnico asignado: Sin asignar → Técnico Uno/.test(historialEquipo(doc)), `El técnico por su nombre: ${historialEquipo(doc).slice(0, 300)}`);
+  }
+
+  // ── Ficha: el responsable que ya no está en la lista no se pierde al guardar otra cosa ──
+  {
+    w = await abrirFicha('2'); d = w.document;
+    const sel = d.querySelector('.edit-asignado[data-id="2"]');
+    ok(sel && sel.value === '30' && sel.selectedOptions[0].textContent.includes('Técnico Retirado'), `Sigue elegido: ${sel?.value}`);
+    d.querySelector('[data-edit][data-id="2"]').click();
+    d.querySelector('.edit-titulo[data-id="2"]').value = 'Preventivo trimestral del compresor';
+    const recargasAntes = recargas.length;
+    d.querySelector('[data-save][data-id="2"]').click();
+    for (let i = 0; i < 100 && recargas.length === recargasAntes; i++) await pausa(10);
+    const envio = enviados.at(-1);
+    ok(envio.ruta === '/api/planes/2' && !('asignadoA' in envio.data) && !('proximaFecha' in envio.data), `Solo lo que cambió: ${JSON.stringify(envio.data)}`);
+    ok(one('SELECT asignado_a, titulo FROM planes_mantenimiento WHERE id=2').asignado_a === 30, 'El responsable sigue');
+  }
+
+  // ── Ficha del técnico: edita el contenido, no la fecha, la frecuencia, el técnico ni la pausa ──
+  {
+    const { doc, texto: t } = await ver(ficha, '/activos/1?area=aires', 'tecnico', { id: '1' });
+    ok(doc.querySelector('[data-edit][data-id="1"]'), 'Puede editar el contenido');
+    ok(!doc.querySelector('[data-pause]') && !doc.querySelector('[data-del]'), 'Sin pausar ni eliminar');
+    ok(!doc.querySelector('.edit-proxima') && !doc.querySelector('.edit-frecuencia') && !doc.querySelector('.edit-asignado'), 'Sin fecha, frecuencia ni técnico');
+    ok(t.includes('La fecha, la frecuencia y el técnico los cambia la jefatura'), 'Se lo dice');
+    w = await abrirFicha('1', 'tecnico'); d = w.document;
+    d.querySelector('[data-edit][data-id="1"]').click();
+    d.querySelector('.edit-titulo[data-id="1"]').value = 'Preventivo mensual de filtros HEPA y serpentín';
+    const recargasAntes = recargas.length;
+    d.querySelector('[data-save][data-id="1"]').click();
+    for (let i = 0; i < 100 && recargas.length === recargasAntes; i++) await pausa(10);
+    const envio = enviados.at(-1);
+    ok(!('asignadoA' in envio.data) && !('proximaFecha' in envio.data) && !('frecuencia' in envio.data) && !envio.data.motivo, `El técnico guarda sin tocar la programación: ${JSON.stringify(envio.data)}`);
+    ok(one('SELECT titulo FROM planes_mantenimiento WHERE id=1').titulo === 'Preventivo mensual de filtros HEPA y serpentín', 'Y se guarda');
+  }
+
+  // ── Tablero: asignar desde una fila recarga la vista (contadores, grupo y carga) ──
+  {
+    const html = await (await respuesta(tablero, '/preventivos', 'jefe')).text();
+    // El contenedor no enlaza los scripts construidos y JSDOM no corre módulos: el
+    // script del tablero (no importa nada) va en línea al final de la página.
+    const archivo = fs.readdirSync('dist/_astro').find((x) => /^preventivos\.astro_astro_type_script_index_0_lang\..*\.js$/.test(x));
+    ok(archivo, 'El script del tablero');
+    const conScript = html.replace('</body>', () => `<script>${fs.readFileSync(path.join('dist/_astro', archivo), 'utf8')}</script></body>`);
+    const consola = new VirtualConsole();
+    const recargasTablero = [];
+    consola.on('jsdomError', (e) => { const m = e.detail?.message ?? e.message; if (/navigation/i.test(m)) recargasTablero.push(m); else if (!/Not implemented/.test(e.message)) errores.push(m); });
+    const dom = new JSDOM(conScript, {
+      url: 'https://local.test/preventivos', runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola,
+      beforeParse(win) {
+        win.fetch = async (url, init = {}) => {
+          const data = init.body ? JSON.parse(init.body) : undefined;
+          const r = new URL(url, 'https://local.test').pathname === '/api/preventivos/asignar' ? await call(app.asignar.POST, '/api/preventivos/asignar', { method: 'POST', data, rol: 'jefe' }) : { status: 200, body: {} };
+          return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
+        };
+      },
+    });
+    await pausa(30);
+    const sel = dom.window.document.querySelector('#atrasados-con select.tecnico-sel[data-plan="2"]');
+    sel.value = '20';
+    sel.dispatchEvent(new dom.window.Event('change'));
+    for (let i = 0; i < 200 && !recargasTablero.length; i++) await pausa(10);
+    ok(one('SELECT asignado_a FROM planes_mantenimiento WHERE id=2').asignado_a === 20, 'Asignado desde la fila');
+    ok(recargasTablero.length > 0, 'Y la vista se recarga');
+  }
+  ok(errores.length === 0, `Sin errores de la página: ${errores.join(' | ')}`);
 
   console.log(`PASS test-tablero-paginas: ${checks} verificaciones; páginas construidas, migraciones reales, sin red.`);
 } finally {

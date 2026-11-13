@@ -5,8 +5,8 @@ import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos } from "@/lib/schema";
 import { requireUserJson } from "@/lib/auth";
 import {
-  cambioPideMotivo, diffDePlan, eliminarPlanes, escribirCambioDePlan, esJefatura, motivoValido,
-  reasignarOrdenesAbiertas, FECHA_RE, MENSAJE_MOTIVO,
+  cambioPideMotivo, diffDePlan, eliminarPlanes, escribirCambioDePlan, esJefatura, fechaValida, motivoValido, mensajeOtPendiente,
+  otQueBloqueaLaFecha, reasignarOrdenesAbiertas, CAMPOS_DE_JEFATURA, MENSAJE_MOTIVO, MENSAJE_SOLO_JEFATURA,
 } from "@/lib/preventivos";
 
 import { parseArea } from "@/lib/areas";
@@ -18,7 +18,7 @@ const updateSchema = z.object({
   descripcion: z.string().nullable().optional(),
   // Todas las frecuencias que la base acepta: la ficha ofrece las mismas.
   frecuencia: z.enum(planesMantenimiento.frecuencia.enumValues).optional(),
-  proximaFecha: z.string().regex(FECHA_RE, "La fecha debe tener el formato AAAA-MM-DD.").optional(),
+  proximaFecha: z.string().refine(fechaValida, "La fecha debe ser un día que exista, con el formato AAAA-MM-DD.").optional(),
   alertaDiasAntes: z.number().int().min(0).max(90).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   horasEstimadas: z.number().positive().nullable().optional(),
@@ -75,15 +75,24 @@ export const PATCH: APIRoute = async (ctx) => {
   // Solo cuenta lo que cambia: la ficha manda todos los campos en cada guardado.
   const diff = diffDePlan(actual as any, data);
   if (Object.keys(diff).length === 0) return Response.json({ plan: actual });
+  // El técnico edita el contenido del preventivo (título, pasos), pero no quién lo
+  // tiene ni cuándo toca: eso es de la jefatura.
+  if (!esJefatura(user.rol) && CAMPOS_DE_JEFATURA.some((c) => c in diff)) return Response.json({ error: MENSAJE_SOLO_JEFATURA }, { status: 403 });
   if (cambioPideMotivo(diff) && !motivoValido(motivo)) return Response.json({ error: MENSAJE_MOTIVO }, { status: 400 });
+  // Con la OT del ciclo sin verificar la fecha no se mueve: su atraso se perdería de
+  // vista y el cron generaría otra OT del mismo plan en la fecha nueva.
+  if ("proximaFecha" in diff) {
+    const ot = await otQueBloqueaLaFecha(db, id);
+    if (ot) return Response.json({ error: mensajeOtPendiente(ot) }, { status: 409 });
+  }
 
   const row = await escribirCambioDePlan(db, actual, data, diff, user, motivo);
-  if (!row) return Response.json({ error: "El preventivo cambió mientras lo editabas. Actualiza la página y vuelve a intentarlo." }, { status: 409 });
+  if (!row) return Response.json({ error: "El preventivo cambió mientras lo editabas (o se generó su OT). Actualiza la página y vuelve a intentarlo." }, { status: 409 });
 
   // El técnico nuevo también toma la OT abierta del preventivo, por el camino de
-  // siempre de la orden (solo la jefatura reasigna órdenes).
+  // siempre de la orden.
   let ordenes: Awaited<ReturnType<typeof reasignarOrdenesAbiertas>> | null = null;
-  if ("asignadoA" in diff && esJefatura(user.rol)) {
+  if ("asignadoA" in diff) {
     ordenes = await reasignarOrdenesAbiertas(ctx, user, [id], row.asignadoA ?? null, motivo);
   }
   return Response.json({ plan: row, ...(ordenes ? { ordenes: ordenes.cambiadas, errores: ordenes.errores } : {}) });

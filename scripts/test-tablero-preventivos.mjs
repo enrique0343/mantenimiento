@@ -162,7 +162,7 @@ try {
   igual(fE.diasAtraso, 1, '1 día exacto'); igual(fE.ot, null, 'Plan sin OT generada');
   const fF = con.find((f) => f.planId === pF);
   igual(fF.diasAtraso, 5); igual(fF.ot.id, otF); igual(fF.tecnico.id, 20, 'El técnico de la OT');
-  ok(sin.find((f) => f.planId === pI).otCanceladaOBorrada, 'Ciclo con la OT cancelada');
+  ok(sin.find((f) => f.planId === pI).otCancelada, 'Ciclo con la OT cancelada');
   ok(!t.programados.some((f) => f.planId === pE), 'Un atrasado no es programado');
   ok(t.programados.some((f) => f.planId === pH), 'Hoy es programado');
   igual(con.find((f) => f.planId === pK).planActivo, false);
@@ -203,8 +203,10 @@ try {
   igual(r.status, 200, 'Mismos valores, sin motivo');
   reg = auditoria('plan', pA).at(-1);
   igual(reg.accion, 'update'); iguales(Object.keys(reg.cambios), ['titulo']);
+  // La fecha, la frecuencia, el técnico y la pausa son de la jefatura, aun con motivo.
   r = await patch(pA, { proximaFecha: dia(10), motivo: MOTIVO }, 'tecnico');
-  igual(r.status, 200, 'El técnico también, con motivo'); igual(auditoria('plan', pA).at(-1).usuario_id, 3);
+  igual(r.status, 403, 'El técnico no reprograma'); ok(typeof r.body.error === 'string');
+  igual(one('SELECT proxima_fecha f FROM planes_mantenimiento WHERE id=?', pA).f, dia(9));
 
   // Desde la ficha, cambiar el técnico también mueve la OT abierta.
   r = await patch(pB, { asignadoA: 20 }, 'jefe');

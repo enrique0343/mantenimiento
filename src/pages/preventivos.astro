@@ -70,31 +70,33 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
     {hayFiltros && <a href="/preventivos" class="btn-secondary text-sm">Limpiar</a>}
   </form>
   {error && <p class="mt-2 text-sm text-red-700" role="alert">{error} Se muestran los próximos {DIAS_POR_DEFECTO} días.</p>}
+  {!error && d.desdeAjustado && <p class="mt-2 text-sm text-slate-600">Programados empieza hoy: lo de fechas pasadas está en Atrasados (o ya se completó).</p>}
   {d.truncado && <p class="mt-2 text-sm text-amber-800">Hay más de 500 preventivos en esta vista: acota el rango o filtra por sede o área.</p>}
 
   <details class="card mt-4 p-4 text-sm text-slate-700">
     <summary class="cursor-pointer font-semibold">Cómo se cuenta un atraso</summary>
     <ul class="mt-2 list-disc space-y-1 pl-5">
-      <li><strong>Fecha programada:</strong> la próxima fecha del preventivo. Ese día, a las 06:00, el sistema crea su orden de trabajo. Mientras la orden está abierta la fecha no se mueve; avanza al siguiente ciclo cuando la orden se verifica y se cierra, contando desde el día en que se ejecutó.</li>
-      <li><strong>Atrasado:</strong> la fecha programada pasó hace 1 día o más (con el día de El Salvador) y el trabajo no se completó: su orden sigue abierta, en proceso o en espera, o el preventivo no tiene orden (no se generó, o la del ciclo se canceló o se borró).</li>
-      <li><strong>Completado:</strong> cuando el técnico envía la orden a verificación («Pendiente de verificación») ya no cuenta como atraso; queda pendiente de la jefatura. Verificada y cerrada, el preventivo pasa a su siguiente fecha.</li>
+      <li><strong>Fecha programada:</strong> la próxima fecha del preventivo. Ese día, a las 06:00, el sistema crea su orden de trabajo. La fecha avanza al siguiente ciclo cuando la orden se verifica (verificarla también la cierra), contando desde el día en que se ejecutó. Mientras la orden del ciclo no se verifica, nadie puede cambiar la fecha: primero se verifica o se cancela la orden.</li>
+      <li><strong>Atrasado:</strong> la fecha programada pasó hace 1 día o más (con el día de El Salvador) y el trabajo no se completó: su orden sigue abierta, en proceso o en espera, o el preventivo no tiene orden del ciclo (no se generó, o se canceló). Una orden borrada se vuelve a generar sola.</li>
+      <li><strong>Completado:</strong> cuando el técnico envía la orden a verificación («Pendiente de verificación») ya no cuenta como atraso; queda pendiente de la jefatura.</li>
       <li><strong>Técnico:</strong> con orden abierta, el de la orden; sin orden, el del preventivo. Al elegir un técnico aquí queda en el preventivo para las próximas órdenes y en la orden abierta, y se le avisa.</li>
       <li><strong>Vencimiento de la orden:</strong> es la fecha programada más los días de alerta del preventivo. Es otro plazo: aquí el atraso se cuenta desde la fecha programada.</li>
-      <li><strong>Responsabilidad:</strong> cambiar la fecha programada o la frecuencia, desactivar o eliminar un preventivo pide un motivo de al menos {MOTIVO_MINIMO} caracteres y queda en el historial con quién, cuándo, el antes, el después y el motivo. Las asignaciones también quedan.</li>
+      <li><strong>Responsabilidad:</strong> solo la jefatura asigna, cambia la fecha programada o la frecuencia, desactiva o elimina un preventivo. Lo de la fecha, la frecuencia, desactivar y eliminar pide un motivo de al menos {MOTIVO_MINIMO} caracteres. Todo queda en el historial con quién, cuándo, el antes, el después y el motivo, igual que las asignaciones y los cambios que hace el sistema al verificar una orden.</li>
     </ul>
   </details>
 
+  <!-- En el celular cada fila se apila como tarjeta: una tabla ancha agranda la página aunque su caja tenga desplazamiento. -->
   <section id="programados" class="mt-6 scroll-mt-24">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="text-lg font-semibold">Programados <span class="text-sm font-normal text-slate-500">del {fmtFechaSoloCompacta(d.filtros.desde)} al {fmtFechaSoloCompacta(d.filtros.hasta)}</span></h2>
     </div>
     <div class="card mt-2 overflow-x-auto">
-      <table class="w-full text-left text-sm">
-        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+      <table class="w-full text-left text-sm max-sm:block">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
           <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo="prog" aria-label="Seleccionar todos los programados" /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
         </thead>
-        <tbody class="divide-y divide-slate-100">
-          {d.programados.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No hay preventivos programados con esos filtros.</td></tr>}
+        <tbody class="divide-y divide-slate-100 max-sm:block">
+          {d.programados.length === 0 && <tr><td colspan="7" class="max-sm:block px-4 py-6 text-center text-slate-400">No hay preventivos programados con esos filtros.</td></tr>}
           {d.programados.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="programado" grupo="prog" />)}
         </tbody>
       </table>
@@ -112,12 +114,12 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       <div id={g.id} class="mt-3 scroll-mt-24">
         <h3 class="font-semibold">{g.titulo} <span class="badge bg-slate-100 text-slate-600">{g.filas.length}</span></h3>
         <div class="card mt-2 overflow-x-auto">
-          <table class="w-full text-left text-sm">
-            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <table class="w-full text-left text-sm max-sm:block">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
               <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo={g.grupo} aria-label={`Seleccionar todos: ${g.titulo}`} /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
             </thead>
-            <tbody class="divide-y divide-slate-100">
-              {g.filas.length === 0 && <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">{g.vacio}</td></tr>}
+            <tbody class="divide-y divide-slate-100 max-sm:block">
+              {g.filas.length === 0 && <tr><td colspan="7" class="max-sm:block px-4 py-6 text-center text-slate-400">{g.vacio}</td></tr>}
               {g.filas.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="atrasado" grupo={g.grupo} />)}
             </tbody>
           </table>
@@ -177,10 +179,11 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
           setTimeout(() => sel.classList.remove("ring-2", "ring-emerald-300"), 900);
           toast(tecnicoId ? "Técnico asignado." : "Asignación quitada.");
           avisoOrdenes(j);
+          // La fila cambia de grupo y los contadores y la carga del técnico se mueven: se recarga.
+          setTimeout(() => location.reload(), j?.errores?.length ? 2500 : 600);
         } catch (e) {
           sel.value = prev;
           toast((e as Error).message, "error");
-        } finally {
           sel.disabled = false;
         }
       });

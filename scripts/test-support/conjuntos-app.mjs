@@ -34,7 +34,10 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
       builder.onResolve({ filter: /^@\/lib\/(email|smtp-worker|telegram|notificaciones|notif-app|audit|especialidad)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'no-effects' }));
       builder.onLoad({ filter: /.*/, namespace: 'no-effects' }, () => ({ contents: `
         export const sendMail=async()=>{}; export const emailLayout=()=>'';
-        export const sendTelegram=async()=>{}; export const crearNotificacion=async()=>{};
+        // Los avisos no salen de la prueba, pero quedan anotados para contarlos.
+        const anotar=(x)=>{ (globalThis.__efectosPrueba ??= []).push(x); };
+        export const sendTelegram=async(env,chat,texto)=>{ anotar({canal:'telegram',chat,texto}); };
+        export const crearNotificacion=async(ctx,n)=>{ anotar({canal:'app',...n}); };
         export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b;
         export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{};
         export const disparadorProyecto=async()=>{};
