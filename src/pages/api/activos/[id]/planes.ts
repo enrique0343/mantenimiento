@@ -4,11 +4,12 @@ import { eq, asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, usuarios, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
-import { fechaValida } from "@/lib/preventivos";
 import { logAudit } from "@/lib/audit";
 
 import { parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { etiquetaFrecuencia } from "@/lib/biomedico";
+import { errorMapEs, fechaIsoSchema, frecuenciaRutinaSchema, respuestaZod } from "@/lib/validacion-api";
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
@@ -19,10 +20,10 @@ export const GET: APIRoute = async (ctx) => {
   const area = parseArea(areaParam);
   if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
-  const [activo] = await db.select().from(activos).where(eq(activos.id, activoId)).limit(1);
+  const [activo] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1);
   if (!activo || (area && rubroDeActivo(activo.rubro, activo.tipo) !== area)) return Response.json({ error: "Activo no encontrado en esta área" }, { status: 404 });
   const rows = await db
-    .select({ p: planesMantenimiento, u: usuarios })
+    .select({ p: planesMantenimiento, u: { id: usuarios.id, nombre: usuarios.nombre } })
     .from(planesMantenimiento)
     .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
     .where(eq(planesMantenimiento.activoId, activoId))
@@ -35,20 +36,12 @@ export const GET: APIRoute = async (ctx) => {
   });
 };
 
+// K-E1: las nueve frecuencias de biomedico.ts; «turno» con su propio mensaje.
 const createSchema = z.object({
-  titulo: z.string().min(1),
+  titulo: z.string().trim().min(1, "Escribe el nombre de la rutina."),
   descripcion: z.string().nullable().optional(),
-  frecuencia: z.enum([
-    "diaria",
-    "semanal",
-    "quincenal",
-    "mensual",
-    "bimestral",
-    "trimestral",
-    "semestral",
-    "anual",
-  ]),
-  proximaFecha: z.string().refine(fechaValida, "La fecha debe ser un día que exista, con el formato AAAA-MM-DD."),
+  frecuencia: frecuenciaRutinaSchema,
+  proximaFecha: fechaIsoSchema("Fecha no válida."),
   alertaDiasAntes: z.number().int().min(0).max(90).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   horasEstimadas: z.number().positive().nullable().optional(),
@@ -71,14 +64,16 @@ export const POST: APIRoute = async (ctx) => {
   if (!user) return response;
   const activoId = Number(ctx.params.id);
   const body = await ctx.request.json().catch(() => null);
-  const parsed = createSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  const parsed = createSchema.safeParse(body, { errorMap: errorMapEs });
+  if (!parsed.success) return respuestaZod(parsed.error);
   const areaParam = ctx.url.searchParams.get("area");
   const area = parseArea(areaParam);
   if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
   const db = getDb(ctx);
-  const [activo] = await db.select().from(activos).where(eq(activos.id, activoId)).limit(1);
+  const [activo] = await db.select({ rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, activoId)).limit(1);
   if (!activo || (area && rubroDeActivo(activo.rubro, activo.tipo) !== area)) return Response.json({ error: "Activo no encontrado en esta área" }, { status: 404 });
+  // Parte automática del requisito 13: un equipo dado de baja no recibe rutinas.
+  if (activo.estado === "baja") return Response.json({ error: "El equipo está dado de baja: no se le programan rutinas." }, { status: 409 });
   const [row] = await db
     .insert(planesMantenimiento)
     .values({
@@ -97,11 +92,11 @@ export const POST: APIRoute = async (ctx) => {
 
   await logAudit(ctx, {
     entidad: "plan", entidadId: row.id, accion: "create",
-    resumen: `Plan "${row.titulo}" creado (${row.frecuencia}, próx: ${row.proximaFecha})`,
+    resumen: `Plan "${row.titulo}" creado (${etiquetaFrecuencia(row.frecuencia)}, próx: ${row.proximaFecha})`,
   });
   await logAudit(ctx, {
     entidad: "activo", entidadId: activoId, accion: "create",
-    resumen: `Plan "${row.titulo}" agregado al cronograma (${row.frecuencia})`,
+    resumen: `Plan "${row.titulo}" agregado al cronograma (${etiquetaFrecuencia(row.frecuencia)})`,
   });
 
   return Response.json({ plan: row }, { status: 201 });

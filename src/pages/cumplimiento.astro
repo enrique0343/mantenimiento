@@ -1,95 +1,86 @@
 ---
+// Panel de cumplimiento del equipo biomédico (JCI FMS.07/FMS.08). Cada indicador usa
+// la regla de su dueño (biomedico.ts) por medio de cumplimiento-reglas.ts: la
+// pantalla, el CSV (/api/cumplimiento/exportar) y el resumen diario cuentan igual.
+// Lo ven admin, jefe y visualizador (la cuenta del auditor), solo lectura.
 import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
-import { activos, planesMantenimiento, ubicaciones, sucursales, alertasEquipo } from "@/lib/schema";
-import { eq, ne, and } from "drizzle-orm";
-import { SUBCAT_KEYS, SUBCATS_BIOMEDICO, subcatLabel, subcatIcono, rubroDeActivo } from "@/lib/rubros";
-import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+import { SUBCAT_KEYS, subcatLabel, subcatIcono } from "@/lib/rubros";
+import { fmtFechaSolo } from "@/lib/datetime";
+import { fechaCorta, hoySV } from "@/lib/biomedico";
+import { cargarDatosCumplimiento } from "@/lib/cumplimiento-bio";
+import { armarCumplimiento, esBiomedicoVigente, type ClaveIndicador, type Hallazgo } from "@/lib/cumplimiento-reglas";
 // Tablero de la biblioteca de procedimientos modelo GO-GUI-011-2026 (cap. 08).
 import { avanceBiblioteca, META_BIBLIOTECA } from "@/lib/metricas";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
+if (user.rol !== "admin" && user.rol !== "jefe" && user.rol !== "visualizador") return Astro.redirect("/");
+// Clasificar es de admin y jefe (/activos/clasificar redirige a los demás): el
+// visualizador (la cuenta del auditor) no ve ese botón.
+const puedeClasificar = user.rol === "admin" || user.rol === "jefe";
 const db = getDb(Astro);
 
-const hoy = new Date().toISOString().slice(0, 10);
+const hoy = hoySV();
+const datos = await cargarDatosCumplimiento(db, hoy);
+const { indicadores, hallazgos } = armarCumplimiento(datos);
+const indicador = (clave: ClaveIndicador) => indicadores.find((i) => i.clave === clave)!;
+const hallazgosDe = new Map<ClaveIndicador, Hallazgo[]>();
+for (const h of hallazgos) hallazgosDe.set(h.indicador, [...(hallazgosDe.get(h.indicador) ?? []), h]);
 
-// ── Equipos biomédicos vigentes ──────────────────────────────────────────────
-const equiposAll = await db
-  .select({ a: activos, ub: ubicaciones, s: sucursales })
-  .from(activos)
-  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
-  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(ne(activos.estado, "baja"));
-
-const bio = equiposAll.filter((r) => rubroDeActivo(r.a.rubro, r.a.tipo) === "biomedico");
-
-// ── Planes activos por equipo ────────────────────────────────────────────────
-const planes = await db
-  .select({ activoId: planesMantenimiento.activoId, proximaFecha: planesMantenimiento.proximaFecha })
-  .from(planesMantenimiento)
-  .where(eq(planesMantenimiento.activo, true));
-
+// ── Equipos biomédicos vigentes (universo del panel) ─────────────────────────
+const bio = datos.equipos.filter(esBiomedicoVigente);
 const planesPorActivo = new Map<number, string[]>();
-for (const p of planes) {
-  const arr = planesPorActivo.get(p.activoId) ?? [];
-  arr.push(p.proximaFecha);
-  planesPorActivo.set(p.activoId, arr);
-}
+for (const p of datos.planes) planesPorActivo.set(p.activoId, [...(planesPorActivo.get(p.activoId) ?? []), p.proximaFecha]);
+const fechasPlan = (id: number) => planesPorActivo.get(id) ?? [];
 
 // ── Métricas de cobertura ────────────────────────────────────────────────────
-const conPlan = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length > 0);
-const sinPlan = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length === 0);
-const conVencido = bio.filter((r) => (planesPorActivo.get(r.a.id) ?? []).some((f) => f <= hoy));
-const sinCriticidad = bio.filter((r) => !r.a.criticidadOperacional);
-const sinSubcat = bio.filter((r) => !r.a.subcategoria);
-
-// Calibración: aplica a los marcados requiereCalibracion o con fecha programada
-const aplicaCalib = bio.filter((r) => r.a.requiereCalibracion || r.a.proximaCalibracion);
-const calibVencida = aplicaCalib.filter((r) => r.a.proximaCalibracion && r.a.proximaCalibracion.slice(0, 10) <= hoy);
-const calibSinFecha = bio.filter((r) => r.a.requiereCalibracion && !r.a.proximaCalibracion);
-
-// Alertas abiertas (FMS.07.1)
-const alertasAbiertas = await db
-  .select({ id: alertasEquipo.id })
-  .from(alertasEquipo)
-  .where(ne(alertasEquipo.estado, "cerrada"));
+const conPlan = bio.filter((e) => fechasPlan(e.id).length > 0);
+const sinPlan = bio.filter((e) => fechasPlan(e.id).length === 0);
+const conVencido = bio.filter((e) => fechasPlan(e.id).some((f) => f <= hoy));
+const sinCriticidad = bio.filter((e) => !e.criticidadOperacional);
+const sinSubcat = bio.filter((e) => !e.subcategoria);
+const sinClase = bio.filter((e) => !String(e.claseRiesgo ?? "").trim());
+const calib = indicador("calibracion");
+const alertasAbiertas = datos.alertas.filter((a) => a.estado !== "cerrada").length;
+const alertasSinAnalisis = datos.alertas.filter((a) => a.aplicabilidad === "pendiente").length;
 
 const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
-const cobertura = pct(conPlan.length, bio.length);
+const cobertura = bio.length > 0 ? pct(conPlan.length, bio.length) : null;
 const colorPct = (p: number) => (p >= 95 ? "text-emerald-600" : p >= 80 ? "text-amber-600" : "text-red-600");
 const barPct = (p: number) => (p >= 95 ? "bg-emerald-500" : p >= 80 ? "bg-amber-500" : "bg-red-500");
 
 // ── Segmentación por subcategoría ────────────────────────────────────────────
 const porSubcat = SUBCAT_KEYS.map((k) => {
-  const eq_ = bio.filter((r) => r.a.subcategoria === k);
-  const cp = eq_.filter((r) => (planesPorActivo.get(r.a.id) ?? []).length > 0);
-  const venc = eq_.filter((r) => (planesPorActivo.get(r.a.id) ?? []).some((f) => f <= hoy));
-  return { subcat: k, total: eq_.length, conPlan: cp.length, vencidos: venc.length };
+  const eq_ = bio.filter((e) => e.subcategoria === k);
+  return {
+    subcat: k,
+    total: eq_.length,
+    conPlan: eq_.filter((e) => fechasPlan(e.id).length > 0).length,
+    vencidos: eq_.filter((e) => fechasPlan(e.id).some((f) => f <= hoy)).length,
+  };
 }).filter((r) => r.total > 0);
-const sinSegmentar = bio.filter((r) => !r.a.subcategoria);
+const sinSegmentar = sinSubcat;
 
 // ── Segmentación por sede ────────────────────────────────────────────────────
 const porSede = new Map<string, { total: number; conPlan: number; vencidos: number }>();
-for (const r of bio) {
-  const sede = r.s?.nombre ?? "Sin sede";
-  const e = porSede.get(sede) ?? { total: 0, conPlan: 0, vencidos: 0 };
-  e.total++;
-  const fechas = planesPorActivo.get(r.a.id) ?? [];
-  if (fechas.length > 0) e.conPlan++;
-  if (fechas.some((f) => f <= hoy)) e.vencidos++;
-  porSede.set(sede, e);
+for (const e of bio) {
+  const sede = e.sede ?? "Sin sede";
+  const s = porSede.get(sede) ?? { total: 0, conPlan: 0, vencidos: 0 };
+  s.total++;
+  const fechas = fechasPlan(e.id);
+  if (fechas.length > 0) s.conPlan++;
+  if (fechas.some((f) => f <= hoy)) s.vencidos++;
+  porSede.set(sede, s);
 }
 const sedes = [...porSede.entries()].sort((a, b) => a[0].localeCompare(b[0], "es"));
 
-const fmt = (s: string) => fmtFechaSoloCompacta(s);
 const fechaGeneracion = fmtFechaSolo(hoy);
 
-// Criticidad A sin plan = hallazgo grave
-const claseASinPlan = sinPlan.filter((r) => r.a.criticidadOperacional === "alta");
+// Criticidad alta sin plan = hallazgo grave
+const claseASinPlan = sinPlan.filter((e) => e.criticidadOperacional === "alta");
 
 // ── Biblioteca de procedimientos modelo (GO-GUI-011-2026, capítulo 08) ──────
 // Avance real de los 25 documentos y de la ruta de validación de cuatro
@@ -100,19 +91,25 @@ const biblio = await avanceBiblioteca(db);
 const bt = biblio.totales;
 ---
 
-<Layout title="Cumplimiento FMS.07">
-  <DocCabecera soloImpresion titulo="Cumplimiento del equipo biomédico" subtitulo="JCI FMS.07: cobertura del inventario, mantenimiento y calibración" />
+<Layout title="Cumplimiento JCI">
+  <div id="cumplimiento">
+  <DocCabecera soloImpresion titulo="Cumplimiento del equipo biomédico" subtitulo="JCI FMS.07 y FMS.08: inventario, mantenimiento, metrología, expediente, regulación y seguridad" fecha={hoy} />
   <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">✓ Cumplimiento — Equipo biomédico</h1>
       <p class="mt-1 text-sm text-slate-500">
-        Programa de gestión de equipo médico (JCI FMS.07): cobertura del inventario, mantenimiento y calibración.
+        Programa de gestión de equipo médico (JCI FMS.07 y FMS.08): cobertura del inventario, mantenimiento, calibración, expediente, regulación y seguridad.
       </p>
     </div>
-    <div class="flex gap-2">
-      <a href="/activos/clasificar" class="btn-secondary">Clasificar</a>
+    <div class="flex flex-wrap items-center gap-2">
+      {puedeClasificar && <a href="/activos/clasificar" class="btn-secondary">Clasificar</a>}
       <a href="/alertas" class="btn-secondary">Alertas</a>
-      <button onclick="window.print()" class="btn-primary">Imprimir evidencia</button>
+      <a href="/calibraciones?criticos=1" class="btn-secondary">Equipos críticos: calibración</a>
+      <a href="/api/cumplimiento/exportar" class="btn-secondary">Descargar CSV</a>
+      <label class="inline-flex items-center gap-1.5 text-sm text-slate-600">
+        <input id="conDetalle" type="checkbox" checked /> Imprimir con el detalle
+      </label>
+      <button onclick="window.print()" class="btn-primary" type="button">Imprimir evidencia</button>
     </div>
   </div>
 
@@ -121,13 +118,13 @@ const bt = biblio.totales;
     <div class="card p-4">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Inventario biomédico</div>
       <div class="mt-1.5 text-3xl font-bold text-slate-800">{bio.length}</div>
-      <div class="mt-0.5 text-[11px] text-slate-400">equipos vigentes</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">{bio.length === 0 ? "Todavía no hay equipos biomédicos cargados." : "equipos vigentes"}</div>
     </div>
     <div class="card p-4">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Cobertura preventiva</div>
-      <div class={`mt-1.5 text-3xl font-bold ${colorPct(cobertura)}`}>{cobertura}%</div>
+      <div class={`mt-1.5 text-3xl font-bold ${cobertura === null ? "text-slate-400" : colorPct(cobertura)}`}>{cobertura === null ? "—" : `${cobertura}%`}</div>
       <div class="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-        <div class={`h-full rounded-full ${barPct(cobertura)}`} style={`width:${cobertura}%`}></div>
+        <div class={`h-full rounded-full ${barPct(cobertura ?? 0)}`} style={`width:${cobertura ?? 0}%`}></div>
       </div>
       <div class="mt-1 text-[11px] text-slate-400">{conPlan.length} con plan · {sinPlan.length} sin plan</div>
     </div>
@@ -138,26 +135,28 @@ const bt = biblio.totales;
     </div>
     <div class="card p-4">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Calibración</div>
-      <div class={`mt-1.5 text-3xl font-bold ${calibVencida.length + calibSinFecha.length === 0 ? "text-emerald-600" : "text-red-600"}`}>
-        {calibVencida.length + calibSinFecha.length}
+      <div class={`mt-1.5 text-3xl font-bold ${calib.sinDatos ? "text-slate-400" : calib.fallas === 0 ? "text-emerald-600" : "text-red-600"}`}>
+        {calib.sinDatos ? "—" : calib.fallas}
       </div>
-      <div class="mt-0.5 text-[11px] text-slate-400">{calibVencida.length} vencida(s) · {calibSinFecha.length} sin programar</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">
+        {calib.sinDatos ? "Sin datos todavía" : `pendientes de ${calib.universo} · ${calib.avisos} por vencer (${calib.pct === null ? "—" : `${calib.pct}% al día`})`}
+      </div>
     </div>
     <div class="card p-4">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Alertas abiertas</div>
-      <div class={`mt-1.5 text-3xl font-bold ${alertasAbiertas.length === 0 ? "text-emerald-600" : "text-amber-600"}`}>{alertasAbiertas.length}</div>
-      <div class="mt-0.5 text-[11px] text-slate-400">FMS.07.1 — recalls y avisos</div>
+      <div class={`mt-1.5 text-3xl font-bold ${alertasAbiertas === 0 ? "text-emerald-600" : "text-amber-600"}`}>{alertasAbiertas}</div>
+      <div class="mt-0.5 text-[11px] text-slate-400">{alertasAbiertas} abiertas · {alertasSinAnalisis} sin análisis</div>
     </div>
   </div>
 
   {claseASinPlan.length > 0 && (
     <div class="card mt-4 border-l-4 border-red-500 p-4">
-      <h2 class="font-semibold text-red-700">{claseASinPlan.length} equipo(s) clase A (crítico) SIN plan preventivo</h2>
+      <h2 class="font-semibold text-red-700">{claseASinPlan.length} equipo(s) de criticidad alta SIN plan preventivo</h2>
       <p class="mt-1 text-xs text-slate-600">Hallazgo prioritario: la falla de estos equipos compromete la vida del paciente y no tienen rutina programada.</p>
       <div class="mt-2 flex flex-wrap gap-1.5 text-xs">
-        {claseASinPlan.map((r) => (
-          <a href={`/activos/${r.a.id}`} class="rounded-md bg-red-50 px-2 py-1 text-red-700 hover:bg-red-100">
-            <span class="font-mono text-[10px]">{r.a.codigo}</span> {r.a.nombre}
+        {claseASinPlan.map((e) => (
+          <a href={`/activos/${e.id}`} class="rounded-md bg-red-50 px-2 py-1 text-red-700 hover:bg-red-100">
+            <span class="font-mono text-[10px]">{e.codigo}</span> {e.nombre}
           </a>
         ))}
       </div>
@@ -165,15 +164,49 @@ const bt = biblio.totales;
   )}
 
   <!-- Clasificación pendiente -->
-  {(sinCriticidad.length > 0 || sinSubcat.length > 0) && (
+  {(sinCriticidad.length > 0 || sinSubcat.length > 0 || sinClase.length > 0) && (
     <div class="card mt-4 border-l-4 border-amber-400 p-4">
-      <h2 class="font-semibold text-amber-800">Clasificación pendiente (Fase 1)</h2>
+      <h2 class="font-semibold text-amber-800">Clasificación pendiente</h2>
       <p class="mt-1 text-xs text-slate-600">
-        {sinCriticidad.length} sin criticidad A/B/C · {sinSubcat.length} sin subcategoría clínica —
-        <a href="/activos/clasificar" class="text-brand-600 hover:underline font-medium">completar en la herramienta de clasificación →</a>
+        {sinCriticidad.length} sin criticidad · {sinSubcat.length} sin subcategoría clínica · {sinClase.length} sin clase de riesgo
+        {puedeClasificar && <> — <a href="/activos/clasificar" class="text-brand-600 hover:underline font-medium no-print">completar en la herramienta de clasificación →</a></>}
       </p>
     </div>
   )}
+
+  <!-- ═══ Expediente, regulación y seguridad: una tarjeta por indicador ═══ -->
+  <section class="mt-6">
+    <h2 class="text-sm font-semibold text-slate-800">Expediente, regulación y seguridad</h2>
+    <p class="text-xs text-slate-500">Rojo: hallazgos que fallan el requisito. Ámbar: vencen pronto. Cada tarjeta lleva a su detalle.</p>
+    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {indicadores.map((i) => (
+        <div class="card p-4">
+          <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{i.titulo}</div>
+          {i.sinDatos ? (
+            <>
+              <div class="mt-1.5 text-2xl font-bold text-slate-400">—</div>
+              <div class="mt-0.5 text-[11px] text-slate-400">Sin datos todavía</div>
+            </>
+          ) : (
+            <>
+              <div class={`mt-1.5 text-2xl font-bold ${i.fallas > 0 ? "text-red-600" : "text-emerald-600"}`}>{i.fallas}</div>
+              <div class="mt-0.5 text-[11px] text-slate-500">
+                {i.universo === 0 ? "Sin registros que medir" : `${i.fallas === 1 ? "hallazgo" : "hallazgos"} de ${i.universo}`}
+                {i.pct !== null && <span> · {i.pct}% cumple</span>}
+                {i.avisos > 0 && <span class="text-amber-700"> · {i.avisos} por vencer</span>}
+              </div>
+            </>
+          )}
+          <p class="mt-1.5 text-[11px] leading-snug text-slate-400">{i.descripcion}</p>
+          <div class="no-print mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            <a href={`#det-${i.clave}`} class="font-medium text-brand-700 hover:underline">Ver detalle</a>
+            <a href={i.enlace} class="text-slate-500 hover:underline">{i.enlaceTexto} →</a>
+            {i.extras.map((x) => <a href={x.enlace} class="text-slate-500 hover:underline">{x.texto} →</a>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
 
   <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <!-- Por subcategoría -->
@@ -230,6 +263,9 @@ const bt = biblio.totales;
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
+          {sedes.length === 0 && (
+            <tr><td colspan="5" class="px-4 py-5 text-center text-slate-400">Todavía no hay equipos biomédicos cargados.</td></tr>
+          )}
           {sedes.map(([sede, e]) => {
             const p = pct(e.conPlan, e.total);
             return (
@@ -397,7 +433,7 @@ const bt = biblio.totales;
                         <span class="badge bg-orange-100 text-orange-700">{d.validacionesObservadas} observada(s)</span>
                       )}
                       {d.proximaValidacion && (
-                        <span class="text-[10px] text-slate-400">programada {fmt(d.proximaValidacion)}</span>
+                        <span class="text-[10px] text-slate-400">programada {fechaCorta(d.proximaValidacion)}</span>
                       )}
                       <span class={`font-mono text-[10px] font-bold ${colorPct(d.pct)}`}>{d.pct}%</span>
                     </span>
@@ -411,74 +447,62 @@ const bt = biblio.totales;
     )}
   </section>
 
-  <!-- Listas de trabajo -->
-  <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-    <div class="card p-4">
-      <h2 class="font-semibold text-slate-800 text-sm">Sin plan preventivo ({sinPlan.length})</h2>
-      {sinPlan.length === 0 ? (
-        <p class="mt-2 text-sm text-emerald-700">✓ Todo el inventario biomédico tiene plan asignado.</p>
-      ) : (
-        <ul class="mt-2 space-y-1 max-h-64 overflow-y-auto text-xs">
-          {sinPlan.map((r) => (
-            <li>
-              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
-                <span class="min-w-0 truncate">
-                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
-                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
-                  {r.a.criticidadOperacional === "alta" && <span class="ml-1 badge bg-red-100 text-red-700">A</span>}
-                </span>
-                <span class="shrink-0 text-slate-400">{r.s?.nombre ?? "—"}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-
-    <div class="card p-4">
-      <h2 class="font-semibold text-slate-800 text-sm">Calibraciones vencidas o sin programar ({calibVencida.length + calibSinFecha.length})</h2>
-      {calibVencida.length + calibSinFecha.length === 0 ? (
-        <p class="mt-2 text-sm text-emerald-700">✓ Calibraciones al día.</p>
-      ) : (
-        <ul class="mt-2 space-y-1 max-h-64 overflow-y-auto text-xs">
-          {calibVencida.map((r) => (
-            <li>
-              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
-                <span class="min-w-0 truncate">
-                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
-                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
-                </span>
-                <span class="shrink-0 text-red-600 font-medium">venció {fmt(r.a.proximaCalibracion!.slice(0, 10))}</span>
-              </a>
-            </li>
-          ))}
-          {calibSinFecha.map((r) => (
-            <li>
-              <a href={`/activos/${r.a.id}`} class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
-                <span class="min-w-0 truncate">
-                  <span class="font-mono text-[10px] text-slate-400">{r.a.codigo}</span>
-                  <span class="ml-1 font-medium text-slate-700">{r.a.nombre}</span>
-                </span>
-                <span class="shrink-0 text-amber-600 font-medium">sin programar</span>
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  </div>
+  <!-- ═══ Detalle por indicador (se imprime si la casilla está marcada) ═══ -->
+  <section class="det-bloque mt-6">
+    <h2 class="text-sm font-semibold text-slate-800">Detalle por indicador</h2>
+    <p class="text-xs text-slate-500">Cada fila lleva a la ficha o al registro donde se corrige. El mismo detalle sale en «Descargar CSV».</p>
+    {indicadores.map((i) => {
+      const filas = hallazgosDe.get(i.clave) ?? [];
+      return (
+        <div class="card mt-3 p-4">
+          <h2 id={`det-${i.clave}`} class="scroll-mt-20 font-semibold text-slate-800 text-sm">{i.titulo} ({filas.length})</h2>
+          {i.sinDatos ? (
+            <p class="mt-2 text-sm text-slate-400">Sin datos todavía.</p>
+          ) : filas.length === 0 ? (
+            <p class="mt-2 text-sm text-emerald-700">✓ Sin pendientes.</p>
+          ) : (
+            <ul class="det-lista mt-2 max-h-80 space-y-1 overflow-y-auto text-xs">
+              {filas.map((h) => (
+                <li>
+                  <a href={h.enlace} class="flex flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                    <span class="min-w-0">
+                      <span class="font-mono text-[10px] text-slate-400">{h.codigo}</span>
+                      <span class="ml-1 font-medium text-slate-700">{h.nombre}</span>
+                      {h.sede && <span class="ml-1 text-[10px] text-slate-400">· {h.sede}{h.ubicacion ? ` · ${h.ubicacion}` : ""}</span>}
+                    </span>
+                    <span class={`shrink-0 font-medium ${h.nivel === "falla" ? "text-red-600" : "text-amber-700"}`}>{h.detalle}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+    })}
+  </section>
 
   <div class="mt-4 text-[10px] text-slate-400">
-    Panel generado el {fechaGeneracion} · Umbral de referencia: ≥95% verde, 80–94% ámbar, &lt;80% rojo (meta institucional: ≥95% en clase A).
+    Panel generado el {fechaGeneracion} · Umbral de referencia: ≥95% verde, 80–94% ámbar, &lt;80% rojo (meta institucional: ≥95% en criticidad alta) ·
+    La vigencia de calibración sale de la última calibración registrada; es la misma regla del tablero Calibraciones ·
+    Los equipos dados de baja no cuentan, salvo en «Bajas sin acta».
   </div>
 
   <DocFolio soloImpresion codigo="Cumplimiento FMS.07" />
+  </div>
 
   <style is:global>
+    /* globals.css ya oculta la barra superior y lo «no-print»: no se oculta `header`,
+       porque DocCabecera es un <header>. Las listas salen completas en papel. */
     @media print {
-      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
-      main { padding: 0 !important; }
-      body { background: white !important; }
+      .det-lista, #cumplimiento ul { max-height: none !important; overflow: visible !important; }
+      .sin-detalle .det-bloque { display: none !important; }
     }
   </style>
+
+  <script>
+    const contenedor = document.getElementById("cumplimiento");
+    document.getElementById("conDetalle")?.addEventListener("change", (e) => {
+      contenedor?.classList.toggle("sin-detalle", !(e.currentTarget as HTMLInputElement).checked);
+    });
+  </script>
 </Layout>

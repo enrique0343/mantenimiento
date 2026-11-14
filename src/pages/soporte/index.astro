@@ -106,6 +106,13 @@ const ubJson = JSON.stringify(ubRows);
                 <option value="">— Selecciona primero la sucursal —</option>
               </select>
             </div>
+            <div id="activoBox" class="sm:col-span-2 hidden">
+              <label class="label" for="activoId">Equipo <span class="text-slate-400 font-normal">(opcional)</span></label>
+              <select class="input" id="activoId">
+                <option value="">— No sé / no está en la lista —</option>
+              </select>
+              <p class="mt-1 text-xs text-slate-500">Si el problema es de un equipo, elígelo. Si no aparece, escríbelo en la descripción.</p>
+            </div>
             <div class="sm:col-span-2">
               <label class="label">Detalle adicional de ubicación (opcional)</label>
               <input class="input" id="ubicacion" placeholder="Ej: junto a la puerta, esquina noreste, mesa 4..." />
@@ -153,6 +160,58 @@ const ubJson = JSON.stringify(ubRows);
           o.textContent = u.nombre;
           ubEl.appendChild(o);
         });
+      });
+
+      // ─── Equipo (opcional): los de la ubicación elegida, sin los dados de baja ───
+      const rubroEl = document.getElementById("rubro");
+      const actBox = document.getElementById("activoBox");
+      const actEl = document.getElementById("activoId");
+      // Con ?area= el área viene fija: elegir un equipo no la cambia.
+      const rubroFijo = !!rubroEl?.disabled;
+      const OPCION_VACIA = "— No sé / no está en la lista —";
+      let consultaEquipos = 0;
+      function vaciarEquipos() {
+        if (!actEl || !actBox) return;
+        actEl.innerHTML = "";
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = OPCION_VACIA;
+        actEl.appendChild(o);
+        actBox.classList.add("hidden");
+      }
+      async function cargarEquipos() {
+        if (!actEl || !actBox) return;
+        const n = ++consultaEquipos;
+        const ubicacionId = ubEl?.value || "";
+        const previo = actEl.value;
+        if (!ubicacionId) { vaciarEquipos(); return; }
+        const area = rubroEl?.value || "";
+        try {
+          const res = await fetch("/api/tickets/publico/equipos?ubicacionId=" + encodeURIComponent(ubicacionId) + (area ? "&area=" + encodeURIComponent(area) : ""));
+          const j = res.ok ? await res.json().catch(() => null) : null;
+          if (n !== consultaEquipos) return; // llegó una consulta más nueva
+          const equipos = Array.isArray(j?.equipos) ? j.equipos : [];
+          vaciarEquipos();
+          for (const e of equipos) {
+            const o = document.createElement("option");
+            o.value = String(e.id);
+            o.textContent = e.codigo + " · " + e.nombre;
+            o.dataset.area = e.area || "";
+            actEl.appendChild(o);
+          }
+          if (previo && equipos.some((e) => String(e.id) === previo)) actEl.value = previo;
+          actBox.classList.toggle("hidden", equipos.length === 0);
+        } catch {
+          if (n === consultaEquipos) vaciarEquipos();
+        }
+      }
+      sucEl?.addEventListener("change", cargarEquipos);
+      ubEl?.addEventListener("change", cargarEquipos);
+      rubroEl?.addEventListener("change", cargarEquipos);
+      // Un equipo de otra área ajusta el área (sin volver a pedir la lista).
+      actEl?.addEventListener("change", () => {
+        const area = actEl.selectedOptions[0]?.dataset.area || "";
+        if (area && rubroEl && !rubroFijo && rubroEl.value !== area) rubroEl.value = area;
       });
 
       // ─── Fotos pendientes ──────────────────────────────────────────────
@@ -211,12 +270,22 @@ const ubJson = JSON.stringify(ubRows);
           ubicacion: v("ubicacion") || null,
           sucursalId: Number(sucEl.value),
           ubicacionId: ubEl?.value ? Number(ubEl.value) : null,
+          activoId: actEl?.value ? Number(actEl.value) : null,
         };
-        const res = await fetch("/api/tickets/publico", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        let res;
+        try {
+          res = await fetch("/api/tickets/publico", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } catch {
+          // Sin red el botón quedaba en «Enviando...» y había que recargar y escribir todo otra vez.
+          err.textContent = "No pudimos enviar tu solicitud: revisa tu conexión e inténtalo de nuevo. Lo que escribiste sigue aquí.";
+          err.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = "Enviar solicitud";
+          return;
+        }
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
           err.textContent = typeof j.error === "string" ? j.error : "No pudimos enviar tu solicitud. Verifica los campos e intenta de nuevo.";

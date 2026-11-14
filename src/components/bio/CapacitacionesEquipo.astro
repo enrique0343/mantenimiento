@@ -1,0 +1,106 @@
+---
+// Fase 59 · WP-D: capacitaciones al personal sobre el equipo (requisito 19). En la ficha,
+// solo equipos biomédicos: el resumen y las cinco más recientes. En la hoja de vida
+// (variante «hoja», sin botones ni scripts), todas, y la sección sale siempre que la hoja la
+// coloque, también en un equipo que se pasó a otra área con capacitaciones (la hoja la numera).
+// Un equipo dado de baja no recibe capacitaciones nuevas: sin «+ Registrar capacitación», con
+// las que ya tiene a la vista. Solo admin, jefe, técnico y visualizador.
+import { eq } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import { capacitacionesDeActivo } from "@/lib/bio-consultas";
+import { EVIDENCIA_CAPACITACION, codigoCapacitacion, etiquetaTipoCapacitacion, evidenciaCapacitacion } from "@/lib/capacitaciones";
+import { fechaCorta, hoySV, puedeRegistrarBio, puedeVerBio } from "@/lib/biomedico";
+import { rubroDeActivo } from "@/lib/rubros";
+import { areaHref } from "@/lib/areas";
+import { partirTitulo } from "./hoja";
+
+interface Props {
+  activoId: number;
+  /** "ficha" (con botones y formulario) u "hoja" (hoja de vida impresa, sin scripts). */
+  variante?: "ficha" | "hoja";
+  /** Título de la sección en la hoja de vida, por ejemplo «6. Expediente técnico». */
+  titulo?: string;
+}
+const { activoId, variante = "ficha", titulo } = Astro.props;
+const user = Astro.locals.user;
+const ver = !!user && puedeVerBio(user.rol);
+const ficha = variante !== "hoja";
+const hoy = hoySV();
+const db = ver ? getDb(Astro) : null;
+const [equipo] = db
+  ? await db.select({ rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, activoId)).limit(1)
+  : [];
+const esBio = !!equipo && rubroDeActivo(equipo.rubro, equipo.tipo) === "biomedico";
+const datos = db && equipo && (esBio || !ficha) ? await capacitacionesDeActivo(db, activoId, hoy) : null;
+const filas = (datos?.filas ?? []).map((f) => ({ ...f, ev: evidenciaCapacitacion(f, hoy) }));
+const puedeRegistrar = !!user && puedeRegistrarBio(user.rol) && ficha && equipo?.estado !== "baja";
+const enlace = (ruta: string) => areaHref(ruta, "biomedico");
+const tituloHoja = partirTitulo(titulo, "Capacitaciones al personal");
+---
+
+{datos && ficha && (
+  <section id="capacitaciones" class="card mt-6 p-5">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="font-semibold">Capacitaciones al personal</h2>
+        <p class="text-xs text-slate-500">
+          {datos.total === 0 ? "Uso seguro, limpieza y desinfección del equipo." : (
+            <>{datos.total} capacitaci{datos.total === 1 ? "ón" : "ones"}{datos.ultima && ` · última ${fechaCorta(datos.ultima)}`} · {datos.asistentes} persona{datos.asistentes === 1 ? "" : "s"}</>
+          )}
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {datos.total > 0 && <a class="btn-secondary text-sm" href={enlace(`/capacitaciones?activo=${activoId}&desde=2000-01-01`)}>Ver todas</a>}
+        {puedeRegistrar && <a class="btn-primary text-sm" href={enlace(`/capacitaciones/nueva?activo=${activoId}`)}>+ Registrar capacitación</a>}
+      </div>
+    </div>
+    {filas.length === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Sin capacitaciones registradas para este equipo.</p>
+    ) : (
+      <ul class="mt-3 divide-y divide-slate-100 text-sm">
+        {filas.slice(0, 5).map((f) => (
+          <li class="flex flex-wrap items-start justify-between gap-3 py-2">
+            <div class="min-w-0 flex-1">
+              <a href={enlace(`/capacitaciones/${f.id}`)} class="font-medium text-brand-700 hover:underline">{f.tema}</a>
+              <div class="text-xs text-slate-500">
+                {fechaCorta(f.fecha)} · {etiquetaTipoCapacitacion(f.tipo)} · {f.asistentes} asistente{f.asistentes === 1 ? "" : "s"} · {codigoCapacitacion(f.id)}
+              </div>
+            </div>
+            <span class={`badge shrink-0 text-[10px] ${EVIDENCIA_CAPACITACION[f.ev].color}`}>{EVIDENCIA_CAPACITACION[f.ev].etiqueta}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
+)}
+
+{datos && !ficha && (
+  <section id="capacitaciones" class="doc-seccion">
+    <h2 class="doc-h">{tituloHoja.numero ? <><span>{tituloHoja.numero}</span> {tituloHoja.texto}</> : tituloHoja.texto}</h2>
+    {filas.length === 0 ? (
+      <p class="doc-nota">Sin capacitaciones registradas.</p>
+    ) : (
+      <>
+        <p class="doc-texto">
+          {datos.total} capacitaci{datos.total === 1 ? "ón" : "ones"}{datos.ultima ? ` · última ${fechaCorta(datos.ultima)}` : ""} · {datos.asistentes} persona{datos.asistentes === 1 ? "" : "s"}.
+        </p>
+        <table class="doc-tabla">
+          <thead><tr><th>Fecha</th><th>Tema</th><th>Tipo</th><th>Instructor</th><th class="n">Asistentes</th><th>Lista firmada</th></tr></thead>
+          <tbody>
+            {filas.map((f) => (
+              <tr>
+                <td class="tn">{fechaCorta(f.fecha)}</td>
+                <td>{f.tema}<span class="doc-nota-celda">{codigoCapacitacion(f.id)}</span></td>
+                <td>{etiquetaTipoCapacitacion(f.tipo)}</td>
+                <td>{f.instructorNombre}</td>
+                <td class="n">{f.asistentes}</td>
+                <td>{f.listasFirmadas > 0 ? "Sí" : f.ev === "programada" ? "Programada" : "No"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>
+    )}
+  </section>
+)}

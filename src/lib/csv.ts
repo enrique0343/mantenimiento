@@ -20,12 +20,25 @@ function csvEscape(v: any): string {
 function formatCell(v: any): string {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString();
-  // Fechas SQLite vienen como "2024-01-15 12:34:56" → convertir a ISO
-  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(v)) {
+  // Marcas de SQLite, con segundos: "2024-01-15 12:34:56" → ISO "2024-01-15T12:34:56".
+  // Una marca ya en hora de El Salvador sin segundos ("2026-11-12 10:10", fase 59 §f.5)
+  // se deja con su espacio: así la lee Excel como fecha y hora.
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(v)) {
     return v.replace(" ", "T");
   }
   if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "string") return sinFormula(v);
   return String(v);
+}
+
+// Excel abre como fórmula el texto que empieza con =, +, -, @, tabulador o retorno
+// («=HYPERLINK(…)», «+503 2537 6161» → #NULL!). Se antepone «'» para que quede como texto.
+// Los números escritos como texto («-2.5», «-1,5», «+5») y un «-» o «+» solos no cambian.
+const NUMERO_TEXTO = /^[-+]?\d+(?:[.,]\d+)?$/;
+export function sinFormula(s: string): string {
+  if (/^[=@\t\r]/.test(s)) return `'${s}`;
+  if (/^[+-]/.test(s) && s.length > 1 && !NUMERO_TEXTO.test(s)) return `'${s}`;
+  return s;
 }
 
 export function csvResponse(filename: string, csv: string): Response {

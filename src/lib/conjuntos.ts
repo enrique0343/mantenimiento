@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb, getEnv } from "./db";
 import { activos, conjuntos, conjuntoPuestos, conjuntoComponentes, conjuntoEventos, ordenConjuntos, ordenes, planesMantenimiento, ubicaciones } from "./schema";
 import { AREA_KEYS, activoAreaExpression, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
+import { condicionRubroAreaEspacio, type Espacio } from "./espacio";
 import type { APIContext } from "astro";
 import { getCurrentUser } from "./auth";
 
@@ -67,14 +68,16 @@ export function calcularDisponibilidadConjunto(puestos: Array<{ funcion: string;
   return { estado: motivos.length ? "no_disponible" : "disponible", motivos };
 }
 
-export async function getConjuntos(ctx: Context, area?: AreaKey | null) {
+/** espacio: sin área, solo los conjuntos de ese espacio (sin los dos, todos). */
+export async function getConjuntos(ctx: Context, area?: AreaKey | null, espacio?: Espacio | null) {
   await lectorConjuntos(ctx);
   const db = getDb(ctx);
-  const rows = await db.select().from(conjuntos).where(area ? eq(conjuntos.rubro, area) : undefined).orderBy(asc(conjuntos.nombre));
+  const where = area ? eq(conjuntos.rubro, area) : espacio ? condicionRubroAreaEspacio(conjuntos.rubro, espacio, null) : undefined;
+  const rows = await db.select().from(conjuntos).where(where).orderBy(asc(conjuntos.nombre));
   if (!rows.length) return [];
   const puestos = await db.select({ p: conjuntoPuestos, c: conjuntoComponentes, a: activos }).from(conjuntoPuestos)
     .leftJoin(conjuntoComponentes, and(eq(conjuntoComponentes.puestoId, conjuntoPuestos.id), isNull(conjuntoComponentes.retiradoEn)))
-    .leftJoin(activos, eq(activos.id, conjuntoComponentes.activoId)).where(inArray(conjuntoPuestos.conjuntoId, rows.map(r => r.id)));
+    .leftJoin(activos, eq(activos.id, conjuntoComponentes.activoId)).where(sql`${conjuntoPuestos.conjuntoId} in (select value from json_each(${JSON.stringify(rows.map(r => r.id))}))`);
   return rows.map(c => {
     const propios = puestos.filter(p => p.p.conjuntoId === c.id);
     return { id: c.id, codigo: c.codigo, nombre: c.nombre, rubro: c.rubro, criticidad: c.criticidad, activo: c.activo, version: c.version,

@@ -3,9 +3,10 @@ import { eq, lte, and, asc } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { planesMantenimiento, ordenes, activos, actividades, actividadCategorias, usuarios } from "@/lib/schema";
 import { enviarRecordatoriosEncuestas } from "@/lib/encuestas-recordatorio";
-import { enviarDigestDiario } from "@/lib/daily-digest";
+import { enviarAvisoVencimientosBio, enviarDigestDiario } from "@/lib/daily-digest";
 
 import { rubroDeActivo } from "@/lib/rubros";
+import { hoySV } from "@/lib/biomedico";
 import { areaDeActividad } from "@/lib/actividades";
 import { crearNotificacion } from "@/lib/notif-app";
 import { sendTelegram } from "@/lib/telegram";
@@ -24,7 +25,8 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const db = getDb(ctx);
-  const hoy = new Date().toISOString().slice(0, 10);
+  // «Hoy» en El Salvador: de 6 p. m. a medianoche UTC ya es el día siguiente.
+  const hoy = hoySV();
   const now = new Date().toISOString();
 
   let creadas = 0;
@@ -46,7 +48,8 @@ export const POST: APIRoute = async (ctx) => {
   // este ciclo (ultimaGeneracion < proximaFecha). NO avanzamos proximaFecha
   // aquí: se avanza al cerrar la OT (lógica en PATCH /api/ordenes/[id]).
   const planesRows = await db
-    .select({ p: planesMantenimiento, a: activos })
+    // Del equipo solo lo que usa la orden (D1 corta el resultado a 100 columnas).
+    .select({ p: planesMantenimiento, a: { id: activos.id, codigo: activos.codigo, rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado } })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, hoy)));
@@ -55,6 +58,16 @@ export const POST: APIRoute = async (ctx) => {
     const p = r.p;
     // Si ya generamos OT para este ciclo, saltar.
     if (p.ultimaGeneracion && p.ultimaGeneracion.slice(0, 10) >= p.proximaFecha) continue;
+    // Parte automática del requisito 13: sin equipo o con el equipo dado de baja no
+    // se crea la orden. El plan no se desactiva aquí (lo hace la baja); queda anotado.
+    if (!r.a) {
+      omitidas.push({ origen: "equipo", refId: p.id, motivo: "Plan sin equipo" });
+      continue;
+    }
+    if (r.a.estado === "baja") {
+      omitidas.push({ origen: "equipo", refId: p.id, motivo: "Equipo dado de baja" });
+      continue;
+    }
     const creadoPor = creadorDeRutina(p.asignadoA);
     if (!creadoPor) {
       omitidas.push({ origen: "equipo", refId: p.id, motivo: "Sin responsable ni administrador activo" });
@@ -179,5 +192,14 @@ export const POST: APIRoute = async (ctx) => {
     console.error("digest diario:", e);
   }
 
-  return Response.json({ ok: true, fecha: hoy, creadas, detalles, omitidas, recordatoriosEnviados, digestEnviados });
+  // Correo corto a la jefatura biomédica con lo que vence (una vez al día, solo si hay algo).
+  let avisoBioEnviados = 0;
+  try {
+    const r = await enviarAvisoVencimientosBio(ctx);
+    avisoBioEnviados = r.enviados;
+  } catch (e) {
+    console.error("aviso de vencimientos biomédicos:", e);
+  }
+
+  return Response.json({ ok: true, fecha: hoy, creadas, detalles, omitidas, recordatoriosEnviados, digestEnviados, avisoBioEnviados });
 };

@@ -1,5 +1,7 @@
 import { sqliteTable, integer, text, real, primaryKey, index } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+// Fase 59: la escala de clase de riesgo y los estados del equipo se definen una sola vez.
+import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO } from "./biomedico";
 
 export const ROLES = ["admin", "jefe", "tecnico", "proveedor", "solicitante", "visualizador", "motorista"] as const;
 export type Rol = (typeof ROLES)[number];
@@ -43,6 +45,19 @@ export const ubicaciones = sqliteTable("ubicaciones", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ─── Centros de costo (Fase 59) ──────────────────────────────────────────────
+// Catálogo cerrado que administran admin y jefe. Código en mayúsculas; sede opcional.
+export const centrosCosto = sqliteTable("centros_costo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  codigo: text("codigo").notNull().unique(),
+  nombre: text("nombre").notNull(),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id, { onDelete: "set null" }),
+  activo: integer("activo", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+}, (t) => [index("idx_centros_costo_sucursal").on(t.sucursalId)]);
+export type CentroCosto = typeof centrosCosto.$inferSelect;
+
 // ─── Proveedores ──────────────────────────────────────────────────────────────
 export const proveedores = sqliteTable("proveedores", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -58,6 +73,12 @@ export const proveedores = sqliteTable("proveedores", {
   acreditacionOrgano: text("acreditacion_organo"),
   acreditacionVigencia: text("acreditacion_vigencia"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // Fase 59: número, alcance y certificado de la acreditación (R2).
+  acreditacionNumero: text("acreditacion_numero"),
+  acreditacionAlcance: text("acreditacion_alcance"),
+  acreditacionR2Key: text("acreditacion_r2_key"),
+  acreditacionArchivoNombre: text("acreditacion_archivo_nombre"),
+  acreditacionContentType: text("acreditacion_content_type"),
 });
 
 // ─── Usuarios ─────────────────────────────────────────────────────────────────
@@ -123,7 +144,7 @@ export const activos = sqliteTable("activos", {
   ubicacion: text("ubicacion"),
   ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id),
   proveedorId: integer("proveedor_id").references(() => proveedores.id),
-  estado: text("estado", { enum: ["operativo", "averiado", "mantenimiento", "baja"] })
+  estado: text("estado", { enum: ESTADOS_ACTIVO })
     .notNull()
     .default("operativo"),
   // Identificacion fisica
@@ -160,7 +181,7 @@ export const activos = sqliteTable("activos", {
   requiereCalibracion: integer("requiere_calibracion", { mode: "boolean" }).notNull().default(false),
   // Campos biomedicos
   registroSanitario: text("registro_sanitario"),
-  claseRiesgo: text("clase_riesgo", { enum: ["I", "IIa", "IIb", "III"] }),
+  claseRiesgo: text("clase_riesgo", { enum: CLASES_RIESGO_VALORES }),
   ultimaCalibracion: text("ultima_calibracion"),
   proximaCalibracion: text("proxima_calibracion"),
   // SLA por prioridad (horas para completar la OT)
@@ -177,7 +198,21 @@ export const activos = sqliteTable("activos", {
   sistema: text("sistema", { enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"] }),
   scpProcedimientoId: integer("scp_procedimiento_id"),
   scpVersionRef: text("scp_version_ref"),
-});
+  // ── Fase 59 · inventario biomédico ──
+  // D1 corta el resultado a 100 columnas: al unir activos con otras tablas, elegir columnas.
+  centroCostoId: integer("centro_costo_id").references(() => centrosCosto.id),
+  registroSanitarioEntidad: text("registro_sanitario_entidad"),
+  registroSanitarioEmision: text("registro_sanitario_emision"),
+  registroSanitarioVencimiento: text("registro_sanitario_vencimiento"),
+  registroSanitarioNoRequiere: integer("registro_sanitario_no_requiere", { mode: "boolean" }).notNull().default(false),
+  // Instrumento patrón y «no requiere calibración» con su motivo (los escribe Calibraciones).
+  esPatron: integer("es_patron", { mode: "boolean" }).notNull().default(false),
+  calibracionNoAplica: integer("calibracion_no_aplica", { mode: "boolean" }).notNull().default(false),
+  calibracionNoAplicaMotivo: text("calibracion_no_aplica_motivo"),
+}, (t) => [
+  index("idx_activos_centro_costo").on(t.centroCostoId),
+  index("idx_activos_estado").on(t.estado),
+]);
 
 // ─── Órdenes de trabajo ───────────────────────────────────────────────────────
 export const ordenes = sqliteTable("ordenes", {
@@ -525,6 +560,8 @@ export const planesMantenimiento = sqliteTable("planes_mantenimiento", {
   plantillaId: integer("plantilla_id"),
   vecesPorDia: integer("veces_por_dia").notNull().default(1),
   horasProgramadas: text("horas_programadas"),
+  // Fase 59: proveedor del servicio externo aunque no haya contrato (plan anual).
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -837,13 +874,24 @@ export const alertasEquipo = sqliteTable("alertas_equipo", {
   cerradaPor: integer("cerrada_por").references(() => usuarios.id),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  // Fase 59: análisis de aplicabilidad, cierre declarado y reapertura con motivo.
+  aplicabilidad: text("aplicabilidad", { enum: ["pendiente", "aplica", "no_aplica"] }).notNull().default("pendiente"),
+  aplicabilidadAnalisis: text("aplicabilidad_analisis"),
+  aplicabilidadFecha: text("aplicabilidad_fecha"),
+  aplicabilidadPor: integer("aplicabilidad_por").references(() => usuarios.id),
+  fechaCierre: text("fecha_cierre"),
+  reabiertaEn: text("reabierta_en"),
+  reabiertaPor: integer("reabierta_por").references(() => usuarios.id),
+  motivoReapertura: text("motivo_reapertura"),
+  vecesReabierta: integer("veces_reabierta").notNull().default(0),
+  updatedAt: text("updated_at"),
 });
 
 export const alertasEquipoActivos = sqliteTable("alertas_equipo_activos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   alertaId: integer("alerta_id").notNull().references(() => alertasEquipo.id, { onDelete: "cascade" }),
   activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
-});
+}, (t) => [index("idx_alertas_equipo_activos_activo").on(t.activoId)]);
 
 export type AlertaEquipo = typeof alertasEquipo.$inferSelect;
 
@@ -1186,7 +1234,14 @@ export const calibraciones = sqliteTable("calibraciones", {
   notas: text("notas"),
   usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+  // Fase 59: patrón de la lista, copia de la acreditación del laboratorio en su fecha
+  // (1 sí, 0 no, NULL no consta) y marca de corrección.
+  patronActivoId: integer("patron_activo_id").references(() => activos.id, { onDelete: "set null" }),
+  labAcreditado: integer("lab_acreditado", { mode: "boolean" }),
+  labAcreditacionRef: text("lab_acreditacion_ref"),
+  corregidaEn: text("corregida_en"),
+  corregidaPor: integer("corregida_por").references(() => usuarios.id),
+}, (t) => [index("idx_calibraciones_patron_activo").on(t.patronActivoId)]);
 export type Calibracion = typeof calibraciones.$inferSelect;
 
 // ─── Documentos del equipo (ficha técnica, manual, garantía…) (Fase 34) ──────
@@ -1203,6 +1258,9 @@ export const activoDocumentos = sqliteTable("activo_documentos", {
   version: text("version"),
   fechaVersion: text("fecha_version"),
   asBuilt: integer("as_built", { mode: "boolean" }).notNull().default(false),
+  // Fase 59: vencimiento opcional ('AAAA-MM-DD') y nota corta.
+  fechaVencimiento: text("fecha_vencimiento"),
+  nota: text("nota"),
 });
 export type ActivoDocumento = typeof activoDocumentos.$inferSelect;
 
@@ -1290,7 +1348,8 @@ export const procedimientos = sqliteTable("procedimientos", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   codigoCorto: text("codigo_corto").notNull().unique(),
   codigoInstitucional: text("codigo_institucional"),
-  tipo: text("tipo", { enum: ["scp", "sop", "mop", "eop", "aop"] }).notNull(),
+  // Fase 59: 'protocolo' = protocolo institucional de Calidad (la columna es texto sin CHECK).
+  tipo: text("tipo", { enum: ["scp", "sop", "mop", "eop", "aop", "protocolo"] }).notNull(),
   sistema: text("sistema", {
     enum: ["electrico", "hvac", "minisplit", "gases", "agua", "incendios", "ascensores", "otro"],
   }).notNull(),
@@ -1315,6 +1374,12 @@ export const procedimientos = sqliteTable("procedimientos", {
   aprobadoEn: text("aprobado_en"),
   proximaRevision: text("proxima_revision"),
   r2Key: text("r2_key"),
+  // Fase 59: datos del PDF aprobado (solo los escribe /api/procedimientos/[id]/pdf).
+  pdfNombre: text("pdf_nombre"),
+  pdfTamano: integer("pdf_tamano"),
+  pdfVersion: text("pdf_version"),
+  pdfSubidoPor: integer("pdf_subido_por").references(() => usuarios.id),
+  pdfSubidoEn: text("pdf_subido_en"),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
   creadoPor: integer("creado_por").references(() => usuarios.id),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -1816,3 +1881,236 @@ export const ordenConjuntos = sqliteTable("orden_conjuntos", {
 });
 
 export { ordenVerificacion, ordenVerificacionEventos } from './orden-verificacion-schema';
+
+// ═══ Fase 59 · Equipos biomédicos y evaluación JCI ══════════════════════════
+// Mismas tablas que migrations/0059_fase59_biomedicos_jci.sql. Fechas sin hora en
+// 'AAAA-MM-DD'; marcas de tiempo en UTC.
+
+// Baja del equipo con su acta. Sin cascada: con una baja, el equipo no se elimina.
+// El índice único parcial uq_activo_bajas_vigente (una sola baja vigente) vive en el SQL.
+export const activoBajas = sqliteTable("activo_bajas", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id),
+  estado: text("estado", { enum: ["vigente", "revertida"] }).notNull().default("vigente"),
+  fechaBaja: text("fecha_baja").notNull(),
+  motivo: text("motivo").notNull(),
+  motivoDetalle: text("motivo_detalle").notNull(),
+  evaluacionTecnica: text("evaluacion_tecnica").notNull(),
+  evaluadoPor: text("evaluado_por").notNull(),
+  autorizaNombre: text("autoriza_nombre").notNull(),
+  autorizaCargo: text("autoriza_cargo").notNull(),
+  destinoFinal: text("destino_final").notNull(),
+  destinoDetalle: text("destino_detalle"),
+  empresaRetira: text("empresa_retira"),
+  fechaRetiro: text("fecha_retiro"),
+  residuosBaterias: text("residuos_baterias").notNull(),
+  estadoAnterior: text("estado_anterior").notNull(),
+  planesDesactivados: text("planes_desactivados"),
+  registradoPor: integer("registrado_por").notNull().references(() => usuarios.id),
+  registradoPorNombre: text("registrado_por_nombre").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  revertidaEn: text("revertida_en"),
+  revertidaPor: integer("revertida_por").references(() => usuarios.id),
+  revertidaPorNombre: text("revertida_por_nombre"),
+  reversionMotivo: text("reversion_motivo"),
+}, (t) => [index("idx_activo_bajas_activo").on(t.activoId)]);
+export type ActivoBaja = typeof activoBajas.$inferSelect;
+
+// Requisito del expediente técnico que no aplica a un equipo, con su motivo.
+export const activoExpedienteNa = sqliteTable("activo_expediente_na", {
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+  requisito: text("requisito").notNull(),
+  motivo: text("motivo").notNull(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [primaryKey({ columns: [t.activoId, t.requisito] })]);
+
+// Licencias y permisos: establecimiento, servicio, equipo o persona. Renovar crea
+// otra fila con reemplaza_a_id; la historia no se sobrescribe.
+export const licencias = sqliteTable("licencias", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  entidad: text("entidad", { enum: ["srs", "cssp", "minsal", "otra"] }).notNull(),
+  entidadOtra: text("entidad_otra"),
+  tipo: text("tipo", { enum: ["funcionamiento", "radiacion_equipo", "radiacion_personal", "inscripcion", "otro"] }).notNull(),
+  nombre: text("nombre").notNull(),
+  numero: text("numero"),
+  ambito: text("ambito", { enum: ["establecimiento", "servicio", "equipo", "persona"] }).notNull(),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id, { onDelete: "set null" }),
+  servicio: text("servicio"),
+  activoId: integer("activo_id").references(() => activos.id, { onDelete: "set null" }),
+  titular: text("titular"),
+  fechaEmision: text("fecha_emision"),
+  fechaVencimiento: text("fecha_vencimiento"),
+  responsableId: integer("responsable_id").references(() => usuarios.id),
+  estado: text("estado", { enum: ["activa", "en_tramite", "reemplazada", "anulada"] }).notNull().default("activa"),
+  reemplazaAId: integer("reemplaza_a_id").references((): any => licencias.id, { onDelete: "set null" }),
+  notas: text("notas"),
+  creadoPor: integer("creado_por").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+}, (t) => [
+  index("idx_licencias_estado_vence").on(t.estado, t.fechaVencimiento),
+  index("idx_licencias_activo").on(t.activoId),
+  index("idx_licencias_reemplaza").on(t.reemplazaAId),
+]);
+export type Licencia = typeof licencias.$inferSelect;
+
+export const licenciaArchivos = sqliteTable("licencia_archivos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  licenciaId: integer("licencia_id").notNull().references(() => licencias.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria", { enum: ["licencia", "constancia_tramite", "otro"] }).notNull().default("licencia"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_licencia_archivos_licencia").on(t.licenciaId)]);
+export type LicenciaArchivo = typeof licenciaArchivos.$inferSelect;
+
+// Capacitaciones al personal sobre el uso de los equipos.
+export const capacitaciones = sqliteTable("capacitaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fecha: text("fecha").notNull(),
+  tema: text("tema").notNull(),
+  tipo: text("tipo", { enum: ["induccion", "uso_seguro", "actualizacion", "limpieza_desinfeccion", "otro"] }).notNull().default("uso_seguro"),
+  instructorTipo: text("instructor_tipo", { enum: ["interno", "externo"] }).notNull().default("interno"),
+  instructorNombre: text("instructor_nombre").notNull(),
+  proveedorId: integer("proveedor_id").references(() => proveedores.id),
+  instructorEntidad: text("instructor_entidad"),
+  modeloCubierto: text("modelo_cubierto"),
+  duracionMinutos: integer("duracion_minutos"),
+  sucursalId: integer("sucursal_id").references(() => sucursales.id, { onDelete: "set null" }),
+  lugar: text("lugar"),
+  servicio: text("servicio"),
+  notas: text("notas"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+}, (t) => [index("idx_capacitaciones_fecha").on(t.fecha)]);
+export type Capacitacion = typeof capacitaciones.$inferSelect;
+
+export const capacitacionEquipos = sqliteTable("capacitacion_equipos", {
+  capacitacionId: integer("capacitacion_id").notNull().references(() => capacitaciones.id, { onDelete: "cascade" }),
+  activoId: integer("activo_id").notNull().references(() => activos.id, { onDelete: "cascade" }),
+}, (t) => [
+  primaryKey({ columns: [t.capacitacionId, t.activoId] }),
+  index("idx_capacitacion_equipos_activo").on(t.activoId),
+]);
+
+export const capacitacionAsistentes = sqliteTable("capacitacion_asistentes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  capacitacionId: integer("capacitacion_id").notNull().references(() => capacitaciones.id, { onDelete: "cascade" }),
+  orden: integer("orden").notNull().default(0),
+  nombre: text("nombre").notNull(),
+  cargo: text("cargo"),
+  servicio: text("servicio"),
+}, (t) => [index("idx_capacitacion_asistentes_cap").on(t.capacitacionId)]);
+
+export const capacitacionArchivos = sqliteTable("capacitacion_archivos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  capacitacionId: integer("capacitacion_id").notNull().references(() => capacitaciones.id, { onDelete: "cascade" }),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  categoria: text("categoria", { enum: ["lista_firmada", "constancia", "material", "otro"] }).notNull().default("lista_firmada"),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_capacitacion_archivos_cap").on(t.capacitacionId)]);
+
+// Archivos de una alerta: boletín, evaluación y evidencia de la acción.
+export const alertaAdjuntos = sqliteTable("alerta_adjuntos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  alertaId: integer("alerta_id").notNull().references(() => alertasEquipo.id, { onDelete: "cascade" }),
+  categoria: text("categoria", { enum: ["boletin", "evaluacion", "evidencia", "otro"] }).notNull().default("boletin"),
+  nombre: text("nombre").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  usuarioId: integer("usuario_id").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_alerta_adjuntos_alerta").on(t.alertaId)]);
+export type AlertaAdjunto = typeof alertaAdjuntos.$inferSelect;
+
+// Aprobación del plan anual por año y área, con el PDF firmado. Se anula, no se borra.
+export const planAprobaciones = sqliteTable("plan_aprobaciones", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  anio: integer("anio").notNull(),
+  area: text("area").notNull(),
+  version: text("version").notNull(),
+  aprobadoPor: text("aprobado_por").notNull(),
+  fechaAprobacion: text("fecha_aprobacion").notNull(),
+  notas: text("notas"),
+  nombreArchivo: text("nombre_archivo").notNull(),
+  contentType: text("content_type").notNull(),
+  tamano: integer("tamano").notNull(),
+  r2Key: text("r2_key").notNull(),
+  registradoPor: integer("registrado_por").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  anuladaEn: text("anulada_en"),
+  anuladaPor: integer("anulada_por").references(() => usuarios.id),
+  motivoAnulacion: text("motivo_anulacion"),
+}, (t) => [index("idx_plan_aprobaciones_anio_area").on(t.anio, t.area)]);
+export type PlanAprobacion = typeof planAprobaciones.$inferSelect;
+
+// Pruebas de seguridad eléctrica IEC 62353. No se editan: se anulan con motivo.
+export const pruebasSeguridadElectrica = sqliteTable("pruebas_seguridad_electrica", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  activoId: integer("activo_id").notNull().references(() => activos.id),
+  fecha: text("fecha").notNull(),
+  tipo: text("tipo", { enum: ["aceptacion", "periodica", "post_reparacion"] }).notNull(),
+  ordenId: integer("orden_id").references(() => ordenes.id, { onDelete: "set null" }),
+  claseProteccion: text("clase_proteccion", { enum: ["I", "II", "interna"] }).notNull(),
+  parteAplicada: text("parte_aplicada", { enum: ["ninguna", "B", "BF", "CF"] }).notNull().default("ninguna"),
+  metodoFuga: text("metodo_fuga", { enum: ["directo", "alternativo"] }).notNull().default("directo"),
+  inspeccionVisual: text("inspeccion_visual", { enum: ["conforme", "no_conforme"] }).notNull(),
+  pruebaFuncional: text("prueba_funcional", { enum: ["conforme", "no_conforme"] }).notNull(),
+  tierraOhm: real("tierra_ohm"),
+  limiteTierraOhm: real("limite_tierra_ohm"),
+  aislamientoMohm: real("aislamiento_mohm"),
+  limiteAislamientoMohm: real("limite_aislamiento_mohm"),
+  fugaEquipoUa: real("fuga_equipo_ua"),
+  limiteFugaEquipoUa: real("limite_fuga_equipo_ua"),
+  fugaParteUa: real("fuga_parte_ua"),
+  limiteFugaParteUa: real("limite_fuga_parte_ua"),
+  resultadoCalculado: text("resultado_calculado", { enum: ["pasa", "no_pasa"] }).notNull(),
+  resultado: text("resultado", { enum: ["pasa", "no_pasa"] }).notNull(),
+  motivoResultado: text("motivo_resultado"),
+  analizadorActivoId: integer("analizador_activo_id").references(() => activos.id, { onDelete: "set null" }),
+  analizadorDescripcion: text("analizador_descripcion").notNull(),
+  analizadorSerie: text("analizador_serie").notNull(),
+  analizadorCalVence: text("analizador_cal_vence").notNull(),
+  realizadoPor: text("realizado_por").notNull(),
+  realizadoPorId: integer("realizado_por_id").references(() => usuarios.id),
+  empresaExterna: text("empresa_externa"),
+  proximaFecha: text("proxima_fecha").notNull(),
+  informeR2Key: text("informe_r2_key"),
+  informeNombre: text("informe_nombre"),
+  informeTipo: text("informe_tipo"),
+  informeTamano: integer("informe_tamano"),
+  notas: text("notas"),
+  estado: text("estado", { enum: ["valida", "anulada"] }).notNull().default("valida"),
+  anuladaPor: integer("anulada_por").references(() => usuarios.id),
+  anuladaEn: text("anulada_en"),
+  motivoAnulacion: text("motivo_anulacion"),
+  registradoPor: integer("registrado_por").notNull().references(() => usuarios.id),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [
+  index("idx_pruebas_seg_elec_activo").on(t.activoId, t.estado, t.fecha),
+  index("idx_pruebas_seg_elec_orden").on(t.ordenId),
+]);
+export type PruebaSeguridadElectrica = typeof pruebasSeguridadElectrica.$inferSelect;
+
+// Orden relacionada con un incidente avisado a Calidad. Una marca por orden; sin
+// cascada: una orden marcada no se borra.
+export const ordenIncidentes = sqliteTable("orden_incidentes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ordenId: integer("orden_id").notNull().unique().references(() => ordenes.id),
+  numeroReporte: text("numero_reporte"),
+  fechaNotificacion: text("fecha_notificacion").notNull(),
+  nota: text("nota"),
+  marcadoPor: integer("marcado_por").notNull().references(() => usuarios.id),
+  marcadoEn: text("marcado_en").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (t) => [index("idx_orden_incidentes_fecha").on(t.fechaNotificacion)]);
+export type OrdenIncidente = typeof ordenIncidentes.$inferSelect;

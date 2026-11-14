@@ -3,6 +3,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { notificaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { condicionLinkEspacio, espacioDelContexto } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -14,7 +15,9 @@ export const GET: APIRoute = async (ctx) => {
   const url = new URL(ctx.request.url);
   const soloNoLeidas = url.searchParams.get("solo_no_leidas") === "1";
 
-  const conds = [eq(notificaciones.usuarioId, user.id)];
+  // La campana del espacio: los avisos de sus registros y los comunes, no los del otro.
+  const delEspacio = condicionLinkEspacio(notificaciones.link, espacioDelContexto(ctx, user));
+  const conds = [eq(notificaciones.usuarioId, user.id), delEspacio];
   if (soloNoLeidas) conds.push(eq(notificaciones.leida, false));
 
   const rows = await db
@@ -27,7 +30,7 @@ export const GET: APIRoute = async (ctx) => {
   const [count] = await db
     .select({ n: sql<number>`COUNT(*)` })
     .from(notificaciones)
-    .where(and(eq(notificaciones.usuarioId, user.id), eq(notificaciones.leida, false)));
+    .where(and(eq(notificaciones.usuarioId, user.id), eq(notificaciones.leida, false), delEspacio));
 
   return Response.json({
     notificaciones: rows,
@@ -43,9 +46,10 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   if (body.action === "marcar_todas_leidas") {
+    // «Marcar todas» marca las que se ven en este espacio.
     await db.update(notificaciones)
       .set({ leida: true })
-      .where(eq(notificaciones.usuarioId, user.id));
+      .where(and(eq(notificaciones.usuarioId, user.id), condicionLinkEspacio(notificaciones.link, espacioDelContexto(ctx, user))));
     return Response.json({ ok: true });
   }
 

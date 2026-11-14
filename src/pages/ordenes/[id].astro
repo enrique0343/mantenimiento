@@ -1,10 +1,12 @@
 ---
+import { espacioDeTrabajo, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 import { fmtFechaCompacta, fmtFechaSoloCompacta } from "@/lib/datetime";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra, ordenPrerrequisitos, ordenLiberaciones, procedimientos, eopFicha, planesMantenimiento } from "@/lib/schema";
+import { empresaQueRealiza } from "@/lib/tablero-bio";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
@@ -30,6 +32,11 @@ import { fmtCantidad } from "@/lib/inventario";
 import { queSigue, type QueSigue, type Situacion } from "@/lib/resolver";
 import { TIPO_PROC, estadoInfo, puedeVerProcedimientos, type TipoProc } from "@/lib/procedimientos";
 import { parseArea, areaHref, AREAS, activoAreaCondition } from "@/lib/areas";
+// Fase 59 · WP-G: marca de incidente o evento adverso (sección propia; no toca la orden).
+import { ordenIncidentes } from "@/lib/schema";
+import { fechaCorta, fechaHoraSV, hoySV } from "@/lib/biomedico";
+import { MAX_NUMERO_REPORTE, MAX_NOTA_INCIDENTE, MIN_MOTIVO_QUITAR, MAX_MOTIVO_QUITAR } from "@/lib/incidentes";
+import { infoTipoBiblioteca } from "@/lib/protocolos";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -49,6 +56,7 @@ const [row] = await db
       codigo: activos.codigo,
       nombre: activos.nombre,
       tipo: activos.tipo,
+      rubro: activos.rubro,
       marca: activos.marca,
       modelo: activos.modelo,
       serial: activos.serial,
@@ -71,6 +79,9 @@ if (!row) return Astro.redirect("/ordenes");
 
 const o = row.orden;
 const area = parseArea(o.rubro);
+// Registro del otro espacio: el middleware muestra el aviso; sin él, 403 sin datos.
+const espacioOrden = espacioDeTrabajo(o.rubro, row.activo);
+if (!puedeEntrar(user, espacioOrden)) return new Response(mensajeOtroEspacio(espacioOrden), { status: 403 });
 const rawArea = Astro.url.searchParams.get("area");
 if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
@@ -350,6 +361,8 @@ const verComprasSection = ["admin", "jefe", "tecnico"].includes(user.rol);
 const seguimiento = await leerVerificacionOrden(db, id);
 const roundsOrigins = await leerOrigenesRondaOrden(db, id);
 const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
+// Quién realiza el trabajo: la empresa del preventivo o, si no tiene, la del equipo (opcional).
+const empresaRealiza = await empresaQueRealiza(db, { planId: o.planId, activoId: row.activo?.id ?? null });
 const esRevisor = esRevisorOrden(user, seguimiento.control);
 const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
 // El técnico solo mueve una orden suya mientras no la envía a verificación, o
@@ -420,6 +433,32 @@ const adjsAntes = adjs.filter((a) => a.categoria === "antes");
 const adjsDespues = adjs.filter((a) => a.categoria === "despues");
 const adjsDocumento = adjs.filter((a) => a.categoria === "documento");
 const adjsGeneral = adjs.filter((a) => a.categoria === "general");
+
+// ══ Incidente o evento adverso (Fase 59 · WP-G) ══
+// La jefatura relaciona la orden con un incidente avisado a Calidad. La marca vive
+// en orden_incidentes: no cambia la orden, su checklist ni su verificación. La ven
+// admin, jefe, técnico y visualizador; proveedor, solicitante y motorista no.
+const verIncidente = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol);
+const puedeMarcarIncidente = esJefatura;
+const verListadoIncidentes = ["admin", "jefe", "visualizador"].includes(user.rol);
+let incidente: (typeof ordenIncidentes.$inferSelect & { marcadoPorNombre: string | null }) | null = null;
+let incidenteDisponible = true;
+if (verIncidente) {
+  try {
+    const [incRow] = await db
+      .select({ i: ordenIncidentes, marcadoPorNombre: usuarios.nombre })
+      .from(ordenIncidentes)
+      .leftJoin(usuarios, eq(usuarios.id, ordenIncidentes.marcadoPor))
+      .where(eq(ordenIncidentes.ordenId, id))
+      .limit(1);
+    incidente = incRow ? { ...incRow.i, marcadoPorNombre: incRow.marcadoPorNombre } : null;
+  } catch {
+    // Sin la migración 0059 la ficha sigue abriéndose; solo falta esta sección.
+    incidenteDisponible = false;
+  }
+}
+const hoyIncidente = hoySV();
+const muestraIncidente = verIncidente && incidenteDisponible && (!!incidente || puedeMarcarIncidente);
 ---
 
 <Layout title={etiquetaOT(o)}>
@@ -725,7 +764,7 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h2 class="font-semibold text-slate-900">Procedimiento que rige</h2>
             <span class="flex flex-wrap items-center gap-2">
-              {docRige && <span class={`badge ${TIPO_PROC[tipoDocRige].color}`}>{TIPO_PROC[tipoDocRige].icono} {TIPO_PROC[tipoDocRige].label}</span>}
+              {docRige && <span class={`badge ${infoTipoBiblioteca(tipoDocRige).color}`}>{infoTipoBiblioteca(tipoDocRige).icono} {infoTipoBiblioteca(tipoDocRige).label}</span>}
               {docRige && <span class={`badge ${estadoInfo(docRige.estado).color}`}>{estadoInfo(docRige.estado).label}</span>}
               <span id="rigeMsg" class="text-xs text-slate-400"></span>
             </span>
@@ -1114,6 +1153,12 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
                 </span>
               </div>
             </div>
+            {empresaRealiza && (
+              <div class="col-span-2" data-lo-realiza>
+                <div class="text-xs uppercase text-slate-500">Lo realiza</div>
+                <div class="mt-0.5 font-medium">{empresaRealiza.nombre}</div>
+              </div>
+            )}
             <div>
               <div class="text-xs uppercase text-slate-500">Sucursal</div>
               <div class="mt-0.5">{row.sucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>
@@ -1683,6 +1728,205 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
             <p class="mt-2 text-xs text-slate-500">{estadoActual === "abierta" ? "Se escribe una vez iniciada la orden." : "La orden está cancelada."}</p>
           )}
         </div>
+      )}
+
+      <!-- ══ Incidente o evento adverso · lo marca la jefatura (Fase 59). No toca la orden ni su cierre. ══ -->
+      {muestraIncidente && (
+        <section id="incidenteCard" class:list={["card p-5", incidente && "border-l-4 border-red-500"]} aria-label="Incidente o evento adverso">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="font-semibold text-slate-900">Incidente o evento adverso</h2>
+            {incidente && <span class="badge bg-red-100 text-red-700">Relacionada con un incidente</span>}
+          </div>
+          {incidente ? (
+            <Fragment>
+              <dl class="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt class="text-xs text-slate-500">Reporte de Calidad</dt>
+                  <dd class="mt-0.5 text-slate-900">
+                    {incidente.numeroReporte
+                      ? <span class="font-medium">{incidente.numeroReporte}</span>
+                      : <span class="text-amber-700">Pendiente: anótalo cuando Calidad lo asigne</span>}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-slate-500">Aviso a Calidad</dt>
+                  <dd class="mt-0.5 text-slate-900">{fechaCorta(incidente.fechaNotificacion)}</dd>
+                </div>
+                <div class="sm:col-span-2">
+                  <dt class="text-xs text-slate-500">Marcó</dt>
+                  <dd class="mt-0.5 text-slate-900">{incidente.marcadoPorNombre ?? "—"} · {fechaHoraSV(incidente.marcadoEn)}</dd>
+                </div>
+                {incidente.nota && (
+                  <div class="sm:col-span-2 lg:col-span-4">
+                    <dt class="text-xs text-slate-500">Nota</dt>
+                    <dd class="mt-0.5 whitespace-pre-wrap text-slate-700">{incidente.nota}</dd>
+                  </div>
+                )}
+              </dl>
+              <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                {verListadoIncidentes && <a href="/incidentes" class="text-brand-700 hover:underline">Ver listado de incidentes →</a>}
+                <a href="/procedimientos?tipo=protocolo" class="text-brand-700 hover:underline">Protocolos de Calidad →</a>
+                {puedeMarcarIncidente && (
+                  <span class="ml-auto flex flex-wrap gap-2">
+                    <button id="incEditar" type="button" class="btn-secondary text-xs">Editar</button>
+                    <button id="incQuitar" type="button" class="btn-secondary text-xs text-red-700">Quitar marca</button>
+                  </span>
+                )}
+              </div>
+            </Fragment>
+          ) : (
+            <div class="mt-2 flex flex-wrap items-center gap-3">
+              <p class="mr-auto max-w-2xl text-sm text-slate-600">¿Esta orden tiene que ver con un incidente o evento adverso que se avisó a Calidad? Márcala para que quede en el listado de incidentes. El reporte de esta orden sirve como evidencia técnica del caso.</p>
+              <button id="incMarcar" type="button" class="btn-secondary text-xs">Marcar como incidente</button>
+            </div>
+          )}
+          {puedeMarcarIncidente && (
+            <div id="incForm" class="mt-4 hidden space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label class="label" for="incNumero">Número de reporte de Calidad</label>
+                  <input id="incNumero" class="input" maxlength={MAX_NUMERO_REPORTE} placeholder="Ej. RC-2026-0148" value={incidente?.numeroReporte ?? ""} autocomplete="off" />
+                  <p class="mt-1 text-xs text-slate-500">Si Calidad todavía no lo asigna, déjalo vacío y complétalo después.</p>
+                </div>
+                <div>
+                  <label class="label" for="incFecha">Fecha en que se avisó a Calidad *</label>
+                  <input id="incFecha" type="date" class="input" max={hoyIncidente} value={incidente?.fechaNotificacion ?? ""} required />
+                </div>
+              </div>
+              <div>
+                <label class="label" for="incNota">Nota</label>
+                <textarea id="incNota" class="input" rows="3" maxlength={MAX_NOTA_INCIDENTE} placeholder="Qué pasó con el equipo y qué se hizo con él (retirado de uso, en cuarentena, devuelto). No escribas nombres ni datos del paciente.">{incidente?.nota ?? ""}</textarea>
+              </div>
+              <p id="incMsg" class="hidden text-sm text-red-600" role="alert"></p>
+              <div class="flex flex-wrap justify-end gap-2">
+                <button id="incCancelar" type="button" class="btn-secondary text-xs">Cancelar</button>
+                <button id="incGuardar" type="button" class="btn-primary text-xs">Guardar</button>
+              </div>
+            </div>
+          )}
+          {puedeMarcarIncidente && incidente && (
+            <div id="incQuitarBox" class="mt-4 hidden space-y-2 rounded-lg border border-red-200 bg-red-50 p-4">
+              <label class="label" for="incMotivo">Motivo para quitar la marca *</label>
+              <textarea id="incMotivo" class="input" rows="2" maxlength={MAX_MOTIVO_QUITAR} placeholder={`Por qué se quita la marca (mínimo ${MIN_MOTIVO_QUITAR} letras)`}></textarea>
+              <p id="incQuitarMsg" class="hidden text-sm text-red-600" role="alert"></p>
+              <div class="flex flex-wrap justify-end gap-2">
+                <button id="incQuitarCancelar" type="button" class="btn-secondary text-xs">Cancelar</button>
+                <button id="incQuitarConfirmar" type="button" class="btn-danger text-xs">Quitar marca</button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+      {muestraIncidente && puedeMarcarIncidente && (
+        <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ otId: o.id, hoy: hoyIncidente, minMotivo: MIN_MOTIVO_QUITAR }) }}>
+          const { otId, hoy, minMotivo } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+          const $inc = (x) => document.getElementById(x);
+          const incForm = $inc("incForm");
+          const incQuitarBox = $inc("incQuitarBox");
+          const mostrar = (el, si) => { if (el) el.classList.toggle("hidden", !si); };
+          const avisar = (el, texto) => {
+            if (!el) return;
+            el.textContent = texto || "";
+            el.classList.toggle("hidden", !texto);
+          };
+          // Cancelar devuelve los campos a lo que está guardado.
+          const restaurar = (caja) => caja?.querySelectorAll("input, textarea").forEach((c) => { c.value = c.defaultValue; });
+          const abrirForm = () => {
+            mostrar(incQuitarBox, false);
+            mostrar(incForm, true);
+            avisar($inc("incMsg"), "");
+            $inc("incFecha")?.focus();
+          };
+          async function enviarMarca(metodo, datos) {
+            const res = await fetch(`/api/ordenes/${otId}/incidente`, {
+              method: metodo,
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(datos),
+            });
+            const j = await res.json().catch(() => ({}));
+            return { ok: res.ok, j };
+          }
+
+          $inc("incMarcar")?.addEventListener("click", abrirForm);
+          $inc("incEditar")?.addEventListener("click", abrirForm);
+          $inc("incCancelar")?.addEventListener("click", () => {
+            restaurar(incForm);
+            avisar($inc("incMsg"), "");
+            mostrar(incForm, false);
+          });
+          $inc("incQuitar")?.addEventListener("click", () => {
+            mostrar(incForm, false);
+            mostrar(incQuitarBox, true);
+            avisar($inc("incQuitarMsg"), "");
+            $inc("incMotivo")?.focus();
+          });
+          $inc("incQuitarCancelar")?.addEventListener("click", () => {
+            restaurar(incQuitarBox);
+            avisar($inc("incQuitarMsg"), "");
+            mostrar(incQuitarBox, false);
+          });
+
+          $inc("incGuardar")?.addEventListener("click", async (ev) => {
+            const btn = ev.currentTarget;
+            const msg = $inc("incMsg");
+            const fecha = ($inc("incFecha")?.value || "").trim();
+            if (!fecha) return avisar(msg, "Escribe la fecha en que se avisó a Calidad.");
+            if (fecha > hoy) return avisar(msg, "La fecha de aviso a Calidad no puede ser posterior a hoy.");
+            avisar(msg, "");
+            btn.disabled = true;
+            try {
+              const { ok, j } = await enviarMarca("PUT", {
+                numeroReporte: $inc("incNumero")?.value ?? "",
+                fechaNotificacion: fecha,
+                nota: $inc("incNota")?.value ?? "",
+              });
+              if (!ok) {
+                avisar(msg, typeof j.error === "string" ? j.error : "No se pudo guardar la marca.");
+                btn.disabled = false;
+                return;
+              }
+              if (j.sinCambios) {
+                window.showToast?.("La marca ya tenía esos datos.", "info");
+                mostrar(incForm, false);
+                btn.disabled = false;
+                return;
+              }
+              window.showToast?.("Marca de incidente guardada.", "success");
+              setTimeout(() => location.reload(), 600);
+            } catch {
+              avisar(msg, "Sin conexión: no se pudo guardar. Inténtalo de nuevo.");
+              btn.disabled = false;
+            }
+          });
+
+          $inc("incQuitarConfirmar")?.addEventListener("click", async (ev) => {
+            const btn = ev.currentTarget;
+            const msg = $inc("incQuitarMsg");
+            const motivo = ($inc("incMotivo")?.value || "").trim();
+            if (motivo.length < minMotivo) return avisar(msg, `Escribe por qué se quita la marca (mínimo ${minMotivo} letras).`);
+            avisar(msg, "");
+            const titulo = "¿Quitar la marca de incidente?";
+            const detalle = "La orden saldrá del listado de incidentes. El cambio queda en la bitácora con tu nombre.";
+            const seguro = window.confirmAction
+              ? await window.confirmAction(titulo, detalle, { danger: true, confirmLabel: "Quitar marca" })
+              : window.confirm(`${titulo} ${detalle}`);
+            if (!seguro) return;
+            btn.disabled = true;
+            try {
+              const { ok, j } = await enviarMarca("DELETE", { motivo });
+              if (!ok) {
+                avisar(msg, typeof j.error === "string" ? j.error : "No se pudo quitar la marca.");
+                btn.disabled = false;
+                return;
+              }
+              window.showToast?.("Marca quitada.", "success");
+              setTimeout(() => location.reload(), 600);
+            } catch {
+              avisar(msg, "Sin conexión: no se pudo quitar la marca. Inténtalo de nuevo.");
+              btn.disabled = false;
+            }
+          });
+        </script>
       )}
 
       <!-- Repuestos consumidos -->
@@ -2306,12 +2550,21 @@ const adjsGeneral = adjs.filter((a) => a.categoria === "general");
     // Eliminar OT (solo admin)
     $("deleteOtBtn")?.addEventListener("click", async () => {
       if (!confirm("¿Eliminar esta OT permanentemente?\n\nEsta acción borra la OT, sus comentarios y adjuntos. Si vino de un plan o actividad recurrente, el cron podrá generar otra en el siguiente ciclo. No se puede deshacer.")) return;
-      const r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
+      let r;
+      try {
+        r = await fetch(`/api/ordenes/${id}`, { method: "DELETE" });
+      } catch {
+        alert("Sin señal: no se eliminó la OT. Vuelve a intentarlo cuando haya señal.");
+        return;
+      }
       if (r.ok) {
         location.href = `/ordenes?area=${encodeURIComponent(area || "")}`;
-      } else {
-        alert("Error al eliminar la OT");
+        return;
       }
+      // El servidor dice por qué no se borra (marcada como incidente, trazada en un
+      // conjunto o con historial de ejecución): se muestra su texto; si no llega, el genérico.
+      const j = await r.json().catch(() => ({}));
+      alert(typeof j?.error === "string" && j.error.trim() ? j.error : "Error al eliminar la OT");
     });
 
     // Sin señal, una transición o la verificación no salen: se dice, sin cambiar nada en pantalla.

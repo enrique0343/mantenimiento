@@ -15,6 +15,7 @@
 // lo único que cambia es el alcance (su sede y sus órdenes, o todas).
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { condicionActivoEspacio } from "./espacio";
 import { ESTADOS_AOP_ABIERTOS, cronometro, fmtCuentaRegresiva } from "./aop";
 import { inferirSistema, SISTEMA_LABEL, type Sistema } from "./resolver";
 import { resumenTablero, tableroRondas } from "./ronda-turno";
@@ -332,6 +333,8 @@ async function bloqueIntervenciones(db: Db, opts: OpcionesAhora): Promise<Bloque
 }
 
 // ── SCP · equipos que ningún documento gobierna ────────────────────────────
+// Las familias (SCP → MOP) son de Mantenimiento general: los equipos biomédicos no
+// cuentan aquí (el Panorama de Biomédico no muestra este bloque).
 async function bloqueCobertura(db: Db): Promise<BloqueAhora> {
   const filas = await db
     .select({
@@ -342,7 +345,8 @@ async function bloqueCobertura(db: Db): Promise<BloqueAhora> {
       criticidad: activos.criticidadOperacional,
       estado: activos.estado,
     })
-    .from(activos);
+    .from(activos)
+    .where(condicionActivoEspacio("general"));
   const vivos = filas.filter((a) => a.estado !== "baja");
   const sinDeclarar = vivos.filter((a) => !a.sistema);
   const criticosSinDeclarar = sinDeclarar.filter((a) => a.criticidad === "alta").length;

@@ -1,59 +1,95 @@
+// Documentos del equipo (expediente técnico, manuales, actas…). Fase 59 · WP-D:
+// el tipo se revisa por el contenido, se guardan versión, fecha, vencimiento y nota,
+// y solo admin, jefe y técnico suben; borran admin y jefe.
 import type { APIRoute } from "astro";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
-import { activoDocumentos } from "@/lib/schema";
-import { requireUser } from "@/lib/auth";
+import { activoDocumentos, activos } from "@/lib/schema";
 import { logAudit } from "@/lib/audit";
+import { ROLES_BIO_GESTIONAR, ROLES_BIO_REGISTRAR, etiquetaCategoriaDocumento } from "@/lib/biomedico";
+import { leerMetadatosDocumento } from "@/lib/inventario-jci";
+import { borrarArchivoR2, errorJson, exigirRol, guardarArchivoR2, idPositivo, leerArchivoDelFormulario } from "@/lib/bio-archivos";
 
 export const prerender = false;
 
-const MAX_BYTES = 15 * 1024 * 1024;
-const CATEGORIAS = ["ficha_tecnica", "manual", "garantia", "instalacion", "otro"];
-
 export const POST: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe", "tecnico"]);
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_REGISTRAR, "Solo el administrador, el jefe o el técnico suben documentos.");
   if (!user) return response;
 
-  const activoId = Number(ctx.params.id);
+  const activoId = idPositivo(ctx.params.id);
+  const db = getDb(ctx);
+  const [equipo] = activoId
+    ? await db.select({ id: activos.id }).from(activos).where(eq(activos.id, activoId)).limit(1)
+    : [];
+  if (!activoId || !equipo) return errorJson(404, "Equipo no encontrado");
+
   const form = await ctx.request.formData().catch(() => null);
-  const file = form?.get("file");
-  let categoria = String(form?.get("categoria") ?? "ficha_tecnica");
-  if (!CATEGORIAS.includes(categoria)) categoria = "otro";
-  if (!(file instanceof File)) return Response.json({ error: "Archivo requerido" }, { status: 400 });
-  if (file.size > MAX_BYTES) return Response.json({ error: "Archivo supera 15MB" }, { status: 413 });
+  if (!form) return errorJson(400, "Elige un archivo.");
+  const campo = (k: string) => {
+    const v = form.get(k);
+    return typeof v === "string" ? v : undefined;
+  };
+  const meta = leerMetadatosDocumento(
+    { categoria: campo("categoria"), version: campo("version"), fechaDocumento: campo("fechaDocumento"), fechaVencimiento: campo("fechaVencimiento"), nota: campo("nota") },
+    { parcial: false },
+  );
+  if (!meta.ok) return errorJson(400, meta.error);
+  const archivo = await leerArchivoDelFormulario(form);
+  if (!archivo.ok) return errorJson(archivo.status, archivo.error);
 
   const env = getEnv(ctx);
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const r2Key = `activos/${activoId}/docs/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
-  await env.R2.put(r2Key, file.stream(), { httpMetadata: { contentType: file.type } });
-
-  const db = getDb(ctx);
-  const [row] = await db.insert(activoDocumentos).values({
-    activoId,
-    nombre: file.name,
-    contentType: file.type || "application/octet-stream",
-    tamano: file.size,
-    r2Key,
-    categoria,
-    usuarioId: user.id,
-  }).returning();
-  await logAudit(ctx, { entidad: "activo", entidadId: activoId, accion: "update", resumen: `Documento agregado: ${file.name}` });
-  return Response.json({ documento: row }, { status: 201 });
+  let r2Key: string;
+  try {
+    r2Key = await guardarArchivoR2(env, `activos/${activoId}/docs`, archivo.nombre, archivo.datos, archivo.contentType);
+  } catch {
+    return errorJson(500, "No se pudo guardar el archivo. Intenta de nuevo.");
+  }
+  const categoria = meta.datos.categoria!;
+  let documento;
+  try {
+    [documento] = await db.insert(activoDocumentos).values({
+      activoId,
+      nombre: archivo.nombre,
+      contentType: archivo.contentType,
+      tamano: archivo.tamano,
+      r2Key,
+      categoria,
+      version: meta.datos.version ?? null,
+      fechaVersion: meta.datos.fechaVersion ?? null,
+      fechaVencimiento: meta.datos.fechaVencimiento ?? null,
+      nota: meta.datos.nota ?? null,
+      usuarioId: user.id,
+    }).returning();
+  } catch {
+    await borrarArchivoR2(env, r2Key);
+    return errorJson(500, "No se pudo guardar el documento. Intenta de nuevo.");
+  }
+  await logAudit(ctx, {
+    entidad: "activo", entidadId: activoId, accion: "update",
+    resumen: `Documento agregado: ${archivo.nombre} (${etiquetaCategoriaDocumento(categoria)})`,
+  });
+  return Response.json({ documento }, { status: 201 });
 };
 
 export const DELETE: APIRoute = async (ctx) => {
-  const { user, response } = await requireUser(ctx, ["admin", "jefe"]);
+  const { user, response } = await exigirRol(ctx, ROLES_BIO_GESTIONAR, "Solo el jefe o el administrador eliminan documentos.");
   if (!user) return response;
 
-  const activoId = Number(ctx.params.id);
-  const docId = Number(new URL(ctx.request.url).searchParams.get("documentoId"));
-  if (!docId) return Response.json({ error: "documentoId requerido" }, { status: 400 });
+  const activoId = idPositivo(ctx.params.id);
+  const docId = idPositivo(new URL(ctx.request.url).searchParams.get("documentoId"));
+  if (!activoId || !docId) return errorJson(404, "No encontrado");
   const db = getDb(ctx);
-  const [doc] = await db.select().from(activoDocumentos).where(eq(activoDocumentos.id, docId)).limit(1);
-  if (!doc) return Response.json({ error: "No encontrado" }, { status: 404 });
-  const env = getEnv(ctx);
-  await env.R2.delete(doc.r2Key).catch(() => {});
-  await db.delete(activoDocumentos).where(eq(activoDocumentos.id, docId));
-  await logAudit(ctx, { entidad: "activo", entidadId: activoId, accion: "update", resumen: `Documento eliminado: ${doc.nombre}` });
+  const [doc] = await db
+    .select({ id: activoDocumentos.id, nombre: activoDocumentos.nombre, r2Key: activoDocumentos.r2Key, categoria: activoDocumentos.categoria })
+    .from(activoDocumentos)
+    .where(and(eq(activoDocumentos.id, docId), eq(activoDocumentos.activoId, activoId)))
+    .limit(1);
+  if (!doc) return errorJson(404, "No encontrado");
+  await db.delete(activoDocumentos).where(eq(activoDocumentos.id, doc.id));
+  await borrarArchivoR2(getEnv(ctx), doc.r2Key);
+  await logAudit(ctx, {
+    entidad: "activo", entidadId: activoId, accion: "update",
+    resumen: `Documento eliminado: ${doc.nombre} (${etiquetaCategoriaDocumento(doc.categoria)})`,
+  });
   return Response.json({ ok: true });
 };

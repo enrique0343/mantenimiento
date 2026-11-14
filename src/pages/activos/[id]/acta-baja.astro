@@ -1,0 +1,145 @@
+---
+// Fase 59 · Acta de baja de un equipo. Modo controlado: se imprime, se firma y se
+// sube a Documentos del equipo (categoría «Acta de baja firmada»).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activoBajas, activos, centrosCosto, proveedores, sucursales, ubicaciones } from "@/lib/schema";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { areaHref } from "@/lib/areas";
+import { rubroDeActivo } from "@/lib/rubros";
+import {
+  DESTINOS_BAJA, ESTADO_ACTIVO_LABEL, MOTIVOS_BAJA, etiquetaCentroCosto, etiquetaClaseRiesgo, fechaCorta, fechaHoraSV, folioActaBaja, puedeVerBio,
+  type EstadoActivo,
+} from "@/lib/biomedico";
+export const prerender = false;
+
+const id = Number(Astro.params.id);
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+if (!Number.isInteger(id) || id <= 0) return Astro.redirect("/activos");
+
+const db = getDb(Astro);
+const [a] = await db
+  .select({
+    id: activos.id, codigo: activos.codigo, nombre: activos.nombre, numeroActivo: activos.numeroActivo, marca: activos.marca,
+    modelo: activos.modelo, serial: activos.serial, rubro: activos.rubro, tipo: activos.tipo, claseRiesgo: activos.claseRiesgo,
+    registroSanitario: activos.registroSanitario, registroSanitarioEntidad: activos.registroSanitarioEntidad,
+    registroSanitarioVencimiento: activos.registroSanitarioVencimiento, registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere,
+    fechaAdquisicion: activos.fechaAdquisicion, valorAdquisicion: activos.valorAdquisicion, ubicacionDetalle: activos.ubicacion,
+    ubicacion: ubicaciones.nombre, sede: sucursales.nombre, centroCodigo: centrosCosto.codigo, centroNombre: centrosCosto.nombre,
+    proveedor: proveedores.nombre,
+  })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
+  .leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
+  .where(eq(activos.id, id))
+  .limit(1);
+if (!a) return Astro.redirect("/activos");
+const area = rubroDeActivo(a.rubro, a.tipo);
+const fichaHref = areaHref(`/activos/${id}`, area);
+
+// La baja pedida (?baja=) o la más reciente del equipo.
+const bajaPedida = Number(Astro.url.searchParams.get("baja")) || null;
+const [b] = await db.select().from(activoBajas)
+  .where(bajaPedida ? and(eq(activoBajas.activoId, id), eq(activoBajas.id, bajaPedida)) : eq(activoBajas.activoId, id))
+  .orderBy(desc(activoBajas.id)).limit(1);
+if (!b) return Astro.redirect(fichaHref);
+const folio = folioActaBaja(b.id);
+
+let idsPlanes: number[] = [];
+try { idsPlanes = (JSON.parse(b.planesDesactivados ?? "[]") as unknown[]).filter((x): x is number => Number.isInteger(x)); } catch { idsPlanes = []; }
+const titulosPlanes = idsPlanes.length
+  ? (await db.all<{ titulo: string }>(sql`SELECT titulo FROM planes_mantenimiento WHERE id IN (SELECT value FROM json_each(${JSON.stringify(idsPlanes)})) ORDER BY id`)).map((p) => p.titulo)
+  : [];
+
+const registro = a.registroSanitarioNoRequiere ? "No requiere registro"
+  : a.registroSanitario ? [a.registroSanitario, a.registroSanitarioEntidad, a.registroSanitarioVencimiento ? `vence ${fechaCorta(a.registroSanitarioVencimiento)}` : null].filter(Boolean).join(" · ")
+  : area === "biomedico" ? "Sin registro" : "—";
+const lugar = [a.sede, a.ubicacion, a.ubicacionDetalle].filter(Boolean).join(" · ") || "—";
+const valor = a.valorAdquisicion != null ? `$${a.valorAdquisicion.toLocaleString("es-SV", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
+const motivo = MOTIVOS_BAJA[b.motivo as keyof typeof MOTIVOS_BAJA] ?? b.motivo;
+const destino = DESTINOS_BAJA[b.destinoFinal as keyof typeof DESTINOS_BAJA] ?? b.destinoFinal;
+const estadoAnterior = ESTADO_ACTIVO_LABEL[b.estadoAnterior as EstadoActivo] ?? b.estadoAnterior;
+const texto = "white-space: pre-line";
+---
+
+<Layout title={`Acta ${folio}`}>
+  <div class="no-print doc-barra">
+    <a class="btn-secondary" href={fichaHref}>Volver al equipo</a>
+    <button class="btn-primary" onclick="window.print()">Imprimir o guardar PDF</button>
+  </div>
+  <p class="no-print mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+    Sube el acta firmada en Documentos del equipo, categoría «Acta de baja firmada».
+    <a href={`${fichaHref}#documentos`} class="font-medium underline">Ir a Documentos</a>
+  </p>
+
+  <article class="print-doc doc-hoja">
+    <DocCabecera titulo="Acta de baja de equipo" subtitulo={`${a.codigo} · ${a.nombre}`} codigo={folio} etiquetaCodigo="Folio" fecha={b.fechaBaja} />
+
+    {b.estado === "revertida" && (
+      <p class="doc-seccion" style="border: 1px solid var(--rojo); padding: 8px 10px; color: var(--rojo); font-weight: 700;">
+        BAJA REVERTIDA el {fechaCorta(b.revertidaEn)} por {b.revertidaPorNombre ?? "—"}: {b.reversionMotivo ?? ""}
+      </p>
+    )}
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>1.</span> Identificación del equipo</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Código</th><td>{a.codigo}</td><th>N.º de activo</th><td>{a.numeroActivo ?? "—"}</td></tr>
+          <tr><th>Nombre</th><td>{a.nombre}</td><th>Marca y modelo</th><td>{[a.marca, a.modelo].filter(Boolean).join(" · ") || "—"}</td></tr>
+          <tr><th>Serie</th><td>{a.serial ?? "—"}</td><th>Sede y ubicación</th><td>{lugar}</td></tr>
+          <tr><th>Centro de costo</th><td>{a.centroCodigo ? etiquetaCentroCosto({ codigo: a.centroCodigo, nombre: a.centroNombre ?? "" }) : "Sin centro de costo"}</td><th>Clase de riesgo</th><td>{area === "biomedico" ? etiquetaClaseRiesgo(a.claseRiesgo) : "—"}</td></tr>
+          <tr><th>Registro sanitario</th><td>{registro}</td><th>Adquisición</th><td>{fechaCorta(a.fechaAdquisicion)} · {valor}</td></tr>
+          <tr><th>Proveedor</th><td>{a.proveedor ?? "—"}</td><th>Fecha de baja</th><td>{fechaCorta(b.fechaBaja)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>2.</span> Motivo</h2>
+      <p class="doc-texto"><strong>{motivo}.</strong></p>
+      <p class="doc-texto" style={texto}>{b.motivoDetalle}</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>3.</span> Evaluación técnica</h2>
+      <p class="doc-texto" style={texto}>{b.evaluacionTecnica}</p>
+      <p class="doc-nota">Evaluó: {b.evaluadoPor}</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>4.</span> Destino final</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Destino</th><td>{destino}{b.destinoDetalle ? `: ${b.destinoDetalle}` : ""}</td><th>Empresa que retira</th><td>{b.empresaRetira ?? "—"}</td></tr>
+          <tr><th>Fecha de retiro</th><td>{fechaCorta(b.fechaRetiro)}</td><th>Residuos y baterías</th><td style={texto}>{b.residuosBaterias}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>5.</span> Efectos en el sistema</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Estado anterior</th><td>{estadoAnterior}</td><th>Planes desactivados</th><td>{idsPlanes.length}{titulosPlanes.length ? `: ${titulosPlanes.join("; ")}` : ""}</td></tr>
+          <tr><th>Registró</th><td>{b.registradoPorNombre}</td><th>Fecha y hora</th><td>{fechaHoraSV(b.createdAt)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <div class="doc-firmas">
+        <div><div class="doc-firma-vacia"></div><span class="doc-etq">Evaluó</span><span>{b.evaluadoPor}</span></div>
+        <div><div class="doc-firma-vacia"></div><span class="doc-etq">Autoriza</span><span>{b.autorizaNombre} · {b.autorizaCargo}</span></div>
+        <div><div class="doc-firma-vacia"></div><span class="doc-etq">Recibe / retira</span><span>{b.empresaRetira ?? ""}</span></div>
+      </div>
+    </section>
+
+    <DocFolio codigo={folio} />
+  </article>
+</Layout>

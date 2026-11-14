@@ -3,6 +3,7 @@ import ConjuntoShell from "@/components/ConjuntoShell.astro";
 import AppIcon from "@/components/AppIcon.astro";
 import { getConjuntos } from "@/lib/conjuntos";
 import { AREAS, AREA_KEYS, areaHref, parseArea } from "@/lib/areas";
+import { areaEnEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 const user = Astro.locals.user;
 if (!user) return Astro.redirect("/login");
@@ -11,7 +12,11 @@ const canManage = ["admin", "jefe"].includes(user.rol);
 const area = parseArea(Astro.url.searchParams.get("area"));
 const query = (Astro.url.searchParams.get("q") ?? "").trim();
 const showArchived = Astro.url.searchParams.get("archivados") === "1";
-const rows = await getConjuntos(Astro, area);
+// Solo los conjuntos del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const areasDelEspacio = AREA_KEYS.filter((key) => areaEnEspacio(key, espacio));
+const rows = await getConjuntos(Astro, area, espacio);
 const active = rows.filter((row) => row.activo);
 const matches = rows.filter((row) => (showArchived || row.activo) && `${row.codigo} ${row.nombre}`.toLocaleLowerCase("es").includes(query.toLocaleLowerCase("es")));
 const availabilityLabels: Record<string, string> = { disponible:"Disponible", no_disponible:"No disponible", sin_definir:"Por definir" };
@@ -34,7 +39,7 @@ const criticalityLabels: Record<string,string> = { alta:"Alta", media:"Media", b
   </div>
   <form method="get" class="cq-panel cq-filters">
     <div class="cq-search"><label class="label" for="buscar">Buscar conjunto</label><input type="search" id="buscar" name="q" class="input" value={query} placeholder="Nombre o código" /></div>
-    <div><label class="label" for="areaFiltro">Área</label><select class="input" name="area" id="areaFiltro"><option value="">Todas las áreas</option>{AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}</select></div>
+    <div><label class="label" for="areaFiltro">Área</label><select class="input" name="area" id="areaFiltro"><option value="">Todas las áreas</option>{areasDelEspacio.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}</select></div>
     <label class="inline-flex items-center gap-2 pb-2 text-sm"><input type="checkbox" name="archivados" value="1" checked={showArchived} /> Incluir archivados</label>
     <button class="btn-secondary" type="submit">Filtrar</button>
   </form>

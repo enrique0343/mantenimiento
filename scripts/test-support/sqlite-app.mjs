@@ -35,8 +35,8 @@ export async function setup({ modules, pages = [] }) {
         telegram: 'export async function sendTelegram() {}',
         notificaciones: 'export async function disparadorOT() {} export async function jefesNotificar() { return []; } export async function disparadorProyecto() {}',
         'notif-app': 'export async function crearNotificacion() {}',
-        audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; }',
-        'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; }',
+        audit: 'export async function logAudit() {} export function calcularDiff(a,b) { return b; } export async function logAuditLote() {} export function labelCampo(c) { return c; } export function resumenCambios() { return ""; }',
+        'daily-digest': 'export async function enviarDigestDiario() { return {enviados:0}; } export async function enviarAvisoVencimientosBio() { return {enviados:0}; }',
         'encuestas-recordatorio': 'export async function enviarRecordatoriosEncuestas() { return {enviados:0}; }',
       }[name], loader: 'js' }));
     }}],

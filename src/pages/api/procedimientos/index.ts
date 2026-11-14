@@ -12,12 +12,13 @@ import { requireUser } from "@/lib/auth";
 import {
   ESTADOS_PROC,
   SISTEMAS_PROC,
-  TIPOS_PROC,
   hoyISO,
   puedeAdministrarProcedimientos,
   puedeVerProcedimientos,
   semanaSugerida,
 } from "@/lib/procedimientos";
+// Fase 59 · WP-G: la biblioteca guarda también protocolos institucionales.
+import { TIPOS_BIBLIOTECA, TIPO_PROTOCOLO, type TipoBiblioteca } from "@/lib/protocolos";
 
 export const prerender = false;
 
@@ -42,7 +43,7 @@ const campoSchema = z.object({
 const createSchema = z.object({
   codigoCorto: z.string().min(3).max(40),
   codigoInstitucional: z.string().nullable().optional(),
-  tipo: z.enum(TIPOS_PROC),
+  tipo: z.enum(TIPOS_BIBLIOTECA),
   sistema: z.enum(SISTEMAS_PROC),
   dominio: z.string().nullable().optional(),
   titulo: z.string().min(3),
@@ -67,7 +68,8 @@ const createSchema = z.object({
 export const GET: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
-  if (!puedeVerProcedimientos(user.rol)) return new Response("Sin permisos", { status: 403 });
+  // 403 en JSON { error }, como requireUser y el middleware: las pantallas leen j.error.
+  if (!puedeVerProcedimientos(user.rol)) return Response.json({ error: "Sin permisos" }, { status: 403 });
 
   const url = new URL(ctx.request.url);
   const tipo = url.searchParams.get("tipo");
@@ -76,8 +78,8 @@ export const GET: APIRoute = async (ctx) => {
   const sucursalId = url.searchParams.get("sucursalId");
 
   const cond = [eq(procedimientos.activo, true)];
-  if (tipo && (TIPOS_PROC as readonly string[]).includes(tipo)) {
-    cond.push(eq(procedimientos.tipo, tipo as (typeof TIPOS_PROC)[number]));
+  if (tipo && (TIPOS_BIBLIOTECA as readonly string[]).includes(tipo)) {
+    cond.push(eq(procedimientos.tipo, tipo as TipoBiblioteca));
   }
   if (sistema && (SISTEMAS_PROC as readonly string[]).includes(sistema)) {
     cond.push(eq(procedimientos.sistema, sistema as (typeof SISTEMAS_PROC)[number]));
@@ -102,7 +104,7 @@ export const GET: APIRoute = async (ctx) => {
 export const POST: APIRoute = async (ctx) => {
   const { user, response } = await requireUser(ctx);
   if (!user) return response;
-  if (!puedeAdministrarProcedimientos(user.rol)) return new Response("Sin permisos", { status: 403 });
+  if (!puedeAdministrarProcedimientos(user.rol)) return Response.json({ error: "Sin permisos" }, { status: 403 });
 
   const body = await ctx.request.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
@@ -137,14 +139,19 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const hoy = hoyISO();
+  // El protocolo institucional lo aprueba Calidad: sistema «otro», sin nivel de
+  // riesgo ni semana del calendario de cuatro semanas (no lo toma el resolver).
+  const esProtocolo = proc.tipo === TIPO_PROTOCOLO;
   const [row] = await db
     .insert(procedimientos)
     .values({
       ...proc,
       codigoCorto,
+      sistema: esProtocolo ? "otro" : proc.sistema,
+      nivelRiesgo: esProtocolo ? null : proc.nivelRiesgo,
       // Nace en borrador: sólo pasa a vigente cuando la regla del 8.1 lo permite.
       estado: "borrador",
-      semanaValidacion: proc.semanaValidacion ?? semanaSugerida(proc.tipo),
+      semanaValidacion: esProtocolo ? null : (proc.semanaValidacion ?? semanaSugerida(proc.tipo)),
       creadoPor: user.id,
     })
     .returning();

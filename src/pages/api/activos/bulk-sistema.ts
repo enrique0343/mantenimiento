@@ -16,6 +16,8 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { SISTEMAS_PROC } from "@/lib/procedimientos";
 import { SISTEMA_LABEL, type Sistema } from "@/lib/resolver";
+import { respuestaOtroEspacio } from "@/lib/espacio";
+import { espacioAjenoDeActivos } from "@/lib/espacio-db";
 
 export const prerender = false;
 
@@ -45,6 +47,9 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const sistema = parsed.data.sistema as Sistema;
   const ids = [...new Set(parsed.data.ids)];
+  // Todo o nada: un equipo de un espacio al que no entras frena el lote entero.
+  const ajeno = await espacioAjenoDeActivos(db, user, ids);
+  if (ajeno) return respuestaOtroEspacio(ajeno);
 
   // Solo escribimos lo que de verdad cambia: así el contador que devolvemos
   // ("actualicé 40") es el número real y no el tamaño de la selección.

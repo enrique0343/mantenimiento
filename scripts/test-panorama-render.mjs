@@ -44,13 +44,15 @@ try {
   const { page } = await import(pathToFileURL(path.join(root, 'dist/_worker.js/pages/index.astro.mjs')).href);
   ok(typeof page().default === 'function', 'The real built Astro page must be importable');
   const container = await experimental_AstroContainer.create();
-  const render = async (rol, id) => {
+  const render = async (rol, id, espacio = 'general') => {
     const antes = foto();
-    const html = await container.renderToString(page().default, { partial: false, request: new Request('https://local.test/'), locals: { user: { id, nombre: `Cuenta ${rol}`, rol }, runtime: { env: { DB } } } });
+    const html = await container.renderToString(page().default, { partial: false, request: new Request(`https://local.test/${espacio === 'general' ? '' : `?espacio=${espacio}`}`), locals: { user: { id, nombre: `Cuenta ${rol}`, rol }, runtime: { env: { DB } } } });
     eq(foto(), antes, 'Renderizar no escribe');
     const d = parseHtml(html);
-    eq(limpio(nodes(d, (n) => n.tagName === 'h1')[0]), 'Panorama general');
-    eq(nodes(d, (n) => hasClass(n, 'workspace-card')).map((n) => attr(n, 'href')), ['/areas/aires', '/areas/infraestructura', '/areas/equipo_general', '/areas/biomedico'], 'Las cuatro áreas siguen');
+    // Cada espacio con su panel: General con sus tres áreas; Biomédico con la suya.
+    eq(limpio(nodes(d, (n) => n.tagName === 'h1')[0]), espacio === 'general' ? 'Panorama general' : 'Panorama biomédico');
+    eq(nodes(d, (n) => hasClass(n, 'workspace-card')).map((n) => attr(n, 'href')),
+      espacio === 'general' ? ['/areas/aires', '/areas/infraestructura', '/areas/equipo_general'] : ['/areas/biomedico'], `Las áreas de ${espacio}`);
     return { d, t: limpio(d), a: links(d) };
   };
   for (const [rol, id] of [['admin', 1], ['jefe', 3]]) {
@@ -62,6 +64,11 @@ try {
     ok(a.includes('/aop'), `${rol} ve la cadena completa`);
     ok(!a.some((h) => h.startsWith('/rondas')), `${rol}: ningún enlace al motor retirado`);
     ok(!t.includes('Configura tu primera plantilla'), `${rol}: sin onboarding de plantillas`);
+  }
+  { // En Biomédico no está la cadena de la ronda (es de General) ni enlaces a ella.
+    const b = await render('admin', 1, 'biomedico');
+    ok(!b.t.includes('¿Se hizo la ronda de este turno?') && !b.a.includes('/ronda') && !b.a.includes('/aop'), 'Biomédico: sin ronda ni AOP');
+    ok(b.a.includes('/calibraciones?area=biomedico') && b.a.includes('/cumplimiento'), 'Biomédico: su menú');
   }
   const v = await render('visualizador', 5);
   ok(v.t.includes('¿Se hizo la ronda de este turno?'), 'El visualizador ve si se hizo la ronda');

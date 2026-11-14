@@ -4,6 +4,7 @@ import { eq, like } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { proyectos, tickets, ticketAdjuntos, proyectoAdjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { bloqueoEspacio, espacioDeTicketId } from "@/lib/espacio-db";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { logAudit } from "@/lib/audit";
 import { notificarProyectoCreado } from "@/lib/notificaciones";
@@ -31,6 +32,9 @@ export const POST: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [t] = await db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
   if (!t) return Response.json({ error: "Ticket no encontrado" }, { status: 404 });
+  // La solicitud de un espacio al que no entras no se convierte en proyecto.
+  const otro = bloqueoEspacio(user, await espacioDeTicketId(db, t.id));
+  if (otro) return otro;
   if (t.proyectoId) return Response.json({ error: "Este ticket ya está vinculado a un proyecto" }, { status: 400 });
   if (t.otId) return Response.json({ error: "Este ticket ya tiene OT generada. No se puede convertir a proyecto." }, { status: 400 });
 

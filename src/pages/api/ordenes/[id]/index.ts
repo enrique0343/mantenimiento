@@ -8,6 +8,9 @@ import { leerVerificacionOrden, leerOrigenesRondaOrden } from "@/lib/orden-verif
 import { logAudit } from "@/lib/audit";
 import { validarContextoArea } from "@/lib/ordenes";
 import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
+// Fase 59 · WP-G: una orden marcada como incidente no se borra (solo lo usa DELETE).
+import { ordenIncidentes } from "@/lib/schema";
+import { MENSAJE_ORDEN_MARCADA } from "@/lib/incidentes";
 
 export const prerender = false;
 
@@ -86,6 +89,11 @@ export const DELETE: APIRoute = async (ctx) => {
   // borrado. Una asociación concurrente a un conjunto debe preservar todo.
   const historial = await leerVerificacionOrden(db, id);
   if (historial.eventos.length) return Response.json({ error: "La orden conserva evidencia de ejecución/verificación. Cancélala con motivo; no se puede eliminar su historial." }, { status: 409 });
+  // La marca de incidente es evidencia para Calidad: la llave foránea (sin cascada)
+  // impediría el borrado con un error técnico; aquí se dice qué hacer.
+  const estaMarcada = async () =>
+    (await db.select({ id: ordenIncidentes.id }).from(ordenIncidentes).where(eq(ordenIncidentes.ordenId, id)).limit(1)).length > 0;
+  if (await estaMarcada()) return Response.json({ error: MENSAJE_ORDEN_MARCADA }, { status: 409 });
   const adjs = await db.select().from(adjuntos).where(eq(adjuntos.ordenId, id));
   try {
     await db.batch([
@@ -96,6 +104,7 @@ export const DELETE: APIRoute = async (ctx) => {
     ]);
   } catch (e: any) {
     if (await ordenesTienenConjunto(ctx, [id])) return Response.json({ error: MENSAJE_ORDEN_TRAZADA }, { status: 409 });
+    if (await estaMarcada()) return Response.json({ error: MENSAJE_ORDEN_MARCADA }, { status: 409 });
     return Response.json({ error: `No se pudo borrar: ${e?.message ?? e}` }, { status: 500 });
   }
 

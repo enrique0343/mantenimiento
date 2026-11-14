@@ -27,11 +27,15 @@ const FRECUENCIA: Record<string, string> = { turno: "por turno", diaria: "diaria
 const dif = r.tiempos.diferenciaMin;
 // El técnico no ve tiempos de medición: inicio, fin, tiempo de trabajo, pausas,
 // lo estimado ni los minutos de cada paso. Se siguen registrando igual; el
-// historial le muestra solo el día. Las secciones se numeran sin huecos.
+// historial le muestra solo el día. Las secciones se numeran sin huecos:
+// Tiempos (no para el técnico), Prerrequisitos y Pasos (si la orden los tiene)
+// y Trabajos realizados.
 const verTiempos = user.rol !== "tecnico";
-const nTiempos = 1;
-const nPasos = verTiempos ? 2 : 1;
-const nTrabajos = (verTiempos ? 1 : 0) + (r.pasos.length ? 1 : 0) + 1;
+let nSeccion = 0;
+const nTiempos = verTiempos ? ++nSeccion : 0;
+const nPrerrequisitos = r.prerrequisitos.length ? ++nSeccion : 0;
+const nPasos = r.pasos.length ? ++nSeccion : 0;
+const nTrabajos = ++nSeccion;
 const cuando = (iso: string) => (verTiempos ? fechaHora(iso) : fechaHora(iso).slice(0, 10));
 ---
 
@@ -43,6 +47,10 @@ const cuando = (iso: string) => (verTiempos ? fechaHora(iso) : fechaHora(iso).sl
 
   <article class="print-doc doc-hoja">
     <DocCabecera titulo="Reporte de mantenimiento" subtitulo={equipoTxt} codigo={r.codigo} version={r.version} fecha={o.completadaEn ?? o.createdAt} />
+    {/* Requisito 12: la jefatura relacionó la orden con un incidente avisado a Calidad. */}
+    {r.lineaIncidente && (
+      <p id="reporteIncidente" class="doc-texto" style="margin-top: 10px; padding: 4px 0 4px 10px; border-left: 3px solid var(--rojo); font-weight: 600;">{r.lineaIncidente}</p>
+    )}
 
     <section class="doc-seccion">
       <table class="doc-kv">
@@ -67,6 +75,27 @@ const cuando = (iso: string) => (verTiempos ? fechaHora(iso) : fechaHora(iso).sl
       </div>
       {r.tiempos.marcasSinSenal > 0 && <p class="doc-nota">{r.tiempos.marcasSinSenal} paso{r.tiempos.marcasSinSenal === 1 ? "" : "s"} se capturó sin señal y se envió después; la hora es la del momento en que se hizo.</p>}
     </section>}
+
+    {/* Requisito 7: lo que se exigió antes de empezar y con qué referencia se cumplió (solo lectura). */}
+    {r.prerrequisitos.length > 0 && (
+      <section id="reportePrerrequisitos" class="doc-seccion">
+        <h2 class="doc-h"><span>{nPrerrequisitos}.</span> Prerrequisitos</h2>
+        <table class="doc-tabla">
+          <thead><tr><th>Tipo</th><th>Descripción</th><th>Referencia</th><th>Cumplió</th><th class="c">Cuándo</th></tr></thead>
+          <tbody>
+            {r.prerrequisitos.map((p) => (
+              <tr>
+                <td>{p.tipo}{p.opcional && <span class="doc-nota-celda">Opcional</span>}</td>
+                <td>{p.texto}</td>
+                <td>{p.referencia}</td>
+                <td>{p.cumplio}</td>
+                <td class="c">{p.cuando}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
 
     {r.pasos.length > 0 && (
       <section class="doc-seccion">

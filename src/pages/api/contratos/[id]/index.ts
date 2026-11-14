@@ -9,6 +9,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { puedeGestionarContratos, puedeVerContratos } from "@/lib/contratos";
 import { logAudit, calcularDiff } from "@/lib/audit";
+import { condicionActivoEspacio, espacioDelContexto } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -35,7 +36,8 @@ export const GET: APIRoute = async (ctx) => {
     .select({ a: activos })
     .from(contratoEquipos)
     .innerJoin(activos, eq(activos.id, contratoEquipos.activoId))
-    .where(eq(contratoEquipos.contratoId, id))
+    // El contrato es común; sus equipos, los del espacio del pedido.
+    .where(and(eq(contratoEquipos.contratoId, id), condicionActivoEspacio(espacioDelContexto(ctx, user))))
     .orderBy(asc(activos.nombre));
 
   const adjs = await db.select().from(contratoAdjuntos).where(eq(contratoAdjuntos.contratoId, id));

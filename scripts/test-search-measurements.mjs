@@ -24,7 +24,12 @@ for(const area of ['aires','infraestructura','equipo_general','biomedico']){
 let r=await call(api.search.GET,'/api/search?q=200&area=aires');assert.equal(r.body.resultados.ordenes.length,0);assert.equal(r.body.resultados.tickets.length,0);
 r=await call(api.search.GET,'/api/search?q=200&area=infraestructura');assert.equal(r.body.resultados.ordenes[0].id,200);assert.equal(r.body.resultados.tickets[0].id,200);
 r=await call(api.search.GET,'/api/search?q=Comunscope&area=invalid');assert.equal(r.status,400);
-r=await call(api.search.GET,'/api/search?q=Comunscope');assert.equal(r.body.resultados.ordenes.length,4);assert.equal(r.body.resultados.equipos.length,5);
+// Sin área, la búsqueda es la del espacio: General (tres áreas) o Biomédico (con el equipo legado).
+r=await call(api.search.GET,'/api/search?q=Comunscope');assert.equal(r.body.resultados.ordenes.length,3);assert.equal(r.body.resultados.equipos.length,3);
+for(const row of [...r.body.resultados.ordenes,...r.body.resultados.equipos,...r.body.resultados.tickets,...r.body.resultados.comentarios])assert.notEqual(row.rubro,'biomedico');
+r=await call(api.search.GET,'/api/search?q=Comunscope&espacio=biomedico');assert.equal(r.body.resultados.ordenes.length,1);assert.equal(r.body.resultados.equipos.length,2);
+for(const row of [...r.body.resultados.ordenes,...r.body.resultados.equipos,...r.body.resultados.tickets,...r.body.resultados.comentarios])assert.equal(row.rubro,'biomedico');
+assert.equal(r.body.resultados.items.length,1);assert.equal(r.body.resultados.requisiciones.length,1);
 sqlite.exec("INSERT INTO variables_predictivas(id,activo_id,nombre,max_critico,max_warning) VALUES(1,1,'Temperatura test',40,35),(2,5,'Temperatura legacy test',40,35)");
 r=await call(api.measurement.POST,'/api/mediciones?area=infraestructura',{method:'POST',data:{variableId:1,valor:45}});assert.equal(r.status,400);assert.equal(sqlite.prepare('SELECT count(*) AS n FROM mediciones').get().n,0);
 r=await call(api.measurement.POST,'/api/mediciones?area=aires',{method:'POST',data:{variableId:1,valor:45}});assert.equal(r.status,201,JSON.stringify(r));assert.equal(r.body.ordenAutomatica.rubro,'aires');assert.equal(r.body.ordenAutomatica.prioridad,'alta');

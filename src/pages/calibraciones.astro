@@ -1,135 +1,321 @@
 ---
+// Calibraciones (fase 59, WP-B · requisitos 4 y 7). Estado de calibración de cada equipo
+// que la lleva, con la regla única de biomedico.ts (la misma de la ficha y de Cumplimiento).
+// Filtros, tarjetas, documento imprimible con encabezado y folio, y CSV. La lista de
+// equipos críticos es esta misma pantalla con ?criticos=1. No incluye equipos de baja.
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import CalibracionesNav from "@/components/CalibracionesNav.astro";
+import { asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { activos, ubicaciones, sucursales } from "@/lib/schema";
-import { eq, or, asc } from "drizzle-orm";
+import { sucursales } from "@/lib/schema";
+import {
+  CLASES_RIESGO, ESTADOS_CALIBRACION, ESTADO_CALIBRACION_COLOR, ESTADO_CALIBRACION_LABEL, MOTIVO_CRITICO_LABEL,
+  fechaCorta, hoySV, puedeGestionarBio, puedeRegistrarBio, puedeVerBio, textoVence,
+} from "@/lib/biomedico";
+import { SUBCAT_KEYS, subcatLabel } from "@/lib/rubros";
+import { CRITICIDAD_LABEL, RESULTADO_CALIB_COLOR, RESULTADO_CALIB_LABEL } from "@/lib/inventario-jci";
+import {
+  AREAS_CAL, colorLabAcreditado, describirFiltrosCal, esResultadoCal, etiquetaLabAcreditado, leerFiltrosCal,
+  ordenarFilasCal, pasaFiltrosCal, queryFiltrosCal, resumenCal, type EstadoFiltroCal,
+} from "@/lib/metrologia";
+import { cargarFilasCal } from "@/lib/metrologia-db";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/");
-const filtroEspBio = user.rol === "jefe" && user.especialidad === "general"; // jefe general no debería ver
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const puedeRegistrar = puedeRegistrarBio(user.rol);
+const puedeGestionar = puedeGestionarBio(user.rol);
 
+const hoy = hoySV();
+const filtros = leerFiltrosCal(Astro.url.searchParams);
 const db = getDb(Astro);
-const rows = await db
-  .select({ a: activos, ub: ubicaciones, s: sucursales })
-  .from(activos)
-  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
-  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(or(eq(activos.tipo, "biomedico"), eq(activos.requiereCalibracion, true)))
-  .orderBy(asc(activos.proximaCalibracion));
+const [todas, sedes] = await Promise.all([
+  cargarFilasCal(db, { hoy }),
+  db.select({ id: sucursales.id, nombre: sucursales.nombre, activa: sucursales.activa }).from(sucursales).orderBy(asc(sucursales.nombre)),
+]);
+// Las tarjetas cuentan con los filtros salvo el estado; la tabla, con todos.
+const base = todas.filter((f) => pasaFiltrosCal(f, filtros, true));
+const resumen = resumenCal(base);
+const filas = ordenarFilasCal(base.filter((f) => pasaFiltrosCal(f, filtros)));
 
-const hoy = new Date().toISOString().slice(0, 10);
-const en30 = new Date(); en30.setDate(en30.getDate() + 30);
-const en30Str = en30.toISOString().slice(0, 10);
-const en60 = new Date(); en60.setDate(en60.getDate() + 60);
-const en60Str = en60.toISOString().slice(0, 10);
-
-interface Item { a: any; ub: any; s: any; }
-const vencidas: Item[] = [];
-const proximas30: Item[] = [];
-const proximas60: Item[] = [];
-const conCalOk: Item[] = [];
-const sinCal: Item[] = [];
-
-for (const r of rows) {
-  if (!r.a.proximaCalibracion) {
-    sinCal.push(r);
-  } else if (r.a.proximaCalibracion < hoy) {
-    vencidas.push(r);
-  } else if (r.a.proximaCalibracion <= en30Str) {
-    proximas30.push(r);
-  } else if (r.a.proximaCalibracion <= en60Str) {
-    proximas60.push(r);
-  } else {
-    conCalOk.push(r);
-  }
-}
-
-const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
-const claseColor: Record<string, string> = {
-  I: "bg-green-100 text-green-700",
-  IIa: "bg-blue-100 text-blue-700",
-  IIb: "bg-amber-100 text-amber-700",
-  III: "bg-red-100 text-red-700",
+const nombreSede = filtros.sede != null ? sedes.find((s) => s.id === filtros.sede)?.nombre ?? null : null;
+const sedesSelect = sedes.filter((s) => s.activa || s.id === filtros.sede);
+const titulo = filtros.criticos ? "Equipos críticos: certificado de calibración" : "Calibraciones de equipos";
+const subtitulo = `${filtros.criticos ? "Crítico = soporte de vida, criticidad alta o clase III · " : ""}${describirFiltrosCal(filtros, nombreSede)}`;
+const query = queryFiltrosCal(filtros);
+const conEstado = (estado: EstadoFiltroCal | null) => {
+  const q = queryFiltrosCal({ ...filtros, estado });
+  return q ? `/calibraciones?${q}` : "/calibraciones";
 };
+const tarjetas: Array<{ estado: EstadoFiltroCal; etiqueta: string; valor: number; detalle?: string; borde: string; texto: string }> = [
+  { estado: "al_dia", etiqueta: "Al día", valor: resumen.alDia, detalle: `de ${resumen.total} · ${resumen.pct} %`, borde: "border-emerald-500", texto: "text-emerald-700" },
+  { estado: "vencida", etiqueta: "Vencidas", valor: resumen.porEstado.vencida, borde: "border-red-500", texto: "text-red-700" },
+  { estado: "no_conforme", etiqueta: "No conformes", valor: resumen.porEstado.no_conforme, borde: "border-red-500", texto: "text-red-700" },
+  { estado: "sin_certificado", etiqueta: "Sin certificado", valor: resumen.porEstado.sin_certificado, borde: "border-orange-500", texto: "text-orange-700" },
+  { estado: "sin_calibracion", etiqueta: "Sin calibración", valor: resumen.porEstado.sin_calibracion, borde: "border-slate-400", texto: "text-slate-700" },
+  { estado: "por_vencer", etiqueta: "Por vencer (30 días)", valor: resumen.porEstado.por_vencer, borde: "border-amber-500", texto: "text-amber-700" },
+];
+const conDias = new Set(["vigente", "por_vencer", "vencida"]);
+const marcaModelo = (f: { marca: string | null; modelo: string | null; serial: string | null }) =>
+  [[f.marca, f.modelo].filter(Boolean).join(" "), f.serial ? `S/N ${f.serial}` : ""].filter(Boolean).join(" · ");
 ---
 
-<Layout title="Calibraciones biomédicas">
-  <div class="flex flex-wrap items-center justify-between gap-2">
-    <div>
-      <h1 class="text-2xl font-bold">Calibraciones biomédicas</h1>
-      <p class="text-sm text-slate-500">{rows.length} equipos biomédicos · {vencidas.length} vencidas · {proximas30.length} próximos 30 días</p>
+<Layout title="Calibraciones">
+  <div class="no-print">
+    <CalibracionesNav activo={filtros.criticos ? "criticos" : "equipos"} rol={user.rol} area={filtros.area} />
+    <div class="doc-barra mt-4">
+      <div>
+        <h1 class="text-2xl font-bold">{titulo}</h1>
+        <p class="text-sm text-slate-500">El estado sale de la última calibración registrada. Al día = vigente o por vencer, con certificado y resultado conforme.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn-secondary" href={`/api/calibraciones/exportar?vista=equipos${query ? `&${query}` : ""}`}>Descargar CSV</a>
+        <a class="btn-secondary" href={`/api/calibraciones/exportar?vista=registros${query ? `&${query}` : ""}`}>Historial CSV</a>
+        <button type="button" class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+      </div>
     </div>
-    <a href="/activos?tipo=biomedico" class="btn-secondary">Ver equipos biomédicos →</a>
+
+    <form id="filtrosCal" method="get" action="/calibraciones" class="card mt-4 grid grid-cols-2 gap-3 p-4 md:grid-cols-4 xl:grid-cols-7">
+      <div>
+        <label class="label" for="f_sede">Sede</label>
+        <select class="input" id="f_sede" name="sede">
+          <option value="">Todas</option>
+          {sedesSelect.map((s) => <option value={s.id} selected={s.id === filtros.sede}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f_area">Área</label>
+        <select class="input" id="f_area" name="area">
+          <option value="">Todas</option>
+          {AREAS_CAL.map((a) => <option value={a.clave} selected={a.clave === filtros.area}>{a.etiqueta}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f_sub">Subcategoría</label>
+        <select class="input" id="f_sub" name="subcategoria">
+          <option value="">Todas</option>
+          {SUBCAT_KEYS.map((k) => <option value={k} selected={k === filtros.subcategoria}>{subcatLabel(k)}</option>)}
+          <option value="sin" selected={filtros.subcategoria === "sin"}>Sin segmentar</option>
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f_crit">Criticidad</label>
+        <select class="input" id="f_crit" name="criticidad">
+          <option value="">Todas</option>
+          {(["alta", "media", "baja"] as const).map((c) => <option value={c} selected={c === filtros.criticidad}>{CRITICIDAD_LABEL[c]}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f_clase">Clase de riesgo</label>
+        <select class="input" id="f_clase" name="clase">
+          <option value="">Todas</option>
+          {CLASES_RIESGO.map((c) => <option value={c.valor} selected={c.valor === filtros.clase}>{c.etiqueta}</option>)}
+          <option value="sin" selected={filtros.clase === "sin"}>Sin clasificar</option>
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f_estado">Estado</label>
+        <select class="input" id="f_estado" name="estado">
+          <option value="">Todos</option>
+          <option value="al_dia" selected={filtros.estado === "al_dia"}>Al día</option>
+          <option value="pendientes" selected={filtros.estado === "pendientes"}>Pendientes</option>
+          {ESTADOS_CALIBRACION.map((e) => <option value={e} selected={e === filtros.estado}>{ESTADO_CALIBRACION_LABEL[e]}</option>)}
+        </select>
+      </div>
+      <div class="flex items-end">
+        <label class="flex items-center gap-2 pb-2 text-sm font-semibold text-slate-700">
+          <input type="checkbox" name="criticos" value="1" checked={filtros.criticos} class="h-4 w-4" />
+          Solo críticos
+        </label>
+      </div>
+      <div class="col-span-2 flex flex-wrap gap-2 md:col-span-4 xl:col-span-7">
+        <button type="submit" class="btn-primary">Filtrar</button>
+        <a href="/calibraciones" class="btn-secondary">Limpiar</a>
+      </div>
+    </form>
+
+    <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      {tarjetas.map((t) => (
+        <a href={conEstado(t.estado)} class:list={["card block border-l-4 p-4 hover:bg-slate-50", t.borde, filtros.estado === t.estado && "ring-2 ring-brand-400"]}>
+          <span class="block text-xs font-semibold uppercase text-slate-500">{t.etiqueta}</span>
+          <span class:list={["mt-1 block text-3xl font-bold", t.texto]}>{t.valor}</span>
+          {t.detalle && <span class="block text-xs text-slate-500">{t.detalle}</span>}
+        </a>
+      ))}
+    </div>
+    {resumen.noAplica > 0 && (
+      <p class="mt-2 text-sm text-slate-600">
+        {resumen.noAplica === 1 ? "1 equipo marcado" : `${resumen.noAplica} equipos marcados`} «No requiere calibración» (<a class="text-brand-600 hover:underline" href={conEstado("no_aplica")}>ver</a>).
+      </p>
+    )}
   </div>
 
-  <!-- Resumen -->
-  <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
-    <div class="card p-4 border-l-4 border-red-500">
-      <div class="text-xs uppercase text-slate-500">Vencidas</div>
-      <div class="mt-1 text-3xl font-bold text-red-600">{vencidas.length}</div>
-    </div>
-    <div class="card p-4 border-l-4 border-amber-500">
-      <div class="text-xs uppercase text-slate-500">Próximos 30 días</div>
-      <div class="mt-1 text-3xl font-bold text-amber-600">{proximas30.length}</div>
-    </div>
-    <div class="card p-4 border-l-4 border-blue-400">
-      <div class="text-xs uppercase text-slate-500">Próximos 60 días</div>
-      <div class="mt-1 text-3xl font-bold text-blue-600">{proximas60.length}</div>
-    </div>
-    <div class="card p-4 border-l-4 border-emerald-500">
-      <div class="text-xs uppercase text-slate-500">Al día</div>
-      <div class="mt-1 text-3xl font-bold text-emerald-600">{conCalOk.length}</div>
-    </div>
-    <div class="card p-4 border-l-4 border-slate-400">
-      <div class="text-xs uppercase text-slate-500">Sin calibración</div>
-      <div class="mt-1 text-3xl font-bold text-slate-500">{sinCal.length}</div>
-    </div>
-  </div>
+  <article class="print-doc doc-hoja doc-ancha mt-4">
+    <DocCabecera soloImpresion titulo={titulo} subtitulo={subtitulo} fecha={hoy} />
+    <section class="doc-seccion">
+      <div class="doc-cifras">
+        <div><span class="doc-etq">Equipos</span><b>{resumen.total}</b></div>
+        <div><span class="doc-etq">Al día</span><b>{resumen.alDia}</b></div>
+        <div><span class="doc-etq">% al día</span><b>{resumen.pct} %</b></div>
+        <div><span class="doc-etq">Vencidas</span><b>{resumen.porEstado.vencida}</b></div>
+        <div><span class="doc-etq">No conformes</span><b>{resumen.porEstado.no_conforme}</b></div>
+        <div><span class="doc-etq">Sin certificado</span><b>{resumen.porEstado.sin_certificado}</b></div>
+        <div><span class="doc-etq">Sin calibración</span><b>{resumen.porEstado.sin_calibracion}</b></div>
+      </div>
+    </section>
+    <section class="doc-seccion">
+      {filas.length === 0 ? <p class="doc-texto">No hay equipos con esos filtros.</p> : (
+        <div class="overflow-x-auto">
+          <table class="doc-tabla">
+            <thead>
+              <tr>
+                <th>Código</th><th style="min-width:170px">Equipo</th><th style="min-width:120px">Sede · ubicación</th><th>Crítico</th>
+                <th>Estado</th><th class="c">Última</th><th class="c">Próxima</th><th>Certificado</th><th style="min-width:120px">Laboratorio</th>
+                <th>Resultado</th><th class="no-print">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f) => (
+                <tr>
+                  <td class="tn">{f.codigo}</td>
+                  <td>
+                    <a href={`/activos/${f.activoId}`}>{f.nombre}</a>
+                    {f.esPatron && <span class="badge ml-1 bg-blue-100 text-blue-700 text-[10px]">Patrón</span>}
+                    {marcaModelo(f) && <span class="doc-nota-celda">{marcaModelo(f)}</span>}
+                  </td>
+                  <td>{[f.sede, f.ubicacion].filter(Boolean).join(" · ") || "—"}</td>
+                  <td>{f.motivos.length ? f.motivos.map((m) => <span class="doc-critico block">{MOTIVO_CRITICO_LABEL[m]}</span>) : "—"}</td>
+                  <td>
+                    <span class:list={["badge whitespace-nowrap text-[10px]", ESTADO_CALIBRACION_COLOR[f.estado]]}>{ESTADO_CALIBRACION_LABEL[f.estado]}</span>
+                    {conDias.has(f.estado) && f.dias !== null && <span class="doc-nota-celda">{textoVence(f.dias)}</span>}
+                    {f.estado === "no_aplica" && f.noAplicaMotivo && <span class="doc-nota-celda">{f.noAplicaMotivo}</span>}
+                  </td>
+                  <td class="c tn">{fechaCorta(f.ultima)}</td>
+                  <td class:list={["c tn", f.estado === "vencida" && "font-semibold text-red-700"]}>{fechaCorta(f.proxima)}</td>
+                  <td>
+                    {f.cal ? (
+                      f.cal.tieneArchivo
+                        ? <a href={`/api/calibraciones/certificado/${f.cal.id}`} target="_blank" rel="noopener">{f.cal.numeroCertificado ?? "Ver"}</a>
+                        : <span>{f.cal.numeroCertificado && <span class="block">{f.cal.numeroCertificado}</span>}<span class="text-[11px] font-semibold text-orange-700">Sin archivo</span></span>
+                    ) : "—"}
+                  </td>
+                  <td>
+                    {f.cal ? (
+                      <span>
+                        <span class="block">{f.cal.laboratorio ?? "—"}</span>
+                        <span class:list={["badge text-[10px]", colorLabAcreditado(f.cal.labAcreditado)]} title={f.cal.labAcreditacionRef ?? undefined}>{etiquetaLabAcreditado(f.cal.labAcreditado)}</span>
+                      </span>
+                    ) : "—"}
+                  </td>
+                  <td>
+                    {f.cal && esResultadoCal(f.cal.resultado)
+                      ? <span class:list={["badge text-[10px]", RESULTADO_CALIB_COLOR[f.cal.resultado]]}>{RESULTADO_CALIB_LABEL[f.cal.resultado]}</span>
+                      : "—"}
+                  </td>
+                  <td class="no-print">
+                    <div class="flex flex-col items-start gap-1">
+                      {puedeRegistrar && f.estado !== "no_aplica" && <a class="text-xs" href={`/activos/${f.activoId}#calibraciones`}>Registrar</a>}
+                      {puedeGestionar && f.estado !== "no_aplica" && !f.esPatron && (
+                        <button type="button" class="text-xs text-slate-600 hover:underline" data-no-aplica data-id={f.activoId} data-equipo={`${f.codigo} · ${f.nombre}`}>No requiere</button>
+                      )}
+                      {puedeGestionar && f.estado === "no_aplica" && (
+                        <button type="button" class="text-xs text-brand-600 hover:underline" data-requiere data-id={f.activoId} data-equipo={`${f.codigo} · ${f.nombre}`}>Requiere calibración</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+    <p class="doc-nota">Corte: {fechaCorta(hoy)}. No incluye equipos dados de baja.</p>
+    <DocFolio soloImpresion codigo={filtros.criticos ? "Equipos críticos · calibración" : "Calibraciones de equipos"} />
+  </article>
 
-  {[
-    { titulo: "Calibraciones vencidas", items: vencidas, color: "border-red-300", textColor: "text-red-700" },
-    { titulo: "Próximas 30 días", items: proximas30, color: "border-amber-300", textColor: "text-amber-700" },
-    { titulo: "Próximas 60 días", items: proximas60, color: "border-blue-200", textColor: "text-blue-700" },
-    { titulo: "Sin calibración registrada", items: sinCal, color: "border-slate-200", textColor: "text-slate-700" },
-    { titulo: "✓ Al día (más de 60 días)", items: conCalOk, color: "border-emerald-200", textColor: "text-emerald-700" },
-  ].map((g) => g.items.length > 0 && (
-    <div class={`card mt-6 overflow-hidden border-l-4 ${g.color}`}>
-      <div class="px-5 pt-4 pb-2"><h2 class={`font-semibold ${g.textColor}`}>{g.titulo} ({g.items.length})</h2></div>
-      <table class="w-full text-left text-sm">
-        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
-          <tr>
-            <th class="px-4 py-2">Código</th>
-            <th class="px-4 py-2">Equipo</th>
-            <th class="px-4 py-2">Marca / Modelo</th>
-            <th class="px-4 py-2">Clase</th>
-            <th class="px-4 py-2">Sucursal</th>
-            <th class="px-4 py-2">Última</th>
-            <th class="px-4 py-2">Próxima</th>
-            <th class="px-4 py-2 text-right">Acción</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {g.items.map((r) => (
-            <tr class="hover:bg-slate-50">
-              <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}</td>
-              <td class="px-4 py-2"><a href={`/activos/${r.a.id}`} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a></td>
-              <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "—"}</td>
-              <td class="px-4 py-2">
-                {r.a.claseRiesgo ? <span class={`badge ${claseColor[r.a.claseRiesgo]}`}>Clase {r.a.claseRiesgo}</span> : <span class="text-slate-400 text-xs">—</span>}
-              </td>
-              <td class="px-4 py-2 text-xs text-slate-600">{r.s?.nombre ?? "—"}</td>
-              <td class="px-4 py-2 text-xs">{fmt(r.a.ultimaCalibracion)}</td>
-              <td class:list={["px-4 py-2 text-xs font-mono", r.a.proximaCalibracion && r.a.proximaCalibracion < hoy ? "text-red-600 font-bold" : ""]}>
-                {fmt(r.a.proximaCalibracion)}
-              </td>
-              <td class="px-4 py-2 text-right">
-                <a href={`/activos/${r.a.id}#calibraciones`} class="text-xs text-brand-600 hover:underline">Registrar</a>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  ))}
+  {puedeGestionar && (
+    <dialog id="dlgNoAplica" class="no-print w-[min(92vw,28rem)] border border-slate-300 p-0 backdrop:bg-slate-900/40">
+      <div class="p-5">
+        <h2 class="text-lg font-semibold">No requiere calibración</h2>
+        <p id="naEquipo" class="mt-1 text-sm text-slate-600"></p>
+        <label class="label mt-3" for="naMotivo">¿Por qué este equipo no requiere calibración?</label>
+        <textarea id="naMotivo" class="input" rows="3" maxlength="300" placeholder="Ej.: no tiene función de medición; el fabricante no indica calibración"></textarea>
+        <p class="mt-1 text-xs text-slate-500">Saldrá del total de Calibraciones con el estado «No requiere». Se puede deshacer.</p>
+        <p id="naError" class="mt-2 hidden text-sm text-red-700" role="alert"></p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" id="naCancelar">Cancelar</button>
+          <button type="button" class="btn-primary" id="naGuardar">Guardar</button>
+        </div>
+      </div>
+    </dialog>
+  )}
 </Layout>
+
+<script>
+  // Filtros: la URL lleva solo lo que tiene valor (un `area` vacío lo rechaza el servidor).
+  const form = document.getElementById("filtrosCal") as HTMLFormElement | null;
+  form?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const p = new URLSearchParams();
+    for (const [k, v] of new FormData(form)) if (typeof v === "string" && v.trim()) p.set(k, v.trim());
+    const q = p.toString();
+    location.href = q ? `/calibraciones?${q}` : "/calibraciones";
+  });
+
+  async function marcar(id: string, datos: Record<string, unknown>): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/calibraciones/equipo/${encodeURIComponent(id)}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(datos),
+      });
+      if (res.ok) return null;
+      const j = await res.json().catch(() => ({}));
+      return typeof j.error === "string" ? j.error : "No se pudo guardar. Vuelve a intentarlo.";
+    } catch {
+      return "No hay conexión. Vuelve a intentarlo.";
+    }
+  }
+
+  // «No requiere»: diálogo con el motivo.
+  const dlg = document.getElementById("dlgNoAplica") as HTMLDialogElement | null;
+  const naMotivo = document.getElementById("naMotivo") as HTMLTextAreaElement | null;
+  const naError = document.getElementById("naError");
+  const naEquipo = document.getElementById("naEquipo");
+  const naGuardar = document.getElementById("naGuardar") as HTMLButtonElement | null;
+  let equipoId = "";
+  const mostrarError = (t: string) => { if (naError) { naError.textContent = t; naError.classList.toggle("hidden", !t); } };
+  document.querySelectorAll<HTMLButtonElement>("[data-no-aplica]").forEach((b) => b.addEventListener("click", () => {
+    if (!dlg || !naMotivo) return;
+    equipoId = b.dataset.id ?? "";
+    if (naEquipo) naEquipo.textContent = b.dataset.equipo ?? "";
+    naMotivo.value = "";
+    mostrarError("");
+    dlg.showModal();
+    naMotivo.focus();
+  }));
+  document.getElementById("naCancelar")?.addEventListener("click", () => dlg?.close());
+  naGuardar?.addEventListener("click", async () => {
+    const motivo = (naMotivo?.value ?? "").trim();
+    if (motivo.length < 10) { mostrarError("Escribe por qué no requiere calibración (al menos 10 letras)."); return; }
+    naGuardar.disabled = true;
+    const error = await marcar(equipoId, { calibracionNoAplica: true, motivo });
+    naGuardar.disabled = false;
+    if (error) { mostrarError(error); return; }
+    location.reload();
+  });
+
+  // «Requiere calibración»: vuelve a la lista con su estado.
+  document.querySelectorAll<HTMLButtonElement>("[data-requiere]").forEach((b) => b.addEventListener("click", async () => {
+    const titulo = "¿Vuelve a requerir calibración?";
+    const texto = `${b.dataset.equipo ?? "El equipo"} volverá a la lista con su estado.`;
+    const ok = window.confirmAction ? await window.confirmAction(titulo, texto, { danger: false }) : confirm(`${titulo}\n${texto}`);
+    if (!ok) return;
+    b.disabled = true;
+    const error = await marcar(b.dataset.id ?? "", { calibracionNoAplica: false });
+    b.disabled = false;
+    if (error) { window.showToast ? window.showToast(error, "error") : alert(error); return; }
+    location.reload();
+  }));
+</script>

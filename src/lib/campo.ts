@@ -34,11 +34,32 @@ import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
 import { leerNumero, textoDeNumero } from "@/lib/numero";
 import { calcularVencimiento } from "@/lib/sla";
 import { pasoCambioEnLaFicha, PASO_DE_LA_FRASE, envioConPasosCambiados } from "@/lib/frases-campo";
+import { condicionActivoEspacio, espacioDeActivo, espaciosPermitidos, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
+import { espacioDeTrabajoGuardado } from "@/lib/espacio-db";
 
 type Db = ReturnType<typeof getDb>;
 type Usuario = { id: number; rol: any; nombre: string; especialidad?: string | null };
 
 export const puedeUsarCampo = (rol: string) => ["admin", "jefe", "tecnico"].includes(rol);
+
+// ── Espacios (src/lib/espacio.ts) ───────────────────────────────────────────
+// El celular no cambia de diseño, pero quien trabaja en un solo espacio (su
+// especialidad) solo ve, abre y crea trabajo de los equipos de ese espacio. La
+// ronda de turno es de Mantenimiento general: el técnico biomédico no la recibe.
+const usuarioEspacio = (user: Usuario) => ({ rol: String(user.rol), especialidad: user.especialidad ?? null });
+/** Condición sobre activos para quien está atado a un espacio; undefined si ve los dos. */
+function condicionEquiposDe(user?: Usuario | null): SQL | undefined {
+  if (!user) return undefined;
+  const permitidos = espaciosPermitidos(usuarioEspacio(user));
+  return permitidos.length === 1 ? condicionActivoEspacio(permitidos[0]) : undefined;
+}
+/** 403 de campo si el equipo es de un espacio al que el usuario no entra. */
+function exigirEspacioDelEquipo(user: Usuario, a: { rubro?: string | null; tipo?: string | null }) {
+  const e = espacioDeActivo(a);
+  if (!puedeEntrar(usuarioEspacio(user), e)) throw new RechazoCampo(mensajeOtroEspacio(e), 403);
+}
+/** La ronda de turno es del espacio General. */
+export const haceRonda = (user: Usuario) => puedeEntrar(usuarioEspacio(user), "general");
 
 // ── La hora capturada ───────────────────────────────────────────────────────
 const MAX_FUTURO_MS = 5 * 60_000;
@@ -331,7 +352,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
   const sedeId = sedePedida && sedes.has(sedePedida) ? sedePedida : yo?.sucursalId && sedes.has(yo.sucursalId) ? yo.sucursalId : null;
   // Lo primero del turno se lee primero. Si falla, el celular conserva la que ya tenía: no es que no haya ronda.
   let rondaError = false;
-  const ronda = sedeId ? await rondaParaSede(db, sedeId).catch((e) => { console.error("campo_ronda", e); rondaError = true; return null; }) : null;
+  const ronda = sedeId && haceRonda(user) ? await rondaParaSede(db, sedeId).catch((e) => { console.error("campo_ronda", e); rondaError = true; return null; }) : null;
 
   const ubisFilas = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId }).from(ubicaciones);
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
@@ -473,7 +494,7 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
 }
 
 // ── Buscar un equipo: sede → ubicación → equipo ─────────────────────────────
-export async function ubicacionesDeSede(db: Db, sedeId: number) {
+export async function ubicacionesDeSede(db: Db, sedeId: number, user?: Usuario | null) {
   const filas = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, tipo: ubicaciones.tipo, padreId: ubicaciones.padreId }).from(ubicaciones).where(and(eq(ubicaciones.sucursalId, sedeId), eq(ubicaciones.activa, true))).orderBy(asc(ubicaciones.nombre));
   const porId = new Map(filas.map((u) => [u.id, u]));
   const ruta = (u: (typeof filas)[number]) => {
@@ -487,21 +508,21 @@ export async function ubicacionesDeSede(db: Db, sedeId: number) {
   const cuenta = filas.length
     ? await db.select({ ub: activos.ubicacionId, n: sql<number>`count(*)` }).from(activos)
       .innerJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
-      .where(and(eq(ubicaciones.sucursalId, sedeId), eq(ubicaciones.activa, true), ne(activos.estado, "baja")))
+      .where(and(eq(ubicaciones.sucursalId, sedeId), eq(ubicaciones.activa, true), ne(activos.estado, "baja"), condicionEquiposDe(user)))
       .groupBy(activos.ubicacionId)
     : [];
   const n = new Map(cuenta.map((c) => [c.ub, Number(c.n)]));
   const lista = filas.map((u) => ({ id: u.id, nombre: ruta(u), equipos: n.get(u.id) ?? 0 })).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-  const [sin] = await db.select({ n: sql<number>`count(*)` }).from(activos).where(and(isNull(activos.ubicacionId), ne(activos.estado, "baja")));
+  const [sin] = await db.select({ n: sql<number>`count(*)` }).from(activos).where(and(isNull(activos.ubicacionId), ne(activos.estado, "baja"), condicionEquiposDe(user)));
   return { ubicaciones: lista, sinUbicacion: Number(sin?.n ?? 0) };
 }
 
-export async function equiposDeUbicacion(db: Db, ubicacionId: number | null) {
+export async function equiposDeUbicacion(db: Db, ubicacionId: number | null, user?: Usuario | null) {
   const hoy = new Date(Date.now() - 6 * 3_600_000).toISOString().slice(0, 10);
   const filas = await db
     .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo, estado: activos.estado, rubro: activos.rubro, tipo: activos.tipo })
     .from(activos)
-    .where(and(ubicacionId ? eq(activos.ubicacionId, ubicacionId) : isNull(activos.ubicacionId), ne(activos.estado, "baja")))
+    .where(and(ubicacionId ? eq(activos.ubicacionId, ubicacionId) : isNull(activos.ubicacionId), ne(activos.estado, "baja"), condicionEquiposDe(user)))
     .orderBy(asc(activos.nombre))
     .limit(400);
   const ids = filas.map((f) => f.id);
@@ -527,6 +548,7 @@ export async function fichaEquipo(db: Db, activoId: number, user: Usuario) {
     .where(eq(activos.id, activoId))
     .limit(1);
   if (!a) return null;
+  exigirEspacioDelEquipo(user, a);
   const planes = await db.select().from(planesMantenimiento).where(and(eq(planesMantenimiento.activoId, activoId), eq(planesMantenimiento.activo, true))).orderBy(asc(planesMantenimiento.proximaFecha));
   const abiertas = await db
     .select({ id: ordenes.id, codigo: ordenes.codigo, titulo: ordenes.titulo, estado: ordenes.estado, tipo: ordenes.tipo, asignadoA: ordenes.asignadoA, asignado: usuarios.nombre, planId: ordenes.planId })
@@ -611,6 +633,7 @@ export async function crearOrdenEnCampo(
 ) {
   const [a] = await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo, ubicacionId: activos.ubicacionId, rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, input.activoId)).limit(1);
   if (!a) throw new RechazoCampo("Ese equipo ya no existe.", 404);
+  exigirEspacioDelEquipo(user, a);
   if (a.estado === "baja") throw new RechazoCampo("Ese equipo está dado de baja.", 409);
   const ahora = new Date().toISOString();
   const sucursalId = await sucursalDeUbicacion(db, a.ubicacionId);
@@ -672,6 +695,7 @@ export async function ordenCampoPorId(db: Db, id: number, user: Usuario) {
     .limit(1)) as FilaOrden[];
   if (!f) return null;
   if (user.rol === "tecnico" && f.o.asignadoA && f.o.asignadoA !== user.id) return null;
+  if (espaciosPermitidos(usuarioEspacio(user)).length === 1 && !puedeEntrar(usuarioEspacio(user), await espacioDeTrabajoGuardado(db, f.o.rubro, f.o.activoId))) return null;
   const ultimas = f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
   const extras = await extrasDeCampo(db, [f], ubis);
@@ -1099,6 +1123,8 @@ function conformarPasos(o: typeof ordenes.$inferSelect, user: Usuario, conformes
 }
 
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
+  // La ronda es de Mantenimiento general: quien solo entra a Biomédico no la registra.
+  if (typeof op.tipo === "string" && op.tipo.startsWith("ronda.") && !haceRonda(user)) throw new RechazoCampo(mensajeOtroEspacio("general"), 403);
   switch (op.tipo) {
     case "orden.iniciar": {
       const o = await ordenDeOp(db, op);

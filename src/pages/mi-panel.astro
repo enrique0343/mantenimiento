@@ -5,12 +5,16 @@ import { ordenes, activos, planesMantenimiento, tickets, sucursales } from "@/li
 import { eq, and, desc, gte, sql, isNotNull } from "drizzle-orm";
 import { ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, PRIO_COLOR, type EstadoOT } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { ESPACIOS, condicionActivoEspacio, espacioDelContexto, condicionOrdenEspacio, condicionTicketEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 const db = getDb(Astro);
 const esMotorista = user.rol === "motorista";
 if (esMotorista) return Astro.redirect("/");
+// Mi trabajo del espacio en el que estoy: órdenes, solicitudes, preventivos y cifras.
+const espacio = espacioDelContexto(Astro, user);
+const deOrdenes = condicionOrdenEspacio(espacio);
 
 const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleDateString("es", { timeZone: "America/El_Salvador" }) : "—");
@@ -34,7 +38,7 @@ if (!esMotorista) {
     .select({ o: ordenes, a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
-    .where(and(eq(ordenes.asignadoA, user.id), sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
+    .where(and(eq(ordenes.asignadoA, user.id), deOrdenes, sql`${ordenes.estado} IN ('abierta', 'en_proceso', 'en_espera', 'completada')`))
     .orderBy(desc(ordenes.prioridad), ordenes.vencimiento);
 
   // Tickets asignados al técnico que aún no estén resueltos/cerrados
@@ -42,27 +46,27 @@ if (!esMotorista) {
     .select({ t: tickets, s: sucursales })
     .from(tickets)
     .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
-    .where(and(eq(tickets.asignadoA, user.id), sql`${tickets.estado} IN ('nuevo', 'asignado', 'en_proceso')`))
+    .where(and(eq(tickets.asignadoA, user.id), condicionTicketEspacio(espacio), sql`${tickets.estado} IN ('nuevo', 'asignado', 'en_proceso')`))
     .orderBy(desc(tickets.prioridad), tickets.vencimientoSla);
 
   misPlanes = await db
     .select({ p: planesMantenimiento, a: activos })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-    .where(and(eq(planesMantenimiento.asignadoA, user.id), eq(planesMantenimiento.activo, true)))
+    .where(and(eq(planesMantenimiento.asignadoA, user.id), eq(planesMantenimiento.activo, true), condicionActivoEspacio(espacio)))
     .orderBy(planesMantenimiento.proximaFecha)
     .limit(10);
 
   const completadasMes = await db
     .select({ n: sql<number>`count(*)` })
     .from(ordenes)
-    .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+    .where(and(eq(ordenes.asignadoA, user.id), deOrdenes, gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
   nCompletadas = Number(completadasMes[0]?.n ?? 0);
 
   const horasMes = await db
     .select({ h: sql<number>`SUM(COALESCE(${ordenes.horasTrabajadas}, 0))` })
     .from(ordenes)
-    .where(and(eq(ordenes.asignadoA, user.id), gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
+    .where(and(eq(ordenes.asignadoA, user.id), deOrdenes, gte(ordenes.completadaEn, inicioMes), isNotNull(ordenes.completadaEn)));
   totalHoras = Number(horasMes[0]?.h ?? 0);
 
   const aTiempoRows = await db
@@ -70,6 +74,7 @@ if (!esMotorista) {
     .from(ordenes)
     .where(and(
       eq(ordenes.asignadoA, user.id),
+      deOrdenes,
       isNotNull(ordenes.completadaEn),
       isNotNull(ordenes.vencimiento),
       gte(ordenes.completadaEn, inicioMes),
@@ -106,7 +111,7 @@ if (!esMotorista) {
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 class="text-2xl font-bold">Hola, {user.nombre.split(" ")[0]} </h1>
-          <p class="text-sm text-slate-500">Resumen personal del mes</p>
+          <p class="text-sm text-slate-500">Resumen personal del mes · {ESPACIOS[espacio].rotulo}</p>
         </div>
         <div class="card flex items-center gap-3 px-4 py-2">
           <span class="text-3xl">{nivelActual.emoji}</span>

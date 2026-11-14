@@ -1,0 +1,192 @@
+---
+// Fase 59 · WP-D: formulario de capacitación (registrar o editar). Equipos biomédicos sin
+// baja (más los ya enlazados), asistentes escritos o pegados desde Excel con vista previa,
+// y en el alta la lista firmada (una o varias fotos). Revisa con validarCapacitacion.
+import { ARCHIVO_ACCEPT } from "@/lib/biomedico";
+import { INSTRUCTOR_TIPO, MAX_ASISTENTES, TIPOS_CAPACITACION, claveModelo } from "@/lib/capacitaciones";
+
+interface InicialCapacitacion {
+  id?: number | null; fecha?: string | null; tema?: string | null; tipo?: string | null; instructorTipo?: string | null;
+  instructorNombre?: string | null; proveedorId?: number | null; instructorEntidad?: string | null; modeloCubierto?: string | null;
+  duracionMinutos?: number | null; sucursalId?: number | null; lugar?: string | null; servicio?: string | null; notas?: string | null;
+  equipoIds?: readonly number[]; asistentesTexto?: string;
+}
+interface Props {
+  modo: "nueva" | "editar";
+  inicial: InicialCapacitacion;
+  equipos: ReadonlyArray<{ id: number; codigo: string; nombre: string; marca: string | null; modelo: string | null; sucursalId: number | null; estado?: string | null }>;
+  proveedores: ReadonlyArray<{ id: number; nombre: string }>;
+  sucursales: ReadonlyArray<{ id: number; nombre: string }>;
+  sugerenciasServicio: readonly string[];
+  cancelarHref: string;
+  /** Formulario oculto hasta que se pulse «Editar» (hoja de la capacitación). */
+  oculto?: boolean;
+}
+const { modo, inicial, equipos, proveedores, sucursales, sugerenciasServicio, cancelarHref, oculto = false } = Astro.props;
+const area = Astro.locals.area ?? "";
+const pre = `cap${modo}`;
+const elegidos = new Set(inicial.equipoIds ?? []);
+const externo = inicial.instructorTipo === "externo";
+const sedeNombre = new Map(sucursales.map((s) => [s.id, s.nombre]));
+---
+
+<form
+  id={`${pre}Form`}
+  class:list={["card mt-4 space-y-5 p-5", { hidden: oculto }]}
+  data-capacitacion-form
+  data-modo={modo}
+  data-id={inicial.id ?? ""}
+  data-area={area}
+  novalidate
+>
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Capacitación</legend>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div>
+        <label class="label" for={`${pre}Fecha`}>Fecha *</label>
+        <input id={`${pre}Fecha`} name="fecha" type="date" class="input" value={inicial.fecha ?? ""} />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label" for={`${pre}Tema`}>Tema *</label>
+        <input id={`${pre}Tema`} name="tema" class="input" maxlength="200" value={inicial.tema ?? ""} placeholder="Ej.: Uso seguro del monitor de signos vitales" />
+      </div>
+      <div>
+        <label class="label" for={`${pre}Tipo`}>Tipo *</label>
+        <select id={`${pre}Tipo`} name="tipo" class="input">
+          {Object.entries(TIPOS_CAPACITACION).map(([v, t]) => <option value={v} selected={(inicial.tipo ?? "uso_seguro") === v}>{t}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for={`${pre}Duracion`}>Duración (minutos)</label>
+        <input id={`${pre}Duracion`} name="duracionMinutos" type="number" min="5" max="1440" step="5" inputmode="numeric" class="input" value={inicial.duracionMinutos ?? ""} />
+      </div>
+      <div>
+        <label class="label" for={`${pre}Sede`}>Sede</label>
+        <select id={`${pre}Sede`} name="sucursalId" class="input">
+          <option value="">—</option>
+          {sucursales.map((s) => <option value={s.id} selected={inicial.sucursalId === s.id}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for={`${pre}Lugar`}>Lugar</label>
+        <input id={`${pre}Lugar`} name="lugar" class="input" maxlength="120" value={inicial.lugar ?? ""} placeholder="Ej.: Sala de juntas, UCI" />
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label" for={`${pre}Servicio`}>Dirigida al servicio</label>
+        <input id={`${pre}Servicio`} name="servicio" class="input" maxlength="80" list={`${pre}Servicios`} value={inicial.servicio ?? ""} placeholder="Ej.: UCI adultos" />
+        <datalist id={`${pre}Servicios`}>{sugerenciasServicio.map((s) => <option value={s} />)}</datalist>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Instructor</legend>
+    <div class="flex flex-wrap gap-4 text-sm">
+      {Object.entries(INSTRUCTOR_TIPO).map(([v, t]) => (
+        <label class="flex items-center gap-2"><input type="radio" name="instructorTipo" value={v} checked={(inicial.instructorTipo ?? "interno") === v} /> {t}</label>
+      ))}
+    </div>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div>
+        <label class="label" for={`${pre}Instructor`}>Nombre del instructor *</label>
+        <input id={`${pre}Instructor`} name="instructorNombre" class="input" maxlength="120" value={inicial.instructorNombre ?? ""} />
+      </div>
+      <div data-solo-externo class:list={{ hidden: !externo }}>
+        <label class="label" for={`${pre}Proveedor`}>Proveedor</label>
+        <select id={`${pre}Proveedor`} name="proveedorId" class="input">
+          <option value="">—</option>
+          {proveedores.map((p) => <option value={p.id} selected={inicial.proveedorId === p.id}>{p.nombre}</option>)}
+        </select>
+      </div>
+      <div data-solo-externo class:list={{ hidden: !externo }}>
+        <label class="label" for={`${pre}Empresa`}>Empresa o institución (si no está en Proveedores)</label>
+        <input id={`${pre}Empresa`} name="instructorEntidad" class="input" maxlength="120" value={inicial.instructorEntidad ?? ""} />
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-3">
+    <legend class="font-semibold text-slate-800">Equipos</legend>
+    <p class="text-xs text-slate-500">Marca los equipos sobre los que fue la capacitación. La ficha de cada equipo la mostrará.</p>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div>
+        <label class="label" for={`${pre}FiltroSede`}>Sede</label>
+        <select id={`${pre}FiltroSede`} class="input" data-filtro-sede>
+          <option value="">Todas</option>
+          {sucursales.map((s) => <option value={s.id}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <div class="sm:col-span-2">
+        <label class="label" for={`${pre}FiltroTexto`}>Buscar</label>
+        <input id={`${pre}FiltroTexto`} type="search" class="input" placeholder="Código, nombre, marca o modelo" data-filtro-texto />
+      </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <button type="button" class="btn-secondary btn-sm" data-marcar-filtrados>Marcar los filtrados</button>
+      <button type="button" class="btn-secondary btn-sm hidden" data-mismo-modelo></button>
+      <span class="text-xs text-slate-500" data-equipos-estado></span>
+    </div>
+    <div class="flex flex-wrap gap-1.5" data-fichas aria-live="polite"></div>
+    <div class="max-h-72 overflow-y-auto rounded-md border border-slate-200" data-lista-equipos>
+      {equipos.length === 0 ? (
+        <p class="p-3 text-sm text-slate-500">No hay equipos biomédicos registrados.</p>
+      ) : equipos.map((e) => (
+        <label class="flex items-start gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0"
+          data-equipo data-sede={e.sucursalId ?? ""} data-modelo={claveModelo(e.marca, e.modelo) ?? ""}
+          data-texto={[e.codigo, e.nombre, e.marca, e.modelo].filter(Boolean).join(" ")}>
+          <input type="checkbox" name="equipoIds" value={e.id} checked={elegidos.has(e.id)} data-codigo={e.codigo} class="mt-1" />
+          <span class="min-w-0">
+            <span class="font-medium text-slate-800">{e.codigo}</span> — {e.nombre}
+            <span class="block text-xs text-slate-500">
+              {[e.marca, e.modelo].filter(Boolean).join(" ") || "Sin marca ni modelo"}{e.sucursalId && sedeNombre.get(e.sucursalId) ? ` · ${sedeNombre.get(e.sucursalId)}` : ""}{e.estado === "baja" ? " · Dado de baja" : ""}
+            </span>
+          </span>
+        </label>
+      ))}
+    </div>
+    <div>
+      <label class="label" for={`${pre}Modelo`}>Modelo cubierto (si aplica a todo un modelo)</label>
+      <input id={`${pre}Modelo`} name="modeloCubierto" class="input" maxlength="120" value={inicial.modeloCubierto ?? ""} placeholder="Ej.: Monitor Mindray uMEC12" />
+    </div>
+  </fieldset>
+
+  <fieldset class="space-y-2">
+    <legend class="font-semibold text-slate-800">Asistentes</legend>
+    <label class="label" for={`${pre}Asistentes`}>Lista de asistentes</label>
+    <textarea id={`${pre}Asistentes`} name="asistentesTexto" class="input font-mono text-sm" rows="6" placeholder={"Ana Pérez; Enfermera; UCI\nLuis Gómez; Médico residente; Emergencia"}>{inicial.asistentesTexto ?? ""}</textarea>
+    <p class="text-xs text-slate-500">Una persona por línea: Nombre; Cargo; Servicio. También puedes pegar las columnas desde Excel. Máximo {MAX_ASISTENTES}.</p>
+    <p class="text-sm text-slate-600" data-asistentes-conteo></p>
+    <ul class="hidden list-disc pl-5 text-sm text-red-600" data-asistentes-errores></ul>
+    <div class="hidden max-h-64 overflow-y-auto rounded-md border border-slate-200" data-asistentes-vista>
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-50 text-slate-500"><tr><th class="px-2 py-1">N.º</th><th class="px-2 py-1">Nombre</th><th class="px-2 py-1">Cargo</th><th class="px-2 py-1">Servicio</th></tr></thead>
+        <tbody class="divide-y divide-slate-100" data-asistentes-filas></tbody>
+      </table>
+    </div>
+  </fieldset>
+
+  {modo === "nueva" && (
+    <fieldset class="space-y-2">
+      <legend class="font-semibold text-slate-800">Lista firmada</legend>
+      <label class="label" for={`${pre}Listas`}>Fotos o PDF de la lista de asistencia firmada (máx. 15 MB cada uno)</label>
+      <input id={`${pre}Listas`} name="listas" type="file" accept={ARCHIVO_ACCEPT} multiple class="input" />
+      <p class="text-xs text-slate-500">Si todavía no la tienes, imprime la hoja de la capacitación, hazla firmar y súbela después.</p>
+    </fieldset>
+  )}
+
+  <fieldset class="space-y-2">
+    <legend class="font-semibold text-slate-800">Notas</legend>
+    <textarea name="notas" class="input" rows="2" maxlength="1000" aria-label="Notas">{inicial.notas ?? ""}</textarea>
+  </fieldset>
+
+  <p class="hidden text-sm" data-msg role="alert"></p>
+  <div class="flex flex-wrap gap-2">
+    <button type="submit" class="btn-primary" data-guardar>Guardar</button>
+    {oculto ? <button type="button" class="btn-secondary" data-cancelar>Cancelar</button> : <a href={cancelarHref} class="btn-secondary">Cancelar</a>}
+  </div>
+</form>
+
+<script>
+  import { instalarCapacitacionForm } from "./capacitacion-form";
+  instalarCapacitacionForm();
+</script>

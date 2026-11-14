@@ -12,9 +12,12 @@ import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 import { parseArea } from "@/lib/areas";
+import { espacioDeArea, espacioDeLista, puedeEntrar, respuestaOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
+import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
 import { conCodigo, validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { sembrarDesdeMop } from "@/lib/mop";
+import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
@@ -48,8 +51,9 @@ export const GET: APIRoute = async (ctx) => {
   const rawArea = url.searchParams.get("area");
   const area = parseArea(rawArea);
   if (rawArea !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
-  const conditions = [];
-  if (area) conditions.push(eq(ordenes.rubro, area));
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
+  const conditions = [condicionTrabajoAreaEspacio(ordenes.rubro, ordenes.activoId, espacio, area)];
   if (estado) conditions.push(eq(ordenes.estado, estado));
   if (asignado === "me") conditions.push(eq(ordenes.asignadoA, user.id));
   // Restricción de visibilidad: técnicos solo ven sus OTs
@@ -90,6 +94,14 @@ export const POST: APIRoute = async (ctx) => {
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
   const contextError = validarContextoArea(ctx.request, areaResult.rubro);
   if (contextError) return contextError;
+  // Una orden de un área del otro espacio no la abre quien no entra a ese espacio.
+  if (!puedeEntrar(user, espacioDeArea(areaResult.rubro))) return respuestaOtroEspacio(espacioDeArea(areaResult.rubro));
+  // Ni nace asignada a quien no ve ese espacio.
+  const fuera = await asignadoFueraDeEspacio(db, parsed.data.asignadoA, [espacioDeArea(areaResult.rubro)]);
+  if (fuera) return Response.json({ error: mensajeAsignadoFuera(fuera, { biomedico: "las órdenes biomédicas", general: "las órdenes de mantenimiento general" }) }, { status: 400 });
+  // Fase 59 · requisito 13: a un equipo dado de baja no se le abren órdenes (409).
+  const rechazoBaja = await rechazoOrdenEquipoBaja(db, parsed.data.activoId);
+  if (rechazoBaja) return rechazoBaja;
 
   // Si no se proporcionó vencimiento explícito y hay equipo, calcular desde SLA
   let vencimiento = parsed.data.vencimiento ?? null;

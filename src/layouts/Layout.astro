@@ -2,7 +2,9 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import "@/styles/globals.css";
 import AppIcon from "@/components/AppIcon.astro";
-import { AREA_KEYS, AREAS, parseArea, areaHref } from "@/lib/areas";
+import { AREAS, parseArea, areaHref, type AreaKey } from "@/lib/areas";
+import { puedeVerBio, puedeGestionarBio } from "@/lib/biomedico";
+import { ESPACIOS, ESPACIO_KEYS, espacioDelContexto, espaciosPermitidos, areaEnEspacio, gestionaEspacio } from "@/lib/espacio";
 
 interface Props {
   title?: string;
@@ -16,7 +18,18 @@ const isAdmin = user?.rol === "admin";
 const isAdminOrJefe = user?.rol === "admin" || user?.rol === "jefe";
 const isOperativo = isAdminOrJefe || user?.rol === "tecnico";
 const esTecnico = user?.rol === "tecnico";
-const area = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
+// Fase 59: lo biomédico lo ven admin, jefe, técnico y visualizador.
+const verBio = puedeVerBio(user?.rol);
+// Espacio de trabajo (src/lib/espacio.ts): cada uno con su menú, su color y su tablero.
+const espacio = espacioDelContexto(Astro, user);
+const infoEspacio = ESPACIOS[espacio];
+const permitidos = Astro.locals.espaciosPermitidos ?? espaciosPermitidos(user);
+// El solicitante no gestiona ningún espacio: sin interruptor (ve sus solicitudes de los dos juntas).
+const conInterruptor = permitidos.length > 1 && gestionaEspacio(user);
+const esBio = espacio === "biomedico";
+// Un área del otro espacio no se muestra (la página del aviso, por ejemplo).
+const areaPedida = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
+const area = areaEnEspacio(areaPedida, espacio) ? areaPedida : null;
 const info = area ? AREAS[area] : null;
 const operationalTabs = area ? [
   {href: `/areas/${area}`, label: "Resumen", show: true},
@@ -26,7 +39,75 @@ const operationalTabs = area ? [
   {href: areaHref("/catalogo-aires", "aires"), label: "Catálogo de aires", show: area === "aires" && user?.rol !== "motorista"},
   {href: areaHref("/conjuntos", area), label: "Conjuntos", show: isOperativo || user?.rol === "visualizador"},
   {href: areaHref("/planes", area), label: "Planes", show: isOperativo || user?.rol === "visualizador"},
+  // Fase 59: evidencia JCI del área biomédica.
+  {href: areaHref("/calibraciones", "biomedico"), label: "Calibraciones", show: area === "biomedico" && verBio},
+  {href: areaHref("/seguridad-electrica", "biomedico"), label: "Seguridad eléctrica", show: area === "biomedico" && verBio},
+  {href: areaHref("/expedientes", "biomedico"), label: "Expedientes", show: area === "biomedico" && verBio},
+  {href: areaHref("/capacitaciones", "biomedico"), label: "Capacitaciones", show: area === "biomedico" && verBio},
+  {href: areaHref("/configuracion/plantillas", "biomedico"), label: "Plantillas de checklist", show: area === "biomedico" && isAdminOrJefe},
 ].filter(x=>x.show) : [];
+
+// Menú de cada espacio. Lo común (administración, recursos, ayuda) está en los dos.
+type ItemMenu = { href: string; label: string; icon: string; show: boolean };
+type GrupoMenu = { label: string | null; items: ItemMenu[] };
+const rol = user?.rol ?? "";
+const verPlanes = isOperativo || rol === "visualizador";
+// El tablero de cada espacio: la jefatura asigna y el visualizador lo consulta (los
+// mismos roles que ROLES_TABLERO_VER de lib/preventivos; la prueba de páginas lo cuida).
+const verTablero = isAdminOrJefe || rol === "visualizador";
+const AREAS_GENERAL = ESPACIOS.general.areas as readonly AreaKey[];
+const menu: GrupoMenu[] = !user ? [] : esBio ? [
+  { label: null, items: [
+    { href: "/", label: "Panorama biomédico", icon: "home", show: true },
+    { href: "/preventivos", label: ESPACIOS.biomedico.tablero, icon: "calendar", show: verTablero },
+  ]},
+  { label: "Trabajo", items: [
+    { href: areaHref("/activos", "biomedico"), label: "Equipos", icon: "heart", show: rol !== "motorista" },
+    { href: areaHref("/tickets", "biomedico"), label: "Solicitudes", icon: "alert", show: true },
+    { href: areaHref("/ordenes", "biomedico"), label: "Órdenes", icon: "clipboard", show: !["motorista","proveedor"].includes(rol) },
+    { href: areaHref("/planes", "biomedico"), label: "Preventivos", icon: "calendar", show: verPlanes },
+    { href: areaHref("/cronograma", "biomedico"), label: "Cronograma", icon: "clock", show: verPlanes },
+  ]},
+  { label: "Calidad JCI", items: [
+    { href: areaHref("/calibraciones", "biomedico"), label: "Calibraciones", icon: "report", show: verBio },
+    { href: areaHref("/seguridad-electrica", "biomedico"), label: "Seguridad eléctrica", icon: "alert", show: verBio },
+    { href: areaHref("/expedientes", "biomedico"), label: "Expedientes", icon: "book", show: verBio },
+    { href: "/licencias", label: "Licencias", icon: "clipboard", show: verBio },
+    { href: areaHref("/capacitaciones", "biomedico"), label: "Capacitaciones", icon: "book", show: verBio },
+    { href: "/alertas", label: "Alertas y retiros", icon: "bell", show: verBio },
+    { href: "/incidentes", label: "Incidentes", icon: "alert", show: isAdminOrJefe || rol === "visualizador" },
+    { href: "/cumplimiento", label: "Cumplimiento JCI", icon: "clipboard", show: isAdminOrJefe || rol === "visualizador" },
+  ]},
+  { label: "Gestión", items: [
+    { href: "/proveedores", label: "Empresas externas", icon: "box", show: puedeGestionarBio(rol) },
+    { href: areaHref("/plan-mantenimiento", "biomedico"), label: "Plan anual", icon: "calendar", show: !["motorista","proveedor"].includes(rol) },
+    { href: areaHref("/configuracion/plantillas", "biomedico"), label: "Plantillas de checklist", icon: "settings", show: isAdminOrJefe },
+    { href: "/centros-costo", label: "Centros de costo", icon: "settings", show: puedeGestionarBio(rol) },
+    { href: "/indicadores", label: "Indicadores y reportes", icon: "report", show: isAdminOrJefe },
+    { href: "/recursos", label: "Recursos", icon: "box", show: true },
+    { href: "/administracion", label: "Administración", icon: "settings", show: isAdminOrJefe },
+  ]},
+] : [
+  { label: null, items: [
+    { href: "/", label: "Panorama general", icon: "home", show: true },
+  ]},
+  { label: "Áreas de mantenimiento", items: AREAS_GENERAL.map((key) => ({ href: `/areas/${key}`, label: AREAS[key].label, icon: AREAS[key].icon, show: true })) },
+  { label: "Operación", items: [
+    { href: "/preventivos", label: ESPACIOS.general.tablero, icon: "calendar", show: verTablero },
+    { href: "/ronda", label: "Ronda de turno", icon: "clipboard", show: verPlanes },
+    { href: "/aop", label: "Desviaciones (AOP)", icon: "clock", show: isOperativo },
+    { href: "/eop", label: "Emergencias (EOP)", icon: "alert", show: isOperativo },
+    { href: "/electrico", label: "Sistema eléctrico", icon: "equipment", show: verPlanes },
+  ]},
+  { label: "Gestión", items: [
+    { href: "/indicadores", label: "Indicadores y reportes", icon: "report", show: isAdminOrJefe },
+    { href: "/recursos", label: "Recursos", icon: "box", show: true },
+    { href: "/administracion", label: "Administración", icon: "settings", show: isAdminOrJefe },
+  ]},
+];
+const menuVisible = menu.map((g) => ({ ...g, items: g.items.filter((i) => i.show) })).filter((g) => g.items.length);
+// Activo: la misma ruta; en las áreas, el área actual.
+const itemActivo = (href: string) => href.startsWith("/areas/") ? path === href || (area !== null && href === `/areas/${area}`) : isActive(href);
 const ROL_LABEL: Record<string, string> = {
   admin:        "Admin",
   jefe:         "Jefe",
@@ -47,7 +128,7 @@ const isActive = (href: string) =>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
-    <meta name="theme-color" content="#1E2142" />
+    <meta name="theme-color" content={infoEspacio.colorBarra} />
     <link rel="icon" href="/icons/favicon-64.png" sizes="64x64" type="image/png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="preload" href="/fonts/figtree-400.woff2" as="font" type="font/woff2" crossorigin />
@@ -55,6 +136,12 @@ const isActive = (href: string) =>
     <style>
       body { margin: 0; }
       .sidebar { width: 220px; min-width: 220px; }
+      .franja-espacio { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 60; }
+      .espacio-switch { display: inline-flex; flex: none; border: 1px solid var(--filete); border-radius: 2px; overflow: hidden; }
+      .espacio-switch button { min-height: 36px; padding: 0 12px; font-size: 13px; font-weight: 600; color: var(--tinta2); background: #fff; }
+      .espacio-switch button + button { border-left: 1px solid var(--filete); }
+      .espacio-switch button.activo { color: #fff; }
+      @media (max-width: 420px) { .espacio-switch button { padding: 0 8px; font-size: 12px; } }
       @media (max-width: 768px) {
         .sidebar { display: none; }
         .sidebar.open { display: flex; position: fixed; inset: 0; z-index: 50; }
@@ -62,17 +149,18 @@ const isActive = (href: string) =>
       }
     </style>
   </head>
-  <body class="min-h-screen">
+  <body class="min-h-screen" data-espacio={user ? espacio : undefined} data-area={area ?? undefined}>
     {!hideNav && user ? (
-      <div class="flex min-h-screen">
+      <div class="flex min-h-screen" data-espacio={espacio}>
+        {infoEspacio.colorFranja && <div class="franja-espacio" style={`background:${infoEspacio.colorFranja}`} aria-hidden="true"></div>}
         <!-- Sidebar -->
-        <aside class="sidebar flex flex-col text-white" id="sidebar">
+        <aside class="sidebar flex flex-col text-white" id="sidebar" style={`background:${infoEspacio.colorBarra}`} data-espacio={espacio}>
           <div class="marca-app">
             <a href="/" class="marca-logo" aria-label="Inicio"><img src="/brand/avante-logo-reverso.png" alt="Avante Complejo Hospitalario" /></a>
           </div>
-          <span class="marca-sub">Mantenimiento</span>
+          <span class="marca-sub" data-rotulo-espacio>{infoEspacio.rotulo}</span>
 
-          <nav class="app-nav" aria-label="Navegación principal">
+          <nav class="app-nav" aria-label={`Navegación de ${infoEspacio.rotulo}`}>
             {esTecnico ? (
               <>
                 <a href="/campo" class="app-nav-link"><AppIcon name="home" /><span>Hoy</span></a>
@@ -81,18 +169,12 @@ const isActive = (href: string) =>
                 <a href="/campo#ayuda" class="app-nav-link"><AppIcon name="help" /><span>Ayuda</span></a>
               </>
             ) : <>
-            <a href="/" class:list={["app-nav-link", {active:path === "/"}]} aria-current={path === "/" ? "page" : undefined}><AppIcon name="home" /><span>Panorama general</span></a>
-            <div class="app-nav-label">Áreas de mantenimiento</div>
-            {AREA_KEYS.map(key => <a href={`/areas/${key}`} class:list={["app-nav-link", {active:area === key}]} aria-current={area === key ? "page" : undefined}><AppIcon name={AREAS[key].icon}/><span>{AREAS[key].label}</span></a>)}
-            <div class="app-nav-label">Gestión compartida</div>
-            {isAdminOrJefe && <a href="/preventivos" class:list={["app-nav-link", {active:isActive("/preventivos")}]} aria-current={isActive("/preventivos") ? "page" : undefined}><AppIcon name="calendar"/><span>Tablero de preventivos</span></a>}
-            {(isOperativo || user.rol === "visualizador") && <a href="/ronda" class:list={["app-nav-link", {active:isActive("/ronda")}]} aria-current={isActive("/ronda") ? "page" : undefined}><AppIcon name="clipboard"/><span>Ronda de turno</span></a>}
-            {isOperativo && <a href="/aop" class:list={["app-nav-link", {active:isActive("/aop")}]} aria-current={isActive("/aop") ? "page" : undefined}><AppIcon name="clock"/><span>Desviaciones (AOP)</span></a>}
-            {isOperativo && <a href="/eop" class:list={["app-nav-link", {active:isActive("/eop")}]} aria-current={isActive("/eop") ? "page" : undefined}><AppIcon name="alert"/><span>Emergencias (EOP)</span></a>}
-            <a href="/recursos" class:list={["app-nav-link", {active:path === "/recursos"}]}><AppIcon name="box"/><span>Recursos</span></a>
-            {isAdminOrJefe && <a href="/indicadores" class:list={["app-nav-link", {active:path === "/indicadores"}]}><AppIcon name="report"/><span>Indicadores y reportes</span></a>}
-            {isAdminOrJefe && <a href="/administracion" class:list={["app-nav-link", {active:path === "/administracion"}]}><AppIcon name="settings"/><span>Administración</span></a>}
-            {user.rol !== "motorista" && <a href="/mi-panel" class="app-nav-link"><AppIcon name="equipment"/><span>Mi trabajo</span></a>}
+            {menuVisible.map((grupo) => <>
+              {grupo.label && <div class="app-nav-label">{grupo.label}</div>}
+              {grupo.items.map((item) => <a href={item.href} class:list={["app-nav-link", {active:itemActivo(item.href)}]} aria-current={itemActivo(item.href) ? "page" : undefined}><AppIcon name={item.icon}/><span>{item.label}</span></a>)}
+            </>)}
+            <div class="app-nav-label">Personal</div>
+            {user.rol !== "motorista" && <a href="/mi-panel" class:list={["app-nav-link", {active:isActive("/mi-panel")}]}><AppIcon name="equipment"/><span>Mi trabajo</span></a>}
             {isAdminOrJefe && <a href="/campo" class="app-nav-link"><AppIcon name="clipboard"/><span>Modo técnico</span></a>}
             <a href="/manual" class="app-nav-link"><AppIcon name="book"/><span>Ayuda</span></a>
             </>}
@@ -108,9 +190,17 @@ const isActive = (href: string) =>
         <div class="flex-1 flex flex-col min-w-0">
           <header class="app-topbar flex items-center justify-between gap-3 px-4 py-2.5">
             <button id="menuToggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar" class="topbar-ic md:hidden">☰</button>
+            {conInterruptor && (
+              <form method="post" action="/api/espacio" class="espacio-switch" id="espacioSwitch" aria-label="Espacio de trabajo">
+                <input type="hidden" name="volver" value={path + Astro.url.search} />
+                {ESPACIO_KEYS.filter((k) => permitidos.includes(k)).map((k) => (
+                  <button type="submit" name="espacio" value={k} class:list={[{activo: k === espacio}]} aria-pressed={k === espacio ? "true" : "false"} style={k === espacio ? `background:${ESPACIOS[k].colorBarra}` : undefined}>{ESPACIOS[k].etiqueta}</button>
+                ))}
+              </form>
+            )}
             <button id="searchOpen" class="topbar-busca">
               <AppIcon name="search" size={18} />
-              <span class="truncate">Buscar OT, equipo, ticket…</span>
+              <span class="truncate">Buscar en {infoEspacio.etiqueta.toLowerCase()}…</span>
               <span class="ml-auto hidden sm:inline text-[11px]">⌘K</span>
             </button>
             <div class="flex items-center gap-1">
@@ -143,7 +233,7 @@ const isActive = (href: string) =>
       <div id="searchModal" class="fixed inset-0 z-[100] hidden p-4 sm:p-12" style="background:rgba(30,33,66,.6)">
         <div class="mx-auto max-w-2xl bg-white overflow-hidden">
           <div class="border-b border-slate-200 px-4">
-            <input id="searchInput" type="text" placeholder="Buscar OT, equipo, ticket, item, requisición…" class="w-full border-0 bg-transparent py-3 text-base outline-none focus:ring-0" />
+            <input id="searchInput" type="text" placeholder={`Buscar en ${infoEspacio.etiqueta.toLowerCase()}: OT, equipo, solicitud, ítem, requisición…`} class="w-full border-0 bg-transparent py-3 text-base outline-none focus:ring-0" />
           </div>
           <div id="searchResults" class="max-h-[60vh] overflow-y-auto p-2 text-sm">
             <p class="p-4 text-center text-slate-400">Escribe al menos 2 caracteres para buscar.</p>
@@ -368,6 +458,8 @@ const isActive = (href: string) =>
 
         function buscar(q) {
           results.innerHTML = '<p class="p-4 text-center text-slate-400">Buscando…</p>';
+          // El servidor filtra por el espacio de la sesión; el área afina dentro de él.
+          var searchArea = document.body.getAttribute("data-area") || "";
           fetch("/api/search?q=" + encodeURIComponent(q) + (searchArea ? "&area=" + encodeURIComponent(searchArea) : ""))
             .then(function (r) { return r.json(); })
             .then(function (j) { renderResultados(j.resultados); })

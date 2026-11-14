@@ -1,0 +1,222 @@
+---
+// Fase 59 · WP-G · Órdenes relacionadas con incidentes o eventos adversos.
+// Apoyo a Calidad (requisito 12): qué órdenes relacionó la jefatura con un
+// incidente avisado a Calidad, con su reporte técnico. Se filtra por fecha de
+// aviso y por equipo; se imprime y se descarga en CSV con los mismos filtros.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activos, ordenes, ordenIncidentes, ubicaciones, usuarios } from "@/lib/schema";
+import { and, asc, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import { ESTADO_LABEL, TIPO_LABEL, type EstadoOT, type TipoOT } from "@/lib/ordenes";
+import { etiquetaOT } from "@/lib/orden-codigo";
+import { fechaCorta, fechaHoraSV, hoySV } from "@/lib/biomedico";
+import { csvResponse, toCsv } from "@/lib/csv";
+import {
+  COLUMNAS_CSV_INCIDENTES, contarIncidentes, filaCsvIncidente, leerFiltrosIncidentes, nombreCsvIncidentes,
+  textoFiltros, type FilaIncidente,
+} from "@/lib/incidentes";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+// Admin, jefe y visualizador (el auditor también descarga). Los demás vuelven al inicio.
+if (!["admin", "jefe", "visualizador"].includes(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const lectura = leerFiltrosIncidentes(Astro.url.searchParams);
+const { desde, hasta, activoId } = lectura.filtros;
+const esCsv = Astro.url.searchParams.get("formato") === "csv";
+if (esCsv && !lectura.ok) {
+  return new Response(lectura.error ?? "Filtros no válidos.", { status: 400, headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
+const LIMITE = esCsv ? 5000 : 1000;
+let filas: (FilaIncidente & { equipoId: number | null })[] = [];
+let hayMas = false;
+if (lectura.ok) {
+  const condiciones: SQL[] = [];
+  if (desde) condiciones.push(gte(ordenIncidentes.fechaNotificacion, desde));
+  if (hasta) condiciones.push(lte(ordenIncidentes.fechaNotificacion, hasta));
+  if (activoId) condiciones.push(eq(ordenes.activoId, activoId));
+  // Columnas explícitas (≈20): lejos del límite de 100 de D1.
+  const rows = await db
+    .select({
+      ordenId: ordenes.id,
+      ordenCodigo: ordenes.codigo,
+      ordenTitulo: ordenes.titulo,
+      ordenTipo: ordenes.tipo,
+      ordenEstado: ordenes.estado,
+      causaRaiz: ordenes.causaRaiz,
+      numeroReporte: ordenIncidentes.numeroReporte,
+      fechaNotificacion: ordenIncidentes.fechaNotificacion,
+      nota: ordenIncidentes.nota,
+      marcadoEn: ordenIncidentes.marcadoEn,
+      marcadoPor: usuarios.nombre,
+      equipoId: activos.id,
+      equipoCodigo: activos.codigo,
+      equipoNombre: activos.nombre,
+      equipoSerie: activos.serial,
+      ubicacion: ubicaciones.nombre,
+    })
+    .from(ordenIncidentes)
+    .innerJoin(ordenes, eq(ordenes.id, ordenIncidentes.ordenId))
+    .leftJoin(activos, eq(activos.id, ordenes.activoId))
+    .leftJoin(ubicaciones, eq(ubicaciones.id, sql`coalesce(${activos.ubicacionId}, ${ordenes.ubicacionId})`))
+    .leftJoin(usuarios, eq(usuarios.id, ordenIncidentes.marcadoPor))
+    .where(condiciones.length ? and(...condiciones) : undefined)
+    .orderBy(desc(ordenIncidentes.fechaNotificacion), desc(ordenIncidentes.id))
+    .limit(LIMITE + 1);
+  hayMas = rows.length > LIMITE;
+  filas = rows.slice(0, LIMITE).map((r) => ({
+    ordenId: r.ordenId,
+    orden: etiquetaOT({ id: r.ordenId, codigo: r.ordenCodigo }),
+    ordenTitulo: r.ordenTitulo,
+    tipoOrden: TIPO_LABEL[r.ordenTipo as TipoOT] ?? r.ordenTipo,
+    estadoOrden: ESTADO_LABEL[r.ordenEstado as EstadoOT] ?? r.ordenEstado,
+    numeroReporte: r.numeroReporte,
+    fechaNotificacion: r.fechaNotificacion,
+    nota: r.nota,
+    marcadoPor: r.marcadoPor,
+    marcadoEn: r.marcadoEn,
+    equipoId: r.equipoId,
+    equipoCodigo: r.equipoCodigo,
+    equipoNombre: r.equipoNombre,
+    equipoSerie: r.equipoSerie,
+    ubicacion: r.ubicacion,
+    causaRaiz: r.causaRaiz,
+  }));
+}
+
+if (esCsv) {
+  return csvResponse(
+    nombreCsvIncidentes(hoySV()),
+    toCsv(filas.map((f) => filaCsvIncidente(f, Astro.url.origin)), COLUMNAS_CSV_INCIDENTES),
+  );
+}
+
+// Equipos con alguna orden marcada, para el filtro. El del enlace (?activo=) se
+// agrega aunque no tenga marcas, para que el filtro diga cuál es.
+const equipos = await db
+  .selectDistinct({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+  .from(ordenIncidentes)
+  .innerJoin(ordenes, eq(ordenes.id, ordenIncidentes.ordenId))
+  .innerJoin(activos, eq(activos.id, ordenes.activoId))
+  .orderBy(asc(activos.codigo));
+if (activoId && !equipos.some((e) => e.id === activoId)) {
+  const [solo] = await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
+    .from(activos).where(eq(activos.id, activoId)).limit(1);
+  if (solo) equipos.unshift(solo);
+}
+const equipoSel = activoId ? equipos.find((e) => e.id === activoId) ?? null : null;
+const equipoTxt = equipoSel ? `${equipoSel.codigo} · ${equipoSel.nombre}` : null;
+const resumen = contarIncidentes(filas);
+
+const csvParams = new URLSearchParams();
+if (desde) csvParams.set("desde", desde);
+if (hasta) csvParams.set("hasta", hasta);
+if (activoId) csvParams.set("activo", String(activoId));
+csvParams.set("formato", "csv");
+const csvHref = `/incidentes?${csvParams}`;
+const hayFiltros = !!(desde || hasta || activoId || Astro.url.searchParams.get("desde") || Astro.url.searchParams.get("hasta"));
+---
+
+<Layout title="Incidentes con equipos">
+  <!-- Todo el documento en hoja apaisada: con «page: apaisada» solo en la tabla, el navegador
+       cortaba la página antes y después de ella (cabecera sola en una hoja vertical, la tabla
+       en otra y el folio solo en una tercera). -->
+  <div id="incidentesDoc" style="page: apaisada">
+  <DocCabecera soloImpresion titulo="Órdenes relacionadas con incidentes" subtitulo={textoFiltros(lectura.filtros, equipoTxt)} />
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="no-print text-2xl font-bold">Órdenes relacionadas con incidentes</h1>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">
+        Órdenes que la jefatura relacionó con un incidente o evento adverso avisado a Calidad. El reporte de cada
+        orden es la evidencia técnica del caso; el detalle clínico está en el reporte de Calidad.
+      </p>
+    </div>
+    <div class="no-print flex flex-wrap gap-2">
+      {lectura.ok && <a href={csvHref} class="btn-secondary">Descargar CSV</a>}
+      <button type="button" onclick="window.print()" class="btn-primary">Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <form method="get" action="/incidentes" class="no-print card mt-4 p-4">
+    <div class="flex flex-wrap items-end gap-3">
+      <div>
+        <label class="label text-xs" for="fDesde">Aviso desde</label>
+        <input id="fDesde" name="desde" type="date" class="input" value={desde ?? ""} />
+      </div>
+      <div>
+        <label class="label text-xs" for="fHasta">Aviso hasta</label>
+        <input id="fHasta" name="hasta" type="date" class="input" value={hasta ?? ""} />
+      </div>
+      <div class="min-w-[14rem]">
+        <label class="label text-xs" for="fActivo">Equipo</label>
+        <select id="fActivo" name="activo" class="input">
+          <option value="">Todos</option>
+          {equipos.map((e) => <option value={String(e.id)} selected={e.id === activoId}>{e.codigo} · {e.nombre}</option>)}
+        </select>
+      </div>
+      <button type="submit" class="btn-primary">Filtrar</button>
+      {hayFiltros && <a href="/incidentes" class="btn-secondary">Limpiar</a>}
+    </div>
+  </form>
+
+  {!lectura.ok ? (
+    <div class="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800" role="alert">{lectura.error}</div>
+  ) : (
+    <Fragment>
+      <p class="mt-4 text-sm text-slate-600">
+        Órdenes marcadas: <strong>{resumen.total}</strong> · Sin número de reporte: <strong class:list={[resumen.sinNumero > 0 && "text-amber-700"]}>{resumen.sinNumero}</strong>
+      </p>
+      {hayMas && <p class="mt-1 text-xs text-amber-700">Se muestran las {LIMITE} más recientes; acota las fechas.</p>}
+
+      {filas.length === 0 ? (
+        <div class="card mt-4 p-6 text-center text-sm text-slate-500">No hay órdenes marcadas como incidente con estos filtros.</div>
+      ) : (
+        <div class="card mt-4 overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-xs">
+            <thead class="bg-slate-50 text-left uppercase tracking-wide text-slate-500">
+              <tr>
+                <th class="px-3 py-2">Aviso a Calidad</th>
+                <th class="px-3 py-2">Reporte de Calidad</th>
+                <th class="px-3 py-2">Orden</th>
+                <th class="px-3 py-2">Equipo</th>
+                <th class="px-3 py-2">Ubicación</th>
+                <th class="px-3 py-2">Estado</th>
+                <th class="px-3 py-2">Causa raíz</th>
+                <th class="px-3 py-2">Marcó</th>
+                <th class="px-3 py-2">Nota</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {filas.map((f) => (
+                <tr class="align-top">
+                  <td class="whitespace-nowrap px-3 py-2">{fechaCorta(f.fechaNotificacion)}</td>
+                  <td class="px-3 py-2">
+                    {f.numeroReporte ? <span class="font-medium text-slate-900">{f.numeroReporte}</span> : <span class="text-amber-700">pendiente</span>}
+                  </td>
+                  <td class="px-3 py-2">
+                    <a href={`/ordenes/${f.ordenId}`} class="whitespace-nowrap font-semibold text-brand-700 hover:underline">{f.orden}</a>
+                    <div class="text-slate-500">{f.tipoOrden} · {f.ordenTitulo}</div>
+                    <a href={`/ordenes/${f.ordenId}/reporte`} class="no-print text-brand-700 hover:underline">Reporte</a>
+                  </td>
+                  <td class="px-3 py-2">{f.equipoCodigo ? `${f.equipoCodigo} · ${f.equipoNombre ?? ""}` : <span class="text-slate-400">Sin equipo</span>}</td>
+                  <td class="px-3 py-2">{f.ubicacion ?? "—"}</td>
+                  <td class="whitespace-nowrap px-3 py-2">{f.estadoOrden}</td>
+                  <td class="whitespace-pre-wrap px-3 py-2">{f.causaRaiz?.trim() || "—"}</td>
+                  <td class="px-3 py-2">{f.marcadoPor ?? "—"} · <span class="whitespace-nowrap">{fechaHoraSV(f.marcadoEn)}</span></td>
+                  <td class="whitespace-pre-wrap px-3 py-2">{f.nota ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Fragment>
+  )}
+
+  <DocFolio soloImpresion codigo="Incidentes con equipos" />
+  </div>
+</Layout>

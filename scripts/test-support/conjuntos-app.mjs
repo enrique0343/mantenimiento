@@ -39,8 +39,10 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
         export const sendTelegram=async(env,chat,texto)=>{ anotar({canal:'telegram',chat,texto}); };
         export const crearNotificacion=async(ctx,n)=>{ anotar({canal:'app',...n}); };
         export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b;
+        export const logAuditLote=async()=>{}; export const labelCampo=(c)=>c; export const resumenCambios=()=>'';
         export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{};
-        export const disparadorProyecto=async()=>{};
+        export const disparadorProyecto=async()=>{}; export const notificarProyectoCreado=async()=>{}; export const detectarProveedor=()=>null; export const nombreProveedor=()=>'';
+        export const DiffEntry=null; export const activosVisibles=async()=>null; export const tipoActivoFiltro=(e)=>(!e||e==='ambos')?null:e;
       `, loader: 'js' }));
     }}],
   });

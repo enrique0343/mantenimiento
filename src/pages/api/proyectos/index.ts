@@ -1,12 +1,14 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { desc, eq, like, or, inArray } from "drizzle-orm";
+import { and, desc, eq, like, or, inArray } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { proyectos, usuarios, tickets, ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { puedeCrearProyecto } from "@/lib/proyectos";
 import { logAudit } from "@/lib/audit";
 import { notificarProyectoCreado } from "@/lib/notificaciones";
+import { condicionProyectoEspacio, espacioDelContexto } from "@/lib/espacio";
+import { bloqueoEspacio, espacioDeActivoId, espacioDeTicketId } from "@/lib/espacio-db";
 
 export const prerender = false;
 
@@ -29,7 +31,8 @@ export const GET: APIRoute = async (ctx) => {
     .select({ p: proyectos, creador: usuarios })
     .from(proyectos)
     .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
-    .where(where)
+    // Solo los del espacio: por su equipo o, sin equipo, por su solicitud.
+    .where(and(where, condicionProyectoEspacio(espacioDelContexto(ctx, user))))
     .orderBy(desc(proyectos.id));
   return Response.json({
     proyectos: rows.map((r) => ({
@@ -70,6 +73,10 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
+  // Ni con un equipo o una solicitud de un espacio al que no entras.
+  const otro = bloqueoEspacio(user, await espacioDeActivoId(db, parsed.data.activoId))
+    ?? bloqueoEspacio(user, await espacioDeTicketId(db, parsed.data.ticketId));
+  if (otro) return otro;
 
   // Auto-generar código PRY-XXXX
   const ultimos = await db.select({ codigo: proyectos.codigo }).from(proyectos).where(like(proyectos.codigo, "PRY-%"));

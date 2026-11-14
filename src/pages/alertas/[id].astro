@@ -1,0 +1,515 @@
+---
+// Hoja de una alerta o retiro de equipo (requisito 14, JCI FMS.07.1): datos, análisis
+// de aplicabilidad, equipos afectados, acción tomada, cierre, archivos e historial.
+// Imprimible. Las acciones se hacen desde aquí y la hoja se recarga.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { asc } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import {
+  ALERTA_BADGE, APLICABILIDAD_LABEL, ARCHIVO_ACCEPT, ESTADO_ACTIVO_LABEL, ESTADO_ALERTA_LABEL, FUENTE_ALERTA_LABEL,
+  TIPO_ALERTA_LABEL, fechaCorta, fechaHoraSV, hoySV, puedeGestionarBio, puedeRegistrarBio, puedeVerBio,
+} from "@/lib/biomedico";
+import { CATEGORIAS_ADJUNTO_ALERTA, CATEGORIA_ADJUNTO_ALERTA_LABEL, folioAlerta, textoReabierta } from "@/lib/alertas";
+import { cargarHojaAlerta, mapaUsuarios } from "@/lib/alertas-datos";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const id = Number(Astro.params.id);
+if (!Number.isInteger(id) || id <= 0) return Astro.redirect("/alertas");
+const db = getDb(Astro);
+const hoja = await cargarHojaAlerta(db, id);
+if (!hoja) return Astro.redirect("/alertas");
+const { alerta: al, equipos, archivos, historial } = hoja;
+const nombres = await mapaUsuarios(db);
+const nombre = (uid: number | null) => (uid ? nombres.get(uid) ?? "—" : "—");
+
+const gestiona = puedeGestionarBio(user.rol);
+const registra = puedeRegistrarBio(user.rol);
+const esAdmin = user.rol === "admin";
+const cerrada = al.estado === "cerrada";
+const hoy = hoySV();
+const registrada = Astro.url.searchParams.get("registrada") === "1";
+const folio = folioAlerta(al.id);
+
+// Para «Editar datos»: los equipos no dados de baja más los ya marcados.
+const marcados = new Set(equipos.map((e) => e.id));
+const equiposLista = gestiona && !cerrada
+  ? (await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo, estado: activos.estado })
+      .from(activos).orderBy(asc(activos.codigo))).filter((e) => e.estado !== "baja" || marcados.has(e.id))
+  : [];
+
+const tamano = (b: number) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const accionNoAplica = "No aplica: ningún equipo del hospital está afectado (ver análisis).";
+const fechaAnalisisInicial = al.aplicabilidadFecha ?? hoy;
+---
+
+<Layout title={`${folio} · Alerta de equipo`}>
+  <div class="no-print doc-barra">
+    <a class="btn-secondary" href="/alertas">← Alertas y retiros</a>
+    <div class="flex flex-wrap gap-2">
+      <button class="btn-secondary" onclick="window.print()">Imprimir hoja</button>
+      {registra && !cerrada && <button id="btnSubir" class="btn-secondary" type="button">Subir archivo</button>}
+      {gestiona && !cerrada && (
+        <>
+          <button id="btnEditar" class="btn-secondary" type="button">Editar datos</button>
+          <button id="btnAnalisis" class="btn-secondary" type="button">Análisis</button>
+          <button id="btnCerrar" class="btn-primary" type="button">Cerrar alerta</button>
+        </>
+      )}
+      {gestiona && cerrada && <button id="btnReabrir" class="btn-secondary" type="button">Reabrir</button>}
+      {esAdmin && !cerrada && <button id="btnBorrar" class="btn-secondary text-red-600" type="button">Borrar alerta</button>}
+    </div>
+  </div>
+  {registrada && (
+    <div class="no-print mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      Alerta registrada. Adjunta el boletín y registra el análisis.
+    </div>
+  )}
+  <p id="hojaError" class="no-print hidden mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"></p>
+
+  <article id="hoja" class="print-doc doc-hoja" data-alerta-id={al.id}>
+    <DocCabecera
+      titulo="Alerta de equipo médico"
+      subtitulo={`${TIPO_ALERTA_LABEL[al.tipo] ?? al.tipo} · ${FUENTE_ALERTA_LABEL[al.fuente] ?? al.fuente}`}
+      codigo={folio}
+      etiquetaCodigo="Registro"
+    />
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>1.</span> Datos de la alerta</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Título</th><td colspan="3"><strong>{al.titulo}</strong></td></tr>
+          <tr>
+            <th>Tipo</th><td><span class={`badge ${ALERTA_BADGE[al.tipo] ?? ""}`}>{TIPO_ALERTA_LABEL[al.tipo] ?? al.tipo}</span></td>
+            <th>Estado</th><td><span class={`badge ${ALERTA_BADGE[al.estado] ?? ""}`}>{ESTADO_ALERTA_LABEL[al.estado] ?? al.estado}</span></td>
+          </tr>
+          <tr><th>Fuente</th><td>{FUENTE_ALERTA_LABEL[al.fuente] ?? al.fuente}</td><th>Referencia</th><td>{al.referencia ?? "—"}</td></tr>
+          <tr><th>Emisión</th><td>{fechaCorta(al.fechaAlerta)}</td><th>Registró</th><td>{nombre(al.creadoPor)} · {fechaHoraSV(al.createdAt)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>2.</span> Descripción</h2>
+      <p class="doc-texto whitespace-pre-line">{al.descripcion ?? "Sin descripción."}</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>3.</span> Análisis de aplicabilidad</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr>
+            <th>Resultado</th><td><span class={`badge ${ALERTA_BADGE[al.aplicabilidad] ?? ""}`}>{APLICABILIDAD_LABEL[al.aplicabilidad] ?? al.aplicabilidad}</span></td>
+            <th>Evaluó</th><td>{al.aplicabilidad === "pendiente" ? "—" : `${nombre(al.aplicabilidadPor)} · ${fechaCorta(al.aplicabilidadFecha)}`}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="doc-texto mt-2 whitespace-pre-line">{al.aplicabilidadAnalisis ?? "Sin análisis registrado: falta decidir si la alerta afecta a equipos del hospital."}</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>4.</span> Equipos afectados ({equipos.length})</h2>
+      {equipos.length === 0 ? (
+        <p class="doc-texto">Sin equipos marcados.</p>
+      ) : (
+        <table class="doc-tabla">
+          <thead><tr><th>Código</th><th>Equipo</th><th>Marca · modelo · serie</th><th>Sede · ubicación</th><th>Estado del equipo</th></tr></thead>
+          <tbody>
+            {equipos.map((e) => (
+              <tr>
+                <td class="tn"><a href={`/activos/${e.id}`}>{e.codigo}</a></td>
+                <td>{e.nombre}</td>
+                <td>{[e.marca, e.modelo, e.serial].filter(Boolean).join(" · ") || "—"}</td>
+                <td>{[e.sede, e.ubicacion ?? e.ubicacionTexto].filter(Boolean).join(" · ") || "—"}</td>
+                <td>{ESTADO_ACTIVO_LABEL[e.estado as keyof typeof ESTADO_ACTIVO_LABEL] ?? e.estado}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p class="doc-nota">Las órdenes de trabajo se crean desde la ficha de cada equipo y se anotan en la acción tomada.</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>5.</span> Acción tomada</h2>
+      <p class="doc-texto whitespace-pre-line">{al.accionTomada ?? "Sin acción registrada."}</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>6.</span> Cierre</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr>
+            <th>Fecha de cierre</th><td>{cerrada ? fechaCorta(al.fechaCierre ?? al.cerradaEn) : "Abierta"}</td>
+            <th>Cerró</th><td>{cerrada ? `${nombre(al.cerradaPor)} · registrado el ${fechaHoraSV(al.cerradaEn)}` : "—"}</td>
+          </tr>
+          {al.vecesReabierta > 0 && (
+            <tr>
+              <th>Reapertura</th>
+              <td colspan="3">{textoReabierta(al.vecesReabierta)} · la última el {fechaHoraSV(al.reabiertaEn)} por {nombre(al.reabiertaPor)}{al.motivoReapertura ? ` · motivo: ${al.motivoReapertura}` : ""}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>7.</span> Archivos ({archivos.length})</h2>
+      {archivos.length === 0 ? (
+        <p class="doc-texto">Sin archivos. Sube el boletín del fabricante o la evaluación.</p>
+      ) : (
+        <table class="doc-tabla">
+          <thead><tr><th>Nombre</th><th>Categoría</th><th class="n">Tamaño</th><th>Fecha</th><th>Subió</th>{gestiona && !cerrada && <th class="no-print"></th>}</tr></thead>
+          <tbody>
+            {archivos.map((a) => (
+              <tr>
+                <td><a href={`/api/alertas/adjunto/${a.id}`} target="_blank" rel="noopener">{a.nombre}</a></td>
+                <td>{CATEGORIA_ADJUNTO_ALERTA_LABEL[a.categoria] ?? a.categoria}</td>
+                <td class="n">{tamano(a.tamano)}</td>
+                <td class="tn">{fechaCorta(a.createdAt)}</td>
+                <td>{nombre(a.usuarioId)}</td>
+                {gestiona && !cerrada && (
+                  <td class="no-print"><button type="button" class="quitar-adjunto text-xs text-red-600 hover:underline" data-adjunto-id={a.id} data-nombre={a.nombre}>Quitar</button></td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h"><span>8.</span> Historial</h2>
+      {historial.length === 0 ? (
+        <p class="doc-texto">Sin movimientos registrados en la bitácora.</p>
+      ) : (
+        <table class="doc-tabla">
+          <thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Qué pasó</th></tr></thead>
+          <tbody>
+            {historial.map((h) => (
+              <tr><td class="tn">{fechaHoraSV(h.createdAt)}</td><td>{nombre(h.usuarioId)}</td><td>{h.resumen ?? h.accion}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="doc-seccion doc-firmas">
+      <div>
+        <div class="doc-firma-vacia"></div>
+        <span class="doc-etq">Evaluó</span>
+        <span>{al.aplicabilidad === "pendiente" ? "" : nombre(al.aplicabilidadPor)}</span>
+      </div>
+      <div>
+        <div class="doc-firma-vacia"></div>
+        <span class="doc-etq">Cerró</span>
+        <span>{cerrada ? nombre(al.cerradaPor) : ""}</span>
+      </div>
+    </section>
+
+    <DocFolio codigo="Alertas FMS.07.1" />
+  </article>
+
+  {/* ── Ventanas de las acciones (no se imprimen) ── */}
+  {registra && !cerrada && (
+    <div id="mSubir" class="modal-alerta no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <form class="card w-full max-w-md p-5" data-accion="subir">
+        <h3 class="text-lg font-semibold text-slate-900">Subir archivo</h3>
+        <p class="mt-1 text-xs text-slate-500">PDF o foto (JPG, PNG o WEBP), máximo 15 MB.</p>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="label text-xs" for="s_categoria">Categoría</label>
+            <select id="s_categoria" name="categoria" class="input">
+              {CATEGORIAS_ADJUNTO_ALERTA.map((c) => <option value={c}>{CATEGORIA_ADJUNTO_ALERTA_LABEL[c]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="s_archivo">Archivo *</label>
+            <input id="s_archivo" name="archivo" type="file" accept={ARCHIVO_ACCEPT} class="input" required />
+          </div>
+        </div>
+        <p class="modal-error hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" class="cerrar-modal btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Subir</button>
+        </div>
+      </form>
+    </div>
+  )}
+
+  {gestiona && !cerrada && (
+    <>
+      <div id="mEditar" class="modal-alerta no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <form class="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto" data-accion="editar">
+          <h3 class="text-lg font-semibold text-slate-900">Editar datos de la alerta</h3>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="label text-xs" for="e_tipo">Tipo *</label>
+              <select id="e_tipo" class="input">
+                {Object.entries(TIPO_ALERTA_LABEL).map(([k, v]) => <option value={k} selected={k === al.tipo}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <label class="label text-xs" for="e_fuente">Fuente *</label>
+              <select id="e_fuente" class="input">
+                {Object.entries(FUENTE_ALERTA_LABEL).map(([k, v]) => <option value={k} selected={k === al.fuente}>{v}</option>)}
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_titulo">Título *</label>
+              <input id="e_titulo" class="input" maxlength="200" value={al.titulo} />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_desc">Descripción</label>
+              <textarea id="e_desc" class="input" rows="3">{al.descripcion ?? ""}</textarea>
+            </div>
+            <div>
+              <label class="label text-xs" for="e_fecha">Fecha de emisión *</label>
+              <input id="e_fecha" type="date" class="input" max={hoy} value={al.fechaAlerta} />
+            </div>
+            <div>
+              <label class="label text-xs" for="e_ref">Referencia (n.º de aviso)</label>
+              <input id="e_ref" class="input" maxlength="120" value={al.referencia ?? ""} />
+            </div>
+            <div>
+              <label class="label text-xs" for="e_estado">Estado</label>
+              <select id="e_estado" class="input">
+                <option value="abierta" selected={al.estado === "abierta"}>Abierta</option>
+                <option value="en_proceso" selected={al.estado === "en_proceso"}>En proceso</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label text-xs" for="e_buscar">Equipos afectados</label>
+              <input id="e_buscar" class="input mb-1.5" placeholder="Filtrar por código o nombre…" />
+              <div class="max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-2 space-y-1">
+                {equiposLista.length === 0 && <p class="text-xs text-slate-400">No hay equipos registrados.</p>}
+                {equiposLista.map((e) => (
+                  <label class="eq-item flex items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer" data-search={`${e.codigo} ${e.nombre}`.toLowerCase()}>
+                    <input type="checkbox" class="eq-cb" value={e.id} checked={marcados.has(e.id)} />
+                    <span class="font-mono text-[10px] text-slate-400">{e.codigo}</span>
+                    <span class="truncate">{e.nombre}</span>
+                    {e.estado === "baja" && <span class="text-[9px] text-slate-400">dado de baja</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <p class="modal-error hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button type="button" class="cerrar-modal btn-secondary">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="mAnalisis" class="modal-alerta no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <form class="card w-full max-w-lg p-5" data-accion="analisis">
+          <h3 class="text-lg font-semibold text-slate-900">Análisis de aplicabilidad</h3>
+          <p class="mt-1 text-xs text-slate-500">¿La alerta afecta a equipos del hospital? Si aplica, marca los equipos en «Editar datos».</p>
+          <div class="mt-4 space-y-3">
+            <div class="flex flex-wrap gap-4 text-sm">
+              <label class="inline-flex items-center gap-1.5"><input type="radio" name="aplicabilidad" value="aplica" checked={al.aplicabilidad === "aplica"} /> Aplica</label>
+              <label class="inline-flex items-center gap-1.5"><input type="radio" name="aplicabilidad" value="no_aplica" checked={al.aplicabilidad === "no_aplica"} /> No aplica</label>
+              <label class="inline-flex items-center gap-1.5"><input type="radio" name="aplicabilidad" value="pendiente" checked={al.aplicabilidad === "pendiente"} /> Sin análisis</label>
+            </div>
+            <div>
+              <label class="label text-xs" for="a_fecha">Fecha del análisis</label>
+              <input id="a_fecha" type="date" class="input" min={al.fechaAlerta} max={hoy} value={fechaAnalisisInicial} />
+            </div>
+            <div>
+              <label class="label text-xs" for="a_texto">Qué se revisó y por qué aplica o no</label>
+              <textarea id="a_texto" class="input" rows="4" placeholder="Ej. Se revisaron las series del lote 12: dos bombas de UCI están afectadas.">{al.aplicabilidadAnalisis ?? ""}</textarea>
+            </div>
+          </div>
+          <p class="modal-error hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button type="button" class="cerrar-modal btn-secondary">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar análisis</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="mCerrar" class="modal-alerta no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <form class="card w-full max-w-lg p-5" data-accion="cerrar">
+          <h3 class="text-lg font-semibold text-slate-900">Cerrar alerta</h3>
+          <p class="mt-1 text-xs text-slate-500">Una alerta cerrada ya no se edita: para corregirla hay que reabrirla con un motivo.</p>
+          <div class="mt-4 space-y-3">
+            <div>
+              <label class="label text-xs" for="c_accion">Acción tomada *</label>
+              <textarea id="c_accion" class="input" rows="4" placeholder="Ej. Se retiraron de servicio las 2 bombas del lote y el proveedor las reemplazó (OT-MB0012).">{al.accionTomada ?? (al.aplicabilidad === "no_aplica" ? accionNoAplica : "")}</textarea>
+            </div>
+            <div>
+              <label class="label text-xs" for="c_fecha">Fecha de cierre *</label>
+              <input id="c_fecha" type="date" class="input" min={al.fechaAlerta} max={hoy} value={hoy} />
+            </div>
+          </div>
+          <p class="modal-error hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button type="button" class="cerrar-modal btn-secondary">Cancelar</button>
+            <button type="submit" class="btn-primary">Cerrar alerta</button>
+          </div>
+        </form>
+      </div>
+    </>
+  )}
+
+  {gestiona && cerrada && (
+    <div id="mReabrir" class="modal-alerta no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+      <form class="card w-full max-w-md p-5" data-accion="reabrir">
+        <h3 class="text-lg font-semibold text-slate-900">Reabrir alerta</h3>
+        <p class="mt-1 text-xs text-slate-500">El cierre se borra y queda la constancia de quién la reabrió, cuándo y por qué.</p>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label class="label text-xs" for="r_estado">Vuelve a quedar</label>
+            <select id="r_estado" class="input">
+              <option value="en_proceso">En proceso</option>
+              <option value="abierta">Abierta</option>
+            </select>
+          </div>
+          <div>
+            <label class="label text-xs" for="r_motivo">Motivo de la reapertura *</label>
+            <textarea id="r_motivo" class="input" rows="3" placeholder="Ej. El fabricante amplió el lote afectado."></textarea>
+          </div>
+        </div>
+        <p class="modal-error hidden mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" class="cerrar-modal btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Reabrir</button>
+        </div>
+      </form>
+    </div>
+  )}
+
+  <script>
+    const hoja = document.getElementById("hoja");
+    const alertaId = hoja?.dataset.alertaId ?? "";
+    const valor = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ?? "";
+    const mostrar = (m: HTMLElement) => { m.classList.remove("hidden"); m.classList.add("flex"); };
+    const ocultar = (m: HTMLElement) => { m.classList.add("hidden"); m.classList.remove("flex"); };
+    const textoError = async (res: Response, porDefecto: string) => {
+      const j = await res.json().catch(() => null) as { error?: unknown } | null;
+      return typeof j?.error === "string" ? j.error : porDefecto;
+    };
+    const avisoHoja = (msg: string) => {
+      const p = document.getElementById("hojaError");
+      if (p) { p.textContent = msg; p.classList.remove("hidden"); }
+    };
+
+    // Abrir y cerrar ventanas
+    const abrir: Record<string, string> = { btnSubir: "mSubir", btnEditar: "mEditar", btnAnalisis: "mAnalisis", btnCerrar: "mCerrar", btnReabrir: "mReabrir" };
+    for (const [boton, modal] of Object.entries(abrir)) {
+      const m = document.getElementById(modal);
+      document.getElementById(boton)?.addEventListener("click", () => { if (m) mostrar(m); });
+    }
+    document.querySelectorAll<HTMLElement>(".modal-alerta").forEach((m) => {
+      m.addEventListener("click", (e) => { if (e.target === m) ocultar(m); });
+      m.querySelectorAll(".cerrar-modal").forEach((b) => b.addEventListener("click", () => ocultar(m)));
+    });
+
+    // Buscador de equipos
+    document.getElementById("e_buscar")?.addEventListener("input", (e) => {
+      const q = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+      document.querySelectorAll<HTMLElement>(".eq-item").forEach((el) => {
+        el.style.display = !q || (el.dataset.search ?? "").includes(q) ? "" : "none";
+      });
+    });
+
+    async function patch(body: Record<string, unknown>): Promise<Response> {
+      return fetch(`/api/alertas/${alertaId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    // Cada formulario manda su cambio; si falla, muestra el texto de la API.
+    document.querySelectorAll<HTMLFormElement>(".modal-alerta form").forEach((form) => {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const err = form.querySelector<HTMLElement>(".modal-error");
+        const boton = form.querySelector<HTMLButtonElement>("button[type=submit]");
+        err?.classList.add("hidden");
+        if (boton) boton.disabled = true;
+        let res: Response;
+        try {
+          const accion = form.dataset.accion;
+          if (accion === "subir") {
+            const datos = new FormData();
+            datos.set("categoria", valor("s_categoria"));
+            const archivo = (document.getElementById("s_archivo") as HTMLInputElement | null)?.files?.[0];
+            if (archivo) datos.set("archivo", archivo);
+            res = await fetch(`/api/alertas/${alertaId}/adjuntos`, { method: "POST", body: datos });
+          } else if (accion === "editar") {
+            const activoIds = Array.from(document.querySelectorAll<HTMLInputElement>(".eq-cb:checked")).map((c) => Number(c.value));
+            res = await patch({
+              tipo: valor("e_tipo"), fuente: valor("e_fuente"), titulo: valor("e_titulo").trim(),
+              descripcion: valor("e_desc").trim() || null, referencia: valor("e_ref").trim() || null,
+              fechaAlerta: valor("e_fecha"), estado: valor("e_estado"), activoIds,
+            });
+          } else if (accion === "analisis") {
+            const aplicabilidad = form.querySelector<HTMLInputElement>("input[name=aplicabilidad]:checked")?.value ?? "pendiente";
+            res = await patch(aplicabilidad === "pendiente"
+              ? { aplicabilidad }
+              : { aplicabilidad, aplicabilidadAnalisis: valor("a_texto").trim(), aplicabilidadFecha: valor("a_fecha") || null });
+          } else if (accion === "cerrar") {
+            res = await patch({ estado: "cerrada", accionTomada: valor("c_accion").trim(), fechaCierre: valor("c_fecha") || null });
+          } else {
+            res = await patch({ estado: valor("r_estado"), motivoReapertura: valor("r_motivo").trim() });
+          }
+        } catch {
+          if (err) { err.textContent = "No hay conexión. Intenta de nuevo."; err.classList.remove("hidden"); }
+          if (boton) boton.disabled = false;
+          return;
+        }
+        if (res.ok) { location.reload(); return; }
+        if (err) { err.textContent = await textoError(res, "No se pudo guardar."); err.classList.remove("hidden"); }
+        if (boton) boton.disabled = false;
+      });
+    });
+
+    // Acción de un botón fuera de las ventanas: una a la vez y, si falla (también sin
+    // conexión), el aviso de la hoja dice por qué y el botón vuelve a servir.
+    async function accionBoton(b: HTMLButtonElement, hacer: () => Promise<Response>, listo: () => void, porDefecto: string) {
+      if (b.disabled) return;
+      b.disabled = true;
+      document.getElementById("hojaError")?.classList.add("hidden");
+      try {
+        const res = await hacer();
+        if (res.ok) { listo(); return; }
+        avisoHoja(await textoError(res, porDefecto));
+      } catch {
+        avisoHoja("No hay conexión. Intenta de nuevo.");
+      }
+      b.disabled = false;
+    }
+
+    // Quitar un archivo
+    document.querySelectorAll<HTMLButtonElement>(".quitar-adjunto").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const nombre = b.dataset.nombre ?? "el archivo";
+        const ok = window.confirmAction
+          ? await window.confirmAction("Quitar archivo", `¿Quitar «${nombre}» de la alerta?`, { danger: true, confirmLabel: "Quitar" })
+          : confirm(`¿Quitar «${nombre}» de la alerta?`);
+        if (!ok) return;
+        await accionBoton(b, () => fetch(`/api/alertas/${alertaId}/adjuntos?adjuntoId=${b.dataset.adjuntoId}`, { method: "DELETE" }),
+          () => location.reload(), "No se pudo quitar el archivo.");
+      });
+    });
+
+    // Borrar la alerta (solo admin, no cerrada)
+    const btnBorrar = document.getElementById("btnBorrar") as HTMLButtonElement | null;
+    btnBorrar?.addEventListener("click", async () => {
+      const ok = window.confirmAction
+        ? await window.confirmAction("Borrar alerta", "Se borran la alerta, sus equipos marcados y sus archivos. ¿Continuar?", { danger: true, confirmLabel: "Borrar" })
+        : confirm("Se borran la alerta, sus equipos marcados y sus archivos. ¿Continuar?");
+      if (!ok) return;
+      await accionBoton(btnBorrar, () => fetch(`/api/alertas/${alertaId}`, { method: "DELETE" }),
+        () => { location.href = "/alertas"; }, "No se pudo borrar la alerta.");
+    });
+  </script>
+</Layout>

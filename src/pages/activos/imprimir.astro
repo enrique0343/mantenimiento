@@ -1,0 +1,169 @@
+---
+// Fase 59 · Inventario imprimible con los mismos filtros que la lista (K-A2).
+// Evidencia para el auditor: admin, jefe, técnico y visualizador.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activoBajas, activos, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
+import { and, eq } from "drizzle-orm";
+import { AREAS, activoAreaCondition, areaHref } from "@/lib/areas";
+import { condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
+import {
+  DESTINOS_BAJA, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, MOTIVOS_BAJA, estadoRegistroSanitario, fechaCorta, folioActaBaja, hoySV, puedeVerBio,
+  type EstadoActivo,
+} from "@/lib/biomedico";
+import {
+  aFilaInventario, agruparPorCentro, describirFiltros, filtrosAQuery, leerAgrupacion, leerFiltrosInventario, pasaFiltros,
+} from "@/lib/inventario-filtros";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+
+const db = getDb(Astro);
+const filtros = leerFiltrosInventario(Astro.url.searchParams, { estadoPorDefecto: "vigentes" });
+const hoy = hoySV();
+const { espacio, permitido } = espacioDeLista(Astro, user, filtros.area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const rows = await db
+  .select({
+    id: activos.id, codigo: activos.codigo, numeroActivo: activos.numeroActivo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo,
+    categoria: activos.categoria, marca: activos.marca, modelo: activos.modelo, serial: activos.serial, estado: activos.estado,
+    criticidadOperacional: activos.criticidadOperacional, claseRiesgo: activos.claseRiesgo, centroCostoId: activos.centroCostoId,
+    ubicacionId: activos.ubicacionId, ubicacionDetalle: activos.ubicacion, registroSanitario: activos.registroSanitario,
+    registroSanitarioEntidad: activos.registroSanitarioEntidad, registroSanitarioVencimiento: activos.registroSanitarioVencimiento,
+    registroSanitarioNoRequiere: activos.registroSanitarioNoRequiere, proximaCalibracion: activos.proximaCalibracion,
+    ubicacionNombre: ubicaciones.nombre, sucursalId: sucursales.id, sucursal: sucursales.nombre,
+    centroCodigo: centrosCosto.codigo, centroNombre: centrosCosto.nombre,
+    bajaId: activoBajas.id, bajaFecha: activoBajas.fechaBaja, bajaMotivo: activoBajas.motivo, bajaDestino: activoBajas.destinoFinal,
+  })
+  .from(activos)
+  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
+  .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
+  .leftJoin(activoBajas, and(eq(activoBajas.activoId, activos.id), eq(activoBajas.estado, "vigente")))
+  .where(filtros.area ? activoAreaCondition(filtros.area) : condicionActivoEspacio(espacio));
+
+const filas = rows
+  .map((r) => ({ r, fila: aFilaInventario({
+    a: { ...r, ubicacion: r.ubicacionDetalle },
+    ub: r.ubicacionId != null ? { id: r.ubicacionId, nombre: r.ubicacionNombre ?? "" } : null,
+    suc: r.sucursalId != null ? { id: r.sucursalId, nombre: r.sucursal ?? "" } : null,
+    cc: r.centroCostoId != null && r.centroCodigo ? { id: r.centroCostoId, codigo: r.centroCodigo, nombre: r.centroNombre ?? "" } : null,
+  }) }))
+  .filter(({ fila }) => pasaFiltros(fila, filtros, hoy))
+  .sort((x, y) => (x.r.sucursal ?? "~").localeCompare(y.r.sucursal ?? "~", "es")
+    || (x.r.ubicacionNombre ?? "~").localeCompare(y.r.ubicacionNombre ?? "~", "es")
+    || x.r.codigo.localeCompare(y.r.codigo, "es"));
+
+// Nombres para describir los filtros aunque la lista quede vacía.
+const sede = filtros.sucursal != null ? (await db.select({ nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.id, filtros.sucursal)).limit(1))[0]?.nombre : null;
+const ubic = filtros.ubicacion != null ? (await db.select({ nombre: ubicaciones.nombre }).from(ubicaciones).where(eq(ubicaciones.id, filtros.ubicacion)).limit(1))[0]?.nombre : null;
+const centro = typeof filtros.centro === "number" ? (await db.select({ codigo: centrosCosto.codigo }).from(centrosCosto).where(eq(centrosCosto.id, filtros.centro)).limit(1))[0]?.codigo : null;
+// Requisito 1 · «Inventario desglosado por centro de costo» (?agrupar=centro): un grupo por
+// centro, ordenados por código, cada uno con su subtotal, y «Sin centro de costo» al final.
+const grupos = leerAgrupacion(Astro.url.searchParams) === "centro" ? agruparPorCentro(filas) : null;
+const cuantos = (n: number) => `${n} ${n === 1 ? "equipo" : "equipos"}`;
+const titulo = filtros.area === "biomedico" ? "Inventario de equipos biomédicos" : filtros.area ? `Inventario · ${AREAS[filtros.area].label}` : "Inventario de activos";
+const subtitulo = `${describirFiltros(filtros, { sucursal: sede, ubicacion: ubic, centro })} · ${cuantos(filas.length)}${grupos ? " · Por centro de costo" : ""}`;
+const deBajas = filtros.estado === "baja";
+const volverHref = `/activos?${filtrosAQuery({ ...filtros, q: null })}`;
+const otraVistaHref = `/activos/imprimir?${filtrosAQuery(filtros)}${grupos ? "" : "&agrupar=centro"}`;
+// Sin agrupar, la columna «Centro de costo» va en cada fila; agrupado, la dice el grupo.
+const columnas = 10 + (grupos ? 0 : 1) + (deBajas ? 4 : 2);
+
+type Linea =
+  | { tipo: "grupo"; etiqueta: string }
+  | { tipo: "fila"; n: number; r: (typeof filas)[number]["r"]; fila: (typeof filas)[number]["fila"] }
+  | { tipo: "subtotal"; texto: string };
+const lineas: Linea[] = [];
+if (grupos) {
+  let n = 0;
+  for (const g of grupos) {
+    lineas.push({ tipo: "grupo", etiqueta: g.etiqueta });
+    for (const x of g.filas) lineas.push({ tipo: "fila", n: ++n, ...x });
+    const de = g.centroId == null ? "sin centro de costo" : `del centro ${g.etiqueta}`;
+    lineas.push({ tipo: "subtotal", texto: `Subtotal ${de}: ${cuantos(g.filas.length)}` });
+  }
+} else {
+  filas.forEach((x, i) => lineas.push({ tipo: "fila", n: i + 1, ...x }));
+}
+
+function registroTxt(r: (typeof rows)[number], area: string): string {
+  if (area !== "biomedico") return "—";
+  if (r.registroSanitarioNoRequiere) return "No requiere";
+  if (!r.registroSanitario) return ESTADO_REGISTRO_LABEL.sin_registro;
+  const vence = r.registroSanitarioVencimiento ? `vence ${fechaCorta(r.registroSanitarioVencimiento)}` : ESTADO_REGISTRO_LABEL[estadoRegistroSanitario(r, hoy)];
+  return [r.registroSanitario, r.registroSanitarioEntidad, vence].filter(Boolean).join(" · ");
+}
+---
+
+<Layout title={titulo}>
+  <div class="no-print doc-barra">
+    <a class="btn-secondary" href={areaHref(volverHref, filtros.area)}>Volver al inventario</a>
+    <div class="flex flex-wrap gap-2">
+      <a class="btn-secondary" href={otraVistaHref} id="otraVista">{grupos ? "Sin agrupar" : "Agrupar por centro de costo"}</a>
+      <button class="btn-primary" onclick="window.print()">Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <article class="print-doc doc-hoja doc-ancha">
+    <DocCabecera titulo={titulo} subtitulo={subtitulo} fecha={hoy} />
+    <section class="doc-seccion">
+      {filas.length === 0 ? (
+        <p class="doc-texto">No hay equipos con estos filtros.</p>
+      ) : (
+        <table class="doc-tabla" id="inventarioTabla" data-agrupar={grupos ? "centro" : undefined}>
+          <thead>
+            <tr>
+              <th class="n">N.º</th><th>Código</th><th>N.º activo</th><th>Nombre</th><th>Marca / Modelo</th><th>Serie</th>
+              <th>Sede</th><th>Ubicación</th>{!grupos && <th>Centro de costo</th>}<th>Clase</th><th>Registro sanitario</th>
+              {deBajas ? <><th>Fecha de baja</th><th>Motivo</th><th>Destino</th><th>Acta</th></> : <><th>Estado</th><th>Próx. calibración</th></>}
+            </tr>
+          </thead>
+          <tbody>
+            {lineas.map((l) => l.tipo === "grupo" ? (
+              <tr class="grupo-centro"><th colspan={columnas} scope="colgroup" style="padding-top: 12px">{l.etiqueta}</th></tr>
+            ) : l.tipo === "subtotal" ? (
+              <tr class="subtotal-centro"><td colspan={columnas} class="text-right font-semibold">{l.texto}</td></tr>
+            ) : (
+              <tr>
+                <td class="n">{l.n}</td>
+                <td class="tn">{l.r.codigo}</td>
+                <td>{l.r.numeroActivo ?? "—"}</td>
+                <td>{l.r.nombre}</td>
+                <td>{[l.r.marca, l.r.modelo].filter(Boolean).join(" / ") || "—"}</td>
+                <td>{l.r.serial ?? "—"}</td>
+                <td>{l.r.sucursal ?? "—"}</td>
+                <td>{[l.r.ubicacionNombre, l.r.ubicacionDetalle].filter(Boolean).join(" · ") || "—"}</td>
+                {!grupos && <td>{l.r.centroCodigo ?? "—"}</td>}
+                <td>{l.fila.area === "biomedico" ? (l.r.claseRiesgo ?? "Sin clase") : "—"}</td>
+                <td>{registroTxt(l.r, l.fila.area)}</td>
+                {deBajas ? (
+                  <>
+                    <td class="tn">{fechaCorta(l.r.bajaFecha)}</td>
+                    <td>{l.r.bajaMotivo ? (MOTIVOS_BAJA[l.r.bajaMotivo as keyof typeof MOTIVOS_BAJA] ?? l.r.bajaMotivo) : "Sin acta"}</td>
+                    <td>{l.r.bajaDestino ? (DESTINOS_BAJA[l.r.bajaDestino as keyof typeof DESTINOS_BAJA] ?? l.r.bajaDestino) : "—"}</td>
+                    <td class="tn">{l.r.bajaId ? folioActaBaja(l.r.bajaId) : "—"}</td>
+                  </>
+                ) : (
+                  <>
+                    <td>{ESTADO_ACTIVO_LABEL[l.r.estado as EstadoActivo] ?? l.r.estado}</td>
+                    <td class="tn">{fechaCorta(l.r.proximaCalibracion)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+          {grupos && (
+            <tfoot>
+              <tr class="total-centros"><td colspan={columnas} class="text-right font-semibold">Total: {cuantos(filas.length)}</td></tr>
+            </tfoot>
+          )}
+        </table>
+      )}
+    </section>
+    <DocFolio codigo="Inventario de equipos" />
+  </article>
+</Layout>

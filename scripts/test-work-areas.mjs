@@ -30,7 +30,7 @@ try {
       builder.onResolve({ filter: /(?:^|\/)(auth|email|smtp-worker|telegram|notificaciones|notif-app|audit|especialidad)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'test-effects' }));
       builder.onLoad({ filter: /.*/, namespace: 'test-effects' }, ({ path: name }) => ({ contents: name === 'auth'
         ? `export async function requireUser(ctx, roles) { const user=ctx.locals.testUser; return !user ? {user:null,response:new Response('Unauthorized',{status:401})} : roles && !roles.includes(user.rol) ? {user:null,response:new Response('Forbidden',{status:403})} : {user,response:null}; }`
-        : `export const sendMail=async()=>{}; export const emailLayout=()=>''; export const sendTelegram=async()=>{}; export const crearNotificacion=async()=>{}; export const logAudit=async()=>{}; export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{}; export const disparadorProyecto=async()=>{};` }));
+        : `export const sendMail=async()=>{}; export const emailLayout=()=>''; export const sendTelegram=async()=>{}; export const crearNotificacion=async()=>{}; export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b; export const logAuditLote=async()=>{}; export const labelCampo=(c)=>c; export const resumenCambios=()=>''; export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{}; export const disparadorProyecto=async()=>{};` }));
     }}],
   });
   const app = await import(pathToFileURL(bundle).href);

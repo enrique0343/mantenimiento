@@ -377,9 +377,13 @@ const TIPOS_UB = [
         No se confunden con <a href="/procedimientos" class="text-brand-600 underline">la biblioteca de
         procedimientos</a>, que es el documento firmado (SCP, SOP, MOP, EOP, AOP) con su matriz de validación.
       </p>
-      <p class="mt-1 text-sm text-amber-700">
-        Todavía no hay pantalla de edición propia para estas plantillas: se administran por
-        <code>/api/checklist-plantillas</code>. Abajo queda el inventario de sólo lectura.
+      <p class="mt-2 text-sm text-slate-600">
+        En el editor de plantillas creas plantillas, cambias sus pasos (criterio, punto crítico, lectura con unidad y
+        rango) y las activas o desactivas. Ahí también está la plantilla sugerida «Preventivo biomédico general». Abajo
+        queda el resumen.
+      </p>
+      <p class="mt-2">
+        <a href="/configuracion/plantillas" class="btn-primary">Abrir el editor de plantillas</a>
       </p>
       <p class="mt-2 text-sm text-slate-500">
         Hay {plantillas.length} plantilla{plantillas.length === 1 ? "" : "s"} configurada{plantillas.length === 1 ? "" : "s"}.

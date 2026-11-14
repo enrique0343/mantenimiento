@@ -1,13 +1,17 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
-import { eq, asc, and } from "drizzle-orm";
-import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { eq, asc, and, ne } from "drizzle-orm";
+import { abrevFrecuencia, proyectarFechas } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { hoySV, sumarMeses } from "@/lib/biomedico";
+import { MESES_CORTOS } from "@/lib/plan-anual";
 import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
 import { areaHref } from "@/lib/areas";
 import { areaDeActividad } from "@/lib/actividades";
+import { areaEnEspacio, condicionActivoEspacio, espacioDeArea, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -20,6 +24,10 @@ const sedeId = sedeParam ? Number(sedeParam) : null;
 const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 const esTecnico = user.rol === "tecnico";
+// Solo lo del espacio (las actividades por ubicación son de General).
+const { espacio, permitido } = espacioDeLista(Astro, user, dominio);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const rubrosDelEspacio = RUBRO_KEYS.filter((k) => areaEnEspacio(k, espacio));
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre })
@@ -28,16 +36,25 @@ const sucursalesList = await db
   .orderBy(asc(sucursales.nombre));
 const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
 
-// ── Datos ────────────────────────────────────────────────────────────────────
+// ── Datos (sin las rutinas de equipos dados de baja) ─────────────────────────
 const planRowsAll = await db
-  .select({ p: planesMantenimiento, a: activos, s: sucursales, ub: ubicaciones })
+  // Del equipo solo lo que se muestra: D1 corta el resultado a 100 columnas.
+  .select({
+    p: planesMantenimiento,
+    a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo, criticidadOperacional: activos.criticidadOperacional },
+    s: sucursales,
+    ub: ubicaciones,
+  })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(esTecnico
-    ? and(eq(planesMantenimiento.activo, true), eq(planesMantenimiento.asignadoA, user.id))
-    : eq(planesMantenimiento.activo, true));
+  .where(and(
+    eq(planesMantenimiento.activo, true),
+    ne(activos.estado, "baja"),
+    condicionActivoEspacio(espacio),
+    esTecnico ? eq(planesMantenimiento.asignadoA, user.id) : undefined,
+  ));
 
 const actRowsAll = await db
   .select({ a: actividades, c: actividadCategorias, s: sucursales, ub: ubicaciones })
@@ -50,37 +67,28 @@ const actRowsAll = await db
     : eq(actividades.activo, true));
 
 const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const actRowsEspacio = actRowsAll.filter((r) => espacioDeArea(areaDeActividad(r.a.rubro, r.c?.rubro)) === espacio);
+const actRowsSede = sedeId ? actRowsEspacio.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsEspacio;
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
 const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 
-// ── Horizonte de 12 meses desde el mes actual ────────────────────────────────
-const hoyD = new Date();
-const hoy = hoyD.toISOString().slice(0, 10);
-const horizonStart = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth(), 1));
-const horizonEnd = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth() + 12, 1));
-const horizonStartStr = horizonStart.toISOString().slice(0, 10);
-const horizonEndStr = horizonEnd.toISOString().slice(0, 10);
+// ── Horizonte de 12 meses desde el mes actual (en El Salvador) ──────────────
+const hoy = hoySV();
+const horizonStartStr = `${hoy.slice(0, 7)}-01`;
+const horizonEndStr = sumarMeses(horizonStartStr, 12);
+const anioIni = Number(horizonStartStr.slice(0, 4));
+const mesIni = Number(horizonStartStr.slice(5, 7));
 
 const meses = Array.from({ length: 12 }, (_, i) => {
-  const d = new Date(Date.UTC(horizonStart.getUTCFullYear(), horizonStart.getUTCMonth() + i, 1));
-  return {
-    label: d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", ""),
-    anio: String(d.getUTCFullYear()).slice(2),
-  };
+  const ym = sumarMeses(horizonStartStr, i);
+  return { label: MESES_CORTOS[Number(ym.slice(5, 7)) - 1], anio: ym.slice(2, 4) };
 });
 
-const mesIndex = (fecha: string) => {
-  const d = new Date(fecha);
-  return (d.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 + (d.getUTCMonth() - horizonStart.getUTCMonth());
-};
+const mesIndex = (fecha: string) => (Number(fecha.slice(0, 4)) - anioIni) * 12 + (Number(fecha.slice(5, 7)) - mesIni);
 
-function proyectar(fechaInicial: string, frecuencia: Frecuencia, onOcc: (fecha: string) => void) {
-  let f = fechaInicial;
-  let guard = 0;
-  while (f < horizonStartStr && guard < 500) { const n = siguienteFecha(f, frecuencia); if (n <= f) return; f = n; guard++; }
-  guard = 0;
-  while (f < horizonEndStr && guard < 400) { onOcc(f); const n = siguienteFecha(f, frecuencia); if (n <= f) break; f = n; guard++; }
+// Misma proyección que el plan anual y el cronograma (proyectarFechas).
+function proyectar(fechaInicial: string, frecuencia: string, onOcc: (fecha: string) => void) {
+  for (const f of proyectarFechas(fechaInicial, frecuencia, horizonStartStr, horizonEndStr)) onOcc(f);
 }
 
 // ── Filas del Gantt ──────────────────────────────────────────────────────────
@@ -101,7 +109,7 @@ const filas: Fila[] = [];
 
 for (const r of planRows) {
   const counts = Array(12).fill(0);
-  proyectar(r.p.proximaFecha, r.p.frecuencia as Frecuencia, (fecha) => {
+  proyectar(r.p.proximaFecha, r.p.frecuencia, (fecha) => {
     const mi = mesIndex(fecha);
     if (mi >= 0 && mi < 12) counts[mi]++;
   });
@@ -120,7 +128,7 @@ for (const r of planRows) {
 }
 for (const r of actRows) {
   const counts = Array(12).fill(0);
-  proyectar(r.a.proximaFecha, r.a.frecuencia as Frecuencia, (fecha) => {
+  proyectar(r.a.proximaFecha, r.a.frecuencia, (fecha) => {
     const mi = mesIndex(fecha);
     if (mi >= 0 && mi < 12) counts[mi]++;
   });
@@ -145,15 +153,12 @@ filas.sort((a, b) => (Number(b.vencido) - Number(a.vencido)) || a.proximaFecha.l
 const totalesMes = Array(12).fill(0);
 for (const f of filas) f.counts.forEach((c, i) => (totalesMes[i] += c));
 
-const FREC_ABREV: Record<string, string> = {
-  diaria: "D", semanal: "S", quincenal: "Q", mensual: "M",
-  bimestral: "2M", trimestral: "3M", semestral: "6M", anual: "A",
-};
 const fmt = (s: string) => fmtFechaSoloCompacta(s);
 ---
 
 <Layout title="Cronograma Gantt">
-  <div class="flex flex-wrap items-center justify-between gap-3">
+  <DocCabecera soloImpresion titulo="Cronograma de 12 meses" subtitulo={`${sedeActiva ? sedeActiva.nombre : "Todas las sedes"}${dominio ? ` · ${rubroLabel(dominio)}` : ""}`} fecha={hoy} />
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Cronograma Gantt — 12 meses</h1>
       <p class="mt-1 text-sm text-slate-500">
@@ -171,10 +176,11 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
       </select>
       <select id="dominioSel" class="input w-auto text-sm py-1.5">
         <option value="">Todas las áreas</option>
-        {RUBRO_KEYS.map((k) => (
+        {rubrosDelEspacio.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
+      <button class="btn-secondary" type="button" onclick="window.print()">Imprimir</button>
       <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">Vista por fechas</a>
       <a href={`/plan-mantenimiento${sedeId || dominio ? `?${[sedeId ? `sede=${sedeId}` : "", dominio ? `area=${dominio}` : ""].filter(Boolean).join("&")}` : ""}`} class="btn-secondary">Plan anual</a>
     </div>
@@ -185,13 +191,13 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
       Sin rutinas programadas {sedeActiva ? "para esta sede" : ""}.
     </div>
   ) : (
-    <div class="card mt-4 overflow-hidden">
+    <div class="gantt-hoja card mt-4 overflow-hidden">
       <div class="overflow-x-auto">
         <table class="w-full text-left text-xs" style="min-width: 1000px">
           <thead class="bg-slate-50 text-slate-500 border-b border-slate-200">
             <tr>
               <th class="sticky left-0 bg-slate-50 px-3 py-2 font-medium z-10" style="min-width: 240px">Rutina</th>
-              <th class="px-1 py-2 font-medium text-center w-10" title="Frecuencia: D diaria · S semanal · Q quincenal · M mensual · A anual">Frec.</th>
+              <th class="px-1 py-2 font-medium text-center w-10" title="Frecuencia: D diaria · S semanal · Q quincenal · M mensual · 2M bimestral · 3M trimestral · 4M cuatrimestral · 6M semestral · A anual">Frec.</th>
               {meses.map((m, i) => (
                 <th class={`px-1 py-2 text-center capitalize ${i === 0 ? "bg-brand-50 text-brand-700 font-bold" : "font-medium"}`} style="min-width: 52px">
                   {m.label}<span class="block text-[9px] font-normal text-slate-400">'{m.anio}</span>
@@ -211,7 +217,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
                     <span class={`ml-1 font-semibold ${f.vencido ? "text-red-600" : "text-slate-500"}`}>{f.vencido ? `${fmt(f.proximaFecha)}` : fmt(f.proximaFecha)}</span>
                   </div>
                 </td>
-                <td class="px-1 py-1.5 text-center text-[10px] font-mono text-slate-400">{FREC_ABREV[f.frecuencia] ?? "?"}</td>
+                <td class="px-1 py-1.5 text-center text-[10px] font-mono text-slate-400">{abrevFrecuencia(f.frecuencia)}</td>
                 {f.counts.map((c, i) => (
                   <td class={`px-1 py-1.5 text-center ${i === 0 ? "bg-brand-50/40" : ""}`}>
                     {c > 0 && (
@@ -246,8 +252,18 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
     <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-brand-500"></span> Programado</span>
     <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-amber-500"></span> Equipo crítico</span>
     <span class="inline-flex items-center gap-1.5"><span class="inline-block h-3 w-5 rounded bg-red-500"></span> Vencido (mes actual)</span>
-    <span>· "2×" = veces en el mes · Frec.: D diaria, S semanal, Q quincenal, M mensual, 2M bimestral, 3M trimestral, 6M semestral, A anual</span>
+    <span>· "2×" = veces en el mes · Frec.: D diaria, S semanal, Q quincenal, M mensual, 2M bimestral, 3M trimestral, 4M cuatrimestral, 6M semestral, A anual · Sin equipos dados de baja</span>
   </div>
+
+  <style is:global>
+    /* Al imprimir: hoja horizontal (@page apaisada en globals.css) y la tabla completa, sin desplazamiento. */
+    @media print {
+      .gantt-hoja { page: apaisada; overflow: visible !important; }
+      .gantt-hoja .overflow-x-auto { overflow: visible !important; }
+      .gantt-hoja table { min-width: 0 !important; }
+      .gantt-hoja .sticky { position: static !important; }
+    }
+  </style>
 
   <script>
     function nav(param: string, value: string) {

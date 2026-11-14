@@ -20,27 +20,44 @@
 //   y el preventivo no se completó: su OT sigue abierta, en proceso o en espera, o
 //   el plan activo no tiene OT del ciclo (no se generó, o se canceló; una OT
 //   borrada deja el plan como no generado y el cron la vuelve a crear).
+//
+// Espacios (src/lib/espacio.ts, 14/11/2026): el tablero es uno por espacio. En
+// General no sale nada biomédico («Tablero de preventivos»); en Biomédico solo lo
+// biomédico («Tablero biomédico»), con quién lo realiza (empresa externa o personal
+// propio), las calibraciones que vencen y los equipos pendientes de ubicación
+// (lib/tablero-bio). Filtra el servidor. Un plan del otro espacio responde 403 al
+// usuario que no entra a ese espacio; en un lote, todo o nada. El visualizador ve
+// el tablero sin cambiar nada.
 import type { APIContext } from "astro";
+import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "./espacio-db";
 import { and, asc, desc, eq, gte, isNotNull, lt, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "./db";
-import { activos, auditLog, ordenes, ordenVerificacion, ordenVerificacionEventos, planesMantenimiento, sucursales, ubicaciones, usuarios } from "./schema";
+import { activos, auditLog, ordenes, ordenVerificacion, ordenVerificacionEventos, planesMantenimiento, proveedores, sucursales, ubicaciones, usuarios } from "./schema";
 // calcularDiff es una función pura: se importa por ruta relativa a propósito.
 import { calcularDiff, labelCampo, type DiffEntry } from "./audit";
 import { activoAreaCondition, parseArea, type AreaKey } from "./areas";
 import { FRECUENCIAS } from "./frecuencias";
+import { esFechaISO } from "./biomedico";
 import { fmtFechaSoloCompacta, fmtMarcaSV, msDeMarca } from "./datetime";
 import { etiquetaOT } from "./orden-codigo";
 import { ahoraSV } from "./turnos";
 import { aplicarCambioOrden } from "./orden-cambio";
 import { crearNotificacion } from "@/lib/notif-app";
+import {
+  areasDeEspacio, condicionActivoEspacio, espacioDeActivo, espacioDelContexto, mensajeOtroEspacio,
+  puedeEntrar, type Espacio, type UsuarioEspacio,
+} from "./espacio";
+import { condicionEmpresa, datosBiomedicos, empresaDelPlanSql, leerFiltroEmpresa, rutasDeUbicaciones, textoUbicacionPendiente, type FiltroEmpresa } from "./tablero-bio";
 
 type Db = ReturnType<typeof getDb>;
-type Usuario = { id: number; rol: string; nombre: string };
+type Usuario = { id: number; rol: string; nombre: string; especialidad?: string | null };
 
 export const OT_ABIERTA = ["abierta", "en_proceso", "en_espera"] as const;
 export const OT_EN_VERIFICACION = ["completada", "verificada"] as const;
 export const ROLES_TABLERO = ["admin", "jefe"] as const;
+/** Ven el tablero (y el historial) sin cambiar nada: la jefatura y el visualizador. */
+export const ROLES_TABLERO_VER = ["admin", "jefe", "visualizador"] as const;
 export const MOTIVO_MINIMO = 10;
 export const MENSAJE_MOTIVO = `Escribe el motivo (mínimo ${MOTIVO_MINIMO} caracteres). Cambiar la fecha programada o la frecuencia, desactivar o eliminar un preventivo queda registrado con tu nombre, la hora, el antes y el después.`;
 export const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -60,8 +77,25 @@ export const hoySV = () => ahoraSV().fecha;
 const msDia = (f: string) => { const [y, m, d] = f.slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
 export const sumarDias = (fecha: string, dias: number) => new Date(msDia(fecha) + dias * 86_400_000).toISOString().slice(0, 10);
 export const diasEntre = (desde: string, hasta: string) => Math.round((msDia(hasta) - msDia(desde)) / 86_400_000);
-/** AAAA-MM-DD de un día que existe (rechaza 2026-02-31 o 2026-13-45). */
-export const fechaValida = (f: string) => FECHA_RE.test(f) && new Date(msDia(f)).toISOString().slice(0, 10) === f;
+/** AAAA-MM-DD de un día que existe (rechaza 2026-02-31 o 2026-13-45). La misma regla que las API de rutinas (biomedico.ts). */
+export const fechaValida = (f: string) => esFechaISO(f);
+
+// ─── Espacio del pedido ──────────────────────────────────────────────────────
+/**
+ * El espacio de este request: el mismo que el resto de la app (espacioDelContexto):
+ * el que dejó el middleware (Astro.locals.espacio) si el usuario entra a él; si no
+ * está (pruebas, rutas sin middleware), la misma regla con ?espacio= y la cookie.
+ */
+export function espacioDelPedido(ctx: { locals?: any; cookies?: any; url: URL }, user: UsuarioEspacio): Espacio {
+  return espacioDelContexto(ctx, user);
+}
+
+/** El espacio de un plan (por su equipo); null si el plan no existe. */
+export async function espacioDelPlan(db: Db, planId: number): Promise<Espacio | null> {
+  const [r] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(planesMantenimiento)
+    .innerJoin(activos, eq(activos.id, planesMantenimiento.activoId)).where(eq(planesMantenimiento.id, planId)).limit(1);
+  return r ? espacioDeActivo(r) : null;
+}
 
 const estadosSql = (e: readonly string[]) => sql.raw(e.map((x) => `'${x}'`).join(", "));
 /** Lista de ids en un solo parámetro: D1 rechaza más de 100 por consulta. */
@@ -250,13 +284,21 @@ export async function asignarPreventivos(ctx: APIContext, db: Db, usuario: Usuar
   const ids = [...new Set(planIds)];
   if (!ids.length) return { ok: false, status: 400, error: "Elige al menos un preventivo." };
   const enLista = enListaDePlanes(ids);
-  const encontrados = await db.select({ id: planesMantenimiento.id, codigo: activos.codigo }).from(planesMantenimiento)
+  const encontrados = await db.select({ id: planesMantenimiento.id, codigo: activos.codigo, rubro: activos.rubro, tipo: activos.tipo }).from(planesMantenimiento)
     .innerJoin(activos, eq(activos.id, planesMantenimiento.activoId)).where(enLista);
   if (encontrados.length !== ids.length) return { ok: false, status: 404, error: "Alguno de los preventivos ya no existe. Actualiza la página." };
+  // Todo o nada: un plan de un espacio al que el usuario no entra frena el lote entero.
+  const espacios = new Set(encontrados.map((e) => espacioDeActivo(e)));
+  const ajeno = [...espacios].find((e) => !puedeEntrar(usuario as UsuarioEspacio, e));
+  if (ajeno) return { ok: false, status: 403, error: mensajeOtroEspacio(ajeno) };
   let nombre: string | null = null;
   if (tecnicoId !== null) {
     const [t] = await db.select({ nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo }).from(usuarios).where(eq(usuarios.id, tecnicoId)).limit(1);
     if (!t || !t.activo || t.rol !== "tecnico") return { ok: false, status: 400, error: "Elige un técnico activo." };
+    // El técnico solo ve en su celular el trabajo de su especialidad (la misma regla
+    // que la ficha del plan y la de la OT: src/lib/espacio-db.ts).
+    const fuera = await asignadoFueraDeEspacio(db, tecnicoId, espacios);
+    if (fuera) return { ok: false, status: 400, error: mensajeAsignadoFuera(fuera, { biomedico: "los preventivos biomédicos", general: "los preventivos de mantenimiento general", quien: "un técnico" }) };
     nombre = t.nombre;
   }
   const motivoLimpio = motivo?.trim() || null;
@@ -281,17 +323,35 @@ export async function asignarPreventivos(ctx: APIContext, db: Db, usuario: Usuar
       await crearNotificacion(ctx, {
         usuarioId: tecnicoId, tipo: "preventivo_asignado",
         titulo: sinOrden.length === 1 ? `Te asignaron el preventivo de ${codigo}` : `Te asignaron ${sinOrden.length} preventivos`,
-        mensaje: "La orden te llega el día programado.", link: "/cronograma",
+        // El enlace lleva al cronograma del espacio de esos preventivos: así la campana
+        // lo muestra solo en ese espacio (condicionLinkEspacio lee ?espacio=).
+        mensaje: "La orden te llega el día programado.", link: linkCronograma([...espacios]),
       });
     } catch {}
   }
   return { ok: true, planes: cambiados.length, ordenes: ots.cambiadas, errores: ots.errores };
 }
 
-// ─── El tablero ──────────────────────────────────────────────────────────────
-export interface FiltrosTablero { desde: string; hasta: string; sedeId: number | null; area: AreaKey | null; q: string }
+/**
+ * Enlace del aviso «Te asignaron …»: el cronograma del espacio de los preventivos
+ * (en Biomédico, con su área); si el lote mezcla espacios, el cronograma sin espacio.
+ */
+export function linkCronograma(espacios: readonly Espacio[]): string {
+  const unicos = [...new Set(espacios)];
+  if (unicos.length !== 1) return "/cronograma";
+  return unicos[0] === "biomedico" ? "/cronograma?area=biomedico&espacio=biomedico" : "/cronograma?espacio=general";
+}
 
-export function leerFiltros(params: URLSearchParams, hoy = hoySV()): { filtros: FiltrosTablero; error: string | null } {
+// ─── El tablero ──────────────────────────────────────────────────────────────
+export interface FiltrosTablero {
+  desde: string; hasta: string; sedeId: number | null; area: AreaKey | null; q: string;
+  /** Solo en Biomédico: quién lo realiza (null = todos). */
+  empresa?: FiltroEmpresa;
+  /** El espacio del tablero; sin espacio (null o ausente), todo, como antes. */
+  espacio?: Espacio | null;
+}
+
+export function leerFiltros(params: URLSearchParams, hoy = hoySV(), espacio: Espacio | null = null): { filtros: FiltrosTablero; error: string | null } {
   const porDefecto = { desde: hoy, hasta: sumarDias(hoy, DIAS_POR_DEFECTO - 1) };
   let desde = params.get("desde") || porDefecto.desde;
   let hasta = params.get("hasta") || porDefecto.hasta;
@@ -300,8 +360,16 @@ export function leerFiltros(params: URLSearchParams, hoy = hoySV()): { filtros: 
   else if (hasta < desde) { error = "La fecha final es anterior a la inicial."; ({ desde, hasta } = porDefecto); }
   else if (diasEntre(desde, hasta) > 366) { error = "El rango puede ser de un año como máximo."; ({ desde, hasta } = porDefecto); }
   const sede = Number(params.get("sede"));
+  // El área y la empresa valen solo dentro de su espacio: un área del otro espacio se ignora.
+  const area = parseArea(params.get("area"));
   return {
-    filtros: { desde, hasta, sedeId: Number.isInteger(sede) && sede > 0 ? sede : null, area: parseArea(params.get("area")), q: (params.get("q") ?? "").trim().slice(0, 100) },
+    filtros: {
+      desde, hasta, sedeId: Number.isInteger(sede) && sede > 0 ? sede : null,
+      area: area && espacio && !areasDeEspacio(espacio).includes(area) ? null : area,
+      q: (params.get("q") ?? "").trim().slice(0, 100),
+      empresa: espacio === "biomedico" ? leerFiltroEmpresa(params.get("empresa")) : null,
+      espacio,
+    },
     error,
   };
 }
@@ -309,6 +377,7 @@ export function leerFiltros(params: URLSearchParams, hoy = hoySV()): { filtros: 
 const otFila = alias(ordenes, "ot");
 const tecnicoDelPlan = alias(usuarios, "tec_plan");
 const tecnicoDeLaOt = alias(usuarios, "tec_ot");
+const empresaFila = alias(proveedores, "empresa");
 // La OT abierta más reciente del plan (normalmente es una sola).
 const otAbiertaDelPlan = sql`(select max(o2.id) from ordenes o2 where o2.plan_id = ${PLAN_ID} and o2.estado in (${estadosSql(OT_ABIERTA)}))`;
 // Enviada a verificación en este ciclo: la que ya movió la fecha es de un ciclo anterior.
@@ -331,6 +400,7 @@ async function consultarFilas(db: Db, donde: SQL | undefined) {
     planAsignadoA: planesMantenimiento.asignadoA, ultimaGeneracion: planesMantenimiento.ultimaGeneracion,
     activoId: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo, estadoEquipo: activos.estado,
     ubicacionId: activos.ubicacionId, ubicacionTexto: activos.ubicacion, sede: sucursales.nombre,
+    empresaId: empresaFila.id, empresa: empresaFila.nombre,
     tecnicoPlan: tecnicoDelPlan.nombre,
     otId: otFila.id, otCodigo: otFila.codigo, otEstado: otFila.estado, otAsignadoA: otFila.asignadoA, tecnicoOt: tecnicoDeLaOt.nombre,
     enVerificacion: sql<number>`${enVerificacionDelPlan}`,
@@ -341,6 +411,7 @@ async function consultarFilas(db: Db, donde: SQL | undefined) {
     .leftJoin(tecnicoDelPlan, eq(tecnicoDelPlan.id, planesMantenimiento.asignadoA))
     .leftJoin(otFila, sql`${otFila.id} = ${otAbiertaDelPlan}`)
     .leftJoin(tecnicoDeLaOt, eq(tecnicoDeLaOt.id, otFila.asignadoA))
+    .leftJoin(empresaFila, sql`${empresaFila.id} = ${empresaDelPlanSql}`)
     .where(donde)
     .orderBy(asc(planesMantenimiento.proximaFecha), asc(activos.codigo), asc(planesMantenimiento.id))
     .limit(LIMITE_FILAS + 1);
@@ -361,6 +432,11 @@ function armarFila(r: Awaited<ReturnType<typeof consultarFilas>>[number], hoy: s
     prioridad: r.prioridad, planActivo: !!r.planActivo,
     equipo: { id: r.activoId, codigo: r.codigo, nombre: r.nombre, area: parseArea(r.rubro) ?? (r.tipo === "biomedico" ? "biomedico" : "equipo_general"), estado: r.estadoEquipo },
     ubicacion: ruta(r.ubicacionId) ?? r.ubicacionTexto ?? null, sede: r.sede ?? null,
+    // Sin ubicación de la lista: pendiente de asignar, con el texto del inventario.
+    ubicacionPendiente: !r.ubicacionId, ubicacionInventario: !r.ubicacionId ? r.ubicacionTexto?.trim() || null : null,
+    ubicacionPendienteTexto: !r.ubicacionId ? textoUbicacionPendiente(r.ubicacionTexto) : null,
+    // Quién lo realiza: la empresa del plan, o la del equipo; null = personal propio.
+    empresa: r.empresaId ? { id: r.empresaId, nombre: r.empresa ?? `#${r.empresaId}` } : null,
     ot, enVerificacion: !!Number(r.enVerificacion),
     tecnicoPlan: r.planAsignadoA ? { id: r.planAsignadoA, nombre: r.tecnicoPlan ?? `#${r.planAsignadoA}` } : null,
     tecnico: tecnicoId ? { id: tecnicoId, nombre: tecnico ?? `#${tecnicoId}` } : null,
@@ -372,18 +448,11 @@ function armarFila(r: Awaited<ReturnType<typeof consultarFilas>>[number], hoy: s
 
 const normalizar = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV()) {
+export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(), opciones: { sinBiomedico?: boolean } = {}) {
   // Rutas de ubicación: el árbol completo en una consulta sin parámetros.
   const ubs = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, padreId: ubicaciones.padreId }).from(ubicaciones);
-  const porId = new Map(ubs.map((u) => [u.id, u]));
-  const ruta = (id: number | null) => {
-    const u = id ? porId.get(id) : undefined;
-    if (!u) return null;
-    const partes = [u.nombre];
-    let p = u.padreId ? porId.get(u.padreId) : undefined;
-    for (let i = 0; p && i < 6; i++) { partes.unshift(p.nombre); p = p.padreId ? porId.get(p.padreId) : undefined; }
-    return partes.join(" · ");
-  };
+  const ruta = rutasDeUbicaciones(ubs);
+  const espacio = filtros.espacio ?? null;
   const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre, activa: sucursales.activa }).from(sucursales).orderBy(asc(sucursales.nombre));
   // La búsqueda va en SQL, antes del límite de filas. Rutas de ubicación, sedes y
   // personas se buscan aquí (sin tildes) y entran como una lista en un parámetro.
@@ -401,6 +470,8 @@ export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(
     );
   }
   const comunes = and(
+    espacio ? condicionActivoEspacio(espacio) : undefined,
+    espacio === "biomedico" ? condicionEmpresa(filtros.empresa ?? null) : undefined,
     filtros.sedeId ? eq(ubicaciones.sucursalId, filtros.sedeId) : undefined,
     filtros.area ? activoAreaCondition(filtros.area) : undefined,
     busqueda,
@@ -426,7 +497,14 @@ export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(
     id: usuarios.id, nombre: usuarios.nombre,
     abiertas: sql<number>`(select count(*) from ordenes o4 where o4.asignado_a = "usuarios"."id" and o4.estado in (${estadosSql(OT_ABIERTA)}))`,
     preventivos: sql<number>`(select count(*) from planes_mantenimiento p4 where p4.asignado_a = "usuarios"."id" and p4.activo = 1)`,
-  }).from(usuarios).where(and(eq(usuarios.rol, "tecnico"), eq(usuarios.activo, true))).orderBy(asc(usuarios.nombre));
+  }).from(usuarios).where(and(
+    eq(usuarios.rol, "tecnico"), eq(usuarios.activo, true),
+    // Solo los técnicos que ven ese espacio (especialidad vacía o «ambos»: los dos).
+    espacio ? sql`(${usuarios.especialidad} is null or ${usuarios.especialidad} in ('ambos', ${espacio}))` : undefined,
+  )).orderBy(asc(usuarios.nombre));
+  // El bloque biomédico (calibraciones, pendientes de ubicación) solo en Biomédico;
+  // el aviso del panel principal no lo necesita (sinBiomedico).
+  const biomedico = espacio === "biomedico" && !opciones.sinBiomedico ? await datosBiomedicos(db, { hoy, sedeId: filtros.sedeId }) : null;
 
   return {
     hoy, filtros: { ...filtros, ...rango }, desdeAjustado,
@@ -435,6 +513,8 @@ export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(
     truncado: prog.length > LIMITE_FILAS || atr.length > LIMITE_FILAS,
     tecnicos: tecnicos.map((t) => ({ id: t.id, nombre: t.nombre, abiertas: Number(t.abiertas), preventivos: Number(t.preventivos) })),
     sedes: sedes.filter((s) => s.activa).map(({ id, nombre }) => ({ id, nombre })),
+    espacio,
+    biomedico,
   };
 }
 

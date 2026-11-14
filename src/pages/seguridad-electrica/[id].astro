@@ -1,0 +1,305 @@
+---
+// Registro imprimible de una prueba de seguridad eléctrica (IEC 62353): equipo,
+// mediciones con el límite con que se juzgaron, resultado, analizador, informe,
+// firmas y viñeta. Desde aquí se adjunta el informe que falta y se anula.
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { areaHref } from "@/lib/areas";
+import { textoDeNumero } from "@/lib/numero";
+import {
+  ARCHIVO_ACCEPT, CLASE_PROTECCION_LABEL, METODO_FUGA_LABEL, PARTE_APLICADA_LABEL, RESULTADO_SE_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL,
+  etiquetaClaseRiesgo, fechaCorta, fechaHoraSV, puedeGestionarBio, puedeRegistrarBio, puedeVerBio,
+  type ClaseProteccion, type MetodoFuga, type ParteAplicada, type ResultadoPruebaElectrica, type TipoPruebaElectrica,
+} from "@/lib/biomedico";
+import { cargarPrueba, idPositivo } from "@/lib/seguridad-electrica";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const id = idPositivo(Astro.params.id);
+if (!id) return Astro.redirect("/seguridad-electrica");
+const db = getDb(Astro);
+const datos = await cargarPrueba(db, id);
+if (!datos) return Astro.redirect("/seguridad-electrica");
+
+const { prueba: p, equipo: a } = datos;
+const anulada = p.estado === "anulada";
+const pasa = p.resultado === "pasa";
+const folio = `SE-${String(p.id).padStart(5, "0")}`;
+const fichaHref = (activoId: number) => areaHref(`/activos/${activoId}`, "biomedico");
+
+type Fila = { medicion: string; valor: string; limite: string; cumple: "Sí" | "No" | "—" };
+const valor = (v: number | null, unidad: string, lim: number | null, opcional = false) =>
+  lim === null ? "No aplica" : v === null ? (opcional ? "No medida" : "Sin lectura") : `${textoDeNumero(v)} ${unidad}`;
+const cumpleMax = (v: number | null, lim: number | null): Fila["cumple"] => (lim === null || v === null ? "—" : v <= lim ? "Sí" : "No");
+const cumpleMin = (v: number | null, lim: number | null): Fila["cumple"] => (lim === null || v === null ? "—" : v >= lim ? "Sí" : "No");
+const conformidad = (c: string) => (c === "conforme" ? "Conforme" : "No conforme");
+const filas: Fila[] = [
+  { medicion: "Inspección visual", valor: conformidad(p.inspeccionVisual), limite: "Sin daños visibles", cumple: p.inspeccionVisual === "conforme" ? "Sí" : "No" },
+  { medicion: "Resistencia de tierra de protección", valor: valor(p.tierraOhm, "Ω", p.limiteTierraOhm), limite: p.limiteTierraOhm === null ? "—" : `≤ ${textoDeNumero(p.limiteTierraOhm)} Ω`, cumple: cumpleMax(p.tierraOhm, p.limiteTierraOhm) },
+  { medicion: "Resistencia de aislamiento", valor: valor(p.aislamientoMohm, "MΩ", p.limiteAislamientoMohm, true), limite: p.limiteAislamientoMohm === null ? "—" : `≥ ${textoDeNumero(p.limiteAislamientoMohm)} MΩ`, cumple: cumpleMin(p.aislamientoMohm, p.limiteAislamientoMohm) },
+  { medicion: "Corriente de fuga del equipo", valor: valor(p.fugaEquipoUa, "µA", p.limiteFugaEquipoUa), limite: p.limiteFugaEquipoUa === null ? "—" : `≤ ${textoDeNumero(p.limiteFugaEquipoUa)} µA`, cumple: cumpleMax(p.fugaEquipoUa, p.limiteFugaEquipoUa) },
+  { medicion: "Corriente de fuga de parte aplicada", valor: valor(p.fugaParteUa, "µA", p.limiteFugaParteUa), limite: p.limiteFugaParteUa === null ? "—" : `≤ ${textoDeNumero(p.limiteFugaParteUa)} µA`, cumple: cumpleMax(p.fugaParteUa, p.limiteFugaParteUa) },
+  { medicion: "Prueba funcional", valor: conformidad(p.pruebaFuncional), limite: "Funciones principales operativas", cumple: p.pruebaFuncional === "conforme" ? "Sí" : "No" },
+];
+const ubicacion = [datos.sucursal, datos.ubicacion].filter(Boolean).join(" · ") || "—";
+const puedeAdjuntar = !anulada && !p.informeR2Key && puedeRegistrarBio(user.rol);
+const puedeAnular = !anulada && puedeGestionarBio(user.rol);
+const avisoNoPasa = !anulada && !pasa;
+const accionesNoPasa = avisoNoPasa && puedeRegistrarBio(user.rol) && a.estado !== "baja";
+---
+
+<Layout title={`Prueba de seguridad eléctrica — ${a.codigo}`}>
+  <div class="no-print flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <a href={`/activos/${a.id}/seguridad-electrica`} class="text-xs text-slate-400 hover:text-slate-600">← Pruebas del equipo</a>
+      <h1 class="mt-1 text-2xl font-bold">Prueba de seguridad eléctrica · {a.codigo}</h1>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" onclick="window.print()" class="btn-primary">Imprimir / PDF</button>
+      <a href={`/activos/${a.id}/seguridad-electrica`} class="btn-secondary">Pruebas del equipo</a>
+      {puedeAdjuntar && <button type="button" id="se-adjuntar" class="btn-secondary">Adjuntar informe</button>}
+      {puedeAnular && <button type="button" id="se-anular" class="btn-danger">Anular</button>}
+    </div>
+  </div>
+
+  <div id="se-acciones" class="no-print" data-prueba-id={p.id} data-activo-id={a.id}>
+    <p id="se-error" role="alert" class="mt-3 hidden rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700"></p>
+    {puedeAdjuntar && <input id="se-informe" type="file" accept={ARCHIVO_ACCEPT} class="hidden" />}
+    {puedeAnular && (
+      <form id="se-form-anular" class="card mt-3 hidden p-4">
+        <label class="label" for="se-motivo">¿Por qué anulas esta prueba?</label>
+        <textarea id="se-motivo" class="input" rows="3" maxlength="1000" required placeholder="Al menos 10 letras. Ejemplo: se registró en el equipo equivocado."></textarea>
+        <p class="mt-2 text-xs text-slate-500">La prueba queda tachada en el equipo y deja de contar como última prueba. No se borra.</p>
+        <div class="mt-3 flex gap-2">
+          <button type="submit" class="btn-danger">Anular prueba</button>
+          <button type="button" id="se-anular-cancelar" class="btn-secondary">Cancelar</button>
+        </div>
+      </form>
+    )}
+    {avisoNoPasa && (
+      <div class="mt-3 rounded border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+        <p class="font-semibold">El equipo no pasó la prueba. Retíralo de uso hasta repararlo y vuelve a probarlo.</p>
+        {accionesNoPasa && (
+          <div class="mt-3 flex flex-wrap gap-2">
+            <a href={`/ordenes/nueva?activo=${a.id}`} class="btn-primary btn-sm">Abrir orden correctiva</a>
+            {a.estado !== "averiado" && <button type="button" id="se-averiado" class="btn-danger btn-sm">Marcar equipo como averiado</button>}
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+
+  <div class="print-doc doc-hoja">
+    <DocCabecera titulo="Registro de prueba de seguridad eléctrica" subtitulo="Referencia IEC 62353 · inspección y prueba del equipo médico" codigo={a.codigo} fecha={p.fecha} />
+
+    {anulada && (
+      <p class="mt-3 border-2 border-red-600 bg-red-50 p-3 text-sm font-semibold text-red-700">
+        ANULADA el {fechaCorta(p.anuladaEn)} por {datos.anuladaPorNombre ?? "—"}. Motivo: {p.motivoAnulacion ?? "—"}
+      </p>
+    )}
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Equipo</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Código</th><td><a href={fichaHref(a.id)}>{a.codigo}</a></td><th>Nombre</th><td>{a.nombre}</td></tr>
+          <tr><th>Marca</th><td>{a.marca ?? "—"}</td><th>Modelo</th><td>{a.modelo ?? "—"}</td></tr>
+          <tr><th>Serie</th><td>{a.serial ?? "—"}</td><th>Nº de activo</th><td>{a.numeroActivo ?? "—"}</td></tr>
+          <tr><th>Ubicación</th><td>{ubicacion}</td><th>Clase de riesgo</th><td>{etiquetaClaseRiesgo(a.claseRiesgo)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Prueba</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Fecha</th><td>{fechaCorta(p.fecha)}</td><th>Tipo</th><td>{TIPO_PRUEBA_ELECTRICA_LABEL[p.tipo as TipoPruebaElectrica] ?? p.tipo}</td></tr>
+          <tr><th>Orden</th><td>{datos.orden ? <a href={`/ordenes/${datos.orden.id}?completa=1`}>{datos.orden.etiqueta}</a> : "Sin orden"}</td><th>Clase de protección</th><td>{CLASE_PROTECCION_LABEL[p.claseProteccion as ClaseProteccion]}</td></tr>
+          <tr><th>Parte aplicada</th><td>{PARTE_APLICADA_LABEL[p.parteAplicada as ParteAplicada]}</td><th>Método de fuga</th><td>{METODO_FUGA_LABEL[p.metodoFuga as MetodoFuga]}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Mediciones</h2>
+      <table class="doc-tabla">
+        <thead><tr><th>Medición</th><th>Valor</th><th>Límite</th><th class="c">Cumple</th></tr></thead>
+        <tbody>
+          {filas.map((f) => (
+            <tr>
+              <td>{f.medicion}</td>
+              <td class="tn">{f.valor}</td>
+              <td class="tn">{f.limite}</td>
+              <td class:list={["c", { "doc-critico": f.cumple === "No" }]}>{f.cumple}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p class="doc-nota">Límites de referencia IEC 62353 que correspondían a la clase y la parte aplicada de esta prueba; quedan guardados con ella.</p>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Resultado</h2>
+      <p class:list={["se-resultado", pasa ? "se-pasa" : "se-no-pasa"]}>{pasa ? "PASA" : "NO PASA"}</p>
+      <p class="doc-texto">Calculado por el sistema con los valores: <strong>{RESULTADO_SE_LABEL[p.resultadoCalculado as ResultadoPruebaElectrica]}</strong>.</p>
+      {p.resultado !== p.resultadoCalculado && <p class="doc-texto">Quien registró la confirmó como <strong>{RESULTADO_SE_LABEL[p.resultado as ResultadoPruebaElectrica]}</strong>.</p>}
+      {p.motivoResultado && <p class="doc-texto">Motivo: {p.motivoResultado}</p>}
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Analizador y responsables</h2>
+      <table class="doc-kv">
+        <tbody>
+          <tr>
+            <th>Analizador</th>
+            <td>{p.analizadorActivoId ? <a href={fichaHref(p.analizadorActivoId)}>{p.analizadorDescripcion}</a> : p.analizadorDescripcion}<span class="block">S/N {p.analizadorSerie}</span></td>
+            <th>Calibración</th>
+            <td>Vigente hasta {fechaCorta(p.analizadorCalVence)}{p.analizadorCalVence >= p.fecha ? ": vigente el día de la prueba" : ""}</td>
+          </tr>
+          <tr>
+            <th>Realizó</th>
+            <td>{p.realizadoPor}{p.empresaExterna && <span class="block">{p.empresaExterna}</span>}</td>
+            <th>Registró y confirmó</th>
+            <td>{datos.registradoPorNombre ?? "—"} el {fechaHoraSV(p.createdAt)}</td>
+          </tr>
+          <tr>
+            <th>Próxima prueba</th>
+            <td>{fechaCorta(p.proximaFecha)}</td>
+            <th>Informe</th>
+            <td>{p.informeR2Key ? <a href={`/api/seguridad-electrica/${p.id}/informe`} target="_blank" rel="noopener">Ver informe ({p.informeNombre})</a> : "Sin informe adjunto"}</td>
+          </tr>
+        </tbody>
+      </table>
+      {p.notas && <p class="doc-texto mt-2"><strong>Notas:</strong> {p.notas}</p>}
+    </section>
+
+    <div class="doc-firmas">
+      <div><div class="doc-firma-vacia"></div><span class="text-xs">Realizó: {p.realizadoPor}</span></div>
+      <div><div class="doc-firma-vacia"></div><span class="text-xs">Revisó (jefatura)</span></div>
+    </div>
+
+    {!anulada && (
+      <div class="se-vineta" aria-label="Viñeta para el equipo">
+        <strong>Seguridad eléctrica</strong>
+        <span>{a.codigo} · {RESULTADO_SE_LABEL[p.resultado as ResultadoPruebaElectrica]}</span>
+        <span>Probado {fechaCorta(p.fecha)}</span>
+        <span>Próxima {fechaCorta(p.proximaFecha)}</span>
+      </div>
+    )}
+
+    <DocFolio codigo={folio} />
+  </div>
+
+  <style>
+    .se-resultado { font-size: 28px; font-weight: 700; letter-spacing: .08em; margin: 4px 0 6px; }
+    .se-pasa { color: var(--verde, #1F5740); }
+    .se-no-pasa { color: var(--rojo, #C03435); }
+    .se-vineta {
+      margin-top: 18px; width: 60mm; height: 30mm; box-sizing: border-box; padding: 2.5mm 3mm;
+      border: 1px dashed var(--tinta, #1A1A1A); display: flex; flex-direction: column; justify-content: center;
+      font-size: 9pt; line-height: 1.25; break-inside: avoid;
+    }
+    .se-vineta strong { font-size: 10pt; }
+  </style>
+</Layout>
+
+<script>
+  const caja = document.getElementById("se-acciones");
+  const pruebaId = Number(caja?.dataset.pruebaId);
+  const activoId = Number(caja?.dataset.activoId);
+  const errorBox = document.getElementById("se-error");
+
+  function mostrarError(texto: string) {
+    if (!errorBox) return alert(texto);
+    errorBox.textContent = texto;
+    errorBox.classList.remove("hidden");
+    errorBox.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  async function errorDe(res: Response, porDefecto: string) {
+    const j = await res.json().catch(() => null);
+    if (j && typeof j.error === "string") return j.error;
+    if (res.status === 403) return "No tienes permiso para esto.";
+    if (res.status === 413) return "El archivo pesa más de 15 MB. Comprímelo o divídelo en partes.";
+    return porDefecto;
+  }
+
+  // Adjuntar el informe que falta
+  const botonAdjuntar = document.getElementById("se-adjuntar") as HTMLButtonElement | null;
+  const archivo = document.getElementById("se-informe") as HTMLInputElement | null;
+  if (botonAdjuntar && archivo) {
+    botonAdjuntar.addEventListener("click", () => archivo.click());
+    archivo.addEventListener("change", async () => {
+      const f = archivo.files?.[0];
+      if (!f) return;
+      botonAdjuntar.disabled = true;
+      botonAdjuntar.textContent = "Subiendo…";
+      try {
+        const fd = new FormData();
+        fd.append("informe", f);
+        const res = await fetch(`/api/seguridad-electrica/${pruebaId}/informe`, { method: "POST", body: fd });
+        if (!res.ok) throw new Error(await errorDe(res, "No se pudo adjuntar el informe. Intenta de nuevo."));
+        location.reload();
+      } catch (e) {
+        mostrarError(e instanceof Error && e.message ? e.message : "Sin conexión. Intenta de nuevo.");
+        botonAdjuntar.disabled = false;
+        botonAdjuntar.textContent = "Adjuntar informe";
+        archivo.value = "";
+      }
+    });
+  }
+
+  // Anular con motivo
+  const botonAnular = document.getElementById("se-anular") as HTMLButtonElement | null;
+  const formAnular = document.getElementById("se-form-anular") as HTMLFormElement | null;
+  if (botonAnular && formAnular) {
+    botonAnular.addEventListener("click", () => {
+      formAnular.classList.remove("hidden");
+      (document.getElementById("se-motivo") as HTMLTextAreaElement | null)?.focus();
+    });
+    document.getElementById("se-anular-cancelar")?.addEventListener("click", () => formAnular.classList.add("hidden"));
+    formAnular.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const motivo = (document.getElementById("se-motivo") as HTMLTextAreaElement).value.trim();
+      if (motivo.length < 10) return mostrarError("Escribe el motivo (al menos 10 letras).");
+      const enviar = formAnular.querySelector("button[type=submit]") as HTMLButtonElement | null;
+      if (enviar) enviar.disabled = true;
+      try {
+        const res = await fetch(`/api/seguridad-electrica/${pruebaId}/anular`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motivo }),
+        });
+        if (!res.ok) throw new Error(await errorDe(res, "No se pudo anular. Intenta de nuevo."));
+        location.reload();
+      } catch (err) {
+        mostrarError(err instanceof Error && err.message ? err.message : "Sin conexión. Intenta de nuevo.");
+        if (enviar) enviar.disabled = false;
+      }
+    });
+  }
+
+  // Marcar el equipo como averiado (el estado no cambia solo)
+  const botonAveriado = document.getElementById("se-averiado") as HTMLButtonElement | null;
+  if (botonAveriado) {
+    botonAveriado.addEventListener("click", async () => {
+      if (!confirm("¿Marcar el equipo como averiado? Así queda fuera de uso hasta que se repare.")) return;
+      botonAveriado.disabled = true;
+      try {
+        const res = await fetch(`/api/activos/${activoId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ estado: "averiado" }),
+        });
+        if (!res.ok) throw new Error(await errorDe(res, "No se pudo cambiar el estado del equipo. Intenta de nuevo."));
+        location.reload();
+      } catch (err) {
+        mostrarError(err instanceof Error && err.message ? err.message : "Sin conexión. Intenta de nuevo.");
+        botonAveriado.disabled = false;
+      }
+    });
+  }
+</script>

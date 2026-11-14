@@ -6,12 +6,13 @@ import {
   contratosMantenimiento, contratoEquipos, contratoAdjuntos, contratoComentarios,
   proveedores, usuarios, activos,
 } from "@/lib/schema";
-import { eq, asc, and, inArray, ne } from "drizzle-orm";
+import { eq, asc, and, inArray, ne, sql } from "drizzle-orm";
 import {
   ESTADO_CONTRATO_LABEL, ESTADO_CONTRATO_COLOR, TIPO_CONTRATO_LABEL, PERIODICIDAD_LABEL,
   diasParaVencer, puedeGestionarContratos, puedeVerContratos,
 } from "@/lib/contratos";
 import { fmtFechaLarga, fmtFechaSimple } from "@/lib/datetime";
+import { condicionActivoEspacio, espacioDelContexto, ESPACIOS } from "@/lib/espacio";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -30,18 +31,28 @@ const [row] = await db
   .limit(1);
 if (!row) return Astro.redirect("/contratos");
 
+// El contrato es común (proveedores), pero sus equipos se ven por espacio: los del
+// otro solo se cuentan. Renovar copia todos en el servidor, se vean o no aquí.
+const espacio = espacioDelContexto(Astro, user);
+const otroEspacio = espacio === "general" ? "biomedico" : "general";
+const delEspacio = condicionActivoEspacio(espacio);
 const equipos = await db
   .select({ a: activos })
   .from(contratoEquipos)
   .innerJoin(activos, eq(activos.id, contratoEquipos.activoId))
-  .where(eq(contratoEquipos.contratoId, id))
+  .where(and(eq(contratoEquipos.contratoId, id), delEspacio))
   .orderBy(asc(activos.codigo));
+const [{ n: equiposDelOtro } = { n: 0 }] = await db
+  .select({ n: sql<number>`count(*)` })
+  .from(contratoEquipos)
+  .innerJoin(activos, eq(activos.id, contratoEquipos.activoId))
+  .where(and(eq(contratoEquipos.contratoId, id), condicionActivoEspacio(otroEspacio)));
 
 const equiposIds = new Set(equipos.map((e) => e.a.id));
 const equiposDisponibles = await db
   .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre })
   .from(activos)
-  .where(ne(activos.estado, "baja"))
+  .where(and(ne(activos.estado, "baja"), delEspacio))
   .orderBy(asc(activos.codigo));
 
 const adjs = await db.select().from(contratoAdjuntos).where(eq(contratoAdjuntos.contratoId, id));
@@ -171,8 +182,9 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
           <h2 class="font-semibold text-slate-900">Equipos cubiertos ({equipos.length})</h2>
           {puedeGestionar && <button id="btnAgregarEquipo" type="button" class="text-sm text-brand-600 hover:underline">+ Agregar equipo</button>}
         </div>
+        {Number(equiposDelOtro) > 0 && <p class="mt-1 text-xs text-slate-500" data-equipos-otro-espacio>Y {Number(equiposDelOtro)} equipo(s) del espacio {ESPACIOS[otroEspacio].etiqueta}: se ven desde ese espacio.</p>}
         {equipos.length === 0 ? (
-          <p class="mt-2 text-sm text-slate-400">Sin equipos vinculados.</p>
+          <p class="mt-2 text-sm text-slate-400">Sin equipos vinculados en este espacio.</p>
         ) : (
           <ul class="mt-3 space-y-1.5 text-sm">
             {equipos.map(({ a }) => (

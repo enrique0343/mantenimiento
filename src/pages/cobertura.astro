@@ -17,6 +17,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, sucursales } from "@/lib/schema";
 import { asc, eq } from "drizzle-orm";
+import { condicionActivoEspacio } from "@/lib/espacio";
 import {
   cobertura,
   equiposPorFamilia,
@@ -54,7 +55,10 @@ const sedeNombre = sedes.find((s) => s.id === sedeId)?.nombre ?? null;
 
 // ── El tablero: un juego por familia, la peor cobertura arriba ──────────────
 const juegos = await juegosDeTodasLasFamilias(db, sedeId);
-const pesoFamilia = await equiposPorFamilia(db);
+// Las familias son de Mantenimiento general (/cobertura está en RUTAS_SOLO_GENERAL):
+// los equipos biomédicos no se cuentan ni se listan aquí.
+const soloGeneral = condicionActivoEspacio("general");
+const pesoFamilia = await equiposPorFamilia(db, soloGeneral);
 // «Otro» no es una familia crítica: es la bolsa de los equipos que nadie
 // clasificó. Se mira aparte porque su arreglo es distinto (declarar sistema).
 const juegoOtro = await juegoDeFamilia(db, "otro", sedeId);
@@ -66,7 +70,8 @@ const juegoOtro = await juegoDeFamilia(db, "otro", sedeId);
 // pero sí lo que la ficha del equipo responderá, y eso hay que poder decirlo.
 const jerarquia: Array<{ id: number; sistema: string | null; padreId: number | null }> = await db
   .select({ id: activos.id, sistema: activos.sistema, padreId: activos.padreId })
-  .from(activos);
+  .from(activos)
+  .where(soloGeneral);
 const porId = new Map(jerarquia.map((r) => [r.id, r]));
 function sistemaHeredado(id: number): Sistema | null {
   let padreId = porId.get(id)?.padreId ?? null;
@@ -97,7 +102,7 @@ interface EquipoFila {
   familiaFicha: Sistema;
 }
 
-const equipos: EquipoFila[] = (await cobertura(db)).map((e: any) => {
+const equipos: EquipoFila[] = (await cobertura(db, soloGeneral)).map((e: any) => {
   const heredado = e.declarado ? null : sistemaHeredado(e.id);
   return {
     id: e.id,

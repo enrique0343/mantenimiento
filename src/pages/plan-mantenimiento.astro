@@ -1,34 +1,51 @@
 ---
+// Plan anual de mantenimiento (requisito 6): documento institucional generado con
+// las rutinas reales, con calendario del año, servicios externos, atención
+// correctiva y el registro de su aprobación firmada. Las rutinas de equipos dados
+// de baja no entran. Las mismas rutinas salen en GET /api/planes/exportar.
 import Layout from "@/layouts/Layout.astro";
 import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
-import {
-  planesMantenimiento, activos, usuarios, sucursales, ubicaciones,
-  actividades, actividadCategorias, appConfig, presupuestoMantenimiento,
-  gastosMantenimiento, contratosMantenimiento,
-} from "@/lib/schema";
+import { sucursales, appConfig, presupuestoMantenimiento, gastosMantenimiento } from "@/lib/schema";
 import { eq, asc, and, gte, lt, like } from "drizzle-orm";
-import { fmtFechaSoloCompacta, fmtFechaSolo } from "@/lib/datetime";
+import { fmtFechaSolo } from "@/lib/datetime";
+import { RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, type RubroKey } from "@/lib/rubros";
+import { areaHref } from "@/lib/areas";
+import { ARCHIVO_ACCEPT, etiquetaFrecuencia, fechaCorta, hoySV, puedeVerBio } from "@/lib/biomedico";
+import { abrevFrecuencia } from "@/lib/frecuencias";
+import { horasSlaPara, type Prioridad } from "@/lib/sla";
 import {
-  RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, MODALIDAD_LABEL,
-  rubroDeActivo, rubroDeActividad, subcatLabel, subcatIcono, type RubroKey,
-} from "@/lib/rubros";
-import { parseArea, areaHref } from "@/lib/areas";
-import { areaDeActividad } from "@/lib/actividades";
+  MESES_CORTOS, PRIORIDAD_LABEL, aprobacionVigente, calendarioAnual, celdaMes, fechasDelMes, horasEnAnio, modalidadTexto,
+  type RutinaPlan,
+} from "@/lib/plan-anual";
+import { cargarAprobacionesPlan, cargarRutinasPlan, cargarSlaPropios } from "@/lib/plan-anual-datos";
+import { areaEnEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol === "motorista" || user.rol === "proveedor") return Astro.redirect("/");
 const db = getDb(Astro);
 const puedeEditar = user.rol === "admin" || user.rol === "jefe";
+// Aprobaciones y CSV: admin, jefe, técnico y visualizador (no el solicitante).
+const verAprobaciones = puedeVerBio(user.rol);
 
 const url = new URL(Astro.request.url);
 const sedeParam = url.searchParams.get("sede");
-const sedeId = sedeParam ? Number(sedeParam) : null;
-const anio = Number(url.searchParams.get("anio")) || new Date().getFullYear();
+const sedeId = sedeParam && Number.isInteger(Number(sedeParam)) && Number(sedeParam) > 0 ? Number(sedeParam) : null;
+const hoy = hoySV();
+const anioActual = Number(hoy.slice(0, 4));
+const anioParam = Number(url.searchParams.get("anio"));
+const anio = Number.isInteger(anioParam) && anioParam >= 2000 && anioParam <= 2100 ? anioParam : anioActual;
 const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
-const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+const dominioPedido: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+// Espacio: el plan de General reúne sus tres áreas; el de Biomédico es el de su área.
+const { espacio, permitido } = espacioDeLista(Astro, user, dominioPedido);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const dominio: RubroKey | null = dominioPedido ?? (espacio === "biomedico" ? "biomedico" : null);
+const rubrosDelEspacio = RUBRO_KEYS.filter((k) => areaEnEspacio(k, espacio));
+// Aprobación por área; «general» = plan de todas las áreas (sin `area` en la URL).
+const areaPlan = dominio ?? "general";
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre, direccion: sucursales.direccion })
@@ -56,41 +73,16 @@ const txtNormativa = C("normativa",
   "• Estándares de acreditación Joint Commission International (FMS).\n• Reglamentos técnicos nacionales aplicables a instalaciones eléctricas y sanitarias.\n• Recomendaciones de los fabricantes de cada equipo.");
 const txtRecursos = C("recursos",
   "El plan se ejecuta con personal propio de mantenimiento y con empresas externas contratadas para los sistemas especializados (equipos biomédicos, subestaciones eléctricas, aires acondicionados, entre otros), bajo la supervisión de la Jefatura de Mantenimiento.");
+const txtCorrectivo = C("correctivo",
+  "Las fallas se reportan por el formulario de soporte, por «Reportar falla» en el modo técnico o por teléfono a Mantenimiento. Cada orden correctiva recibe una fecha límite según su prioridad y el equipo. Fuera de horario atiende el técnico de turno.");
+const txtCorrectivoResp = C("correctivo_responsable", "Jefatura de Mantenimiento");
 
-// ── Datos: planes por equipo ─────────────────────────────────────────────────
-const planRowsAll = await db
-  .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
-  .from(planesMantenimiento)
-  .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-  .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
-  .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
-  .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(eq(planesMantenimiento.activo, true))
-  .orderBy(asc(planesMantenimiento.proximaFecha));
-
-const actRowsAll = await db
-  .select({ a: actividades, c: actividadCategorias, u: usuarios, s: sucursales, ub: ubicaciones })
-  .from(actividades)
-  .leftJoin(actividadCategorias, eq(actividadCategorias.id, actividades.categoriaId))
-  .leftJoin(usuarios, eq(usuarios.id, actividades.asignadoA))
-  .leftJoin(sucursales, eq(sucursales.id, actividades.sucursalId))
-  .leftJoin(ubicaciones, eq(ubicaciones.id, actividades.ubicacionId))
-  .where(eq(actividades.activo, true))
-  .orderBy(asc(actividades.proximaFecha));
-
-const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
-
-// Filtro por dominio (categoría): planes vía el dominio del equipo,
-// actividades vía el dominio de su categoría.
-const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
-const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
-
-// Contratos para mostrar modalidad "contratado"
-const contratosList = await db
-  .select({ id: contratosMantenimiento.id, codigo: contratosMantenimiento.codigo, nombre: contratosMantenimiento.nombre })
-  .from(contratosMantenimiento);
-const contratoMap = new Map(contratosList.map((c) => [c.id, c]));
+// ── Rutinas del plan (sin equipos dados de baja) ─────────────────────────────
+const rutinas = await cargarRutinasPlan(db, { area: dominio, sedeId, espacio });
+const planRows = rutinas.filter((r) => r.tipo === "equipo");
+const actRows = rutinas.filter((r) => r.tipo === "actividad");
+const calendario = new Map(rutinas.map((r) => [`${r.tipo}-${r.id}`, calendarioAnual(r.proximaFecha, r.frecuencia, anio)]));
+const cal = (r: RutinaPlan) => calendario.get(`${r.tipo}-${r.id}`)!;
 
 // ── Presupuesto del año ──────────────────────────────────────────────────────
 const presupuestos = await db
@@ -106,63 +98,84 @@ const gastosAnio = await db
 const gastoPorRubro = new Map<string, number>();
 for (const g of gastosAnio) gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
 
-// ── Resumen por dominio ──────────────────────────────────────────────────────
-const dominiosResumen = dominio ? [dominio] : RUBRO_KEYS;
-const resumenRubros = dominiosResumen.map((k) => {
-  const planes = planRows.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === k);
-  const acts = actRows.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === k);
-  return {
-    rubro: k,
-    nPlanes: planes.length,
-    nActs: acts.length,
-    presupuesto: presupuestoPorRubro.get(k) ?? 0,
-    gastado: gastoPorRubro.get(k) ?? 0,
-  };
-}).filter((r) => r.nPlanes > 0 || r.nActs > 0 || r.presupuesto > 0 || r.gastado > 0);
+// ── Resumen por área ─────────────────────────────────────────────────────────
+const dominiosResumen = dominio ? [dominio] : rubrosDelEspacio;
+const resumenRubros = dominiosResumen.map((k) => ({
+  rubro: k,
+  nPlanes: planRows.filter((r) => r.area === k).length,
+  nActs: actRows.filter((r) => r.area === k).length,
+  presupuesto: presupuestoPorRubro.get(k) ?? 0,
+  gastado: gastoPorRubro.get(k) ?? 0,
+})).filter((r) => r.nPlanes > 0 || r.nActs > 0 || r.presupuesto > 0 || r.gastado > 0);
 const totalPresupuesto = resumenRubros.reduce((s, r) => s + r.presupuesto, 0);
 const totalGastado = resumenRubros.reduce((s, r) => s + r.gastado, 0);
 
-// ── Agrupaciones para las secciones detalladas ───────────────────────────────
-// En la vista del dominio biomédico se agrupa por subcategoría clínica
-// (soporte de vida, diagnóstico…); en las demás, por categoría del equipo.
-const planesPorCategoria = new Map<string, typeof planRows>();
-for (const r of planRows) {
-  const cat = dominio === "biomedico"
-    ? `${subcatIcono(r.a?.subcategoria)} ${subcatLabel(r.a?.subcategoria)}`
-    : (r.a?.categoria?.trim() || (r.a?.tipo === "biomedico" ? "Equipo biomédico" : "Sin categoría"));
-  const arr = planesPorCategoria.get(cat) ?? [];
-  arr.push(r);
-  planesPorCategoria.set(cat, arr);
-}
-const catsPlanes = [...planesPorCategoria.keys()].sort((a, b) => a.localeCompare(b, "es"));
-
-const actsPorCategoria = new Map<string, typeof actRows>();
-for (const r of actRows) {
-  const cat = r.c ? `${r.c.icono ?? ""} ${r.c.nombre}`.trim() : "Sin categoría";
-  const arr = actsPorCategoria.get(cat) ?? [];
-  arr.push(r);
-  actsPorCategoria.set(cat, arr);
-}
-const catsActs = [...actsPorCategoria.keys()].sort((a, b) => a.localeCompare(b, "es"));
-
-const FRECUENCIA_LABEL: Record<string, string> = {
-  diaria: "Diaria", semanal: "Semanal", quincenal: "Quincenal", mensual: "Mensual",
-  bimestral: "Bimestral", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual",
+// ── Agrupaciones de las secciones 6 y 9 ─────────────────────────────────────
+const agrupar = (filas: RutinaPlan[]) => {
+  const m = new Map<string, RutinaPlan[]>();
+  for (const r of filas) m.set(r.grupo, [...(m.get(r.grupo) ?? []), r]);
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], "es"));
 };
+const gruposPlanes = agrupar(planRows);
+const gruposActs = agrupar(actRows);
 
-const hoy = new Date().toISOString().slice(0, 10);
-const fmt = (s: string) => fmtFechaSoloCompacta(s);
+// Horas del año (sección 6: rutinas de equipos).
+let horasPlanes = 0, ejecucionesPlanes = 0;
+for (const r of planRows) {
+  const c = cal(r);
+  ejecucionesPlanes += c.veces;
+  horasPlanes += horasEnAnio(r.horasEstimadas, c.veces) ?? 0;
+}
+const sinHoras = planRows.filter((r) => !r.horasEstimadas).length;
+const fmtHoras = (h: number) => (Math.round(h * 10) / 10).toLocaleString("es-SV", { maximumFractionDigits: 1 });
+
+// ── Servicios externos (sección 7) ───────────────────────────────────────────
+const externas = rutinas.filter((r) => r.modalidad !== "interno");
+const sinProveedor = externas.filter((r) => !r.proveedor).length;
+const servicios = [...externas.filter((r) => r.proveedor).reduce((m, r) => {
+  const clave = `${r.proveedor}|${r.contrato ?? ""}`;
+  const s = m.get(clave) ?? { proveedor: r.proveedor!, contrato: r.contrato, vigencia: r.contratoVigencia, rutinas: 0, equipos: new Set<number>() };
+  s.rutinas++;
+  if (r.activoId) s.equipos.add(r.activoId);
+  m.set(clave, s);
+  return m;
+}, new Map<string, { proveedor: string; contrato: string | null; vigencia: RutinaPlan["contratoVigencia"]; rutinas: number; equipos: Set<number> }>()).values()]
+  .sort((a, b) => a.proveedor.localeCompare(b.proveedor, "es"));
+
+// ── Calendario del año (sección 8): equipos y actividades ───────────────────
+const filasCalendario = [...planRows, ...actRows];
+const ejecucionesMes = Array.from({ length: 12 }, () => 0);
+const horasMes = Array.from({ length: 12 }, () => 0);
+for (const r of filasCalendario) {
+  cal(r).porMes.forEach((n, i) => {
+    ejecucionesMes[i] += n;
+    if (r.horasEstimadas) horasMes[i] += r.horasEstimadas * n;
+  });
+}
+const totalEjecuciones = ejecucionesMes.reduce((a, b) => a + b, 0);
+
+// ── Atención correctiva (sección 10) ─────────────────────────────────────────
+const PRIORIDADES: Prioridad[] = ["urgente", "alta", "media", "baja"];
+const slaPropios = await cargarSlaPropios(db, { area: dominio, sedeId, espacio });
+
+// ── Aprobación del plan ──────────────────────────────────────────────────────
+const aprobaciones = await cargarAprobacionesPlan(db, anio, areaPlan);
+const vigente = aprobacionVigente(aprobaciones, anio, areaPlan);
+const versionDistinta = vigente && vigente.version !== docVersion;
+
 const fechaGeneracion = fmtFechaSolo(hoy);
 const tituloBase = dominio
   ? `Plan de Mantenimiento ${anio} — ${rubroLabel(dominio)}`
   : `Plan Anual de Mantenimiento ${anio}`;
 const titulo = sedeActiva ? `${tituloBase} — ${sedeActiva.nombre}` : tituloBase;
+const etiquetaAreaPlan = dominio ? rubroLabel(dominio) : "Plan general";
 
-// Query string compartido para conservar filtros al navegar
+// Query string que conserva sede, área y año
 const qs = (cambios: Record<string, string | null>) => {
   const p = new URLSearchParams();
   if (sedeId) p.set("sede", String(sedeId));
   if (dominio) p.set("area", dominio);
+  if (anio !== anioActual) p.set("anio", String(anio));
   for (const [k, v] of Object.entries(cambios)) {
     if (v === null) p.delete(k);
     else p.set(k, v);
@@ -170,12 +183,8 @@ const qs = (cambios: Record<string, string | null>) => {
   const s = p.toString();
   return s ? `?${s}` : "";
 };
-
-const modalidadDe = (r: (typeof planRows)[number]) => {
-  const m = MODALIDAD_LABEL[r.p.modalidad] ?? r.p.modalidad;
-  const c = r.p.contratoId ? contratoMap.get(r.p.contratoId) : null;
-  return c ? `${m} (${c.codigo})` : m;
-};
+const csvHref = `/api/planes/exportar${qs({ anio: String(anio) })}`;
+const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActual + 1, anio])].sort((a, b) => a - b);
 ---
 
 <Layout title={titulo}>
@@ -186,27 +195,31 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
       <p class="mt-1 text-sm text-slate-500">Documento institucional generado con los datos reales del sistema.</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
+      <select id="anioSel" class="input w-auto text-sm py-1.5" title="Año del plan">
+        {anios.map((a) => <option value={a} selected={a === anio}>{a}</option>)}
+      </select>
       <select id="sedeSel" class="input w-auto text-sm py-1.5">
         <option value="">Todas las sedes</option>
         {sucursalesList.map((s) => (
           <option value={s.id} selected={s.id === sedeId}>{s.nombre}</option>
         ))}
       </select>
-      {puedeEditar && <button id="editDocBtn" class="btn-secondary">Editar textos</button>}
-      <button id="printBtn" class="btn-primary">Imprimir / PDF</button>
+      {puedeEditar && <button id="editDocBtn" class="btn-secondary" type="button">Editar textos</button>}
+      {verAprobaciones && <a href={csvHref} class="btn-secondary">Descargar CSV</a>}
+      <button id="printBtn" class="btn-primary" type="button">Imprimir / PDF</button>
       <a href={areaHref(`/cronograma${sedeId ? `?sede=${sedeId}` : ""}`, dominio)} class="btn-secondary">← Cronograma</a>
     </div>
   </div>
 
-  <!-- Filtro por dominio / categoría (no se imprime) -->
+  <!-- Filtro por área (no se imprime) -->
   <div class="no-print mt-3 flex flex-wrap gap-1.5 text-sm">
-    <a
+    {espacio === "general" && <a
       href={`/plan-mantenimiento${qs({ area: null })}`}
       class:list={["rounded-lg px-3 py-1.5 font-medium", !dominio ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
     >
       Plan general
-    </a>
-    {RUBRO_KEYS.map((k) => (
+    </a>}
+    {rubrosDelEspacio.map((k) => (
       <a
         href={`/plan-mantenimiento${qs({ area: k })}`}
         class:list={["rounded-lg px-3 py-1.5 font-medium", dominio === k ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
@@ -215,6 +228,66 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
       </a>
     ))}
   </div>
+
+  <!-- Aprobaciones del plan (no se imprime) -->
+  {verAprobaciones && (
+    <div id="aprobaciones" class="no-print card mt-4 p-4" data-anio={anio} data-area={areaPlan}>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="font-semibold text-slate-800">Aprobaciones del plan {anio} · {etiquetaAreaPlan}</h2>
+          <p class="text-xs text-slate-500">El plan firmado se sube aquí; no se edita ni se borra: si hace falta, se anula con motivo.</p>
+        </div>
+        {puedeEditar && <button id="btnAprobar" class="btn-primary btn-sm" type="button">Registrar aprobación</button>}
+      </div>
+      {versionDistinta && (
+        <p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          La versión del documento ({docVersion}) no es la aprobada ({vigente!.version}). Registra la nueva aprobación cuando esté firmada.
+        </p>
+      )}
+      {aprobaciones.length === 0 ? (
+        <p class="mt-3 text-sm text-slate-500">Sin aprobaciones registradas para {anio}.</p>
+      ) : (
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="border-b border-slate-200 text-slate-500">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Versión</th>
+                <th class="px-2 py-1.5 font-medium">Aprobó</th>
+                <th class="px-2 py-1.5 font-medium">Fecha</th>
+                <th class="px-2 py-1.5 font-medium">Registró</th>
+                <th class="px-2 py-1.5 font-medium">Archivo</th>
+                <th class="px-2 py-1.5 font-medium">Estado</th>
+                {puedeEditar && <th class="px-2 py-1.5"></th>}
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {aprobaciones.map((a) => (
+                <tr>
+                  <td class="px-2 py-1.5 font-medium text-slate-800">{a.version}</td>
+                  <td class="px-2 py-1.5 text-slate-700">{a.aprobadoPor}</td>
+                  <td class="px-2 py-1.5">{fechaCorta(a.fechaAprobacion)}</td>
+                  <td class="px-2 py-1.5 text-slate-500">{a.registradoPor ?? "—"} · {fechaCorta(a.createdAt)}</td>
+                  <td class="px-2 py-1.5"><a href={`/api/planes/aprobaciones/${a.id}/archivo`} target="_blank" rel="noopener" class="text-brand-700 hover:underline">Ver PDF</a></td>
+                  <td class="px-2 py-1.5">
+                    {a.anuladaEn
+                      ? <span class="text-red-600">Anulada: {a.motivoAnulacion}</span>
+                      : vigente?.id === a.id
+                        ? <span class="badge bg-emerald-100 text-emerald-700">Vigente</span>
+                        : <span class="text-slate-500">Anterior</span>}
+                  </td>
+                  {puedeEditar && (
+                    <td class="px-2 py-1.5 text-right">
+                      {!a.anuladaEn && <button type="button" class="anular-aprobacion text-xs text-red-600 hover:underline" data-id={a.id} data-version={a.version}>Anular</button>}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )}
 
   <!-- Documento -->
   <div class="print-doc card mt-4 p-6 sm:p-8">
@@ -236,7 +309,7 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
     <h3 class="mt-6 text-base font-bold text-slate-900">4. Recursos y modalidad de ejecución</h3>
     <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtRecursos}</p>
 
-    <!-- 5. Resumen por rubro -->
+    <!-- 5. Resumen por área -->
     <h3 class="mt-7 text-base font-bold text-slate-900">5. Resumen por categoría de mantenimiento</h3>
     <div class="overflow-x-auto avoid-break">
       <table class="mt-2 w-full text-left text-xs border border-slate-200">
@@ -278,88 +351,229 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
 
     <!-- 6. Equipos con plan preventivo -->
     <h3 class="mt-7 text-base font-bold text-slate-900 border-l-4 border-brand-600 pl-3">6. Equipos con plan preventivo</h3>
-    {catsPlanes.length === 0 && (
+    {gruposPlanes.length === 0 && (
       <p class="mt-3 text-sm text-slate-400">Sin planes de equipos {sedeActiva ? "registrados para esta sede" : "registrados"}. Los equipos deben tener ubicación asignada para aparecer bajo su sede.</p>
     )}
-    {catsPlanes.map((cat) => {
-      const rows = planesPorCategoria.get(cat)!;
-      return (
-        <div class="mt-4 avoid-break">
-          <h4 class="text-sm font-semibold text-slate-700 bg-slate-100 rounded-md px-3 py-1.5 capitalize">{cat} <span class="font-normal text-slate-400">({rows.length})</span></h4>
-          <div class="overflow-x-auto">
-            <table class="mt-1 w-full text-left text-xs">
-              <thead class="text-slate-500 border-b border-slate-200">
-                <tr>
-                  <th class="px-2 py-1.5 font-medium">Equipo</th>
-                  <th class="px-2 py-1.5 font-medium">Ubicación</th>
-                  <th class="px-2 py-1.5 font-medium">Plan / rutina</th>
-                  <th class="px-2 py-1.5 font-medium">Frecuencia</th>
-                  <th class="px-2 py-1.5 font-medium">Modalidad</th>
-                  <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
-                  <th class="px-2 py-1.5 font-medium">Responsable</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                {rows.map((r) => (
+    {gruposPlanes.map(([grupo, rows]) => (
+      <div class="mt-4 avoid-break">
+        <h4 class="text-sm font-semibold text-slate-700 bg-slate-100 rounded-md px-3 py-1.5">{grupo} <span class="font-normal text-slate-400">({rows.length})</span></h4>
+        <div class="overflow-x-auto">
+          <table class="mt-1 w-full text-left text-xs">
+            <thead class="text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Equipo</th>
+                <th class="px-2 py-1.5 font-medium">Ubicación</th>
+                <th class="px-2 py-1.5 font-medium">Rutina</th>
+                <th class="px-2 py-1.5 font-medium">Frecuencia</th>
+                <th class="px-2 py-1.5 font-medium text-right">Horas/ejec.</th>
+                <th class="px-2 py-1.5 font-medium text-center">Veces {anio}</th>
+                <th class="px-2 py-1.5 font-medium">Modalidad y proveedor</th>
+                <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
+                <th class="px-2 py-1.5 font-medium">Responsable</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {rows.map((r) => {
+                const m = modalidadTexto(r.modalidad, r.proveedor, r.contrato);
+                return (
                   <tr>
                     <td class="px-2 py-1.5">
-                      <span class="font-mono text-[10px] text-slate-400">{r.a?.codigo}</span>
-                      <span class="ml-1 font-medium text-slate-800">{r.a?.nombre}</span>
+                      <span class="font-mono text-[10px] text-slate-400">{r.codigo}</span>
+                      <span class="ml-1 font-medium text-slate-800">{r.nombre}</span>
                     </td>
-                    <td class="px-2 py-1.5 text-slate-500">{!sedeActiva && r.s?.nombre ? `${r.s.nombre} · ` : ""}{r.ub?.nombre ?? r.a?.ubicacion ?? "—"}</td>
-                    <td class="px-2 py-1.5 text-slate-700">{r.p.titulo}</td>
-                    <td class="px-2 py-1.5 text-slate-600">{FRECUENCIA_LABEL[r.p.frecuencia] ?? r.p.frecuencia}</td>
-                    <td class="px-2 py-1.5 text-slate-600">{modalidadDe(r)}</td>
-                    <td class={`px-2 py-1.5 font-medium ${r.p.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fmt(r.p.proximaFecha)}</td>
-                    <td class="px-2 py-1.5 text-slate-500">{r.u?.nombre ?? "—"}</td>
+                    <td class="px-2 py-1.5 text-slate-500">{!sedeActiva && r.sede ? `${r.sede} · ` : ""}{r.ubicacion ?? "—"}</td>
+                    <td class="px-2 py-1.5 text-slate-700">{r.rutina}</td>
+                    <td class="px-2 py-1.5 text-slate-600">{etiquetaFrecuencia(r.frecuencia)}</td>
+                    <td class="px-2 py-1.5 text-right font-mono">{r.horasEstimadas ? fmtHoras(r.horasEstimadas) : "—"}</td>
+                    <td class="px-2 py-1.5 text-center">{cal(r).veces || "—"}</td>
+                    <td class:list={["px-2 py-1.5", m.faltaProveedor ? "text-amber-700 font-medium" : "text-slate-600"]}>{m.texto}</td>
+                    <td class={`px-2 py-1.5 font-medium ${r.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fechaCorta(r.proximaFecha)}</td>
+                    <td class="px-2 py-1.5 text-slate-500">{r.responsable ?? "—"}</td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      );
-    })}
+      </div>
+    ))}
+    {planRows.length > 0 && (
+      <p class="mt-2 text-xs text-slate-600">
+        Horas estimadas en {anio}: <strong>{fmtHoras(horasPlanes)} h</strong> en {ejecucionesPlanes} ejecuciones
+        {sinHoras > 0 && <span> · {sinHoras} rutina(s) sin horas estimadas</span>}
+      </p>
+    )}
 
-    <!-- 7. Actividades recurrentes -->
-    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-emerald-600 pl-3">7. Actividades recurrentes de infraestructura</h3>
-    {catsActs.length === 0 && (
+    <!-- 7. Servicios externos -->
+    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-slate-500 pl-3">7. Servicios externos</h3>
+    {servicios.length === 0 && sinProveedor === 0 ? (
+      <p class="mt-3 text-sm text-slate-500">Todas las rutinas las ejecuta personal propio.</p>
+    ) : (
+      <div class="overflow-x-auto avoid-break">
+        {servicios.length > 0 && (
+          <table class="mt-2 w-full text-left text-xs">
+            <thead class="text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Proveedor</th>
+                <th class="px-2 py-1.5 font-medium">Contrato</th>
+                <th class="px-2 py-1.5 font-medium">Vigencia</th>
+                <th class="px-2 py-1.5 font-medium text-center">Rutinas</th>
+                <th class="px-2 py-1.5 font-medium text-center">Equipos</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {servicios.map((s) => (
+                <tr>
+                  <td class="px-2 py-1.5 font-medium text-slate-800">{s.proveedor}</td>
+                  <td class="px-2 py-1.5 font-mono text-slate-600">{s.contrato ?? "Sin contrato"}</td>
+                  <td class="px-2 py-1.5 text-slate-600">{s.vigencia ? `${fechaCorta(s.vigencia.inicio)}–${fechaCorta(s.vigencia.fin)}` : "—"}</td>
+                  <td class="px-2 py-1.5 text-center">{s.rutinas}</td>
+                  <td class="px-2 py-1.5 text-center">{s.equipos.size || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {sinProveedor > 0 && (
+          <p class="mt-2 text-xs font-medium text-amber-700">
+            {sinProveedor} rutina(s) externas sin proveedor: complétalo en {puedeEditar ? <a href={areaHref("/planes", dominio)} class="underline">Planes</a> : "Planes"}.
+          </p>
+        )}
+      </div>
+    )}
+
+    <!-- 8. Calendario del año -->
+    <section class="cal-anual mt-8">
+      <h3 class="text-base font-bold text-slate-900 border-l-4 border-brand-600 pl-3">8. Calendario {anio}</h3>
+      <p class="mt-1 text-[11px] text-slate-500">Fechas proyectadas desde la próxima fecha registrada según la frecuencia; lo ejecutado se consulta en las órdenes. Los meses antes de la próxima fecha quedan vacíos.</p>
+      {filasCalendario.length === 0 ? (
+        <p class="mt-3 text-sm text-slate-400">Sin rutinas programadas.</p>
+      ) : (
+        <div class="overflow-x-auto">
+          <table class="mt-2 w-full text-left text-[10px] border border-slate-200">
+            <thead class="bg-slate-800 text-white">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Rutina</th>
+                <th class="px-1 py-1.5 font-medium text-center" title="Frecuencia: D diaria · S semanal · Q quincenal · M mensual · 2M bimestral · 3M trimestral · 4M cuatrimestral · 6M semestral · A anual">Frec.</th>
+                {MESES_CORTOS.map((m) => <th class="px-1 py-1.5 font-medium text-center">{m}</th>)}
+                <th class="px-1 py-1.5 font-medium text-center">Total</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {filasCalendario.map((r) => {
+                const c = cal(r);
+                return (
+                  <tr>
+                    <td class="px-2 py-1"><span class="font-mono text-slate-400">{r.codigo}</span>{r.tipo === "equipo" ? ` · ${r.nombre}` : ""} · {r.rutina}</td>
+                    <td class="px-1 py-1 text-center font-mono text-slate-500">{abrevFrecuencia(r.frecuencia)}</td>
+                    {MESES_CORTOS.map((_, i) => <td class="px-1 py-1 text-center whitespace-nowrap">{celdaMes(fechasDelMes(c.fechas, i + 1))}</td>)}
+                    <td class="px-1 py-1 text-center font-semibold">{c.veces || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot class="bg-slate-50 font-semibold">
+              <tr>
+                <td class="px-2 py-1.5" colspan="2">Ejecuciones por mes</td>
+                {ejecucionesMes.map((n) => <td class="px-1 py-1.5 text-center">{n || "—"}</td>)}
+                <td class="px-1 py-1.5 text-center">{totalEjecuciones}</td>
+              </tr>
+              <tr>
+                <td class="px-2 py-1.5" colspan="2">Horas estimadas por mes</td>
+                {horasMes.map((h) => <td class="px-1 py-1.5 text-center">{h ? fmtHoras(h) : "—"}</td>)}
+                <td class="px-1 py-1.5 text-center">{fmtHoras(horasMes.reduce((a, b) => a + b, 0))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </section>
+
+    <!-- 9. Actividades recurrentes -->
+    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-emerald-600 pl-3">9. Actividades recurrentes de infraestructura</h3>
+    {gruposActs.length === 0 && (
       <p class="mt-3 text-sm text-slate-400">Sin actividades recurrentes {sedeActiva ? "registradas para esta sede" : "registradas"}.</p>
     )}
-    {catsActs.map((cat) => {
-      const rows = actsPorCategoria.get(cat)!;
-      return (
-        <div class="mt-4 avoid-break">
-          <h4 class="text-sm font-semibold text-slate-700 bg-slate-100 rounded-md px-3 py-1.5">{cat} <span class="font-normal text-slate-400">({rows.length})</span></h4>
-          <div class="overflow-x-auto">
-            <table class="mt-1 w-full text-left text-xs">
-              <thead class="text-slate-500 border-b border-slate-200">
+    {gruposActs.map(([grupo, rows]) => (
+      <div class="mt-4 avoid-break">
+        <h4 class="text-sm font-semibold text-slate-700 bg-slate-100 rounded-md px-3 py-1.5">{grupo} <span class="font-normal text-slate-400">({rows.length})</span></h4>
+        <div class="overflow-x-auto">
+          <table class="mt-1 w-full text-left text-xs">
+            <thead class="text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-2 py-1.5 font-medium">Código</th>
+                <th class="px-2 py-1.5 font-medium">Actividad</th>
+                <th class="px-2 py-1.5 font-medium">Ubicación</th>
+                <th class="px-2 py-1.5 font-medium">Frecuencia</th>
+                <th class="px-2 py-1.5 font-medium text-center">Veces {anio}</th>
+                <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
+                <th class="px-2 py-1.5 font-medium">Responsable</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {rows.map((r) => (
                 <tr>
-                  <th class="px-2 py-1.5 font-medium">Código</th>
-                  <th class="px-2 py-1.5 font-medium">Actividad</th>
-                  <th class="px-2 py-1.5 font-medium">Ubicación</th>
-                  <th class="px-2 py-1.5 font-medium">Frecuencia</th>
-                  <th class="px-2 py-1.5 font-medium">Próxima fecha</th>
-                  <th class="px-2 py-1.5 font-medium">Responsable</th>
+                  <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400">{r.codigo}</td>
+                  <td class="px-2 py-1.5 font-medium text-slate-800">{r.nombre}</td>
+                  <td class="px-2 py-1.5 text-slate-500">{!sedeActiva && r.sede ? `${r.sede} · ` : ""}{r.ubicacion ?? "—"}</td>
+                  <td class="px-2 py-1.5 text-slate-600">{etiquetaFrecuencia(r.frecuencia)}</td>
+                  <td class="px-2 py-1.5 text-center">{cal(r).veces || "—"}</td>
+                  <td class={`px-2 py-1.5 font-medium ${r.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fechaCorta(r.proximaFecha)}</td>
+                  <td class="px-2 py-1.5 text-slate-500">{r.responsable ?? "—"}</td>
                 </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                {rows.map((r) => (
-                  <tr>
-                    <td class="px-2 py-1.5 font-mono text-[10px] text-slate-400">{r.a.codigo}</td>
-                    <td class="px-2 py-1.5 font-medium text-slate-800">{r.a.titulo}</td>
-                    <td class="px-2 py-1.5 text-slate-500">{!sedeActiva && r.s?.nombre ? `${r.s.nombre} · ` : ""}{r.ub?.nombre ?? r.a.ubicacionDetalle ?? "—"}</td>
-                    <td class="px-2 py-1.5 text-slate-600">{FRECUENCIA_LABEL[r.a.frecuencia] ?? r.a.frecuencia}</td>
-                    <td class={`px-2 py-1.5 font-medium ${r.a.proximaFecha <= hoy ? "text-red-600" : "text-slate-700"}`}>{fmt(r.a.proximaFecha)}</td>
-                    <td class="px-2 py-1.5 text-slate-500">{r.u?.nombre ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
-      );
-    })}
+      </div>
+    ))}
+
+    <!-- 10. Atención correctiva -->
+    <h3 class="mt-8 text-base font-bold text-slate-900 border-l-4 border-red-600 pl-3">10. Atención correctiva</h3>
+    <p class="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{txtCorrectivo}</p>
+    <div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 avoid-break">
+      <div>
+        <table class="w-full text-left text-xs border border-slate-200">
+          <thead class="bg-slate-100 text-slate-600">
+            <tr><th class="px-3 py-1.5 font-medium">Prioridad</th><th class="px-3 py-1.5 font-medium text-right">Tiempo máximo de atención</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {PRIORIDADES.map((p) => (
+              <tr><td class="px-3 py-1.5">{PRIORIDAD_LABEL[p]}</td><td class="px-3 py-1.5 text-right font-mono">{horasSlaPara(null, p)} h</td></tr>
+            ))}
+          </tbody>
+        </table>
+        <p class="mt-2 text-xs text-slate-600">Responsable: <strong>{txtCorrectivoResp}</strong></p>
+      </div>
+      <div>
+        <h4 class="text-xs font-semibold text-slate-700">Equipos con tiempos propios</h4>
+        {slaPropios.length === 0 ? (
+          <p class="mt-1 text-xs text-slate-500">Todos los equipos usan los tiempos generales.</p>
+        ) : (
+          <table class="mt-1 w-full text-left text-xs">
+            <thead class="text-slate-500 border-b border-slate-200">
+              <tr>
+                <th class="px-2 py-1 font-medium">Código</th><th class="px-2 py-1 font-medium">Equipo</th>
+                <th class="px-2 py-1 font-medium text-right">Urgente</th><th class="px-2 py-1 font-medium text-right">Alta</th>
+                <th class="px-2 py-1 font-medium text-right">Media</th><th class="px-2 py-1 font-medium text-right">Baja</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {slaPropios.map((s) => (
+                <tr>
+                  <td class="px-2 py-1 font-mono text-[10px] text-slate-400">{s.codigo}</td>
+                  <td class="px-2 py-1">{s.nombre}</td>
+                  <td class="px-2 py-1 text-right font-mono">{s.urgente} h</td>
+                  <td class="px-2 py-1 text-right font-mono">{s.alta} h</td>
+                  <td class="px-2 py-1 text-right font-mono">{s.media} h</td>
+                  <td class="px-2 py-1 text-right font-mono">{s.baja} h</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
 
     <!-- Firmas -->
     <div class="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-6 avoid-break">
@@ -376,11 +590,17 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
         </div>
       ))}
     </div>
+    <p class="mt-4 text-center text-xs text-slate-600">
+      {vigente
+        ? `Aprobado: versión ${vigente.version} por ${vigente.aprobadoPor} el ${fechaCorta(vigente.fechaAprobacion)} (registro N.º ${vigente.id}). El original firmado está en el sistema.`
+        : `Sin aprobación registrada en el sistema para ${anio}.`}
+    </p>
 
     <!-- Pie -->
     <div class="mt-8 border-t border-slate-200 pt-3 text-[10px] text-slate-400">
       {docCodigo} · Versión {docVersion} · Documento generado desde la plataforma de mantenimiento el {fechaGeneracion} por {user.nombre} ·
-      Las fechas mostradas corresponden a la próxima ejecución programada de cada rutina · Fechas en rojo indican rutinas vencidas.
+      Las fechas mostradas corresponden a la próxima ejecución programada de cada rutina · Fechas en rojo indican rutinas vencidas ·
+      Las rutinas de equipos dados de baja no se incluyen.
     </div>
     <DocFolio codigo={docCodigo} version={docVersion} />
   </div>
@@ -404,75 +624,200 @@ const modalidadDe = (r: (typeof planRows)[number]) => {
           <div><label class="label text-xs">2. Objetivos (usa • para viñetas)</label><textarea id="d_objetivos" class="input" rows="4">{txtObjetivos}</textarea></div>
           <div><label class="label text-xs">3. Marco normativo</label><textarea id="d_normativa" class="input" rows="4">{txtNormativa}</textarea></div>
           <div><label class="label text-xs">4. Recursos y modalidad</label><textarea id="d_recursos" class="input" rows="4">{txtRecursos}</textarea></div>
+          <div><label class="label text-xs">10. Atención correctiva: cómo se reportan y atienden las fallas</label><textarea id="d_correctivo" class="input" rows="4">{txtCorrectivo}</textarea></div>
+          <div><label class="label text-xs">10. Responsable de la atención correctiva</label><input id="d_correctivo_responsable" class="input" value={txtCorrectivoResp} /></div>
         </div>
         <p id="docErr" class="hidden mt-2 text-sm text-red-600"></p>
         <div class="mt-5 flex justify-end gap-2">
-          <button id="docCancel" class="btn-secondary">Cancelar</button>
-          <button id="docSave" class="btn-primary">Guardar textos</button>
+          <button id="docCancel" class="btn-secondary" type="button">Cancelar</button>
+          <button id="docSave" class="btn-primary" type="button">Guardar textos</button>
         </div>
       </div>
     </div>
   )}
 
+  <!-- Registrar y anular aprobaciones -->
+  {puedeEditar && (
+    <>
+      <div id="aprobarModal" class="no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <form id="aprobarForm" class="card w-full max-w-lg p-5">
+          <h3 class="text-lg font-semibold text-slate-900">Registrar aprobación del plan {anio}</h3>
+          <p class="mt-1 text-xs text-slate-500">{etiquetaAreaPlan}. Sube el plan con las firmas (PDF o foto, máximo 15 MB).</p>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div><label class="label text-xs" for="ap_version">Versión *</label><input id="ap_version" class="input" maxlength="20" value={docVersion} required /></div>
+            <div><label class="label text-xs" for="ap_fecha">Fecha de aprobación *</label><input id="ap_fecha" type="date" class="input" max={hoy} value={hoy} required /></div>
+            <div class="sm:col-span-2"><label class="label text-xs" for="ap_aprobo">Aprobó (nombre y cargo) *</label><input id="ap_aprobo" class="input" maxlength="120" value={docAprobo} required /></div>
+            <div class="sm:col-span-2"><label class="label text-xs" for="ap_archivo">Plan firmado *</label><input id="ap_archivo" type="file" accept={ARCHIVO_ACCEPT} class="input" required /></div>
+            <div class="sm:col-span-2"><label class="label text-xs" for="ap_notas">Notas</label><textarea id="ap_notas" class="input" rows="2" maxlength="500"></textarea></div>
+          </div>
+          <p id="aprobarErr" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button type="button" id="aprobarCancel" class="btn-secondary">Cancelar</button>
+            <button type="submit" class="btn-primary">Registrar</button>
+          </div>
+        </form>
+      </div>
+      <div id="anularModal" class="no-print hidden fixed inset-0 z-50 items-center justify-center bg-black/50 p-4">
+        <form id="anularForm" class="card w-full max-w-md p-5">
+          <h3 class="text-lg font-semibold text-slate-900">Anular aprobación</h3>
+          <p id="anularTexto" class="mt-1 text-xs text-slate-500"></p>
+          <div class="mt-4">
+            <label class="label text-xs" for="an_motivo">Motivo de la anulación *</label>
+            <textarea id="an_motivo" class="input" rows="3" placeholder="Ej. Se subió el archivo de otra versión."></textarea>
+          </div>
+          <p id="anularErr" class="hidden mt-2 text-sm text-red-600"></p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button type="button" id="anularCancel" class="btn-secondary">Cancelar</button>
+            <button type="submit" class="btn-primary">Anular</button>
+          </div>
+        </form>
+      </div>
+    </>
+  )}
+
   <style is:global>
+    /* globals.css ya oculta la barra superior, el menú y lo «no-print»: aquí no se oculta
+       `header`, porque DocCabecera es un <header> y el plan impreso perdía su encabezado. */
     @media print {
-      .no-print, #sidebar, header, #bellPanel, #toastContainer { display: none !important; }
-      main { padding: 0 !important; }
-      .print-doc { border: none !important;  margin-top: 0 !important; }
+      .print-doc { border: none !important; margin-top: 0 !important; }
       .avoid-break { break-inside: avoid; }
-      body { background: white !important; }
+      /* El calendario del año va en hoja horizontal (@page apaisada en globals.css). */
+      .cal-anual { page: apaisada; }
     }
   </style>
 
   <script>
     import { areaHref, parseArea } from "@/lib/areas";
-    const area = parseArea(new URLSearchParams(location.search).get("area") ?? new URLSearchParams(location.search).get("dominio"));
-    document.getElementById("printBtn")?.addEventListener("click", () => window.print());
-    document.getElementById("sedeSel")?.addEventListener("change", (e) => {
-      const v = (e.currentTarget as HTMLSelectElement).value;
+    const params = new URLSearchParams(location.search);
+    const area = parseArea(params.get("area") ?? params.get("dominio"));
+    const navegar = (cambio: Record<string, string>) => {
       const p = new URLSearchParams(location.search);
       if (!p.has("area") && p.has("dominio")) p.set("area", p.get("dominio")!);
       p.delete("dominio");
-      if (v) p.set("sede", v); else p.delete("sede");
+      for (const [k, v] of Object.entries(cambio)) { if (v) p.set(k, v); else p.delete(k); }
       const s = p.toString();
       location.href = `/plan-mantenimiento${s ? `?${s}` : ""}`;
-    });
+    };
+    document.getElementById("printBtn")?.addEventListener("click", () => window.print());
+    document.getElementById("sedeSel")?.addEventListener("change", (e) => navegar({ sede: (e.currentTarget as HTMLSelectElement).value }));
+    document.getElementById("anioSel")?.addEventListener("change", (e) => navegar({ anio: (e.currentTarget as HTMLSelectElement).value }));
+
+    const mostrar = (m: HTMLElement | null) => { m?.classList.remove("hidden"); m?.classList.add("flex"); };
+    const ocultar = (m: HTMLElement | null) => { m?.classList.add("hidden"); m?.classList.remove("flex"); };
+    const valor = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null)?.value ?? "";
+    const textoError = async (res: Response, porDefecto: string) => {
+      const j = await res.json().catch(() => null) as { error?: unknown } | null;
+      return typeof j?.error === "string" ? j.error : porDefecto;
+    };
+    const fallo = (id: string, msg: string) => {
+      const p = document.getElementById(id);
+      if (p) { p.textContent = msg; p.classList.remove("hidden"); }
+    };
 
     // ── Edición de textos (admin/jefe) ──
     const docModal = document.getElementById("docModal");
     if (docModal) {
-      const show = () => { docModal.classList.remove("hidden"); docModal.classList.add("flex"); };
-      const hide = () => { docModal.classList.add("hidden"); docModal.classList.remove("flex"); };
-      document.getElementById("editDocBtn")?.addEventListener("click", show);
-      document.getElementById("docCancel")?.addEventListener("click", hide);
-      docModal.addEventListener("click", (e) => { if (e.target === docModal) hide(); });
+      document.getElementById("editDocBtn")?.addEventListener("click", () => mostrar(docModal));
+      document.getElementById("docCancel")?.addEventListener("click", () => ocultar(docModal));
+      docModal.addEventListener("click", (e) => { if (e.target === docModal) ocultar(docModal); });
 
-      document.getElementById("docSave")?.addEventListener("click", async () => {
-        const v = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
-        const res = await fetch(areaHref("/api/plan-config", area), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            valores: {
-              "plan.codigo": v("d_codigo"),
-              "plan.version": v("d_version"),
-              "plan.elaboro": v("d_elaboro"),
-              "plan.reviso": v("d_reviso"),
-              "plan.aprobo": v("d_aprobo"),
-              "plan.intro": v("d_intro"),
-              "plan.objetivos": v("d_objetivos"),
-              "plan.normativa": v("d_normativa"),
-              "plan.recursos": v("d_recursos"),
-            },
-          }),
-        });
-        if (res.ok) { window.showToast?.("Textos guardados", "success"); location.reload(); }
-        else {
-          const err = document.getElementById("docErr")!;
-          err.textContent = "Error al guardar";
-          err.classList.remove("hidden");
-        }
+      const docSave = document.getElementById("docSave") as HTMLButtonElement | null;
+      docSave?.addEventListener("click", async () => {
+        docSave.disabled = true;
+        try {
+          const res = await fetch(areaHref("/api/plan-config", area), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              valores: {
+                "plan.codigo": valor("d_codigo"),
+                "plan.version": valor("d_version"),
+                "plan.elaboro": valor("d_elaboro"),
+                "plan.reviso": valor("d_reviso"),
+                "plan.aprobo": valor("d_aprobo"),
+                "plan.intro": valor("d_intro"),
+                "plan.objetivos": valor("d_objetivos"),
+                "plan.normativa": valor("d_normativa"),
+                "plan.recursos": valor("d_recursos"),
+                "plan.correctivo": valor("d_correctivo"),
+                "plan.correctivo_responsable": valor("d_correctivo_responsable"),
+              },
+            }),
+          });
+          if (res.ok) { window.showToast?.("Textos guardados", "success"); location.reload(); return; }
+          fallo("docErr", await textoError(res, "No se pudieron guardar los textos."));
+        } catch { fallo("docErr", "No hay conexión. Intenta de nuevo."); }
+        docSave.disabled = false;
       });
     }
+
+    // ── Aprobaciones (admin/jefe) ──
+    const caja = document.getElementById("aprobaciones");
+    const aprobarModal = document.getElementById("aprobarModal");
+    const anularModal = document.getElementById("anularModal");
+    document.getElementById("btnAprobar")?.addEventListener("click", () => mostrar(aprobarModal));
+    document.getElementById("aprobarCancel")?.addEventListener("click", () => ocultar(aprobarModal));
+    document.getElementById("anularCancel")?.addEventListener("click", () => ocultar(anularModal));
+    for (const m of [aprobarModal, anularModal]) m?.addEventListener("click", (e) => { if (e.target === m) ocultar(m); });
+
+    // Un solo envío a la vez: el plan firmado puede tardar en subir y un segundo clic
+    // registraba otra aprobación vigente de la misma versión.
+    const enviando = new WeakSet<HTMLFormElement>();
+    const bloquear = (form: HTMLFormElement, si: boolean) => {
+      if (si) enviando.add(form); else enviando.delete(form);
+      form.querySelectorAll<HTMLButtonElement>("button[type=submit]").forEach((b) => { b.disabled = si; });
+    };
+
+    document.getElementById("aprobarForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget as HTMLFormElement;
+      if (enviando.has(form)) return;
+      document.getElementById("aprobarErr")?.classList.add("hidden");
+      const archivo = (document.getElementById("ap_archivo") as HTMLInputElement | null)?.files?.[0];
+      if (!archivo) return fallo("aprobarErr", "Adjunta el plan firmado.");
+      const datos = new FormData();
+      datos.set("anio", caja?.dataset.anio ?? "");
+      datos.set("area", caja?.dataset.area ?? "general");
+      datos.set("version", valor("ap_version").trim());
+      datos.set("aprobadoPor", valor("ap_aprobo").trim());
+      datos.set("fechaAprobacion", valor("ap_fecha"));
+      datos.set("notas", valor("ap_notas").trim());
+      datos.set("archivo", archivo);
+      bloquear(form, true);
+      try {
+        const res = await fetch("/api/planes/aprobaciones", { method: "POST", body: datos });
+        if (res.ok) { window.showToast?.("Aprobación registrada", "success"); location.reload(); return; }
+        fallo("aprobarErr", await textoError(res, "No se pudo registrar la aprobación."));
+      } catch { fallo("aprobarErr", "No hay conexión. Intenta de nuevo."); }
+      bloquear(form, false);
+    });
+
+    let anularId = "";
+    document.querySelectorAll<HTMLButtonElement>(".anular-aprobacion").forEach((b) => {
+      b.addEventListener("click", () => {
+        anularId = b.dataset.id ?? "";
+        const texto = document.getElementById("anularTexto");
+        if (texto) texto.textContent = `Versión ${b.dataset.version ?? ""}. El registro y el archivo firmado se conservan como evidencia.`;
+        document.getElementById("anularErr")?.classList.add("hidden");
+        mostrar(anularModal);
+      });
+    });
+    document.getElementById("anularForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget as HTMLFormElement;
+      if (enviando.has(form)) return;
+      document.getElementById("anularErr")?.classList.add("hidden");
+      bloquear(form, true);
+      try {
+        const res = await fetch(`/api/planes/aprobaciones/${anularId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motivo: valor("an_motivo").trim() }),
+        });
+        if (res.ok) { location.reload(); return; }
+        fallo("anularErr", await textoError(res, "No se pudo anular."));
+      } catch { fallo("anularErr", "No hay conexión. Intenta de nuevo."); }
+      bloquear(form, false);
+    });
   </script>
 </Layout>

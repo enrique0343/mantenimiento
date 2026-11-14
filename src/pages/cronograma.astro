@@ -2,12 +2,15 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, activos, usuarios, sucursales, ubicaciones, actividades, actividadCategorias } from "@/lib/schema";
-import { eq, asc, and } from "drizzle-orm";
-import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
+import { eq, asc, and, ne } from "drizzle-orm";
+import { proyectarFechas } from "@/lib/frecuencias";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { diasEntre, etiquetaFrecuencia, hoySV, sumarDias, sumarMeses } from "@/lib/biomedico";
+import { MESES_CORTOS } from "@/lib/plan-anual";
 import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
 import { parseArea, areaHref } from "@/lib/areas";
 import { areaDeActividad } from "@/lib/actividades";
+import { areaEnEspacio, condicionActivoEspacio, espacioDeArea, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -22,6 +25,11 @@ const sedeParam = url.searchParams.get("sede");
 const sedeId = sedeParam ? Number(sedeParam) : null;
 const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+// Solo lo del espacio: en Biomédico, los preventivos de sus equipos (las actividades
+// por ubicación son de General).
+const { espacio, permitido } = espacioDeLista(Astro, user, dominio);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const rubrosDelEspacio = RUBRO_KEYS.filter((k) => areaEnEspacio(k, espacio));
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre })
@@ -29,17 +37,31 @@ const sucursalesList = await db
   .where(eq(sucursales.activa, true))
   .orderBy(asc(sucursales.nombre));
 
-// 1) Planes preventivos por equipo
+// 1) Planes preventivos por equipo (sin los equipos dados de baja)
 const planRowsAll = await db
-  .select({ p: planesMantenimiento, a: activos, u: usuarios, s: sucursales, ub: ubicaciones })
+  // D1 corta el resultado a 100 columnas: del técnico solo se usa el nombre y del
+  // equipo, lo que se muestra.
+  .select({
+    p: planesMantenimiento,
+    a: {
+      id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo,
+      ubicacion: activos.ubicacion, criticidadOperacional: activos.criticidadOperacional,
+    },
+    u: { id: usuarios.id, nombre: usuarios.nombre },
+    s: sucursales,
+    ub: ubicaciones,
+  })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(esTecnico
-    ? and(eq(planesMantenimiento.activo, true), eq(planesMantenimiento.asignadoA, user.id))
-    : eq(planesMantenimiento.activo, true))
+  .where(and(
+    eq(planesMantenimiento.activo, true),
+    ne(activos.estado, "baja"),
+    condicionActivoEspacio(espacio),
+    esTecnico ? eq(planesMantenimiento.asignadoA, user.id) : undefined,
+  ))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
 // 2) Actividades recurrentes
@@ -59,7 +81,8 @@ const actRowsAll = await db
 // tienen sucursal directa. Luego filtro por dominio/categoría. Sin filtros se
 // muestra todo.
 const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const actRowsEspacio = actRowsAll.filter((r) => espacioDeArea(areaDeActividad(r.a.rubro, r.c?.rubro)) === espacio);
+const actRowsSede = sedeId ? actRowsEspacio.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsEspacio;
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
 const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 const sedeActiva = sedeId ? sucursalesList.find((s) => s.id === sedeId) ?? null : null;
@@ -125,13 +148,11 @@ const tecnicosLista = puedeAsignar
       .orderBy(asc(usuarios.nombre))
   : [];
 
-const hoy = new Date().toISOString().slice(0, 10);
-const en7 = new Date(); en7.setDate(en7.getDate() + 7);
-const en15 = new Date(); en15.setDate(en15.getDate() + 15);
-const en30 = new Date(); en30.setDate(en30.getDate() + 30);
-const en7Str = en7.toISOString().slice(0, 10);
-const en15Str = en15.toISOString().slice(0, 10);
-const en30Str = en30.toISOString().slice(0, 10);
+// «Hoy» en El Salvador: en UTC, de 6 p. m. a medianoche ya era el día siguiente.
+const hoy = hoySV();
+const en7Str = sumarDias(hoy, 7);
+const en15Str = sumarDias(hoy, 15);
+const en30Str = sumarDias(hoy, 30);
 
 // Bucketing exclusivo y consecutivo: 7 → 15 → 30 → más adelante.
 const vencidos   = items.filter((r) => r.fecha <= hoy);
@@ -145,63 +166,52 @@ const futuros    = items.filter((r) => r.fecha > en30Str);
 const fmt = (s: string) => fmtFechaSoloCompacta(s);
 
 // ─── Vista anual (12 meses) + detección de colisiones de equipos críticos ────
-const hoyD = new Date();
-const horizonStart = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth(), 1));
-const horizonEnd = new Date(Date.UTC(hoyD.getUTCFullYear(), hoyD.getUTCMonth() + 12, 1));
-const horizonStartStr = horizonStart.toISOString().slice(0, 10);
-const horizonEndStr = horizonEnd.toISOString().slice(0, 10);
+// Desde el primer día del mes actual en El Salvador, con fechas como texto.
+const horizonStartStr = `${hoy.slice(0, 7)}-01`;
+const horizonEndStr = sumarMeses(horizonStartStr, 12);
+const anioIni = Number(horizonStartStr.slice(0, 4));
+const mesIni = Number(horizonStartStr.slice(5, 7));
 
 const meses = Array.from({ length: 12 }, (_, i) => {
-  const d = new Date(Date.UTC(horizonStart.getUTCFullYear(), horizonStart.getUTCMonth() + i, 1));
+  const ym = sumarMeses(horizonStartStr, i).slice(0, 7);
   return {
-    label: d.toLocaleDateString("es", { month: "short", timeZone: "UTC" }).replace(".", "") + " " + String(d.getUTCFullYear()).slice(2),
-    ym: d.toISOString().slice(0, 7),
+    label: `${MESES_CORTOS[Number(ym.slice(5, 7)) - 1]} ${ym.slice(2, 4)}`,
+    ym,
     total: 0,
     criticos: 0,
   };
 });
-const mesIndex = (fecha: string) => {
-  const d = new Date(fecha);
-  return (d.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 + (d.getUTCMonth() - horizonStart.getUTCMonth());
-};
+const mesIndex = (fecha: string) => (Number(fecha.slice(0, 4)) - anioIni) * 12 + (Number(fecha.slice(5, 7)) - mesIni);
 
 // Por semana (bucket de 7 días desde el inicio del horizonte): equipos críticos programados.
 const semanas = new Map<number, Map<number, { codigo: string; nombre: string; fecha: string }>>();
 
-function proyectar(fechaInicial: string, frecuencia: Frecuencia, onOcc: (fecha: string) => void) {
-  let f = fechaInicial;
-  let guard = 0;
-  while (f < horizonStartStr && guard < 500) { const n = siguienteFecha(f, frecuencia); if (n <= f) return; f = n; guard++; }
-  guard = 0;
-  while (f < horizonEndStr && guard < 400) { onOcc(f); const n = siguienteFecha(f, frecuencia); if (n <= f) break; f = n; guard++; }
-}
-
+// Misma proyección que el plan anual y el Gantt (proyectarFechas, sin deriva de fin de mes).
 for (const r of planRows) {
   const crit = r.a?.criticidadOperacional === "alta";
-  proyectar(r.p.proximaFecha, r.p.frecuencia as Frecuencia, (fecha) => {
+  for (const fecha of proyectarFechas(r.p.proximaFecha, r.p.frecuencia, horizonStartStr, horizonEndStr)) {
     const mi = mesIndex(fecha);
     if (mi >= 0 && mi < 12) { meses[mi].total++; if (crit) meses[mi].criticos++; }
     if (crit && r.a) {
-      const wk = Math.floor((new Date(fecha).getTime() - horizonStart.getTime()) / (7 * 86400_000));
+      const wk = Math.floor(diasEntre(horizonStartStr, fecha) / 7);
       const m = semanas.get(wk) ?? new Map();
       if (!m.has(r.a.id)) m.set(r.a.id, { codigo: r.a.codigo, nombre: r.a.nombre, fecha });
       semanas.set(wk, m);
     }
-  });
+  }
 }
 for (const r of actRows) {
-  proyectar(r.a.proximaFecha, r.a.frecuencia as Frecuencia, (fecha) => {
+  for (const fecha of proyectarFechas(r.a.proximaFecha, r.a.frecuencia, horizonStartStr, horizonEndStr)) {
     const mi = mesIndex(fecha);
     if (mi >= 0 && mi < 12) meses[mi].total++;
-  });
+  }
 }
 
 const colisiones = [...semanas.entries()]
   .filter(([, m]) => m.size >= 2)
   .map(([wk, m]) => {
-    const ini = new Date(horizonStart.getTime() + wk * 7 * 86400_000);
-    const fin = new Date(ini.getTime() + 6 * 86400_000);
-    return { ini: ini.toISOString().slice(0, 10), fin: fin.toISOString().slice(0, 10), equipos: [...m.values()] };
+    const ini = sumarDias(horizonStartStr, wk * 7);
+    return { ini, fin: sumarDias(ini, 6), equipos: [...m.values()] };
   })
   .sort((a, b) => a.ini.localeCompare(b.ini));
 const mesesConColision = new Set(colisiones.map((c) => c.ini.slice(0, 7)));
@@ -227,7 +237,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       </select>
       <select id="dominioFiltro" class="input w-auto text-sm py-1.5" title="Filtrar por área">
         <option value="">Todas las áreas</option>
-        {RUBRO_KEYS.map((k) => (
+        {rubrosDelEspacio.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>
@@ -304,7 +314,7 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
                   </div>
                 )}
                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                  <span class="capitalize">{r.frecuencia}</span>
+                  <span>{etiquetaFrecuencia(r.frecuencia)}</span>
                   {puedeAsignar ? (
                     <label class="inline-flex items-center gap-1 normal-case">
                       

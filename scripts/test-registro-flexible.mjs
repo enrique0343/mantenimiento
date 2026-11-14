@@ -50,25 +50,31 @@ try {
   const legacyBefore = JSON.stringify(saved(100));
   const unicodeLegacyBefore = JSON.stringify(saved(101));
 
-  // The smallest valid request and a request containing only its area both
-  // produce durable, identifiable records without inventing medical details.
+  // The smallest valid request and a request containing only its area (and, for a
+  // biomedical device, its risk class) produce durable, identifiable records
+  // without inventing other medical details.
   const minimal = await created({});
   automatic(minimal, 'equipo_general');
   pending(minimal);
   assert.equal(minimal.criticidadOperacional, 'media');
   assert.equal(minimal.estado, 'operativo');
   assert.equal(minimal.datosTecnicos, null);
-  const biomedical = await created({ rubro: 'biomedico' });
+  // Fase 59 · requisito 16: la clase de riesgo es obligatoria en biomédicos también por la API.
+  const CLASE = 'Elige la clase de riesgo (I, IIa, IIb o III).';
+  for (const data of [{ rubro: 'biomedico' }, { tipo: 'biomedico' }, { rubro: 'biomedico', claseRiesgo: null }, { rubro: 'biomedico', claseRiesgo: '' }, { rubro: 'biomedico', claseRiesgo: 'IV' }]) {
+    assert.deepEqual(expect(await create(data), 400), { error: CLASE }, JSON.stringify(data));
+  }
+  const biomedical = await created({ rubro: 'biomedico', claseRiesgo: 'IIa' });
   automatic(biomedical, 'biomedico');
   pending(biomedical);
   assert.equal(biomedical.marca, null);
   assert.equal(biomedical.serial, null);
   assert.equal(biomedical.registroSanitario, null);
-  assert.equal(biomedical.claseRiesgo, null);
+  assert.equal(biomedical.claseRiesgo, 'IIa');
   assert.equal(one('SELECT count(*) AS n FROM planes_mantenimiento').n, 0, 'An incomplete record must not acquire an unsolicited preventive plan');
 
   for (const [area, criticality] of Object.entries({ aires: 'alta', infraestructura: 'media', equipo_general: 'baja', biomedico: 'alta' })) {
-    const row = await created({ rubro: area, codigo: '', nombre: '', criticidadOperacional: criticality });
+    const row = await created({ rubro: area, codigo: '', nombre: '', criticidadOperacional: criticality, ...(area === 'biomedico' ? { claseRiesgo: 'I' } : {}) });
     automatic(row, area);
     pending(row);
     assert.equal(row.criticidadOperacional, criticality);
@@ -76,7 +82,7 @@ try {
   const blanks = await created({
     rubro: 'biomedico', codigo: '  \t ', nombre: ' \n ', descripcion: '', ubicacion: null,
     numeroActivo: '', marca: null, modelo: '', serial: '', anio: null,
-    categoria: '', registroSanitario: '', claseRiesgo: null,
+    categoria: '', registroSanitario: '', claseRiesgo: 'I',
     fechaAdquisicion: null, vidaUtilAnios: null, valorAdquisicion: null,
     responsableId: null, proveedorId: null, ubicacionId: null,
     ultimaCalibracion: null, proximaCalibracion: null, datosTecnicos: { servicio: '' },
@@ -84,13 +90,13 @@ try {
   });
   automatic(blanks, 'biomedico');
   pending(blanks);
-  const nullIdentity = await created({ rubro: 'biomedico', codigo: null, nombre: null });
+  const nullIdentity = await created({ rubro: 'biomedico', codigo: null, nombre: null, claseRiesgo: 'III' });
   automatic(nullIdentity, 'biomedico');
   pending(nullIdentity);
 
   // Simultaneous submissions must each persist their own code/QR. This checks
   // the database result, not only the random-code helper's return value.
-  const simultaneous = await Promise.all(Array.from({ length: 30 }, (_, index) => create({ rubro: 'biomedico', nombre: `cámara simultánea ${index}` })));
+  const simultaneous = await Promise.all(Array.from({ length: 30 }, (_, index) => create({ rubro: 'biomedico', claseRiesgo: 'I', nombre: `cámara simultánea ${index}` })));
   const concurrentAssets = simultaneous.map((result) => expect(result, 201).activo);
   assert.equal(new Set(concurrentAssets.map((row) => row.codigo)).size, concurrentAssets.length);
   assert.equal(new Set(concurrentAssets.map((row) => row.qrCode)).size, concurrentAssets.length);
@@ -112,7 +118,7 @@ try {
       sqlite.prepare('INSERT INTO activos(codigo,nombre,qr_code,rubro,tipo) VALUES(?,?,?,?,?)').run(contestedCode, 'REGISTRO SIMULTÁNEO DE PRUEBA', `QR-${contestedCode}`, 'biomedico', 'biomedico');
     },
   };
-  const retried = await created({ rubro: 'biomedico' });
+  const retried = await created({ rubro: 'biomedico', claseRiesgo: 'I' });
   automatic(retried, 'biomedico');
   assert.notEqual(retried.codigo, contestedCode);
   assert.equal(one('SELECT count(*) AS n FROM activos WHERE codigo=?', contestedCode).n, 1);
@@ -141,12 +147,12 @@ try {
   assert.equal(plan.frecuencia, 'mensual');
   assert.equal(plan.prioridad, 'alta');
   assert.equal(plan.proxima_fecha, '2030-10-01');
-  expect(await create({ rubro: 'biomedico', codigo: entered.codigo.toLowerCase() }), 409);
-  expect(await create({ rubro: 'biomedico', codigo: 'legacy-abc' }), 409);
-  for (const codigo of ['legado-ñ-01', 'LEGADO-Ñ-01']) expect(await create({ rubro: 'biomedico', codigo }), 409);
+  expect(await create({ rubro: 'biomedico', claseRiesgo: 'I', codigo: entered.codigo.toLowerCase() }), 409);
+  expect(await create({ rubro: 'biomedico', claseRiesgo: 'I', codigo: 'legacy-abc' }), 409);
+  for (const codigo of ['legado-ñ-01', 'LEGADO-Ñ-01']) expect(await create({ rubro: 'biomedico', claseRiesgo: 'I', codigo }), 409);
   const imported = expect(await call(app.assetImport.POST, '/api/admin/import-equipos', { method: 'POST', data: {
     area: 'biomedico',
-    csv: 'codigo,nombre,rubro,marca,modelo,serial,categoria,descripcion,servicio\nlegacy-abc,No duplicar,biomedico,,,,,,\nbio-csv-ñ-001,módulo de cámara,biomedico,marca ñ,visión hd,serie-á,cámara,inspección óptica,cirugía',
+    csv: 'codigo,nombre,rubro,marca,modelo,serial,categoria,descripcion,servicio,clase_riesgo\nlegacy-abc,No duplicar,biomedico,,,,,,,\nbio-csv-ñ-001,módulo de cámara,biomedico,marca ñ,visión hd,serie-á,cámara,inspección óptica,cirugía,IIa',
   } }), 200);
   assert.equal(imported.insertados, 1, 'CSV import rejects the lowercase spelling of an existing mixed-case code');
   assert.equal(imported.errores.length, 1);
@@ -173,7 +179,7 @@ try {
   // length so the reader can still parse every accepted technical value.
   const expandingBoundary = 'ß'.repeat(100);
   const storedBoundary = 'SS'.repeat(100);
-  const boundaryAsset = await created({ rubro: 'biomedico', datosTecnicos: { servicio: expandingBoundary } });
+  const boundaryAsset = await created({ rubro: 'biomedico', claseRiesgo: 'I', datosTecnicos: { servicio: expandingBoundary } });
   assert.deepEqual(JSON.parse(boundaryAsset.datosTecnicos), { servicio: storedBoundary });
   assert.deepEqual(app.assetArea.leerDatosTecnicos(saved(boundaryAsset.id).datos_tecnicos), { servicio: storedBoundary });
   const boundaryRead = expect(await call(app.assets.GET, `/api/activos/${boundaryAsset.id}`, { id: boundaryAsset.id }), 200).activo;
@@ -182,7 +188,7 @@ try {
   assert.deepEqual(app.assetArea.leerDatosTecnicos(patchedBoundary.datosTecnicos), { servicio: storedBoundary });
   assert.deepEqual(app.assetArea.leerDatosTecnicos(saved(blanks.id).datos_tecnicos), { servicio: storedBoundary });
   const beforeInvalidLength = JSON.stringify(rows('SELECT * FROM activos ORDER BY id'));
-  expect(await create({ rubro: 'biomedico', datosTecnicos: { servicio: 'ß'.repeat(101) } }), 400);
+  expect(await create({ rubro: 'biomedico', claseRiesgo: 'I', datosTecnicos: { servicio: 'ß'.repeat(101) } }), 400);
   assert.equal(JSON.stringify(rows('SELECT * FROM activos ORDER BY id')), beforeInvalidLength);
   expect(await edit(blanks.id, { nombre: 'No guardar parcialmente', datosTecnicos: { servicio: 'ß'.repeat(101) } }), 400);
   assert.equal(JSON.stringify(rows('SELECT * FROM activos ORDER BY id')), beforeInvalidLength);
@@ -218,7 +224,7 @@ try {
     { criticidadOperacional: 'urgente' }, { criticidadOperacional: null },
     { estado: 'nuevo' }, { estado: null }, { codigo: 123 }, { nombre: [] },
     { rubro: 'aires', tipo: 'biomedico' },
-    { rubro: 'biomedico', datosTecnicos: { refrigerante: 'r32' } },
+    { rubro: 'biomedico', claseRiesgo: 'I', datosTecnicos: { refrigerante: 'r32' } },
     { rubro: 'aires', datosTecnicos: { capacidadBtuH: -1 } },
     { datosTecnicos: '{broken' }, { vidaUtilAnios: -1 }, { valorAdquisicion: -1 },
   ]) expect(await create(data), 400);
@@ -229,15 +235,17 @@ try {
   for (const data of [null, [], '']) expect(await create(data), 400);
 
   expect(await create({}, { rol: null }), 401);
-  for (const rol of ['jefe', 'visualizador', 'solicitante', 'motorista', 'bodega']) expect(await create({}, { rol }), 403);
-  automatic(await created({ rubro: 'biomedico' }, { rol: 'tecnico' }), 'biomedico');
+  for (const rol of ['visualizador', 'solicitante', 'motorista', 'bodega']) expect(await create({}, { rol }), 403);
+  automatic(await created({ rubro: 'biomedico', claseRiesgo: 'IIb' }, { rol: 'jefe' }), 'biomedico');
+  automatic(await created({ rubro: 'biomedico', claseRiesgo: 'IIb' }, { rol: 'tecnico' }), 'biomedico');
   expect(await edit(biomedical.id, { nombre: 'No permitido' }, { rol: null }), 401);
   for (const rol of ['visualizador', 'solicitante', 'motorista', 'bodega']) expect(await edit(biomedical.id, { nombre: 'No permitido' }, { rol }), 403);
   assert.equal((await changed(biomedical.id, { modelo: 'edición del jefe' }, { rol: 'jefe' })).modelo, 'EDICIÓN DEL JEFE');
 
   sqlite.prepare('INSERT INTO ordenes(titulo,activo_id,creado_por,rubro) VALUES(?,?,?,?)').run('Orden vinculada de prueba', biomedical.id, 1, 'biomedico');
   const beforeRejectedAreaChange = JSON.stringify(saved(biomedical.id));
-  expect(await edit(biomedical.id, { rubro: 'aires', nombre: '' }), 409);
+  // La clase se manda en null: un aire no lleva clase (400 antes de llegar a los vínculos).
+  expect(await edit(biomedical.id, { rubro: 'aires', nombre: '', claseRiesgo: null }), 409);
   assert.equal(JSON.stringify(saved(biomedical.id)), beforeRejectedAreaChange);
   assert.equal((await changed(biomedical.id, { descripcion: ' información completada sin perder la orden ' })).descripcion, 'INFORMACIÓN COMPLETADA SIN PERDER LA ORDEN');
 
@@ -247,12 +255,12 @@ try {
   const beforePlans = JSON.stringify(rows('SELECT * FROM planes_mantenimiento ORDER BY id'));
   faults.statement = (sql) => /insert\s+into\s+["`]?planes_mantenimiento/i.test(sql);
   let failedPlan = false;
-  try { failedPlan = (await create({ rubro: 'biomedico', mantenimientoFrecuencia: 'mensual' })).status >= 500; }
+  try { failedPlan = (await create({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'mensual' })).status >= 500; }
   catch { failedPlan = true; }
   assert(failedPlan, 'Injected failure must not return a successful partial registration');
   assert.equal(JSON.stringify(rows('SELECT * FROM activos ORDER BY id')), beforeFailedPlan);
   assert.equal(JSON.stringify(rows('SELECT * FROM planes_mantenimiento ORDER BY id')), beforePlans);
-  const defaultPlanAsset = await created({ rubro: 'biomedico', mantenimientoFrecuencia: 'mensual', mantenimientoTitulo: '  ' });
+  const defaultPlanAsset = await created({ rubro: 'biomedico', claseRiesgo: 'I', mantenimientoFrecuencia: 'mensual', mantenimientoTitulo: '  ' });
   const defaultPlan = one('SELECT titulo FROM planes_mantenimiento WHERE activo_id=?', defaultPlanAsset.id);
   assert(defaultPlan.titulo.trim().length > 0);
   assert.equal(defaultPlan.titulo, uppercase(defaultPlan.titulo));

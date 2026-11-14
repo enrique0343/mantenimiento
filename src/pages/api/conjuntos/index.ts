@@ -2,6 +2,7 @@ import type { APIRoute } from "astro";
 import { requireUser } from "@/lib/auth";
 import { parseArea } from "@/lib/areas";
 import { CONJUNTO_LECTORES, CONJUNTO_GESTORES, respuestaErrorConjunto, conjuntoCrearSchema, crearConjunto, getConjuntos } from "@/lib/conjuntos";
+import { espacioDeLista, respuestaOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 export const GET: APIRoute = async ctx => {
   const { user, response } = await requireUser(ctx, [...CONJUNTO_LECTORES]);
@@ -9,7 +10,9 @@ export const GET: APIRoute = async ctx => {
   ctx.locals.user = user;
   const value = new URL(ctx.request.url).searchParams.get("area"), area = parseArea(value);
   if (value && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
-  try { return Response.json({ conjuntos: await getConjuntos(ctx, area) }); }
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
+  try { return Response.json({ conjuntos: await getConjuntos(ctx, area, espacio) }); }
   catch (error) { return respuestaErrorConjunto(error); }
 };
 export const POST: APIRoute = async ctx => {

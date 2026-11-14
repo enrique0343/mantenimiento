@@ -1,0 +1,194 @@
+---
+// Fase 59 · WP-D: una licencia o permiso con sus datos, situación, renovaciones, archivos
+// e historial. Editar, renovar, anular y archivos: admin y jefe; eliminar: solo admin.
+// La licencia de un equipo dado de baja se puede editar, pero no renovar (no recibe licencias nuevas).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import LicenciaForm from "@/components/bio/LicenciaForm.astro";
+import { getDb } from "@/lib/db";
+import { equiposParaElegir, licenciaConDetalle, responsablesLicencia, sedesActivas, sugerenciasServicio } from "@/lib/bio-consultas";
+import {
+  CATEGORIAS_ARCHIVO_LICENCIA, aplicaA, codigoLicencia, esDeEquipoDeBaja, etiquetaAmbito, etiquetaEntidad, etiquetaEstadoLicencia,
+  etiquetaTipoLicencia,
+} from "@/lib/licencias";
+import { ARCHIVO_ACCEPT, fechaCorta, fechaHoraSV, hoySV, puedeGestionarBio, puedeVerBio, situacionLicencia } from "@/lib/biomedico";
+import { idPositivo } from "@/lib/bio-archivos";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const id = idPositivo(Astro.params.id);
+const area = Astro.locals.area ?? null;
+if (!id) return Astro.redirect(areaHref("/licencias", area));
+const db = getDb(Astro);
+const d = await licenciaConDetalle(db, id);
+if (!d) return new Response("Licencia no encontrada", { status: 404 });
+const l = d.licencia;
+const hoy = hoySV();
+const s = situacionLicencia(l, hoy, { renovacionEnTramite: l.renovacionEnTramite });
+const codigo = codigoLicencia(l.id);
+const gestiona = puedeGestionarBio(user.rol);
+const editable = l.estado === "activa" || l.estado === "en_tramite";
+const renovacionEnCurso = d.renovaciones.find((r) => r.estado === "en_tramite") ?? null;
+const reemplazadaPor = d.renovaciones.find((r) => r.estado === "activa" || r.estado === "reemplazada") ?? null;
+const equipoDeBaja = esDeEquipoDeBaja(l);
+const enlace = (ruta: string) => areaHref(ruta, area);
+// La sede y el responsable que ya tiene van en la lista aunque estén inactivos: si no, editar los borraría.
+const [sedes, equipos, responsables, servicios] = gestiona && editable
+  ? await Promise.all([
+    sedesActivas(db, l.sucursalId), equiposParaElegir(db, { soloBiomedicos: false, activoId: l.activoId }),
+    responsablesLicencia(db, l.responsableId), sugerenciasServicio(db),
+  ])
+  : [[], [], [], []];
+const ACCION: Record<string, string> = { create: "Registro", update: "Cambio", delete: "Eliminación", estado: "Cambio de estado" };
+---
+
+<Layout title={`${codigo} · ${l.nombre}`}>
+  <div class="no-print doc-barra" data-registro-api={`/api/licencias/${l.id}`} data-registro-lista={enlace("/licencias")}>
+    <a class="btn-secondary" href={enlace("/licencias")}>Volver</a>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" class="btn-secondary" onclick="window.print()">Imprimir</button>
+      {gestiona && editable && <button type="button" class="btn-secondary" data-editar>Editar</button>}
+      {gestiona && l.estado === "activa" && !renovacionEnCurso && !equipoDeBaja && <a class="btn-primary" href={enlace(`/licencias/nueva?renueva=${l.id}`)}>Registrar renovación</a>}
+      {gestiona && renovacionEnCurso && <a class="btn-secondary" href={enlace(`/licencias/${renovacionEnCurso.id}`)}>Ver la renovación en trámite</a>}
+      {gestiona && editable && <button type="button" class="btn-secondary" data-anular>Anular</button>}
+      {user.rol === "admin" && (
+        <button type="button" class="btn-danger" data-eliminar data-titulo="¿Eliminar esta licencia?"
+          data-mensaje={`${codigo} y sus archivos se borran. ${l.estado === "activa" && l.reemplazaAId ? "La licencia que renovaba vuelve a quedar activa. " : ""}No se puede deshacer.`}>Eliminar</button>
+      )}
+    </div>
+    {gestiona && editable && (
+      <form class="hidden w-full rounded-md border border-slate-200 bg-slate-50 p-3" data-anular-form novalidate>
+        <label class="label" for="licAnularMotivo">Motivo de la anulación *</label>
+        <input id="licAnularMotivo" name="motivo" class="input" maxlength="300" placeholder="Ej.: registrada por error, revocada por la entidad" />
+        <p class="mt-1 hidden text-sm" data-msg role="alert"></p>
+        <div class="mt-2 flex gap-2">
+          <button type="submit" class="btn-danger btn-sm">Anular licencia</button>
+          <button type="button" class="btn-secondary btn-sm" data-anular-cancelar>Cancelar</button>
+        </div>
+      </form>
+    )}
+  </div>
+
+  <article class="print-doc doc-hoja" data-ver-licencia>
+    <DocCabecera titulo="Licencia o permiso" subtitulo={l.nombre} codigo={codigo} fecha={hoy} />
+    <section class="doc-seccion">
+      <p class="mb-2"><span class={`badge ${s.color}`}>{s.etiqueta}</span> <span class="text-sm text-slate-600">{s.texto !== s.etiqueta ? s.texto : ""}</span></p>
+      <table class="doc-kv">
+        <tbody>
+          <tr><th>Entidad</th><td>{etiquetaEntidad(l.entidad, l.entidadOtra)}</td><th>Número</th><td>{l.numero ?? "—"}</td></tr>
+          <tr><th>Tipo</th><td>{etiquetaTipoLicencia(l.tipo)}</td><th>Estado</th><td>{etiquetaEstadoLicencia(l.estado)}</td></tr>
+          <tr>
+            <th>Ámbito</th><td>{etiquetaAmbito(l.ambito)}</td>
+            <th>Aplica a</th>
+            <td>
+              {l.ambito === "equipo" && l.activoId ? <a href={`/activos/${l.activoId}#licencias`}>{aplicaA(l)}</a> : aplicaA(l)}
+              {equipoDeBaja && <span class="doc-nota-celda" data-equipo-baja>Equipo dado de baja: no se registran renovaciones.</span>}
+            </td>
+          </tr>
+          <tr><th>Sede</th><td>{l.sede ?? "—"}</td><th>Servicio</th><td>{l.servicio ?? "—"}</td></tr>
+          <tr><th>Titular</th><td>{l.titular ?? "—"}</td><th>Responsable</th><td>{l.responsable ?? "—"}</td></tr>
+          <tr><th>Emisión</th><td>{fechaCorta(l.fechaEmision)}</td><th>Vence</th><td>{l.fechaVencimiento ? fechaCorta(l.fechaVencimiento) : l.estado === "activa" ? "No vence" : "—"}</td></tr>
+          <tr>
+            <th>Renueva a</th><td>{d.reemplazaA ? <a href={enlace(`/licencias/${d.reemplazaA.id}`)}>{codigoLicencia(d.reemplazaA.id)}{d.reemplazaA.numero ? ` · N.º ${d.reemplazaA.numero}` : ""}</a> : "—"}</td>
+            <th>Reemplazada por</th><td>{reemplazadaPor ? <a href={enlace(`/licencias/${reemplazadaPor.id}`)}>{codigoLicencia(reemplazadaPor.id)}{reemplazadaPor.numero ? ` · N.º ${reemplazadaPor.numero}` : ""}</a> : renovacionEnCurso ? `Renovación en trámite: ${codigoLicencia(renovacionEnCurso.id)}` : "—"}</td>
+          </tr>
+          <tr><th>Notas</th><td colspan="3">{l.notas ?? "—"}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="doc-seccion">
+      <h2 class="doc-h">Archivos</h2>
+      {d.archivos.length === 0 ? <p class="doc-texto text-red-600">Falta el archivo de la licencia.</p> : (
+        <table class="doc-tabla">
+          <thead><tr><th>Archivo</th><th>Categoría</th><th class="c">Subido</th><th>Por</th></tr></thead>
+          <tbody>
+            {d.archivos.map((a) => (
+              <tr>
+                <td><a href={`/api/licencias/archivo/${a.id}`} target="_blank" rel="noopener">{a.nombre}</a></td>
+                <td>{CATEGORIAS_ARCHIVO_LICENCIA[a.categoria as keyof typeof CATEGORIAS_ARCHIVO_LICENCIA] ?? a.categoria}</td>
+                <td class="c tn">{fechaCorta(a.createdAt)}</td>
+                <td>{a.usuario ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    {d.historial.length > 0 && (
+      <section class="doc-seccion">
+        <h2 class="doc-h">Historial</h2>
+        <table class="doc-tabla">
+          <thead><tr><th class="c">Cuándo</th><th>Qué</th><th>Quién</th></tr></thead>
+          <tbody>
+            {d.historial.map((h) => (
+              <tr><td class="c tn">{fechaHoraSV(h.cuando)}</td><td>{h.resumen ?? ACCION[h.accion] ?? h.accion}</td><td>{h.usuario ?? "—"}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+    <DocFolio codigo={codigo} />
+  </article>
+
+  {gestiona && (
+    <div class="no-print card mt-4 p-5" data-registro-api={`/api/licencias/${l.id}`} data-registro-lista={enlace("/licencias")}>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="font-semibold">Archivos de la licencia</h2>
+        <button type="button" class="btn-primary text-sm" data-archivo-abrir>+ Subir archivo</button>
+      </div>
+      <form class="mt-3 hidden grid grid-cols-1 gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3" data-archivo-form novalidate>
+        <div class="sm:col-span-2">
+          <label class="label" for="licArchivo">Archivo (PDF o foto, máx. 15 MB) *</label>
+          <input id="licArchivo" name="file" type="file" accept={ARCHIVO_ACCEPT} multiple class="input" />
+        </div>
+        <div>
+          <label class="label" for="licArchivoCategoria">Categoría</label>
+          <select id="licArchivoCategoria" name="categoria" class="input">
+            {Object.entries(CATEGORIAS_ARCHIVO_LICENCIA).map(([v, t]) => <option value={v} selected={v === (l.estado === "en_tramite" ? "constancia_tramite" : "licencia")}>{t}</option>)}
+          </select>
+        </div>
+        <p class="hidden text-sm sm:col-span-3" data-msg role="alert"></p>
+        <div class="flex gap-2 sm:col-span-3">
+          <button type="submit" class="btn-primary btn-sm">Subir</button>
+          <button type="button" class="btn-secondary btn-sm" data-archivo-cancelar>Cancelar</button>
+        </div>
+      </form>
+      {d.archivos.length === 0 ? <p class="mt-3 text-sm text-slate-500">Sin archivos.</p> : (
+        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+          {d.archivos.map((a) => (
+            <li class="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span class="min-w-0">
+                <a class="break-words font-medium text-brand-700 hover:underline" href={`/api/licencias/archivo/${a.id}`} target="_blank" rel="noopener">{a.nombre}</a>
+                <span class="block text-xs text-slate-500">{CATEGORIAS_ARCHIVO_LICENCIA[a.categoria as keyof typeof CATEGORIAS_ARCHIVO_LICENCIA] ?? a.categoria} · {Math.max(1, Math.round(a.tamano / 1024))} KB · {fechaCorta(a.createdAt)}</span>
+              </span>
+              <button type="button" class="text-xs text-red-600 hover:underline" data-archivo-eliminar data-id={a.id} data-nombre={a.nombre}>Eliminar</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )}
+
+  {gestiona && editable && (
+    <LicenciaForm
+      modo="editar"
+      oculto
+      inicial={l}
+      sucursales={sedes}
+      equipos={equipos}
+      responsables={responsables}
+      sugerenciasServicio={servicios}
+      cancelarHref={enlace(`/licencias/${l.id}`)}
+    />
+  )}
+
+  <script>
+    import { instalarAccionesRegistro } from "@/components/bio/archivos-registro";
+    instalarAccionesRegistro();
+  </script>
+</Layout>

@@ -1,0 +1,162 @@
+---
+// Fase 59 · WP-D: capacitaciones al personal sobre el uso de los equipos (requisito 19;
+// apoyo al 18 con el tipo «Limpieza y desinfección»). Lista con filtros, impresión como
+// evidencia y CSV por sesión y por asistente.
+import { eq } from "drizzle-orm";
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { activos } from "@/lib/schema";
+import { listarCapacitaciones, sedesActivas } from "@/lib/bio-consultas";
+import {
+  EVIDENCIA_CAPACITACION, TIPOS_CAPACITACION, codigoCapacitacion, etiquetaTipoCapacitacion, evidenciaCapacitacion,
+  filtrarCapacitaciones, leerFiltrosCapacitacion, paramsDeFiltrosCapacitacion,
+} from "@/lib/capacitaciones";
+import { fechaCorta, hoySV, normalizarTexto, puedeRegistrarBio, puedeVerBio, sumarDias } from "@/lib/biomedico";
+import { areaHref } from "@/lib/areas";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+const db = getDb(Astro);
+const hoy = hoySV();
+const area = Astro.locals.area ?? null;
+const filtros = leerFiltrosCapacitacion(Astro.url.searchParams, hoy);
+const haceUnAnio = sumarDias(hoy, -365);
+const porDefecto = filtros.desde === haceUnAnio && !filtros.hasta && filtros.activo === null;
+const [lista, sedes, [equipoFiltro]] = await Promise.all([
+  listarCapacitaciones(db, filtros),
+  sedesActivas(db),
+  filtros.activo ? db.select({ codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado }).from(activos).where(eq(activos.id, filtros.activo)).limit(1) : Promise.resolve([]),
+]);
+// «+ Registrar capacitación» deja marcado el equipo del filtro, salvo que esté de baja (no recibe capacitaciones nuevas).
+const activoParaNueva = filtros.activo !== null && equipoFiltro?.estado !== "baja" ? filtros.activo : null;
+const anio = porDefecto ? lista : await listarCapacitaciones(db, { desde: haceUnAnio, hasta: null, activo: null });
+const realizadas = anio.filter((c) => c.fecha <= hoy);
+const tarjetas = {
+  ultimos12: realizadas.length,
+  personas: new Set(realizadas.flatMap((c) => c.asistentes.map((a) => normalizarTexto(a.nombre)))).size,
+  sinLista: realizadas.filter((c) => c.listasFirmadas === 0).length,
+  programadas: anio.filter((c) => c.fecha > hoy).length,
+};
+const filas = filtrarCapacitaciones(lista, filtros).map((c) => ({
+  ...c, ev: evidenciaCapacitacion({ fecha: c.fecha, asistentes: c.asistentes.length, listasFirmadas: c.listasFirmadas }, hoy),
+}));
+const enlace = (ruta: string) => areaHref(ruta, area);
+const qs = paramsDeFiltrosCapacitacion(filtros).toString();
+const sinActivo = () => { const p = paramsDeFiltrosCapacitacion({ ...filtros, activo: null }); if (area) p.set("area", area); return `/capacitaciones?${p}`; };
+const hayFiltros = !porDefecto || !!filtros.equipo || !!filtros.servicio || !!filtros.tipo || filtros.sede !== null;
+const describir = [
+  `Desde ${fechaCorta(filtros.desde)}${filtros.hasta ? ` hasta ${fechaCorta(filtros.hasta)}` : ""}`,
+  equipoFiltro && `${equipoFiltro.codigo} — ${equipoFiltro.nombre}`,
+  filtros.equipo && `Equipo o modelo «${filtros.equipo}»`,
+  filtros.servicio && `Servicio «${filtros.servicio}»`,
+  filtros.tipo && TIPOS_CAPACITACION[filtros.tipo],
+  filtros.sede !== null && sedes.find((s) => s.id === filtros.sede)?.nombre,
+].filter(Boolean).join(" · ");
+const equiposTexto = (c: (typeof filas)[number]) => {
+  const codigos = c.equipos.map((e) => e.codigo);
+  const base = codigos.slice(0, 3).join(", ") + (codigos.length > 3 ? ` +${codigos.length - 3}` : "");
+  return [base, c.modeloCubierto].filter(Boolean).join(" · ") || "—";
+};
+---
+
+<Layout title="Capacitaciones">
+  <div class="no-print flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-2xl font-bold">Capacitaciones</h1>
+      <p class="mt-1 text-sm text-slate-500">Capacitaciones al personal médico y de enfermería sobre el uso de los equipos.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {puedeRegistrarBio(user.rol) && <a href={enlace(`/capacitaciones/nueva${activoParaNueva ? `?activo=${activoParaNueva}` : ""}`)} class="btn-primary">+ Registrar capacitación</a>}
+      <a href={`/api/capacitaciones/exportar?${qs}`} class="btn-secondary">CSV por sesión</a>
+      <a href={`/api/capacitaciones/exportar?${qs}&detalle=asistentes`} class="btn-secondary">CSV de asistentes</a>
+      <button type="button" class="btn-secondary" onclick="window.print()">Imprimir evidencia</button>
+    </div>
+  </div>
+
+  <div class="no-print mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="card p-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Últimos 12 meses</div><div class="mt-1 text-3xl font-bold text-slate-800">{tarjetas.ultimos12}</div><div class="text-[11px] text-slate-500">capacitaciones realizadas</div></div>
+    <div class="card p-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personas capacitadas</div><div class="mt-1 text-3xl font-bold text-slate-800">{tarjetas.personas}</div><div class="text-[11px] text-slate-500">en los últimos 12 meses</div></div>
+    <div class="card p-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Sin lista firmada</div><div class={`mt-1 text-3xl font-bold ${tarjetas.sinLista ? "text-amber-700" : "text-emerald-700"}`}>{tarjetas.sinLista}</div><div class="text-[11px] text-slate-500">de los últimos 12 meses</div></div>
+    <div class="card p-4"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Programadas</div><div class="mt-1 text-3xl font-bold text-sky-700">{tarjetas.programadas}</div><div class="text-[11px] text-slate-500">con fecha futura</div></div>
+  </div>
+
+  <form method="get" class="no-print card mt-4 grid grid-cols-1 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-7">
+    {area && <input type="hidden" name="area" value={area} />}
+    {filtros.activo !== null && <input type="hidden" name="activo" value={filtros.activo} />}
+    <div><label class="label" for="capDesde">Desde</label><input id="capDesde" name="desde" type="date" class="input" value={filtros.desde} /></div>
+    <div><label class="label" for="capHasta">Hasta</label><input id="capHasta" name="hasta" type="date" class="input" value={filtros.hasta ?? ""} /></div>
+    <div><label class="label" for="capEquipo">Equipo o modelo</label><input id="capEquipo" name="equipo" type="search" class="input" value={filtros.equipo} placeholder="Código, nombre o modelo" /></div>
+    <div><label class="label" for="capServicio">Servicio</label><input id="capServicio" name="servicio" type="search" class="input" value={filtros.servicio} /></div>
+    <div>
+      <label class="label" for="capTipo">Tipo</label>
+      <select id="capTipo" name="tipo" class="input">
+        <option value="">Todos</option>
+        {Object.entries(TIPOS_CAPACITACION).map(([v, t]) => <option value={v} selected={filtros.tipo === v}>{t}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label" for="capSede">Sede</label>
+      <select id="capSede" name="sede" class="input">
+        <option value="">Todas</option>
+        {sedes.map((s) => <option value={s.id} selected={filtros.sede === s.id}>{s.nombre}</option>)}
+      </select>
+    </div>
+    <div class="flex items-end gap-2">
+      <button type="submit" class="btn-primary">Filtrar</button>
+      {hayFiltros && <a href={enlace("/capacitaciones")} class="btn-secondary">Limpiar</a>}
+    </div>
+  </form>
+
+  {filtros.activo !== null && (
+    <p class="no-print mt-3 text-sm text-slate-600">
+      Mostrando las capacitaciones de {equipoFiltro ? `${equipoFiltro.codigo} — ${equipoFiltro.nombre}` : "este equipo"}{equipoFiltro?.estado === "baja" ? " (dado de baja: no recibe capacitaciones nuevas)" : ""}. <a class="text-brand-700 underline" href={sinActivo()}>Quitar filtro</a>
+    </p>
+  )}
+
+  <article class="print-doc doc-hoja doc-ancha mt-4 hidden sm:block print:block">
+    <DocCabecera soloImpresion titulo="Capacitaciones al personal" subtitulo={describir} />
+    {filas.length === 0 ? (
+      <p class="doc-texto">No hay capacitaciones con esos filtros.</p>
+    ) : (
+      <table class="doc-tabla">
+        <thead>
+          <tr><th class="c">Fecha</th><th>Tema</th><th>Equipos o modelo</th><th>Instructor</th><th>Sede · Lugar</th><th>Servicio</th><th class="n">Asistentes</th><th>Evidencia</th></tr>
+        </thead>
+        <tbody>
+          {filas.map((c) => (
+            <tr>
+              <td class="c tn">{fechaCorta(c.fecha)}</td>
+              <td><a href={enlace(`/capacitaciones/${c.id}`)}>{c.tema}</a><span class="block text-[11px] text-slate-500">{codigoCapacitacion(c.id)} · {etiquetaTipoCapacitacion(c.tipo)}</span></td>
+              <td>{equiposTexto(c)}</td>
+              <td>{c.instructorNombre}<span class="block text-[11px] text-slate-500">{c.instructorTipo === "externo" ? (c.proveedor ?? c.instructorEntidad ?? "Externo") : "Interno"}</span></td>
+              <td>{[c.sede, c.lugar].filter(Boolean).join(" · ") || "—"}</td>
+              <td>{c.servicio ?? "—"}</td>
+              <td class="n">{c.asistentes.length}</td>
+              <td><span class={`badge text-[10px] ${EVIDENCIA_CAPACITACION[c.ev].color}`}>{EVIDENCIA_CAPACITACION[c.ev].etiqueta}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+    <p class="doc-nota">{filas.length} capacitaci{filas.length === 1 ? "ón" : "ones"} · {describir} · Corte: {fechaCorta(hoy)}.</p>
+    <DocFolio soloImpresion codigo="Capacitaciones al personal" />
+  </article>
+
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:hidden print:hidden">
+    {filas.length === 0 && <div class="card p-6 text-center text-sm text-slate-500">No hay capacitaciones con esos filtros.</div>}
+    {filas.map((c) => (
+      <a href={enlace(`/capacitaciones/${c.id}`)} class="card block p-4 no-underline hover:bg-slate-50">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-xs text-slate-500">{fechaCorta(c.fecha)} · {codigoCapacitacion(c.id)}</span>
+          <span class={`badge text-[10px] ${EVIDENCIA_CAPACITACION[c.ev].color}`}>{EVIDENCIA_CAPACITACION[c.ev].etiqueta}</span>
+        </div>
+        <div class="mt-1 font-semibold text-slate-900">{c.tema}</div>
+        <div class="mt-1 text-sm text-slate-600">{etiquetaTipoCapacitacion(c.tipo)} · {c.instructorNombre}</div>
+        <div class="mt-1 text-xs text-slate-500">{equiposTexto(c)} · {c.asistentes.length} asistente{c.asistentes.length === 1 ? "" : "s"}</div>
+      </a>
+    ))}
+  </div>
+</Layout>

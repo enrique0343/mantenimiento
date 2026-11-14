@@ -6,10 +6,15 @@ import { eq, and, gte, lte, isNotNull } from "drizzle-orm";
 import { ESTADO_COLOR, TIPO_COLOR, type EstadoOT } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
+import { condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const url = new URL(Astro.request.url);
 const area = parseArea(url.searchParams.get("area"));
+// Solo lo del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, Astro.locals.user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const deOrdenes = condicionTrabajoAreaEspacio(ordenes.rubro, ordenes.activoId, espacio, area);
 const monthParam = url.searchParams.get("m"); // YYYY-MM
 const today = new Date();
 const [yy, mm] = monthParam
@@ -36,21 +41,21 @@ const otRows = await db
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(area ? eq(ordenes.rubro, area) : undefined, isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, firstStr), lte(ordenes.vencimiento, lastStr + "T23:59:59")));
+  .where(and(deOrdenes, isNotNull(ordenes.vencimiento), gte(ordenes.vencimiento, firstStr), lte(ordenes.vencimiento, lastStr + "T23:59:59")));
 
 // Planes con proxima fecha en el mes
 const planRows = await db
   .select({ p: planesMantenimiento, a: activos })
   .from(planesMantenimiento)
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-  .where(and(area ? activoAreaCondition(area) : undefined, eq(planesMantenimiento.activo, true), gte(planesMantenimiento.proximaFecha, firstStr), lte(planesMantenimiento.proximaFecha, lastStr)));
+  .where(and(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio), eq(planesMantenimiento.activo, true), gte(planesMantenimiento.proximaFecha, firstStr), lte(planesMantenimiento.proximaFecha, lastStr)));
 
 // Carga por tecnico (OTs activas asignadas)
 const cargas = await db
   .select({ u: usuarios, o: ordenes })
   .from(ordenes)
   .innerJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(isNotNull(ordenes.asignadoA), area ? eq(ordenes.rubro, area) : undefined));
+  .where(and(isNotNull(ordenes.asignadoA), deOrdenes));
 
 const cargaMap = new Map<number, { nombre: string; abierta: number; en_proceso: number; completada: number; total: number }>();
 for (const r of cargas) {

@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { activoRespaldos, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { espacioDeActivo } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -20,8 +21,11 @@ export const POST: APIRoute = async (ctx) => {
   if (parsed.data.respaldoId === activoId) return Response.json({ error: "Un equipo no puede ser su propio respaldo" }, { status: 400 });
 
   const db = getDb(ctx);
-  const [respaldo] = await db.select({ id: activos.id, codigo: activos.codigo }).from(activos).where(eq(activos.id, parsed.data.respaldoId)).limit(1);
+  const [respaldo] = await db.select({ id: activos.id, codigo: activos.codigo, rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, parsed.data.respaldoId)).limit(1);
   if (!respaldo) return Response.json({ error: "Equipo de respaldo no encontrado" }, { status: 404 });
+  // El respaldo es del mismo espacio que el equipo (la ficha solo ofrece esos).
+  const [propio] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1);
+  if (propio && espacioDeActivo(propio) !== espacioDeActivo(respaldo)) return Response.json({ error: "El respaldo tiene que ser un equipo del mismo espacio." }, { status: 400 });
 
   await db.insert(activoRespaldos).values({
     activoId, respaldoId: parsed.data.respaldoId, notas: parsed.data.notas ?? null,

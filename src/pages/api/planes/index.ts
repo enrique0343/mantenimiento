@@ -5,6 +5,7 @@ import { planesMantenimiento, activos, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 
 import { parseArea, activoAreaCondition } from "@/lib/areas";
+import { condicionActivoEspacio, espacioDeLista, respuestaOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 export const GET: APIRoute = async (ctx) => {
@@ -13,13 +14,20 @@ export const GET: APIRoute = async (ctx) => {
   const areaParam = ctx.url.searchParams.get("area");
   const area = parseArea(areaParam);
   if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
   const db = getDb(ctx);
   const rows = await db
-    .select({ p: planesMantenimiento, a: activos, u: usuarios })
+    // Columnas explícitas: D1 corta el resultado a 100 columnas.
+    .select({
+      p: planesMantenimiento,
+      a: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro },
+      u: { id: usuarios.id, nombre: usuarios.nombre },
+    })
     .from(planesMantenimiento)
     .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
     .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
-    .where(and(eq(planesMantenimiento.activo, true), area ? activoAreaCondition(area) : undefined))
+    .where(and(eq(planesMantenimiento.activo, true), area ? activoAreaCondition(area) : condicionActivoEspacio(espacio)))
     .orderBy(asc(planesMantenimiento.proximaFecha));
   return Response.json({
     planes: rows.map((r) => ({

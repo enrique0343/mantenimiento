@@ -16,9 +16,9 @@ export const GET: APIRoute = async (ctx) => {
     const raw = q.get("ubicacion");
     const id = raw === "sin" ? null : Number(raw);
     if (id !== null && (!Number.isInteger(id) || id <= 0)) return Response.json({ error: "Ubicación inválida" }, { status: 400 });
-    return Response.json({ equipos: await equiposDeUbicacion(db, id) });
+    return Response.json({ equipos: await equiposDeUbicacion(db, id, user) });
   }
   const sede = Number(q.get("sede"));
   if (!Number.isInteger(sede) || sede <= 0) return Response.json({ error: "Falta la sede" }, { status: 400 });
-  return Response.json(await ubicacionesDeSede(db, sede));
+  return Response.json(await ubicacionesDeSede(db, sede, user));
 };

@@ -1,0 +1,244 @@
+---
+// Tablero de seguridad eléctrica (IEC 62353): última prueba, resultado y próxima
+// de los equipos biomédicos de clase de riesgo III (o de todos los biomédicos).
+import Layout from "@/layouts/Layout.astro";
+import DocCabecera from "@/components/DocCabecera.astro";
+import DocFolio from "@/components/DocFolio.astro";
+import { getDb } from "@/lib/db";
+import { sucursales } from "@/lib/schema";
+import { asc, eq } from "drizzle-orm";
+import { areaHref, parseArea } from "@/lib/areas";
+import {
+  DIAS_AVISO, ESTADO_SEG_ELEC_COLOR, ESTADO_SEG_ELEC_LABEL, RESULTADO_SE_COLOR, RESULTADO_SE_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL,
+  etiquetaClaseRiesgo, fechaCorta, hoySV, puedeGestionarBio, puedeVerBio, type EstadoSeguridadElectrica,
+} from "@/lib/biomedico";
+import { ALCANCE_SE_LABEL, idPositivo, leerAlcance, porcentajeAlDia, tableroSeguridadElectrica } from "@/lib/seguridad-electrica";
+export const prerender = false;
+
+const user = Astro.locals.user!;
+if (!puedeVerBio(user.rol)) return Astro.redirect("/");
+
+const params = Astro.url.searchParams;
+// Enlace de la ficha del equipo: /seguridad-electrica?activo=ID → pruebas de ese equipo.
+const activoAlias = idPositivo(params.get("activo"));
+if (activoAlias) return Astro.redirect(`/activos/${activoAlias}/seguridad-electrica`);
+
+const ESTADOS: EstadoSeguridadElectrica[] = ["no_pasa", "vencida", "sin_prueba", "por_vencer", "vigente"];
+const alcance = leerAlcance(params.get("alcance"));
+const estadoParam = params.get("estado");
+const estado = ESTADOS.includes(estadoParam as EstadoSeguridadElectrica) ? (estadoParam as EstadoSeguridadElectrica) : null;
+const sucursalId = idPositivo(params.get("sucursal"));
+const area = parseArea(params.get("area"));
+
+const db = getDb(Astro);
+const hoy = hoySV();
+const [tablero, sedes] = await Promise.all([
+  tableroSeguridadElectrica(db, { alcance, sucursalId, hoy }),
+  db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre)),
+]);
+const filas = estado ? tablero.filas.filter((f) => f.estado === estado) : tablero.filas;
+const pct = porcentajeAlDia(tablero);
+const puedeGestionar = puedeGestionarBio(user.rol);
+const sedeNombre = sucursalId ? sedes.find((s) => s.id === sucursalId)?.nombre ?? null : null;
+
+/** Misma página con otros filtros (los que no se pasan se conservan). */
+function enlace(cambios: { alcance?: string; estado?: string | null; sucursal?: number | null }) {
+  const q = new URLSearchParams();
+  if (area) q.set("area", area);
+  q.set("alcance", cambios.alcance ?? alcance);
+  const e = cambios.estado === undefined ? estado : cambios.estado;
+  if (e) q.set("estado", e);
+  const s = cambios.sucursal === undefined ? sucursalId : cambios.sucursal;
+  if (s) q.set("sucursal", String(s));
+  return `/seguridad-electrica?${q.toString()}`;
+}
+const csvHref = (() => {
+  const q = new URLSearchParams({ alcance });
+  if (estado) q.set("estado", estado);
+  if (sucursalId) q.set("sucursal", String(sucursalId));
+  return `/api/seguridad-electrica/csv?${q.toString()}`;
+})();
+const subtitulo = `IEC 62353 · ${ALCANCE_SE_LABEL[alcance]}${estado ? ` · ${ESTADO_SEG_ELEC_LABEL[estado]}` : ""}${sedeNombre ? ` · ${sedeNombre}` : ""}`;
+const tarjetas: Array<{ etiqueta: string; valor: number; estado: EstadoSeguridadElectrica | null; color: string }> = [
+  { etiqueta: "Equipos", valor: tablero.total, estado: null, color: "text-slate-800" },
+  { etiqueta: "Vigentes", valor: tablero.conteo.vigente, estado: "vigente", color: "text-emerald-700" },
+  { etiqueta: `Por vencer (${DIAS_AVISO.seguridadElectrica} días)`, valor: tablero.conteo.por_vencer, estado: "por_vencer", color: "text-amber-700" },
+  { etiqueta: "Vencidas", valor: tablero.conteo.vencida, estado: "vencida", color: "text-red-700" },
+  { etiqueta: "No pasaron", valor: tablero.conteo.no_pasa, estado: "no_pasa", color: "text-red-700" },
+  { etiqueta: "Sin prueba", valor: tablero.conteo.sin_prueba, estado: "sin_prueba", color: "text-slate-700" },
+];
+const fichaHref = (id: number) => areaHref(`/activos/${id}`, "biomedico");
+const registroHref = (id: number) => areaHref(`/seguridad-electrica/${id}`, "biomedico");
+---
+
+<Layout title="Seguridad eléctrica">
+  <div class="print-doc doc-hoja doc-ancha">
+    <DocCabecera soloImpresion titulo="Seguridad eléctrica de equipos biomédicos" subtitulo={subtitulo} fecha={hoy} />
+
+    <div class="no-print flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold">Seguridad eléctrica</h1>
+        <p class="mt-1 text-sm text-slate-500">Pruebas IEC 62353 de los equipos biomédicos: última prueba, resultado y próxima.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href={csvHref} class="btn-secondary">Descargar CSV</a>
+        <button type="button" onclick="window.print()" class="btn-primary">Imprimir evidencia</button>
+      </div>
+    </div>
+
+    <form method="get" action="/seguridad-electrica" class="no-print card mt-4 flex flex-wrap items-end gap-3 p-4">
+      {area && <input type="hidden" name="area" value={area} />}
+      <div>
+        <label class="label" for="f-alcance">Alcance</label>
+        <select id="f-alcance" name="alcance" class="input">
+          <option value="clase3" selected={alcance === "clase3"}>Clase de riesgo III</option>
+          <option value="biomedicos" selected={alcance === "biomedicos"}>Todos los biomédicos</option>
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f-estado">Estado</label>
+        <select id="f-estado" name="estado" class="input">
+          <option value="" selected={!estado}>Todos</option>
+          {ESTADOS.map((e) => <option value={e} selected={estado === e}>{ESTADO_SEG_ELEC_LABEL[e]}</option>)}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f-sede">Sede</label>
+        <select id="f-sede" name="sucursal" class="input">
+          <option value="" selected={!sucursalId}>Todas</option>
+          {sedes.map((s) => <option value={s.id} selected={sucursalId === s.id}>{s.nombre}</option>)}
+        </select>
+      </div>
+      <button type="submit" class="btn-primary">Ver</button>
+      {(estado || sucursalId || alcance !== "clase3") && <a href={area ? `/seguridad-electrica?area=${area}` : "/seguridad-electrica"} class="btn-secondary">Quitar filtros</a>}
+    </form>
+
+    <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+      {tarjetas.map((t) => (
+        <a href={enlace({ estado: t.estado })} class:list={["card block p-3 hover:bg-slate-50", { "ring-2 ring-blue-300": t.estado !== null && estado === t.estado }]}>
+          <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{t.etiqueta}</div>
+          <div class={`mt-1 text-2xl font-bold ${t.color}`}>{t.valor}</div>
+        </a>
+      ))}
+      <div class="card p-3">
+        <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Al día</div>
+        <div class:list={["mt-1 text-2xl font-bold", pct === null ? "text-slate-400" : pct >= 95 ? "text-emerald-700" : pct >= 80 ? "text-amber-700" : "text-red-700"]}>{pct === null ? "—" : `${pct} %`}</div>
+        <div class="text-[11px] text-slate-400">vigentes o por vencer</div>
+      </div>
+    </div>
+
+    <div class="mt-4 card p-0">
+      {tablero.total === 0 ? (
+        <div class="p-6 text-sm text-slate-600">
+          {alcance === "clase3" ? (
+            <p>No hay equipos biomédicos con clase de riesgo III. <a class="font-semibold text-blue-700 underline" href="/activos?area=biomedico&clase=III&estado=vigentes">Revisa la clasificación</a> o mira <a class="font-semibold text-blue-700 underline" href={enlace({ alcance: "biomedicos", estado: null })}>«Todos los biomédicos»</a>.</p>
+          ) : (
+            <p>No hay equipos biomédicos en servicio{sedeNombre ? ` en ${sedeNombre}` : ""}.</p>
+          )}
+        </div>
+      ) : filas.length === 0 ? (
+        <p class="p-6 text-sm text-slate-600">Ningún equipo está en «{estado ? ESTADO_SEG_ELEC_LABEL[estado] : ""}» con estos filtros. <a class="font-semibold text-blue-700 underline" href={enlace({ estado: null })}>Ver todos</a>.</p>
+      ) : (
+        <div class="se-tabla overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th class="px-3 py-2">Código</th>
+                <th class="px-3 py-2">Equipo</th>
+                <th class="px-3 py-2">Marca / Modelo</th>
+                <th class="px-3 py-2">Serie</th>
+                <th class="px-3 py-2">Ubicación</th>
+                <th class="px-3 py-2">Clase de riesgo</th>
+                <th class="px-3 py-2">Última prueba</th>
+                <th class="px-3 py-2">Tipo</th>
+                <th class="px-3 py-2">Resultado</th>
+                <th class="px-3 py-2">Próxima</th>
+                <th class="px-3 py-2">Estado</th>
+                <th class="px-3 py-2">Informe</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {filas.map((f) => (
+                <tr>
+                  <td class="px-3 py-2 font-mono text-xs"><a class="text-blue-700 hover:underline" href={fichaHref(f.activoId)}>{f.codigo}</a></td>
+                  <td class="px-3 py-2">{f.nombre}</td>
+                  <td class="px-3 py-2 text-slate-600">{[f.marca, f.modelo].filter(Boolean).join(" / ") || "—"}</td>
+                  <td class="px-3 py-2 font-mono text-xs">{f.serial ?? "—"}</td>
+                  <td class="px-3 py-2 text-slate-600">{[f.sucursal, f.ubicacion].filter(Boolean).join(" · ") || "—"}</td>
+                  <td class="px-3 py-2 text-xs">{etiquetaClaseRiesgo(f.claseRiesgo)}</td>
+                  <td class="px-3 py-2 whitespace-nowrap">
+                    {f.ultima ? <a class="text-blue-700 hover:underline" href={registroHref(f.ultima.id)}>{fechaCorta(f.ultima.fecha)}</a> : "—"}
+                  </td>
+                  <td class="px-3 py-2 text-xs">{f.ultima ? TIPO_PRUEBA_ELECTRICA_LABEL[f.ultima.tipo] : "—"}</td>
+                  <td class="px-3 py-2">{f.ultima ? <span class={`badge ${RESULTADO_SE_COLOR[f.ultima.resultado]}`}>{RESULTADO_SE_LABEL[f.ultima.resultado]}</span> : "—"}</td>
+                  <td class="px-3 py-2 whitespace-nowrap">{f.ultima ? fechaCorta(f.ultima.proximaFecha) : "—"}</td>
+                  <td class="px-3 py-2"><span class={`badge ${ESTADO_SEG_ELEC_COLOR[f.estado]}`}>{ESTADO_SEG_ELEC_LABEL[f.estado]}</span></td>
+                  <td class="px-3 py-2 text-xs">{f.ultima ? (f.ultima.tieneInforme ? "Sí" : "No") : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+
+    <div class="mt-4 card p-4 text-sm">
+      <p class="text-slate-700">Periodicidad de la prueba: <strong id="se-meses-texto">{tablero.periodicidadMeses} {tablero.periodicidadMeses === 1 ? "mes" : "meses"}</strong>.</p>
+      {puedeGestionar && (
+        <form id="se-periodicidad" class="no-print mt-3 flex flex-wrap items-end gap-2" data-meses={tablero.periodicidadMeses}>
+          <div>
+            <label class="label" for="se-meses">Cambiar (meses)</label>
+            <input id="se-meses" name="meses" type="number" min="1" max="60" step="1" required class="input w-28" value={tablero.periodicidadMeses} />
+          </div>
+          <button type="submit" class="btn-secondary">Guardar</button>
+          <p id="se-periodicidad-msg" class="w-full text-xs text-slate-500" role="status">Vale para las pruebas que se registren desde ahora; las registradas conservan su próxima fecha.</p>
+        </form>
+      )}
+    </div>
+
+    <p class="mt-4 text-xs text-slate-500">Clase de riesgo III es la clasificación sanitaria del equipo. Clase I o II es su protección eléctrica. No son lo mismo.</p>
+    <p class="mt-1 text-[11px] text-slate-400">Generado el {fechaCorta(hoy)} · «Por vencer»: la próxima prueba cae en los próximos {DIAS_AVISO.seguridadElectrica} días · No se cuentan los equipos dados de baja ni los equipos patrón.</p>
+
+    <DocFolio soloImpresion codigo="Seguridad eléctrica IEC 62353" />
+  </div>
+
+  <style is:global>
+    @media print {
+      .se-tabla { overflow: visible !important; }
+    }
+  </style>
+</Layout>
+
+<script>
+  const form = document.getElementById("se-periodicidad") as HTMLFormElement | null;
+  if (form) form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("se-meses") as HTMLInputElement;
+    const msg = document.getElementById("se-periodicidad-msg");
+    const boton = form.querySelector("button[type=submit]") as HTMLButtonElement | null;
+    const meses = Number(input.value);
+    const mostrar = (texto: string, error = false) => {
+      if (!msg) return;
+      msg.textContent = texto;
+      msg.className = `w-full text-xs ${error ? "text-red-600" : "text-emerald-700"}`;
+    };
+    if (!Number.isInteger(meses) || meses < 1 || meses > 60) return mostrar("Escribe un número de meses entre 1 y 60.", true);
+    if (boton) boton.disabled = true;
+    try {
+      const res = await fetch("/api/seguridad-electrica/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ meses }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) return mostrar(typeof j.error === "string" ? j.error : "No se pudo guardar. Intenta de nuevo.", true);
+      const texto = document.getElementById("se-meses-texto");
+      if (texto) texto.textContent = `${j.meses} ${j.meses === 1 ? "mes" : "meses"}`;
+      mostrar("Guardado. Vale para las pruebas que se registren desde ahora.");
+    } catch {
+      mostrar("Sin conexión. Intenta de nuevo.", true);
+    } finally {
+      if (boton) boton.disabled = false;
+    }
+  });
+</script>

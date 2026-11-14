@@ -2,10 +2,11 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, ubicaciones, sucursales, ordenes, planesMantenimiento } from "@/lib/schema";
-import { eq, asc, inArray, and, isNotNull, sql } from "drizzle-orm";
+import { eq, asc, and, isNotNull, sql } from "drizzle-orm";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
 import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 export const prerender = false;
 
@@ -20,13 +21,17 @@ const url = new URL(Astro.request.url);
 const area = parseArea(url.searchParams.get("area"));
 const sucursalFiltro = url.searchParams.get("sucursal");
 const tipoFiltro = url.searchParams.get("tipo");
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+// Una lista de ids en un solo parámetro: D1 no acepta más de 100 por consulta.
+const enLista = (col: typeof ordenes.activoId | typeof planesMantenimiento.activoId, ids: number[]) => sql`${col} in (select value from json_each(${JSON.stringify(ids)}))`;
 
 const all = await db
   .select({ a: activos, ub: ubicaciones, s: sucursales })
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(area ? activoAreaCondition(area) : undefined)
+  .where(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio))
   .orderBy(asc(activos.codigo));
 
 const filtered = all.filter((r) =>
@@ -48,14 +53,14 @@ if (idsFiltrados.length > 0) {
   const ultimas = await db
     .select({ activoId: ordenes.activoId, f: sql<string>`MAX(${ordenes.completadaEn})` })
     .from(ordenes)
-    .where(and(inArray(ordenes.activoId, idsFiltrados), isNotNull(ordenes.completadaEn)))
+    .where(and(enLista(ordenes.activoId, idsFiltrados), isNotNull(ordenes.completadaEn)))
     .groupBy(ordenes.activoId);
   for (const u of ultimas) if (u.activoId && u.f) ultimaMap.set(u.activoId, u.f);
 
   const proximas = await db
     .select({ activoId: planesMantenimiento.activoId, f: sql<string>`MIN(${planesMantenimiento.proximaFecha})` })
     .from(planesMantenimiento)
-    .where(and(inArray(planesMantenimiento.activoId, idsFiltrados), eq(planesMantenimiento.activo, true)))
+    .where(and(enLista(planesMantenimiento.activoId, idsFiltrados), eq(planesMantenimiento.activo, true)))
     .groupBy(planesMantenimiento.activoId);
   for (const p of proximas) if (p.activoId && p.f) proximaMap.set(p.activoId, p.f);
 }

@@ -14,11 +14,19 @@ import {
 import { horasFueraRangoPorSala } from "@/lib/aop";
 import { fmtFechaSolo, fmtFechaSoloCompacta, fmtFechaCompacta } from "@/lib/datetime";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { ESPACIOS, areaEnEspacio, condicionActivoEspacio, espacioDelContexto, condicionOrdenEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
 const esAdmin = user.rol === "admin";
+// Los indicadores del espacio: órdenes por su rubro, equipos por su área. Lo de
+// rondas, desviaciones y sistemas (GO-GUI-011) es de General.
+const espacio = espacioDelContexto(Astro, user);
+const esBio = espacio === "biomedico";
+const deOrdenes = condicionOrdenEspacio(espacio);
+const deEquipos = condicionActivoEspacio(espacio);
+const scopesVista = SCOPES.filter((s) => s === espacio);
 
 const db = getDb(Astro);
 const now = new Date();
@@ -32,6 +40,7 @@ const inicio30d = aplicarLineaBase(inicio30dRaw);
 const totalesEstado = await db
   .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
   .from(ordenes)
+  .where(deOrdenes)
   .groupBy(ordenes.estado);
 const total = totalesEstado.reduce((s, r) => s + Number(r.n), 0);
 const get = (estado: string) => Number(totalesEstado.find((r) => r.estado === estado)?.n ?? 0);
@@ -41,7 +50,7 @@ const get = (estado: string) => Number(totalesEstado.find((r) => r.estado === es
 const vencidasRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
-  .where(sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada') AND ${ordenes.createdAt} >= ${KPI_BASELINE_DATE}`);
+  .where(and(deOrdenes, sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso','completada') AND ${ordenes.createdAt} >= ${KPI_BASELINE_DATE}`));
 const vencidas = Number(vencidasRows[0]?.n ?? 0);
 
 // % cumplimiento SLA: completadas a tiempo / total completadas con vencimiento
@@ -53,6 +62,7 @@ const slaRows = await db
   })
   .from(ordenes)
   .where(and(
+    deOrdenes,
     isNotNull(ordenes.completadaEn),
     isNotNull(ordenes.vencimiento),
     gte(ordenes.completadaEn, inicio30d),
@@ -66,6 +76,7 @@ const cumplimientoSla = slaTotal > 0 ? (slaATiempo / slaTotal) * 100 : 100;
 const porTipo = await db
   .select({ tipo: ordenes.tipo, n: sql<number>`count(*)` })
   .from(ordenes)
+  .where(deOrdenes)
   .groupBy(ordenes.tipo);
 
 // MTTR (30d): tiempo promedio creación → completada, sólo de OTs creadas
@@ -74,6 +85,7 @@ const completadas30d = await db
   .select({ createdAt: ordenes.createdAt, completadaEn: ordenes.completadaEn })
   .from(ordenes)
   .where(and(
+    deOrdenes,
     gte(ordenes.completadaEn, inicio30d),
     isNotNull(ordenes.completadaEn),
     gte(ordenes.createdAt, KPI_BASELINE_DATE),
@@ -92,7 +104,7 @@ if (completadas30d.length > 0) {
 const correctivos30dRows = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
-  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio30d)));
+  .where(and(deOrdenes, eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio30d)));
 const correctivos30d = Number(correctivos30dRows[0]?.n ?? 0);
 const mtbfHoras = correctivos30d > 0 ? (30 * 24) / correctivos30d : 0;
 
@@ -106,7 +118,7 @@ const topEquipos = await db
   })
   .from(ordenes)
   .leftJoin(activos, eq(activos.id, ordenes.activoId))
-  .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicioAno), isNotNull(ordenes.activoId)))
+  .where(and(deOrdenes, eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicioAno), isNotNull(ordenes.activoId)))
   .groupBy(ordenes.activoId)
   .orderBy(desc(sql`count(*)`))
   .limit(10);
@@ -123,14 +135,14 @@ const topTecnicos = await db
   })
   .from(ordenes)
   .leftJoin(usuarios, eq(usuarios.id, ordenes.asignadoA))
-  .where(and(isNotNull(ordenes.asignadoA), isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicioAno)))
+  .where(and(deOrdenes, isNotNull(ordenes.asignadoA), isNotNull(ordenes.completadaEn), gte(ordenes.completadaEn, inicioAno)))
   .groupBy(ordenes.asignadoA)
   .orderBy(desc(sql`COUNT(*)`))
   .limit(10);
 
 // Disponibilidad estimada
-const totalActivos = (await db.select({ n: sql<number>`count(*)` }).from(activos))[0]?.n ?? 0;
-const operativos = (await db.select({ n: sql<number>`count(*)` }).from(activos).where(eq(activos.estado, "operativo")))[0]?.n ?? 0;
+const totalActivos = (await db.select({ n: sql<number>`count(*)` }).from(activos).where(deEquipos))[0]?.n ?? 0;
+const operativos = (await db.select({ n: sql<number>`count(*)` }).from(activos).where(and(deEquipos, eq(activos.estado, "operativo"))))[0]?.n ?? 0;
 const disponibilidad = totalActivos > 0 ? (Number(operativos) / Number(totalActivos)) * 100 : 0;
 
 // Costo estimado de repuestos en el año
@@ -140,7 +152,8 @@ const costoRepRows = await db
   })
   .from(ordenRepuestos)
   .leftJoin(itemsTable, eq(itemsTable.id, ordenRepuestos.itemId))
-  .where(gte(ordenRepuestos.createdAt, inicioAno));
+  .innerJoin(ordenes, eq(ordenes.id, ordenRepuestos.ordenId))
+  .where(and(deOrdenes, gte(ordenRepuestos.createdAt, inicioAno)));
 const costoTotal = Number(costoRepRows[0]?.total ?? 0);
 
 // Satisfacción
@@ -150,7 +163,8 @@ const [satRow] = await db
     avg: sql<number>`AVG(${encuestasSatisfaccion.calificacion})`,
   })
   .from(encuestasSatisfaccion)
-  .where(isNotNull(encuestasSatisfaccion.respondidaEn));
+  .leftJoin(ordenes, eq(ordenes.id, encuestasSatisfaccion.ordenId))
+  .where(and(isNotNull(encuestasSatisfaccion.respondidaEn), deOrdenes));
 const satN = Number(satRow?.n ?? 0);
 const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
 
@@ -163,11 +177,11 @@ for (let i = 11; i >= 0; i--) {
   const [completadas] = await db
     .select({ n: sql<number>`COUNT(*)` })
     .from(ordenes)
-    .where(and(gte(ordenes.completadaEn, inicio), sql`${ordenes.completadaEn} < ${fin}`));
+    .where(and(deOrdenes, gte(ordenes.completadaEn, inicio), sql`${ordenes.completadaEn} < ${fin}`));
   const [correctivas] = await db
     .select({ n: sql<number>`COUNT(*)` })
     .from(ordenes)
-    .where(and(eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), sql`${ordenes.createdAt} < ${fin}`));
+    .where(and(deOrdenes, eq(ordenes.tipo, "correctivo"), gte(ordenes.createdAt, inicio), sql`${ordenes.createdAt} < ${fin}`));
   const mesEs = d.toLocaleDateString("es", { month: "short", timeZone: "America/El_Salvador" }).replace(".", "");
   tendencia.push({
     mes: `${mesEs} ${String(d.getFullYear()).slice(2)}`,
@@ -189,7 +203,8 @@ for (const r of metricasRows) { (serie[r.scope] ??= {})[r.periodo] = r; }
 const hayMetricas = metricasRows.length > 0;
 const periodosConDatos = periodos12.filter((p) => metricasRows.some((r) => r.periodo === p));
 const ultimoPeriodo = periodosConDatos[periodosConDatos.length - 1] ?? null;
-const metricasJson = JSON.stringify({ periodos: periodos12, serie });
+// Solo la serie del espacio: la del otro no viaja en la página.
+const metricasJson = JSON.stringify({ periodos: periodos12, serie: Object.fromEntries(scopesVista.map((sc) => [sc, serie[sc] ?? {}])) });
 
 function mesLabel(periodo: string): string {
   const [y, m] = periodo.split("-").map(Number);
@@ -279,7 +294,8 @@ const desviacionesTotal = salasFueraRango.reduce((s2, r) => s2 + r.desvAnio, 0);
 const escaladasTotal = salasFueraRango.reduce((s2, r) => s2 + r.escAnio, 0);
 
 // Indicador 1 — cumplimiento del preventivo por dominio.
-const cumplDominio = await cumplimientoPreventivoPorDominio(db, inicioAnoRaw, finVentana);
+const cumplDominio = (await cumplimientoPreventivoPorDominio(db, inicioAnoRaw, finVentana))
+  .filter((r) => r.dominio === "sin_dominio" ? !esBio : areaEnEspacio(r.dominio, espacio));
 const progDominio = cumplDominio.reduce((s2, r) => s2 + r.programados, 0);
 const aTiempoDominio = cumplDominio.reduce((s2, r) => s2 + r.aTiempo, 0);
 const cumplDominioGlobal = progDominio > 0 ? (aTiempoDominio / progDominio) * 100 : null;
@@ -305,7 +321,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
 <Layout title="KPIs">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div>
-      <h1 class="text-2xl font-bold">Indicadores de mantenimiento</h1>
+      <h1 class="text-2xl font-bold">Indicadores · {ESPACIOS[espacio].rotulo}</h1>
       <p class="text-sm text-slate-500">Vista ejecutiva · ventana: últimos 30 días / año en curso</p>
     </div>
     <div class="flex flex-wrap gap-2">
@@ -325,6 +341,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
     </p>
   </div>
 
+  {!esBio && <>
   <!-- ═══ Mantenimiento diferido · GO-GUI-011-2026 §2.3 ═══════════════════ -->
   <section id="diferidoSection" class="card mt-4 border-l-4 p-5" class:list={[diferidas.length === 0 ? "border-emerald-500" : "border-red-500"]}>
     <div class="flex flex-wrap items-start justify-between gap-3">
@@ -494,7 +511,10 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
     )}
   </section>
 
+  </>}
+
   <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    {!esBio && <>
     <!-- ═══ Indicador 8 · horas fuera de rango por sala ══════════════════ -->
     <section class="card overflow-hidden">
       <div class="border-b border-slate-100 px-5 py-3">
@@ -540,6 +560,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       )}
     </section>
 
+    </>}
     <!-- ═══ Indicador 1 · cumplimiento del preventivo por dominio ════════ -->
     <section class="card overflow-hidden">
       <div class="border-b border-slate-100 px-5 py-3">
@@ -608,18 +629,18 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
       <>
         <!-- Tabs de alcance -->
         <div class="mt-4 flex gap-1 border-b border-slate-200">
-          {SCOPES.map((s) => (
+          {scopesVista.map((s) => (
             <button class="scope-tab px-3 py-1.5 text-sm font-medium border-b-2 -mb-px" data-scope={s}
-              class:list={[s === "global" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"]}>
+              class:list={[s === espacio ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"]}>
               {SCOPE_LABEL[s]}
             </button>
           ))}
         </div>
 
-        {SCOPES.map((scope) => {
+        {scopesVista.map((scope) => {
           const latest = ultimoPeriodo ? serie[scope]?.[ultimoPeriodo] : null;
           return (
-            <div class="scope-panel mt-4" data-scope={scope} class:list={[scope !== "global" && "hidden"]}>
+            <div class="scope-panel mt-4" data-scope={scope} class:list={[scope !== espacio && "hidden"]}>
               <!-- Tarjetas del último período -->
               <div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
                 <div class="card p-4">
@@ -870,7 +891,7 @@ const colorFuera = (h: number) => h === 0 ? "text-emerald-600" : h < 8 ? "text-a
   </div>
 
   <script is:inline src="/js/pdf-avante.js"></script>
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: SCOPES }) }}>
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ metricasJson, periodos: periodos12, scopeLabels: SCOPE_LABEL, scopes: scopesVista }) }}>
     const { metricasJson, periodos, scopeLabels, scopes } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     // Tabs de alcance
     document.querySelectorAll(".scope-tab").forEach((tab) => {
