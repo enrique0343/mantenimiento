@@ -18,7 +18,7 @@
     "test:sgo": "node scripts/test-sgo-store.mjs && node --test scripts/test-sgo-api.mjs && node --test scripts/test-sgo-publisher-cron.mjs",
     "test:inline-script-vars": "node scripts/test-inline-script-vars.mjs",
     "test:preventivos:ssr": "node scripts/test-tablero-paginas.mjs",
-    "test:panorama:ssr": "node scripts/test-panorama-render.mjs && node scripts/test-ronda-paginas.mjs && node scripts/test-ficha-orden.mjs"
+    "test:panorama:ssr": "node scripts/test-panorama-render.mjs && node scripts/test-ronda-paginas.mjs && node scripts/test-ficha-orden.mjs && node scripts/test-tablero-paginas.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.2.1",
