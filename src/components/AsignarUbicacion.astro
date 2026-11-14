@@ -3,6 +3,9 @@
 // su ruta. Un botón [data-asignar-ubicacion] con data-activos="1,2" asigna esos
 // equipos; sin data-activos, los marcados (.sel-pendiente:checked). Lo usan el
 // tablero biomédico y la ficha del equipo; solo se pinta para admin y jefe.
+// Los componentes pendientes del equipo elegido (data-padre en las casillas del
+// tablero, o data-componentes="3,4" en el botón de la ficha) se ofrecen en la misma
+// asignación. El botón de confirmar queda apagado hasta elegir la ubicación.
 // POST /api/activos/asignar-ubicacion: todo o nada, con su registro por equipo.
 import type { ArbolUbicaciones } from "@/lib/tablero-bio";
 
@@ -35,12 +38,21 @@ const { arbol } = Astro.props;
         </div>
       </>
     )}
+    {arbol.sedesSinUbicaciones.length > 0 && (
+      <p class="text-xs text-slate-600" data-sedes-sin-ubicaciones>
+        Las sedes sin ubicaciones no aparecen ({arbol.sedesSinUbicaciones.join(", ")}). Créalas en <a href="/ubicaciones" class="text-brand-700 underline">Ubicaciones</a> y vuelve a esta ventana.
+      </p>
+    )}
+    <label id="ubicComponentesFila" class="hidden flex items-start gap-2">
+      <input type="checkbox" id="ubicComponentes" class="mt-0.5 h-5 w-5" checked />
+      <span id="ubicComponentesTexto"></span>
+    </label>
     <p class="text-xs text-slate-500">Queda en el historial de cada equipo con tu nombre, la hora y la ubicación de antes y la nueva.</p>
     <p id="ubicErr" class="hidden text-red-700" role="alert"></p>
   </div>
   <div class="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">
     <button type="button" class="btn-secondary btn-sm" id="ubicCancelar">Cancelar</button>
-    <button type="button" class="btn-primary btn-sm" id="ubicConfirmar" disabled={arbol.ubicaciones.length === 0}>Asignar ubicación</button>
+    <button type="button" class="btn-primary btn-sm" id="ubicConfirmar" disabled>Asignar ubicación</button>
   </div>
 </dialog>
 
@@ -62,9 +74,17 @@ const { arbol } = Astro.props;
       lugar.replaceChildren(primera, ...todas.filter((o) => o.dataset.sede === sede.value).map((o) => o.cloneNode(true) as HTMLOptionElement));
       lugar.disabled = !sede.value;
     };
-    sede?.addEventListener("change", pintar);
+    // Sin ubicación elegida no hay nada que confirmar.
+    const habilitar = () => { confirmar.disabled = !lugar?.value; };
+    sede?.addEventListener("change", () => { pintar(); habilitar(); });
+    lugar?.addEventListener("change", habilitar);
     pintar();
     let ids: number[] = [];
+    let componentes: number[] = [];
+    const filaComp = document.getElementById("ubicComponentesFila")!;
+    const casillaComp = document.getElementById("ubicComponentes") as HTMLInputElement;
+    const textoComp = document.getElementById("ubicComponentesTexto")!;
+    const numeros = (v: string | undefined) => (v ?? "").split(",").map(Number).filter((n) => n > 0);
     const mostrarError = (m: string) => { err.textContent = m; err.classList.toggle("hidden", !m); };
     document.querySelectorAll<HTMLButtonElement>("[data-asignar-ubicacion]").forEach((b) => b.addEventListener("click", () => {
       ids = b.dataset.activos
@@ -72,9 +92,17 @@ const { arbol } = Astro.props;
         : Array.from(document.querySelectorAll<HTMLInputElement>(".sel-pendiente:checked")).map((c) => Number(c.dataset.activo));
       ids = [...new Set(ids)];
       if (!ids.length) { window.showToast?.("Marca al menos un equipo.", "warning"); return; }
+      // Los componentes pendientes de esos equipos que no se marcaron.
+      const elegidos = new Set(ids);
+      const delTablero = Array.from(document.querySelectorAll<HTMLInputElement>(".sel-pendiente[data-padre]"))
+        .filter((c) => elegidos.has(Number(c.dataset.padre))).map((c) => Number(c.dataset.activo));
+      componentes = [...new Set([...delTablero, ...numeros(b.dataset.componentes)])].filter((n) => !elegidos.has(n));
+      textoComp.textContent = componentes.length === 1 ? "Aplicar también a su componente pendiente." : `Aplicar también a sus ${componentes.length} componentes pendientes.`;
+      filaComp.classList.toggle("hidden", componentes.length === 0);
+      casillaComp.checked = true;
       que.textContent = b.dataset.titulo ?? (ids.length === 1 ? "1 equipo pendiente de ubicación." : `${ids.length} equipos pendientes de ubicación.`);
       mostrarError("");
-      confirmar.disabled = !lugar;
+      habilitar();
       dialog.showModal();
     }));
     document.getElementById("ubicCancelar")!.addEventListener("click", () => dialog.close());
@@ -82,7 +110,7 @@ const { arbol } = Astro.props;
       if (!lugar?.value) { mostrarError(sede?.value ? "Elige la ubicación." : "Elige la sede y la ubicación."); return; }
       confirmar.disabled = true;
       try {
-        const r = await fetch("/api/activos/asignar-ubicacion", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ activoIds: ids, ubicacionId: Number(lugar.value) }) });
+        const r = await fetch("/api/activos/asignar-ubicacion", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ activoIds: casillaComp.checked ? [...ids, ...componentes] : ids, ubicacionId: Number(lugar.value) }) });
         const j: any = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(typeof j?.error === "string" ? j.error : "No se pudo guardar. Revisa la conexión e inténtalo de nuevo.");
         window.showToast?.(j.n === 1 ? "Ubicación asignada." : `Ubicación asignada a ${j.n} equipos.`, "success");

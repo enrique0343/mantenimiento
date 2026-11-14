@@ -23,6 +23,9 @@
 //      NULL se trata como 'ambos', igual que tipoActivoFiltro y jefesNotificar
 //      en src/lib/especialidad.ts y el filtro de órdenes libres de /campo.
 //    - sin usuario: ninguno ([]).
+//    - el solicitante (gestionaEspacio = false) entra a los dos pero no gestiona
+//      ninguno: sin interruptor, ve sus solicitudes de los dos juntas en /tickets y
+//      abre las del otro espacio sin el aviso.
 //
 // 3. Qué espacio se usa en un request (resolverEspacio): el de ?espacio= si está
 //    permitido; si no, el de la cookie COOKIE_ESPACIO si está permitido; si no,
@@ -49,12 +52,18 @@
 //
 // 6. Común a los dos (no se filtra por espacio): usuarios, sedes y ubicaciones,
 //    proveedores y empresas, compras y requisiciones, inventario de repuestos.
+//    Los contratos son comunes, pero sus equipos se muestran por espacio. Los
+//    proyectos NO son comunes: van con su equipo o, sin equipo, con su solicitud
+//    (condicionProyectoEspacio; sin ninguno, General).
 //
 // 7. Rutas de un solo espacio (RUTAS_SOLO_GENERAL / RUTAS_SOLO_BIOMEDICO) y
 //    registros (registroDeRuta): el middleware muestra en su lugar la página
 //    /otro-espacio (aviso, con botón «Cambiar a …» si puedeEntrar; 403 si no) y,
 //    en la API, responde 403 JSON al usuario que no puede entrar a ese espacio.
 //    El interruptor es POST /api/espacio (cookie) o cualquier enlace con ?espacio=.
+//    El middleware decide con rutaDecodificada (la ruta como la ve Astro): con %xx
+//    no se salta el control. Las API por id que no pasan por registroDeRuta
+//    (adjuntos, documentos, /campo, proyectos/adjunto) usan src/lib/espacio-db.ts.
 //
 // 8. En páginas y API: espacioDelContexto(ctx, user) (locals.espacio o, sin
 //    middleware, resolverEspacio) y espacioDeLista(ctx, user, area) cuando la
@@ -64,13 +73,13 @@
 //    tiene activo_id), condicionTrabajoEspacio / condicionOrdenEspacio /
 //    condicionTicketEspacio (órdenes y solicitudes: rubro y, sin rubro, el equipo,
 //    como la serie OT-MB de la 0057), condicionRubroAreaEspacio (tablas solo con
-//    rubro: conjuntos) y condicionLinkEspacio (campana).
+//    rubro: conjuntos), condicionProyectoEspacio y condicionLinkEspacio (campana).
 //
 // Puro salvo por drizzle (sql): sin base de datos ni Astro.
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { activoAreaExpression, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
-import { ordenes, tickets } from "./schema";
+import { ordenes, proyectos, tickets } from "./schema";
 
 export type Espacio = "general" | "biomedico";
 export const ESPACIO_KEYS = ["general", "biomedico"] as const satisfies readonly Espacio[];
@@ -141,9 +150,19 @@ export function puedeEntrar(user: UsuarioEspacio, e: Espacio): boolean {
   return espaciosPermitidos(user).includes(e);
 }
 
-/** true si el usuario tiene interruptor (más de un espacio). */
+/**
+ * Roles que no gestionan ningún espacio: el solicitante reporta fallas de los dos.
+ * Ve sus solicitudes juntas en /tickets y las abre sin el aviso del otro espacio,
+ * y no tiene interruptor.
+ */
+const ROLES_SIN_ESPACIO = new Set(["solicitante"]);
+export function gestionaEspacio(user: UsuarioEspacio): boolean {
+  return !!user && !ROLES_SIN_ESPACIO.has(user.rol);
+}
+
+/** true si el usuario tiene interruptor (más de un espacio y alguno que gestionar). */
 export function tieneInterruptor(user: UsuarioEspacio): boolean {
-  return espaciosPermitidos(user).length > 1;
+  return espaciosPermitidos(user).length > 1 && gestionaEspacio(user);
 }
 
 export function resolverEspacio(user: UsuarioEspacio, cookieValue: string | null | undefined, urlParam?: string | null): Espacio {
@@ -198,7 +217,7 @@ export function opcionesCookieEspacio(seguro: boolean) {
 // Páginas y API que solo existen en un espacio. Lo que no está aquí es común o
 // se filtra por los datos (listas) o por el registro (fichas).
 export const RUTAS_SOLO_GENERAL = [
-  "/ronda", "/rondas", "/aop", "/eop", "/electrico", "/actividades", "/catalogo-aires",
+  "/ronda", "/rondas", "/aop", "/eop", "/electrico", "/actividades", "/catalogo-aires", "/cobertura",
   "/api/ronda-turno", "/api/aop", "/api/electrico", "/api/actividades", "/api/catalogo-aires",
 ] as const;
 export const RUTAS_SOLO_BIOMEDICO = [
@@ -207,6 +226,19 @@ export const RUTAS_SOLO_BIOMEDICO = [
   "/api/calibraciones", "/api/seguridad-electrica", "/api/expedientes", "/api/licencias",
   "/api/capacitaciones", "/api/alertas", "/api/cumplimiento", "/api/centros-costo",
 ] as const;
+
+/**
+ * La ruta como la ve Astro al elegir la página y armar los params: decodificada con
+ * decodeURI (validateAndDecodePathname de astro). null si la codificación no es
+ * válida o viene doble (%2532): Astro tampoco la acepta. Sin esto, «/api/ordenes/%32%30%34»
+ * llegaba al manejador de /api/ordenes/204 sin pasar por el control del espacio.
+ */
+export function rutaDecodificada(pathname: string): string | null {
+  let decodificada: string;
+  try { decodificada = decodeURI(pathname); } catch { return null; }
+  if (decodificada !== pathname && /%[0-9a-fA-F]{2}/.test(decodificada)) return null;
+  return decodificada;
+}
 
 const enRuta = (path: string, prefijo: string) => path === prefijo || path.startsWith(prefijo + "/");
 
@@ -218,10 +250,10 @@ export function espacioDeRuta(path: string): Espacio | null {
   return null;
 }
 
-export type TipoRegistro = "activos" | "ordenes" | "tickets" | "actividades" | "conjuntos" | "planes" | "firmas";
+export type TipoRegistro = "activos" | "ordenes" | "tickets" | "actividades" | "conjuntos" | "planes" | "firmas" | "proyectos";
 /** Registro al que apunta una ruta (/activos/12, /api/ordenes/5/adjuntos, /api/planes/3…). */
 export function registroDeRuta(path: string): { tipo: TipoRegistro; id: number; api: boolean } | null {
-  const m = path.match(/^\/(api\/)?(activos|ordenes|tickets|actividades|conjuntos|planes|firmas)\/(\d+)(?:\/|$)/);
+  const m = path.match(/^\/(api\/)?(activos|ordenes|tickets|actividades|conjuntos|planes|firmas|proyectos)\/(\d+)(?:\/|$)/);
   if (!m) return null;
   const api = !!m[1];
   const tipo = m[2] as TipoRegistro;
@@ -235,7 +267,8 @@ export function registroDeRuta(path: string): { tipo: TipoRegistro; id: number; 
  * /activos, /indicadores…); al panel del espacio si era de un espacio o un registro.
  */
 export function destinoAlCambiar(volver: unknown): string {
-  if (typeof volver !== "string" || !volver.startsWith("/") || volver.startsWith("//") || volver.startsWith("/api/")) return "/";
+  // La barra invertida y los caracteres de control: el navegador convierte «/\x» en «//x» (otro sitio).
+  if (typeof volver !== "string" || !volver.startsWith("/") || volver.startsWith("//") || volver.startsWith("/api/") || /[\\\u0000-\u001f\u007f]/.test(volver)) return "/";
   const path = volver.split(/[?#]/)[0];
   if (espacioDeRuta(path) || registroDeRuta(path) || path.startsWith("/areas/") || path === "/otro-espacio") return "/";
   return path;
@@ -311,6 +344,15 @@ export function condicionTrabajoEspacio(rubro: SQLWrapper, activoId: SQLWrapper,
   return e === "biomedico" ? sql`${bio} = 1` : sql`${bio} = 0`;
 }
 export const condicionOrdenEspacio = (e: Espacio) => condicionTrabajoEspacio(ordenes.rubro, ordenes.activoId, e);
+/**
+ * Proyectos (no tienen rubro): el espacio de su equipo; sin equipo, el de su
+ * solicitud; sin ninguno, General. Nunca es NULL.
+ */
+export function condicionProyectoEspacioDe(activoId: SQLWrapper, ticketId: SQLWrapper, e: Espacio): SQL {
+  const bio = sql`(case when ${activoId} is not null then ${activoId} in (select "activos"."id" from "activos" where ${condicionActivoEspacio("biomedico")}) when ${ticketId} is not null then ${ticketId} in (select x.id from "tickets" x where ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), "biomedico")}) else 0 end)`;
+  return e === "biomedico" ? sql`${bio} = 1` : sql`${bio} = 0`;
+}
+export const condicionProyectoEspacio = (e: Espacio) => condicionProyectoEspacioDe(proyectos.activoId, proyectos.ticketId, e);
 export const condicionTicketEspacio = (e: Espacio) => condicionTrabajoEspacio(tickets.rubro, tickets.activoId, e);
 /** Por área si la hay (su rubro, como siempre); si no, por espacio. */
 export function condicionTrabajoAreaEspacio(rubro: SQLWrapper, activoId: SQLWrapper, e: Espacio, area?: AreaKey | null): SQL {
@@ -347,6 +389,7 @@ export function expresionEspacioDeLink(columna: SQLWrapper): SQL {
     when ${columna} glob '/ordenes/[0-9]*' then ${porTrabajo("ordenes", 10)}
     when ${columna} glob '/tickets/[0-9]*' then ${porTrabajo("tickets", 10)}
     when ${columna} glob '/conjuntos/[0-9]*' then ${porRubro("conjuntos", 12)}
+    when ${columna} glob '/proyectos/[0-9]*' then (select case when ${condicionProyectoEspacioDe(sql.raw("x.activo_id"), sql.raw("x.ticket_id"), "biomedico")} then 'biomedico' else 'general' end from "proyectos" x where x.id = cast(substr(${columna}, 12) as integer))
     when ${columna} glob '/activos/[0-9]*' then (select case when ${activoAreaExpression} = 'biomedico' then 'biomedico' else 'general' end from "activos" where "activos"."id" = cast(substr(${columna}, 10) as integer))
     when ${rutasGeneral} then 'general'
     when ${rutasBio} then 'biomedico'

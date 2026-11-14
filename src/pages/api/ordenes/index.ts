@@ -13,6 +13,7 @@ import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 import { parseArea } from "@/lib/areas";
 import { espacioDeArea, espacioDeLista, puedeEntrar, respuestaOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
+import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
 import { conCodigo, validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { sembrarDesdeMop } from "@/lib/mop";
@@ -95,6 +96,9 @@ export const POST: APIRoute = async (ctx) => {
   if (contextError) return contextError;
   // Una orden de un área del otro espacio no la abre quien no entra a ese espacio.
   if (!puedeEntrar(user, espacioDeArea(areaResult.rubro))) return respuestaOtroEspacio(espacioDeArea(areaResult.rubro));
+  // Ni nace asignada a quien no ve ese espacio.
+  const fuera = await asignadoFueraDeEspacio(db, parsed.data.asignadoA, [espacioDeArea(areaResult.rubro)]);
+  if (fuera) return Response.json({ error: mensajeAsignadoFuera(fuera, { biomedico: "las órdenes biomédicas", general: "las órdenes de mantenimiento general" }) }, { status: 400 });
   // Fase 59 · requisito 13: a un equipo dado de baja no se le abren órdenes (409).
   const rechazoBaja = await rechazoOrdenEquipoBaja(db, parsed.data.activoId);
   if (rechazoBaja) return rechazoBaja;

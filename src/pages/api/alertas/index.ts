@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { ROLES_BIO_GESTIONAR, ROLES_BIO_VER, esFechaISO, hoySV } from "@/lib/biomedico";
 import { FUENTES_ALERTA, MENSAJE_ALERTA, TIPOS_ALERTA, limpiarTexto } from "@/lib/alertas";
-import { equiposExistentes } from "@/lib/alertas-datos";
+import { equiposExistentes, equiposNoBiomedicos, MENSAJE_ALERTA_SOLO_BIO } from "@/lib/alertas-datos";
 import { enTandas, errorMapEs, respuestaZod } from "@/lib/validacion-api";
 
 export const prerender = false;
@@ -62,6 +62,7 @@ export const POST: APIRoute = async (ctx) => {
   if (ids.length && (await equiposExistentes(db, ids)) !== ids.length) {
     return Response.json({ error: "Uno de los equipos no existe." }, { status: 400 });
   }
+  if (await equiposNoBiomedicos(db, ids)) return Response.json({ error: MENSAJE_ALERTA_SOLO_BIO }, { status: 400 });
   const [alerta] = await db.insert(alertasEquipo).values({
     tipo: d.tipo, fuente: d.fuente, titulo: d.titulo,
     descripcion: limpiarTexto(d.descripcion), referencia: limpiarTexto(d.referencia),

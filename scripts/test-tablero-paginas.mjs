@@ -298,21 +298,29 @@ try {
     };
     const ficha0 = await modulo('activos/_id_.astro.mjs');
     // Desde la ficha: la sede deja solo sus ubicaciones; sin elegir, no se envía.
+    // Su pieza, también pendiente: la ventana ofrece asignarla en el mismo paso (revisión del 14/11).
+    sqlite.exec("INSERT INTO activos(id,codigo,nombre,rubro,tipo,ubicacion_id,ubicacion,padre_id) VALUES(15,'BIO-015','Vaporizador de la máquina','biomedico','biomedico',NULL,'Quirófano Azul C. M.',11)");
     const { w, avisos } = await abrir('/activos/11?area=biomedico', { id: '11' });
     const d = w.document;
     d.querySelector('[data-asignar-ubicacion][data-activos="11"]').click();
     ok(d.querySelector('#ubicDialog').open, 'Abre el diálogo');
+    ok(!d.querySelector('#ubicComponentesFila').classList.contains('hidden') && d.querySelector('#ubicComponentesTexto').textContent === 'Aplicar también a su componente pendiente.' && d.querySelector('#ubicComponentes').checked, 'Ofrece su componente pendiente, marcado');
     ok(d.querySelector('#ubicLugar').disabled, 'Primero la sede');
     d.querySelector('#ubicConfirmar').click();
     await pausa(20);
-    ok(!d.querySelector('#ubicErr').classList.contains('hidden') && one('SELECT ubicacion_id u FROM activos WHERE id=11').u === null, 'Sin ubicación no envía');
+    // Sin ubicación elegida, el botón de confirmar está apagado (revisión del 14/11).
+    ok(d.querySelector('#ubicConfirmar').disabled && one('SELECT ubicacion_id u FROM activos WHERE id=11').u === null, 'Sin ubicación no envía: el botón está apagado');
     const sede = d.querySelector('#ubicSede'); sede.value = '7'; sede.dispatchEvent(new w.Event('change'));
     const lugares = [...d.querySelectorAll('#ubicLugar option')].map((o) => o.value).filter(Boolean);
     ok(!d.querySelector('#ubicLugar').disabled && lugares.includes('73') && lugares.every((v) => ['70', '71', '72', '73'].includes(v)), `Solo las de la sede: ${lugares}`);
+    ok(d.querySelector('#ubicConfirmar').disabled, 'Con la sede y sin ubicación, sigue apagado');
     d.querySelector('#ubicLugar').value = '73';
+    d.querySelector('#ubicLugar').dispatchEvent(new w.Event('change'));
+    ok(!d.querySelector('#ubicConfirmar').disabled, 'Al elegir la ubicación se enciende');
     d.querySelector('#ubicConfirmar').click();
     for (let i = 0; i < 200 && !avisos.length; i++) await pausa(10);
     ok(one('SELECT ubicacion_id u FROM activos WHERE id=11').u === 73, 'Asignada desde la ficha');
+    ok(one('SELECT ubicacion_id u FROM activos WHERE id=15').u === 73, 'Y su componente con ella');
     ok(avisos.length > 0, 'Y la página se recarga');
     ok(one("SELECT count(*) n FROM audit_log WHERE entidad='activo' AND entidad_id=11 AND accion='ubicacion'").n === 1, 'Con su registro');
   }

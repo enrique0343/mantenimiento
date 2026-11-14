@@ -2,7 +2,8 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { activos, activoRespaldos, escalacionNiveles } from "@/lib/schema";
-import { ne, asc } from "drizzle-orm";
+import { and, ne, asc } from "drizzle-orm";
+import { condicionActivoEspacio, espacioDelContexto } from "@/lib/espacio";
 import { CRITICIDAD_LABEL } from "@/lib/inventario-jci";
 export const prerender = false;
 
@@ -12,7 +13,8 @@ if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
 const db = getDb(Astro);
 const activosAll = await db
   .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado, criticidad: activos.criticidadOperacional })
-  .from(activos).where(ne(activos.estado, "baja"));
+  // Solo los equipos del espacio en el que estás (General o Biomédico).
+  .from(activos).where(and(ne(activos.estado, "baja"), condicionActivoEspacio(espacioDelContexto(Astro, user))));
 const activoMap = new Map(activosAll.map((a) => [a.id, a]));
 
 const respaldosAll = await db.select().from(activoRespaldos);

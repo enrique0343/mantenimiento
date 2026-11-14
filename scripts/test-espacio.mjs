@@ -61,7 +61,7 @@ for (const rol of ROLES) for (const especialidad of ESPS) {
   const esperado = rol === 'admin' || rol === 'visualizador' ? ['general', 'biomedico']
     : especialidad === 'general' ? ['general'] : especialidad === 'biomedico' ? ['biomedico'] : ['general', 'biomedico'];
   es(E.espaciosPermitidos({ rol, especialidad }), esperado, `${rol} con especialidad ${especialidad}`);
-  es(E.tieneInterruptor({ rol, especialidad }), esperado.length > 1, `${rol}/${especialidad}: interruptor`);
+  es(E.tieneInterruptor({ rol, especialidad }), esperado.length > 1 && rol !== 'solicitante', `${rol}/${especialidad}: interruptor (el solicitante no tiene)`);
   for (const e of E.ESPACIO_KEYS) es(E.puedeEntrar({ rol, especialidad }, e), esperado.includes(e), `${rol}/${especialidad} entra a ${e}`);
 }
 es([E.espaciosPermitidos(null), E.espaciosPermitidos(undefined)], [[], []], 'sin usuario: ninguno');
@@ -173,6 +173,9 @@ es([E.espacioDeTrabajo('aires', { tipo: 'biomedico' }), E.espacioDeTrabajo(null,
   db.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, rubro TEXT, activo_id INTEGER)');
   db.exec('CREATE TABLE conjuntos (id INTEGER PRIMARY KEY, rubro TEXT)');
   db.exec('CREATE TABLE notificaciones (id INTEGER PRIMARY KEY, link TEXT)');
+  // Proyectos: por su equipo; sin equipo, por su solicitud; sin ninguno, General.
+  db.exec('CREATE TABLE proyectos (id INTEGER PRIMARY KEY, activo_id INTEGER, ticket_id INTEGER)');
+  db.exec('INSERT INTO proyectos VALUES (1,1,NULL),(2,NULL,2),(3,NULL,NULL),(4,NULL,1),(5,2,1)');
   db.exec("INSERT INTO activos VALUES (1,'biomedico','biomedico'),(2,'aires','general'),(3,NULL,'biomedico'),(4,NULL,NULL)");
   const filas = [[1, 'biomedico', 2], [2, 'aires', 1], [3, null, 1], [4, null, 3], [5, null, 2], [6, null, null], [7, 'otra', 1], [8, null, 99]];
   const ins = db.prepare('INSERT INTO ordenes VALUES (?,?,?)');
@@ -192,15 +195,21 @@ es([E.espacioDeTrabajo('aires', { tipo: 'biomedico' }), E.espacioDeTrabajo(null,
     es(p.ids, e === 'biomedico' ? [2, 3, 4, 7] : [1, 5], `activo_id del espacio ${e} (sin equipo o inexistente: ninguno)`);
     es(p.params.length, 0, 'sin parámetros');
   }
+  for (const e of E.ESPACIO_KEYS) {
+    const r = q(E.condicionProyectoEspacio(e), 'proyectos');
+    es(r.ids, e === 'biomedico' ? [1, 4] : [2, 3, 5], `proyectos de ${e}: el equipo manda sobre la solicitud`);
+    es(r.params.length, 0, 'sin parámetros');
+  }
   es([...q(E.condicionOrdenEspacio('general')).ids, ...q(E.condicionOrdenEspacio('biomedico')).ids].sort(), filas.map(([id]) => id).sort(), 'cada orden en un solo espacio');
   const links = ['/ordenes/1', '/ordenes/2?area=aires', '/ordenes/3', '/ordenes/4#x', '/ordenes/6', '/tickets/1', '/tickets/2', '/activos/1', '/activos/2/historial', '/activos/3', '/conjuntos/1', '/conjuntos/2',
-    '/ronda', '/ronda/semana', '/aop?x=1', '/calibraciones', '/alertas/3', '/licencias#a', '/proyectos/1', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
+    '/ronda', '/ronda/semana', '/aop?x=1', '/calibraciones', '/alertas/3', '/licencias#a', '/proyectos/1', '/proyectos/2', '/proyectos/3', '/proyectos/999', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
   const insL = db.prepare('INSERT INTO notificaciones (link) VALUES (?)');
   links.forEach((l) => insL.run(l));
   const ver = (e) => { const { sql, params } = dialecto.sqlToQuery(E.sql`select link from notificaciones where ${E.condicionLinkEspacio(E.notificaciones.link, e)} order by id`); es(params.length, 0, 'campana sin parámetros'); return db.prepare(sql).all(...params).map((r) => r.link); };
-  const comunes = ['/proyectos/1', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
-  es(ver('biomedico'), ['/ordenes/1', '/ordenes/3', '/ordenes/4#x', '/tickets/1', '/activos/1', '/activos/3', '/conjuntos/1', '/calibraciones', '/alertas/3', '/licencias#a', ...comunes], 'campana de Biomédico');
-  es(ver('general'), ['/ordenes/2?area=aires', '/ordenes/6', '/tickets/2', '/activos/2/historial', '/conjuntos/2', '/ronda', '/ronda/semana', '/aop?x=1', ...comunes], 'campana de General');
+  // Un proyecto que no existe queda común (como una orden que no existe).
+  const comunes = ['/proyectos/999', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
+  es(ver('biomedico'), ['/ordenes/1', '/ordenes/3', '/ordenes/4#x', '/tickets/1', '/activos/1', '/activos/3', '/conjuntos/1', '/calibraciones', '/alertas/3', '/licencias#a', '/proyectos/1', ...comunes], 'campana de Biomédico');
+  es(ver('general'), ['/ordenes/2?area=aires', '/ordenes/6', '/tickets/2', '/activos/2/historial', '/conjuntos/2', '/ronda', '/ronda/semana', '/aop?x=1', '/proyectos/2', '/proyectos/3', ...comunes], 'campana de General');
   es(E.respuestaOtroEspacio('general').status, 403, '403');
   es(await E.respuestaOtroEspacio('biomedico').json(), { error: 'Este registro es del espacio Biomédico.' }, '403 JSON { error }');
 }

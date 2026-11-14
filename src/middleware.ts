@@ -8,8 +8,9 @@ import { eq } from "drizzle-orm";
 import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
 import {
   COOKIE_ESPACIO, PAGINA_OTRO_ESPACIO, PARAM_ESPACIO, espacioDeArea, espacioDeRuta, espaciosPermitidos, opcionesCookieEspacio, puedeEntrar,
-  espacioDeTrabajo, registroDeRuta, resolverEspacio, respuestaOtroEspacio, type Espacio,
+  espacioDeTrabajo, gestionaEspacio, registroDeRuta, resolverEspacio, respuestaOtroEspacio, rutaDecodificada, type Espacio,
 } from "./lib/espacio";
+import { espacioDeProyectoId } from "./lib/espacio-db";
 
 /** Espacio de una orden o solicitud guardada: su rubro o, sin rubro, el de su equipo. */
 async function espacioDeTrabajoGuardado(db: ReturnType<typeof getDb>, rubro: string | null, activoId: number | null): Promise<Espacio> {
@@ -43,7 +44,10 @@ function isPublic(path: string): boolean {
 
 export const onRequest = defineMiddleware(async (ctx, next) => {
   const url = new URL(ctx.request.url);
-  const path = url.pathname;
+  // La ruta decodificada, igual que la usa Astro para elegir la página y sus params:
+  // con la cruda, «/api/ordenes/%32%30%34» o «/%63alibraciones» saltaban el control del espacio.
+  const path = rutaDecodificada(url.pathname);
+  if (path === null) return new Response("Dirección no válida", { status: 400 });
 
   // A separate server principal protects the integration before cookie auth.
   // No human role or public-path exemption authorizes this namespace.
@@ -133,6 +137,9 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
       }
       // Sin rubro, la orden es del espacio de su equipo (como la serie OT-MB/OT-MG).
       if (o) espacioRegistro = await espacioDeTrabajoGuardado(db, o.rubro, o.activoId);
+    } else if (tipo === "proyectos") {
+      // Sin rubro: el espacio de su equipo o, sin equipo, el de su solicitud.
+      espacioRegistro = await espacioDeProyectoId(db, id);
     } else {
       const [t] = await db.select({ rubro: tickets.rubro, activoId: tickets.activoId }).from(tickets).where(eq(tickets.id, id)).limit(1);
       if (t) areaRegistro = parseArea(t.rubro);
@@ -144,6 +151,12 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
     }
   }
 
+  // El solicitante abre sus solicitudes de los dos espacios sin el aviso: la página
+  // se arma en el espacio de la solicitud (no gestiona ninguno, no tiene interruptor).
+  if (registro?.tipo === "tickets" && espacioRegistro && !gestionaEspacio(user) && puedeEntrar(user, espacioRegistro)) {
+    ctx.locals.espacio = espacioRegistro;
+    return next();
+  }
   // Espacio de lo pedido: la ruta (solo de un espacio), el registro o el área.
   const destino = espacioDeRuta(path) ?? espacioRegistro ?? (ctx.locals.area ? espacioDeArea(ctx.locals.area) : null);
   if (destino && destino !== ctx.locals.espacio) {

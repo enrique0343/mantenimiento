@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { proveedores, usuarios, activos, sucursales, ubicaciones } from "@/lib/schema";
 import { asc, eq, and, inArray, ne } from "drizzle-orm";
 import { puedeGestionarContratos } from "@/lib/contratos";
+import { condicionActivoEspacio, espacioDelContexto } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -25,7 +26,8 @@ const equiposRaw = await db
   })
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
-  .where(ne(activos.estado, "baja"))
+  // Solo los equipos del espacio en el que estás.
+  .where(and(ne(activos.estado, "baja"), condicionActivoEspacio(espacioDelContexto(Astro, user))))
   .orderBy(asc(activos.codigo));
 const equipos = equiposRaw;
 const sucs = await db.select({ id: sucursales.id, nombre: sucursales.nombre })

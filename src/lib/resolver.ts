@@ -11,7 +11,7 @@
 //   EOP  ya fallo                   -> tres primeras acciones, estabilizar
 //   MOP  se interviene planificado  -> permiso, bloqueo, liberacion medida
 
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import { activos, procedimientos, procedimientoSistemas, aopFicha, eopFicha, aopUmbrales, ubicaciones } from "@/lib/schema";
 
 export type Sistema = "electrico" | "hvac" | "minisplit" | "gases" | "agua" | "incendios" | "ascensores" | "otro";
@@ -293,7 +293,8 @@ export async function queSigue(
 }
 
 /** Equipos cuyo sistema no tiene ningún documento: la brecha real de cobertura. */
-export async function cobertura(db: any) {
+/** donde: condición opcional sobre activos (el espacio: condicionActivoEspacio). */
+export async function cobertura(db: any, donde?: SQL) {
   const todos = await db
     .select({
       id: activos.id,
@@ -307,7 +308,8 @@ export async function cobertura(db: any) {
       ubicacion: ubicaciones.nombre,
     })
     .from(activos)
-    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId));
+    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+    .where(donde);
   const procs = await db
     .select({ sistema: procedimientos.sistema, tipo: procedimientos.tipo })
     .from(procedimientos)
@@ -428,7 +430,7 @@ export async function juegosDeTodasLasFamilias(db: any, sucursalId?: number | nu
 }
 
 /** Cuántos equipos vivos hay en cada familia (para pesar la brecha: 40 aires sin EOP duele más que 1). */
-export async function equiposPorFamilia(db: any): Promise<Record<string, { total: number; criticos: number }>> {
+export async function equiposPorFamilia(db: any, donde?: SQL): Promise<Record<string, { total: number; criticos: number }>> {
   const todos = await db
     .select({
       nombre: activos.nombre,
@@ -440,7 +442,8 @@ export async function equiposPorFamilia(db: any): Promise<Record<string, { total
       ubicacion: ubicaciones.nombre,
     })
     .from(activos)
-    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId));
+    .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
+    .where(donde);
   const acc: Record<string, { total: number; criticos: number }> = {};
   for (const a of todos) {
     if (a.estado === "baja") continue;

@@ -36,7 +36,7 @@ import {
 } from "@/lib/jerarquia";
 import { historialDePlanes, MOTIVO_MINIMO } from "@/lib/preventivos";
 import AsignarUbicacion from "@/components/AsignarUbicacion.astro";
-import { arbolUbicaciones, AYUDA_EMPRESA, PERSONAL_PROPIO, textoUbicacionPendiente } from "@/lib/tablero-bio";
+import { arbolUbicaciones, AYUDA_EMPRESA, PERSONAL_PROPIO, TIPO_UBICACION_LABEL, textoSegunInventario, textoUbicacionPendiente } from "@/lib/tablero-bio";
 import {
   queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
   SISTEMA_LABEL, type Sistema,
@@ -45,7 +45,7 @@ import { TIPO_PROC, SISTEMAS, estadoInfo } from "@/lib/procedimientos";
 import { AREAS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { leerDatosTecnicos } from "@/lib/activo-area";
-import { espacioDeArea, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
+import { condicionActivoEspacio, espacioDeArea, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -123,6 +123,10 @@ const canJefe = user.rol === "admin" || user.rol === "jefe";
 // Sin ubicación de la lista: pendiente de asignar (con el texto del inventario); la jefatura la asigna aquí.
 const ubicacionPendiente = !a.ubicacionId;
 const arbolUbic = ubicacionPendiente && canJefe ? await arbolUbicaciones(db) : null;
+// Sus componentes también pendientes: la ventana ofrece asignarlos en el mismo paso.
+const componentesPendientes = arbolUbic
+  ? (await db.select({ id: activos.id }).from(activos).where(and(eq(activos.padreId, id), sql`${activos.ubicacionId} is null`, ne(activos.estado, "baja")))).map((c) => c.id)
+  : [];
 // Fase 59: lo biomédico de la ficha (resumen JCI, baja, calibraciones, documentos) solo
 // para quien ve biomédico; registrar para admin, jefe y técnico; corregir y dar de baja,
 // admin y jefe. El resto de la ficha sigue abierta como antes.
@@ -495,7 +499,8 @@ const servidasRows = await db
 const descendientesIds = canEdit ? await descendientesDe(db, id) : new Set<number>();
 const candidatosPadre = canEdit
   ? (await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, nivelJerarquia: activos.nivelJerarquia })
-      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"))).orderBy(asc(activos.codigo)))
+      // Solo del mismo espacio (General o Biomédico): un monitor no cuelga de un aire.
+      .from(activos).where(and(ne(activos.id, id), ne(activos.estado, "baja"), condicionActivoEspacio(espacioDeArea(area)))).orderBy(asc(activos.codigo)))
       .filter((c) => !descendientesIds.has(c.id))
   : [];
 const procedimientosScp = canEdit
@@ -551,7 +556,7 @@ const juego = sistemaResuelto ? await juegoDeFamilia(db, sistemaResuelto, sucurs
 // Cuántos equipos comparten el juego: la brecha de 40 aires sin EOP no pesa
 // igual que la de uno.
 const familiaConteo = sistemaResuelto
-  ? (await equiposPorFamilia(db))[sistemaResuelto] ?? { total: 0, criticos: 0 }
+  ? (await equiposPorFamilia(db, condicionActivoEspacio(espacioDeArea(area))))[sistemaResuelto] ?? { total: 0, criticos: 0 }
   : null;
 
 // Red de seguridad: si un documento existe para el sistema pero le falta su
@@ -724,7 +729,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
             familia de este equipo y en qué estado está cada eslabón.
           </p>
         </div>
-        <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">Cobertura del sistema</a>
+        {espacioDeArea(area) === "general" && <a href={`/cobertura?sistema=${rige.sistema}`} class="btn-secondary btn-sm">Cobertura del sistema</a>}
       </div>
 
       <!-- El sistema resuelto y de dónde salió -->
@@ -957,10 +962,11 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div>
           <div class="text-xs uppercase text-slate-500">Ubicación</div>
           <div>
-            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span>
+            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400">({TIPO_UBICACION_LABEL[ubicacionInfo.tipo] ?? ubicacionInfo.tipo})</span></span>
               : ubicacionPendiente ? <span class="font-medium text-amber-800" data-ubicacion-pendiente>{textoUbicacionPendiente(a.ubicacion)}</span> : "-"}
-            {ubicacionInfo && a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
-            {arbolUbic && <div class="mt-1"><button type="button" class="btn-secondary btn-sm" data-asignar-ubicacion data-activos={String(a.id)} data-titulo={`${a.codigo} · ${a.nombre}. ${textoUbicacionPendiente(a.ubicacion)}.`}>Asignar ubicación</button></div>}
+            {/* El texto libre: en Biomédico es el del inventario cargado; en General, el detalle de siempre. */}
+            {ubicacionInfo && a.ubicacion?.trim() && <div class="text-xs text-slate-400" data-segun-inventario>{espacioDeArea(area) === "biomedico" ? textoSegunInventario(a.ubicacion) : `Detalle: ${a.ubicacion.trim()}`}</div>}
+            {arbolUbic && <div class="mt-1"><button type="button" class="btn-secondary btn-sm" data-asignar-ubicacion data-activos={String(a.id)} data-componentes={componentesPendientes.join(",") || undefined} data-titulo={`${a.codigo} · ${a.nombre}. ${textoUbicacionPendiente(a.ubicacion)}.`}>Asignar ubicación</button></div>}
           </div>
         </div>
         <div class="col-span-2" data-empresa-mantenimiento>
@@ -1427,7 +1433,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               <option value="">Seleccionar…</option>
               {ubicacionesOpciones.map((u) => (
                 <option value={u.id} disabled={idsYaServidos.has(u.id)}>
-                  {u.nombre} ({u.tipo}){u.sucursal ? ` · ${u.sucursal}` : ""}{idsYaServidos.has(u.id) ? " — ya en el mapa" : ""}
+                  {u.nombre} ({TIPO_UBICACION_LABEL[u.tipo] ?? u.tipo}){u.sucursal ? ` · ${u.sucursal}` : ""}{idsYaServidos.has(u.id) ? " — ya en el mapa" : ""}
                 </option>
               ))}
             </select>
@@ -1465,7 +1471,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                 {ROL_SERVIDA_LABEL[(rel.rol ?? "sirve") as RolUbicacionServida]}
               </span>
               <span class="ml-2 font-medium text-slate-800">{u.nombre}</span>
-              <span class="ml-1 text-xs capitalize text-slate-400">({u.tipo})</span>
+              <span class="ml-1 text-xs text-slate-400">({TIPO_UBICACION_LABEL[u.tipo] ?? u.tipo})</span>
               <div class="text-xs text-slate-500">
                 {s?.nombre && <span>{s.nombre}</span>}
                 {rel.notas && <span class="ml-2">{rel.notas}</span>}

@@ -45,6 +45,8 @@ export function rutasDeUbicaciones(ubs: readonly UbicacionMin[]): (id: number | 
 export interface ArbolUbicaciones {
   sedes: { id: number; nombre: string }[];
   ubicaciones: { id: number; sedeId: number; ruta: string }[];
+  /** Sedes activas que todavía no tienen ninguna ubicación activa (no se pueden elegir). */
+  sedesSinUbicaciones: string[];
 }
 
 /** Sedes activas con sus ubicaciones activas, cada una con su ruta. Una consulta por tabla, sin parámetros. */
@@ -59,13 +61,25 @@ export async function arbolUbicaciones(db: Db): Promise<ArbolUbicaciones> {
     .map((u) => ({ id: u.id, sedeId: u.sucursalId, ruta: ruta(u.id)! }))
     .sort((a, b) => a.ruta.localeCompare(b.ruta, "es", { numeric: true }));
   const conUbicaciones = new Set(lista.map((u) => u.sedeId));
-  return { sedes: sedes.filter((s) => conUbicaciones.has(s.id)).map(({ id, nombre }) => ({ id, nombre })), ubicaciones: lista };
+  return {
+    sedes: sedes.filter((s) => conUbicaciones.has(s.id)).map(({ id, nombre }) => ({ id, nombre })), ubicaciones: lista,
+    sedesSinUbicaciones: sedes.filter((s) => s.activa && !conUbicaciones.has(s.id)).map((s) => s.nombre),
+  };
 }
 
 /** Texto de un equipo sin ubicación: «Pendiente de asignar · según inventario: …». */
 export function textoUbicacionPendiente(inventario: string | null | undefined): string {
   const t = inventario?.trim();
   return t ? `Pendiente de asignar · según inventario: ${t}` : "Pendiente de asignar";
+}
+
+/** Tipo de ubicación con tilde, para mostrarlo: «Área», «Sala», «Piso», «Edificio». */
+export const TIPO_UBICACION_LABEL: Record<string, string> = { edificio: "Edificio", piso: "Piso", area: "Área", sala: "Sala" };
+
+/** El texto original del inventario, una vez asignada la ubicación: «Según inventario: …». */
+export function textoSegunInventario(inventario: string | null | undefined): string | null {
+  const t = inventario?.trim();
+  return t ? `Según inventario: ${t}` : null;
 }
 
 // ─── Empresa externa ─────────────────────────────────────────────────────────
@@ -130,6 +144,8 @@ export interface FilaCalTablero {
 export interface PendienteUbicacion {
   activoId: number; codigo: string; nombre: string; marcaModelo: string; inventario: string | null; texto: string;
   empresa: string | null; estado: string;
+  /** El equipo del que es componente (para ofrecer asignar el padre con sus componentes). */
+  padreId: number | null;
 }
 export const LIMITE_PENDIENTES = 500;
 
@@ -156,13 +172,14 @@ export async function datosBiomedicos(db: Db, opciones: { hoy: string; sedeId: n
 
   const pend = await db.select({
     id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo,
-    ubicacion: activos.ubicacion, estado: activos.estado, empresa: proveedores.nombre,
+    ubicacion: activos.ubicacion, estado: activos.estado, empresa: proveedores.nombre, padreId: activos.padreId,
   }).from(activos).leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
     .where(and(bio, isNull(activos.ubicacionId), ne(activos.estado, "baja")))
     .orderBy(asc(activos.codigo)).limit(LIMITE_PENDIENTES + 1);
   const pendientes: PendienteUbicacion[] = pend.slice(0, LIMITE_PENDIENTES).map((p) => ({
     activoId: p.id, codigo: p.codigo, nombre: p.nombre, marcaModelo: [p.marca, p.modelo].filter(Boolean).join(" · "),
     inventario: p.ubicacion?.trim() || null, texto: textoUbicacionPendiente(p.ubicacion), empresa: p.empresa ?? null, estado: p.estado,
+    padreId: p.padreId ?? null,
   }));
 
   // Equipos con empresa externa: la del equipo o la de alguno de sus preventivos activos.

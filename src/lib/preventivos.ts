@@ -29,6 +29,7 @@
 // usuario que no entra a ese espacio; en un lote, todo o nada. El visualizador ve
 // el tablero sin cambiar nada.
 import type { APIContext } from "astro";
+import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "./espacio-db";
 import { and, asc, desc, eq, gte, isNotNull, lt, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "./db";
@@ -44,7 +45,7 @@ import { ahoraSV } from "./turnos";
 import { aplicarCambioOrden } from "./orden-cambio";
 import { crearNotificacion } from "@/lib/notif-app";
 import {
-  areasDeEspacio, condicionActivoEspacio, espacioDeActivo, espacioDelContexto, espaciosPermitidos, mensajeOtroEspacio,
+  areasDeEspacio, condicionActivoEspacio, espacioDeActivo, espacioDelContexto, mensajeOtroEspacio,
   puedeEntrar, type Espacio, type UsuarioEspacio,
 } from "./espacio";
 import { condicionEmpresa, datosBiomedicos, empresaDelPlanSql, leerFiltroEmpresa, rutasDeUbicaciones, textoUbicacionPendiente, type FiltroEmpresa } from "./tablero-bio";
@@ -292,11 +293,12 @@ export async function asignarPreventivos(ctx: APIContext, db: Db, usuario: Usuar
   if (ajeno) return { ok: false, status: 403, error: mensajeOtroEspacio(ajeno) };
   let nombre: string | null = null;
   if (tecnicoId !== null) {
-    const [t] = await db.select({ nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo, especialidad: usuarios.especialidad }).from(usuarios).where(eq(usuarios.id, tecnicoId)).limit(1);
+    const [t] = await db.select({ nombre: usuarios.nombre, rol: usuarios.rol, activo: usuarios.activo }).from(usuarios).where(eq(usuarios.id, tecnicoId)).limit(1);
     if (!t || !t.activo || t.rol !== "tecnico") return { ok: false, status: 400, error: "Elige un técnico activo." };
-    // El técnico solo ve en su celular el trabajo de su especialidad.
-    const fuera = [...espacios].find((e) => !espaciosPermitidos({ rol: t.rol, especialidad: t.especialidad }).includes(e));
-    if (fuera) return { ok: false, status: 400, error: fuera === "biomedico" ? `${t.nombre} es de mantenimiento general: no ve los preventivos biomédicos. Elige un técnico de biomédico.` : `${t.nombre} es de biomédico: no ve los preventivos de mantenimiento general. Elige un técnico de general.` };
+    // El técnico solo ve en su celular el trabajo de su especialidad (la misma regla
+    // que la ficha del plan y la de la OT: src/lib/espacio-db.ts).
+    const fuera = await asignadoFueraDeEspacio(db, tecnicoId, espacios);
+    if (fuera) return { ok: false, status: 400, error: mensajeAsignadoFuera(fuera, { biomedico: "los preventivos biomédicos", general: "los preventivos de mantenimiento general", quien: "un técnico" }) };
     nombre = t.nombre;
   }
   const motivoLimpio = motivo?.trim() || null;

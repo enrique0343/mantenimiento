@@ -9,7 +9,8 @@ import { logAudit, calcularDiff } from "@/lib/audit";
 import { NIVELES_JERARQUIA, validarPadre } from "@/lib/jerarquia";
 import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
 import { activoAreaCondition } from "@/lib/areas";
-import { espacioDeArea, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
+import { ESPACIOS, espacioDeActivo, espacioDeArea, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
+import { espacioDeActivoId } from "@/lib/espacio-db";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
 import {
   textoRegistro, nombrePendienteActivo, esCodigoDuplicado, errorCodigoActivo, mensajeCodigoDuplicado, errorDeDatos,
@@ -110,6 +111,12 @@ export const PATCH: APIRoute = async (ctx) => {
   if ("padreId" in llega) {
     const chequeo = await validarPadre(db, id, llega.padreId ?? null);
     if (!chequeo.ok) return Response.json({ error: chequeo.error }, { status: 400 });
+    // Padre e hijo en el mismo espacio: un monitor no cuelga de un aire, ni al revés.
+    const espacioPadre = await espacioDeActivoId(db, llega.padreId ?? null);
+    const espacioPropio = espacioDeActivo({ rubro: llega.rubro ?? actual.rubro, tipo: llega.tipo ?? actual.tipo });
+    if (espacioPadre && espacioPadre !== espacioPropio) {
+      return Response.json({ error: `El activo padre es del espacio ${ESPACIOS[espacioPadre].etiqueta} y este equipo es de ${ESPACIOS[espacioPropio].etiqueta}. Elige un padre del mismo espacio.` }, { status: 400 });
+    }
   }
 
   // El SCP vinculado debe ser un procedimiento de tipo scp que exista.

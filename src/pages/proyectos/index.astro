@@ -2,7 +2,8 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { proyectos, usuarios, ordenes } from "@/lib/schema";
-import { desc, eq, or, inArray } from "drizzle-orm";
+import { and, desc, eq, or, inArray } from "drizzle-orm";
+import { condicionProyectoEspacio, espacioDelContexto } from "@/lib/espacio";
 import { ESTADO_PROYECTO_LABEL, ESTADO_PROYECTO_COLOR, puedeCrearProyecto } from "@/lib/proyectos";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { fmtFechaSimple } from "@/lib/datetime";
@@ -29,7 +30,8 @@ const rowsRaw = await db
   .select({ p: proyectos, creador: usuarios })
   .from(proyectos)
   .leftJoin(usuarios, eq(usuarios.id, proyectos.creadoPor))
-  .where(whereVisibilidad)
+  // Solo los del espacio: por su equipo o, sin equipo, por su solicitud.
+  .where(and(whereVisibilidad, condicionProyectoEspacio(espacioDelContexto(Astro, user))))
   .orderBy(desc(proyectos.id));
 
 const ESTADOS_ACTIVOS = new Set(["evaluacion", "aprobado", "en_ejecucion", "en_pausa"]);

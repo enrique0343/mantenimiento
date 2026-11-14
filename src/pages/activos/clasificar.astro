@@ -42,7 +42,7 @@ const sucursalesList = await db
 // vez por familia (el sistema crítico) y todos sus equipos lo heredan. Traemos
 // el juego de cada familia para que al asignar se vea qué hereda el equipo.
 const juegos = await juegosDeTodasLasFamilias(db);
-const porFamilia = await equiposPorFamilia(db);
+const porFamilia = await equiposPorFamilia(db, area ? activoAreaCondition(area) : condicionActivoEspacio(espacio));
 const juegoDe: Record<string, (typeof juegos)[number]> = {};
 for (const j of juegos) juegoDe[j.sistema] = j;
 
@@ -126,7 +126,7 @@ const CRIT = [
           Los cinco documentos —SCP, SOP, AOP, EOP, MOP— no se redactan equipo por equipo: se definen
           <strong>una vez por familia</strong> y todos sus equipos los heredan. Todos los aires acondicionados
           responden al mismo juego; lo único que hay que declarar aquí es a qué familia pertenece cada equipo.
-          <a href="/cobertura" class="text-brand-700 hover:underline">Ver cobertura por familia →</a>
+          {espacio === "general" && <a href="/cobertura" class="text-brand-700 hover:underline">Ver cobertura por familia →</a>}
         </p>
       </div>
       <div class="flex flex-wrap gap-2 text-xs">

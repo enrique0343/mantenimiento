@@ -232,7 +232,7 @@ const calibraciones = bio ? [...bio.calibraciones.vencidas, ...bio.calibraciones
             {bio.pendientes.length === 0 && <tr><td colspan={soloLectura ? 3 : 5} class="max-sm:block px-4 py-6 text-center text-slate-400">Todos los equipos biomédicos tienen ubicación.</td></tr>}
             {bio.pendientes.map((p) => (
               <tr class="align-top max-sm:block max-sm:py-2" data-pendiente={p.activoId}>
-                {!soloLectura && <td class="max-sm:block max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-pendiente h-5 w-5" data-activo={p.activoId} aria-label={`Marcar ${p.codigo}`} /></td>}
+                {!soloLectura && <td class="max-sm:block max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-pendiente h-5 w-5" data-activo={p.activoId} data-padre={p.padreId ?? undefined} aria-label={`Marcar ${p.codigo}`} /></td>}
                 <td class="max-sm:block max-sm:py-1 px-3 py-2">
                   <a href={areaHref(`/activos/${p.activoId}`, "biomedico")} class="font-medium text-brand-700 hover:underline">{p.codigo} · {p.nombre}</a>
                   {p.marcaModelo && <div class="text-xs text-slate-500">{p.marcaModelo}</div>}

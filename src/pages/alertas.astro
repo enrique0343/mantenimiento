@@ -7,7 +7,8 @@ import DocCabecera from "@/components/DocCabecera.astro";
 import DocFolio from "@/components/DocFolio.astro";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
-import { asc, ne } from "drizzle-orm";
+import { and, asc, ne } from "drizzle-orm";
+import { condicionActivoEspacio } from "@/lib/espacio";
 import {
   ALERTA_BADGE, APLICABILIDAD_LABEL, ESTADO_ALERTA_LABEL, FUENTE_ALERTA_LABEL, TIPO_ALERTA_LABEL,
   fechaCorta, hoySV, puedeGestionarBio, puedeVerBio,
@@ -37,10 +38,10 @@ const anios = [...new Set([Number(hoy.slice(0, 4)), ...alertas.map((a) => Number
 const hayFiltros = filtros.estado !== "todas" || filtros.analisis !== "todos" || filtros.anio !== null;
 const csvHref = `/api/alertas/exportar${queryFiltrosAlertas(filtros)}`;
 
-// Para registrar: todos los equipos no dados de baja.
+// Para registrar: los equipos biomédicos no dados de baja (las alertas son de Biomédico).
 const equiposLista = puedeGestionar
   ? await db.select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, tipo: activos.tipo })
-      .from(activos).where(ne(activos.estado, "baja")).orderBy(asc(activos.codigo))
+      .from(activos).where(and(ne(activos.estado, "baja"), condicionActivoEspacio("biomedico"))).orderBy(asc(activos.codigo))
   : [];
 
 const describirFiltros = [

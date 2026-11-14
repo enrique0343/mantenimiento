@@ -1,7 +1,8 @@
 // Fase 59 · Consultas de las alertas y retiros: la lista, la hoja, la API y el CSV
 // leen lo mismo. Columnas explícitas y nada de listas de ids en IN () salvo en
 // tandas de 90 (D1: 100 parámetros por consulta).
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { condicionActivoEspacio } from "./espacio";
 import type { getDb } from "./db";
 import { activos, alertaAdjuntos, alertasEquipo, alertasEquipoActivos, auditLog, sucursales, ubicaciones, usuarios } from "./schema";
 import { enTandas } from "./validacion-api";
@@ -15,6 +16,16 @@ export async function equiposExistentes(db: Db, ids: readonly number[]): Promise
     n += (await db.select({ id: activos.id }).from(activos).where(inArray(activos.id, tanda))).length;
   }
   return n;
+}
+
+/** Las alertas y retiros son de Biomédico: cuántos de esos ids son equipos de General. */
+export const MENSAJE_ALERTA_SOLO_BIO = "Las alertas y retiros son de equipos biomédicos. Quita los equipos de mantenimiento general.";
+export async function equiposNoBiomedicos(db: Db, ids: readonly number[]): Promise<number> {
+  if (!ids.length) return 0;
+  // Un solo parámetro JSON: D1 corta a 100 por consulta.
+  const [r] = await db.select({ n: count() }).from(activos)
+    .where(and(sql`${activos.id} in (select value from json_each(${JSON.stringify(ids)}))`, condicionActivoEspacio("general")));
+  return Number(r?.n ?? 0);
 }
 
 /** Nombres de todos los usuarios (son pocos): un solo mapa para registró, evaluó y cerró. */

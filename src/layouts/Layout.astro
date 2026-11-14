@@ -4,7 +4,7 @@ import "@/styles/globals.css";
 import AppIcon from "@/components/AppIcon.astro";
 import { AREAS, parseArea, areaHref, type AreaKey } from "@/lib/areas";
 import { puedeVerBio, puedeGestionarBio } from "@/lib/biomedico";
-import { ESPACIOS, ESPACIO_KEYS, espacioDelContexto, espaciosPermitidos, areaEnEspacio } from "@/lib/espacio";
+import { ESPACIOS, ESPACIO_KEYS, espacioDelContexto, espaciosPermitidos, areaEnEspacio, gestionaEspacio } from "@/lib/espacio";
 
 interface Props {
   title?: string;
@@ -24,7 +24,8 @@ const verBio = puedeVerBio(user?.rol);
 const espacio = espacioDelContexto(Astro, user);
 const infoEspacio = ESPACIOS[espacio];
 const permitidos = Astro.locals.espaciosPermitidos ?? espaciosPermitidos(user);
-const conInterruptor = permitidos.length > 1;
+// El solicitante no gestiona ningún espacio: sin interruptor (ve sus solicitudes de los dos juntas).
+const conInterruptor = permitidos.length > 1 && gestionaEspacio(user);
 const esBio = espacio === "biomedico";
 // Un área del otro espacio no se muestra (la página del aviso, por ejemplo).
 const areaPedida = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);

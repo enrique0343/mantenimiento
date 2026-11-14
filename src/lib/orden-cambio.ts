@@ -18,6 +18,7 @@ import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
 import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
 import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
+import { asignadoFueraDeEspacio, espacioDeTrabajoGuardado, mensajeAsignadoFuera } from "@/lib/espacio-db";
 
 
 // Un solo camino para cambiar una orden. La ficha completa (PATCH) y el celular
@@ -100,6 +101,12 @@ export async function aplicarCambioOrden(
   const contextError = validarContextoArea(ctx.request, actual.rubro);
   if (contextError) return contextError;
   if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una orden no puede cambiarse" }, { status: 400 });
+  // A quien no ve el espacio de la orden no se le asigna: en /campo la vería y no podría abrirla.
+  if (parsed.data.asignadoA && parsed.data.asignadoA !== actual.asignadoA) {
+    const espacio = await espacioDeTrabajoGuardado(db, actual.rubro, actual.activoId);
+    const fuera = await asignadoFueraDeEspacio(db, parsed.data.asignadoA, [espacio]);
+    if (fuera) return Response.json({ error: mensajeAsignadoFuera(fuera, { biomedico: "las órdenes biomédicas", general: "las órdenes de mantenimiento general" }) }, { status: 400 });
+  }
   if (parsed.data.activoId !== undefined) {
     if (actual.planId && parsed.data.activoId !== actual.activoId) return Response.json({ error: "La orden está vinculada al PM de este equipo. Conserva su origen y crea otra orden para un equipo distinto." }, { status: 409 });
     if (parsed.data.activoId !== actual.activoId && await ordenesTienenConjunto(ctx, [id])) {

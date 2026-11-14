@@ -6,7 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { parseArea, areaHref, AREAS } from "@/lib/areas";
-import { espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
+import { espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio, gestionaEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -35,7 +35,8 @@ const rowsRaw = await db
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
   .leftJoin(activos, eq(activos.id, tickets.activoId))
-  .where(condicionTrabajoAreaEspacio(tickets.rubro, tickets.activoId, espacio, area))
+  // El solicitante ve las de los dos espacios en una sola lista (no gestiona ninguno).
+  .where(gestionaEspacio(user) || area ? condicionTrabajoAreaEspacio(tickets.rubro, tickets.activoId, espacio, area) : undefined)
   .orderBy(desc(tickets.id));
 
 // Estados activos: los que se muestran por defecto (vista limpia).

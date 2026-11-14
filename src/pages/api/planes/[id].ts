@@ -11,6 +11,8 @@ import {
 
 import { parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { espacioDeActivo, type Espacio } from "@/lib/espacio";
+import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
 import { errorMapEs, fechaIsoSchema, frecuenciaRutinaSchema, respuestaZod } from "@/lib/validacion-api";
 export const prerender = false;
 
@@ -47,7 +49,7 @@ const updateSchema = z.object({
 
 type Cargado =
   | { ok: false; error: Response }
-  | { ok: true; db: ReturnType<typeof getDb>; actual: typeof planesMantenimiento.$inferSelect; estadoActivo: string | null };
+  | { ok: true; db: ReturnType<typeof getDb>; actual: typeof planesMantenimiento.$inferSelect; estadoActivo: string | null; espacio: Espacio };
 
 async function cargar(ctx: Parameters<APIRoute>[0], id: number): Promise<Cargado> {
   const areaParam = ctx.url.searchParams.get("area");
@@ -58,7 +60,7 @@ async function cargar(ctx: Parameters<APIRoute>[0], id: number): Promise<Cargado
   if (!actual) return { ok: false, error: Response.json({ error: "No encontrado" }, { status: 404 }) };
   const [activo] = await db.select({ rubro: activos.rubro, tipo: activos.tipo, estado: activos.estado }).from(activos).where(eq(activos.id, actual.activoId)).limit(1);
   if (area && (!activo || rubroDeActivo(activo.rubro, activo.tipo) !== area)) return { ok: false, error: Response.json({ error: "Plan no encontrado en esta área" }, { status: 404 }) };
-  return { ok: true, db, actual, estadoActivo: activo?.estado ?? null };
+  return { ok: true, db, actual, estadoActivo: activo?.estado ?? null, espacio: espacioDeActivo(activo ?? {}) };
 }
 
 export const PATCH: APIRoute = async (ctx) => {
@@ -75,7 +77,7 @@ export const PATCH: APIRoute = async (ctx) => {
   if (entrada.checklist) data.checklist = JSON.stringify(entrada.checklist);
   const cargado = await cargar(ctx, id);
   if (!cargado.ok) return cargado.error;
-  const { db, actual, estadoActivo } = cargado;
+  const { db, actual, estadoActivo, espacio } = cargado;
 
   if (entrada.proveedorId) {
     const [prov] = await db.select({ id: proveedores.id }).from(proveedores)
@@ -97,6 +99,11 @@ export const PATCH: APIRoute = async (ctx) => {
   // tiene ni cuándo toca: eso es de la jefatura.
   if (!esJefatura(user.rol) && CAMPOS_DE_JEFATURA.some((c) => c in diff)) return Response.json({ error: MENSAJE_SOLO_JEFATURA }, { status: 403 });
   if (cambioPideMotivo(diff) && !motivoValido(motivo)) return Response.json({ error: MENSAJE_MOTIVO }, { status: 400 });
+  // Como en el tablero: a quien no ve el espacio del equipo no se le deja este preventivo.
+  if ("asignadoA" in diff && entrada.asignadoA) {
+    const fuera = await asignadoFueraDeEspacio(db, entrada.asignadoA, [espacio]);
+    if (fuera) return Response.json({ error: mensajeAsignadoFuera(fuera, { biomedico: "los preventivos biomédicos", general: "los preventivos de mantenimiento general" }) }, { status: 400 });
+  }
   // Con la OT del ciclo sin verificar la fecha no se mueve: su atraso se perdería de
   // vista y el cron generaría otra OT del mismo plan en la fecha nueva.
   if ("proximaFecha" in diff) {

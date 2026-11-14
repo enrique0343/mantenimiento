@@ -8,6 +8,7 @@ import { calcularDiff, logAudit, resumenCambios } from "@/lib/audit";
 import { ROLES_BIO_REGISTRAR, ROLES_BIO_VER } from "@/lib/biomedico";
 import { leerMetadatosDocumento } from "@/lib/inventario-jci";
 import { errorJson, exigirRol, idPositivo, leerJson, respuestaArchivo } from "@/lib/bio-archivos";
+import { bloqueoEspacio, espacioDeActivoId } from "@/lib/espacio-db";
 
 export const prerender = false;
 
@@ -18,10 +19,13 @@ export const GET: APIRoute = async (ctx) => {
   const id = idPositivo(ctx.params.id);
   const db = getDb(ctx);
   const [doc] = id
-    ? await db.select({ r2Key: activoDocumentos.r2Key, nombre: activoDocumentos.nombre, contentType: activoDocumentos.contentType })
+    ? await db.select({ r2Key: activoDocumentos.r2Key, nombre: activoDocumentos.nombre, contentType: activoDocumentos.contentType, activoId: activoDocumentos.activoId })
       .from(activoDocumentos).where(eq(activoDocumentos.id, id)).limit(1)
     : [];
   if (!doc) return errorJson(404, "No encontrado");
+  // El documento es del equipo: quien está atado al otro espacio no lo descarga.
+  const otro = bloqueoEspacio(user, await espacioDeActivoId(db, doc.activoId));
+  if (otro) return otro;
   return respuestaArchivo(getEnv(ctx), doc);
 };
 
@@ -39,6 +43,8 @@ export const PATCH: APIRoute = async (ctx) => {
     }).from(activoDocumentos).where(eq(activoDocumentos.id, id)).limit(1)
     : [];
   if (!actual) return errorJson(404, "No encontrado");
+  const otro = bloqueoEspacio(user, await espacioDeActivoId(db, actual.activoId));
+  if (otro) return otro;
 
   const body = await leerJson(ctx);
   if (!body) return errorJson(400, "Datos no válidos.");

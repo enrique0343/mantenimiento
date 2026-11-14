@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { ticketAdjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { bloqueoEspacio, espacioDeTicketId } from "@/lib/espacio-db";
 
 export const prerender = false;
 
@@ -13,6 +14,9 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [row] = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.id, id)).limit(1);
   if (!row) return new Response("No encontrado", { status: 404 });
+  // El archivo es de la solicitud: quien está atado al otro espacio no lo descarga.
+  const otro = bloqueoEspacio(user, await espacioDeTicketId(db, row.ticketId));
+  if (otro) return otro;
   const env = getEnv(ctx);
   const obj = await env.R2.get(row.r2Key);
   if (!obj) return new Response("Archivo no disponible", { status: 410 });

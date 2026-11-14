@@ -10,7 +10,7 @@ import { ROLES_BIO_GESTIONAR, ROLES_BIO_VER, fechaCorta, hoySV } from "@/lib/bio
 import {
   APLICABILIDADES, ESTADOS_ALERTA, FUENTES_ALERTA, MENSAJE_ALERTA, TIPOS_ALERTA, planearCambioAlerta,
 } from "@/lib/alertas";
-import { camposAlerta, cargarHojaAlerta, equiposDeAlerta, equiposExistentes } from "@/lib/alertas-datos";
+import { camposAlerta, cargarHojaAlerta, equiposDeAlerta, equiposExistentes, equiposNoBiomedicos, MENSAJE_ALERTA_SOLO_BIO } from "@/lib/alertas-datos";
 import { enTandas, errorMapEs, respuestaZod } from "@/lib/validacion-api";
 
 export const prerender = false;
@@ -75,6 +75,9 @@ export const PATCH: APIRoute = async (ctx) => {
   if (plan.equipos?.length && (await equiposExistentes(db, plan.equipos)) !== plan.equipos.length) {
     return Response.json({ error: "Uno de los equipos no existe." }, { status: 400 });
   }
+  // Solo los que se agregan: una alerta vieja con un equipo de General se sigue editando.
+  const agregados = (plan.equipos ?? []).filter((x) => !equiposAntes.includes(x));
+  if (await equiposNoBiomedicos(db, agregados)) return Response.json({ error: MENSAJE_ALERTA_SOLO_BIO }, { status: 400 });
 
   // El cambio y los equipos van juntos: si algo falla, no queda a medias.
   const sentencias: BatchItem<"sqlite">[] = [db.update(alertasEquipo).set(plan.set).where(eq(alertasEquipo.id, id))];

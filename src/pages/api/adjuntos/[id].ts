@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { adjuntos, ordenes, ordenVerificacionEventos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { bloqueoEspacio, espacioDeOrdenId } from "@/lib/espacio-db";
 
 export const prerender = false;
 
@@ -13,6 +14,9 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [row] = await db.select().from(adjuntos).where(eq(adjuntos.id, id)).limit(1);
   if (!row) return new Response("No encontrado", { status: 404 });
+  // El archivo es de la orden: quien está atado al otro espacio no lo descarga.
+  const otro = bloqueoEspacio(user, await espacioDeOrdenId(db, row.ordenId));
+  if (otro) return otro;
 
   const env = getEnv(ctx);
   const obj = await env.R2.get(row.r2Key);
@@ -34,6 +38,8 @@ export const DELETE: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const [row] = await db.select().from(adjuntos).where(eq(adjuntos.id, id)).limit(1);
   if (!row) return Response.json({ error: "No encontrado" }, { status: 404 });
+  const otro = bloqueoEspacio(user, await espacioDeOrdenId(db, row.ordenId));
+  if (otro) return otro;
   const [order] = await db.select().from(ordenes).where(eq(ordenes.id, row.ordenId)).limit(1);
   if (user.rol === 'tecnico' && order?.asignadoA !== user.id) return Response.json({ error: 'Sin permisos sobre esta orden' }, { status: 403 });
   const [retained] = await db.select({ id: ordenVerificacionEventos.id }).from(ordenVerificacionEventos)
