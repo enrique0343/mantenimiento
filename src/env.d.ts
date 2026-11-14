@@ -62,6 +62,8 @@ declare namespace App {
     espacio?: import("./lib/espacio").Espacio;
     /** Espacios a los que el usuario puede entrar; más de uno = interruptor. */
     espaciosPermitidos?: import("./lib/espacio").Espacio[];
+    /** Lo pedido es de otro espacio: el middleware muestra /otro-espacio con esto. */
+    avisoEspacio?: import("./lib/espacio").AvisoEspacio;
     user?: {
       id: number;
       email: string;

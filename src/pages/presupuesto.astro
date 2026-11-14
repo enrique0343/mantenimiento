@@ -4,12 +4,15 @@ import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { presupuestoMantenimiento, gastosMantenimiento, sucursales, usuarios } from "@/lib/schema";
 import { eq, and, gte, lt, desc } from "drizzle-orm";
-import { RUBROS, RUBRO_KEYS, rubroLabel, rubroIcono, fmtMonto, type RubroKey } from "@/lib/rubros";
+import { RUBROS, RUBRO_KEYS as TODOS_LOS_RUBROS, rubroLabel, rubroIcono, fmtMonto, type RubroKey } from "@/lib/rubros";
+import { areaEnEspacio, espacioDelContexto } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect("/");
 const db = getDb(Astro);
+// El presupuesto de los rubros del espacio (General: tres; Biomédico: el suyo).
+const RUBRO_KEYS = TODOS_LOS_RUBROS.filter((k) => areaEnEspacio(k, espacioDelContexto(Astro, user)));
 const esAdminOJefe = true;
 
 const url = new URL(Astro.request.url);
@@ -31,7 +34,8 @@ const gastos = await db
 
 const presupuestoPorRubro = new Map(presupuestos.map((p) => [p.rubro, p.monto]));
 const gastoPorRubro = new Map<string, number>();
-for (const { g } of gastos) {
+const gastosEspacio = gastos.filter(({ g }) => (RUBRO_KEYS as string[]).includes(g.rubro));
+for (const { g } of gastosEspacio) {
   gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
 }
 
@@ -134,7 +138,7 @@ const fmtFecha = (f: string) => {
   </div>
 
   <!-- Gastos del año -->
-  <h2 class="mt-7 font-semibold text-slate-800">Gastos registrados en {anio} ({gastos.length})</h2>
+  <h2 class="mt-7 font-semibold text-slate-800">Gastos registrados en {anio} ({gastosEspacio.length})</h2>
   <div class="card mt-3 overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-left text-sm">
@@ -150,10 +154,10 @@ const fmtFecha = (f: string) => {
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          {gastos.length === 0 && (
+          {gastosEspacio.length === 0 && (
             <tr><td colspan="7" class="px-4 py-8 text-center text-slate-400 text-sm">Sin gastos registrados en {anio}. Usa "+ Registrar gasto".</td></tr>
           )}
-          {gastos.map(({ g, s, u }) => (
+          {gastosEspacio.map(({ g, s, u }) => (
             <tr class="hover:bg-slate-50">
               <td class="px-4 py-2 text-xs text-slate-600 whitespace-nowrap">{fmtFecha(g.fecha)}</td>
               <td class="px-4 py-2 text-xs">{rubroIcono(g.rubro)} {rubroLabel(g.rubro)}</td>

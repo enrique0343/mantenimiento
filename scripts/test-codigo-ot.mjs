@@ -85,7 +85,10 @@ try {
   ok(/^OT-MG\d{4}$/.test(c.body.codigo ?? c.body.orden?.codigo ?? ''), JSON.stringify(c.body));
 
   // ── Buscar por código ────────────────────────────────────────────────────
-  const b = await call(app.buscar.GET, '/api/search?q=OT-MB0001', { method: 'GET', rol: 'admin' });
+  // Una OT biomédica se encuentra en el espacio Biomédico; en General, no.
+  const enGeneral = await call(app.buscar.GET, '/api/search?q=OT-MB0001', { method: 'GET', rol: 'admin' });
+  igual(enGeneral.body.resultados.ordenes.length, 0, 'En General no aparece la OT biomédica');
+  const b = await call(app.buscar.GET, '/api/search?q=OT-MB0001&espacio=biomedico', { method: 'GET', rol: 'admin' });
   igual(b.status, 200, JSON.stringify(b.body));
   igual(b.body.resultados.ordenes[0]?.id, 501, JSON.stringify(b.body.resultados.ordenes));
   igual(b.body.resultados.ordenes[0]?.codigo, 'OT-MB0001');
@@ -113,9 +116,14 @@ try {
   integridad();
 
   // Un número solo encuentra la orden de ese número en las dos series, y también por id.
-  const porNumero = await call(app.buscar.GET, '/api/search?q=1', { method: 'GET', rol: 'admin' });
+  // (La 500 pasó a biomédico arriba: las dos «1» están en Biomédico; en General, ninguna.)
+  const porNumeroGeneral = await call(app.buscar.GET, '/api/search?q=1', { method: 'GET', rol: 'admin' });
+  igual(porNumeroGeneral.body.resultados.ordenes.length, 0, 'En General no salen las órdenes biomédicas');
+  const porNumero = await call(app.buscar.GET, '/api/search?q=1&espacio=biomedico', { method: 'GET', rol: 'admin' });
   igual(porNumero.body.resultados.ordenes.map((o) => o.codigo).sort().join(), 'OT-MB0001,OT-MG0001', JSON.stringify(porNumero.body.resultados.ordenes));
-  const porId = await call(app.buscar.GET, '/api/search?q=503', { method: 'GET', rol: 'admin' });
+  // La 503 no tiene rubro y su equipo es biomédico: es OT-MB y vive en Biomédico.
+  igual((await call(app.buscar.GET, '/api/search?q=503', { method: 'GET', rol: 'admin' })).body.resultados.ordenes.length, 0, 'En General no sale');
+  const porId = await call(app.buscar.GET, '/api/search?q=503&espacio=biomedico', { method: 'GET', rol: 'admin' });
   igual(porId.body.resultados.ordenes[0]?.codigo, 'OT-MB0002', 'El id de los papeles viejos sigue sirviendo');
 
   console.log(`PASS test-codigo-ot: ${verificaciones} verificaciones; migraciones reales, sin red.`);

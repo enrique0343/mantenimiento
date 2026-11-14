@@ -251,10 +251,10 @@ try {
   const rutinaLote = sqlite.prepare("INSERT INTO planes_mantenimiento (id, activo_id, titulo, frecuencia, proxima_fecha, activo) VALUES (?, ?, 'Lote', 'mensual', ?, 0)");
   for (let i = 0; i < 95; i++) rutinaLote.run(1000 + i, 1 + (i % 59), en(30));
   const lote = ids(1000, 1094);
-  r = await llamar(app.rutinasLote.POST, '/api/planes/bulk', { method: 'POST', rol: 'jefe', data: { accion: 'activar', ids: [...lote, 900] } });
+  r = await llamar(app.rutinasLote.POST, '/api/planes/bulk?area=biomedico', { method: 'POST', rol: 'jefe', data: { accion: 'activar', ids: [...lote, 900] } });
   es([r.status, r.body.error], [409, '1 rutina(s) de la selección son de equipos dados de baja y no se pueden activar. Quítalas de la selección.'], 'activar con una de baja → 409');
   es(cuenta('SELECT count(*) AS n FROM planes_mantenimiento WHERE id >= 1000 AND activo = 1'), 0, 'y no activa ninguna');
-  r = await llamar(app.rutinasLote.POST, '/api/planes/bulk', { method: 'POST', rol: 'jefe', data: { accion: 'activar', ids: lote } });
+  r = await llamar(app.rutinasLote.POST, '/api/planes/bulk?area=biomedico', { method: 'POST', rol: 'jefe', data: { accion: 'activar', ids: lote } });
   es([r.status, r.body.afectados, cuenta('SELECT count(*) AS n FROM planes_mantenimiento WHERE id >= 1000 AND activo = 1')], [200, 95, 95], '95 rutinas en tandas de 90');
   r = await llamar(app.rutinasLote.POST, '/api/planes/bulk', { method: 'POST', rol: 'jefe', data: { accion: 'activar', ids: [] } });
   es([r.status, r.body.error], [400, 'Elige al menos una rutina.'], 'selección vacía');

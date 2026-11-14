@@ -26,7 +26,7 @@ const E = await cargar(`
   export { tipoActivoFiltro } from './src/lib/especialidad';
   export { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
   export { sql } from 'drizzle-orm';
-  export { activos, ordenes } from './src/lib/schema';
+  export { activos, ordenes, notificaciones } from './src/lib/schema';
 `, [{
   // especialidad.ts trae db.ts (Cloudflare); aquí solo se usa tipoActivoFiltro.
   name: 'sin-db', setup(b) { b.onResolve({ filter: /^\.\/db$/ }, () => ({ path: 'db', namespace: 'stub' })); b.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({ contents: 'export const getDb = () => { throw new Error("sin base"); };', loader: 'js' })); },
@@ -134,6 +134,76 @@ for (const f of filasActivo) es(E.espacioDeActivo(f), E.espacioDeArea(E.rubroDeA
 es([E.mensajeOtroEspacio('general'), E.mensajeOtroEspacio('biomedico')], ['Este registro es del espacio General.', 'Este registro es del espacio Biomédico.'], 'aviso del otro espacio');
 es(E.opcionesCookieEspacio(true), { path: '/', httpOnly: true, sameSite: 'lax', secure: true, maxAge: 31536000 }, 'cookie de un año en HTTPS');
 es(E.opcionesCookieEspacio(false).secure, false, 'cookie sin secure en local');
+
+// ── Rutas de un solo espacio, registros y el destino del interruptor ────────
+for (const p of ['/ronda', '/ronda/semana', '/rondas', '/aop/3', '/eop', '/electrico/2', '/actividades/9', '/catalogo-aires/nuevo', '/api/aop/eventos', '/api/ronda-turno/puntos', '/api/catalogo-aires', '/ronda/'])
+  es(E.espacioDeRuta(p), 'general', `${p} es de General`);
+for (const p of ['/calibraciones', '/calibraciones/patrones', '/seguridad-electrica/4', '/expedientes', '/licencias/nueva', '/capacitaciones', '/alertas', '/alertas/2', '/incidentes', '/cumplimiento', '/configuracion/plantillas', '/centros-costo', '/api/calibraciones/7', '/api/licencias', '/api/alertas/exportar', '/api/centros-costo/1'])
+  es(E.espacioDeRuta(p), 'biomedico', `${p} es de Biomédico`);
+for (const p of ['/', '/ordenes', '/activos', '/preventivos', '/configuracion', '/inventario', '/usuarios', '/proveedores', '/requisiciones', '/ubicaciones', '/rondas-x', '/aopx', '/calibracionesx', '/api/checklist-plantillas', '/api/espacio', '/campo'])
+  es(E.espacioDeRuta(p), null, `${p} es común o depende de los datos`);
+es(E.registroDeRuta('/activos/12'), { tipo: 'activos', id: 12, api: false }, 'ficha de equipo');
+es(E.registroDeRuta('/ordenes/5/reporte'), { tipo: 'ordenes', id: 5, api: false }, 'subpágina de orden');
+es(E.registroDeRuta('/api/planes/3'), { tipo: 'planes', id: 3, api: true }, 'API de un plan');
+es(E.registroDeRuta('/api/firmas/8/tecnico'), { tipo: 'firmas', id: 8, api: true }, 'firma de una orden');
+es([E.registroDeRuta('/planes/3'), E.registroDeRuta('/activos/nuevo'), E.registroDeRuta('/api/ordenes/bulk-delete'), E.registroDeRuta('/api/campo/equipo/4')], [null, null, null, null], 'no son registros');
+es(['/ordenes?estado=abierta', '/indicadores', '/calibraciones', '/ordenes/4', '/areas/aires', '/otro-espacio', '//ajeno.example', 'https://ajeno.example/', '/api/ordenes', '', null, 7].map(E.destinoAlCambiar),
+  ['/ordenes', '/indicadores', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/'], 'el interruptor vuelve a la lista común o al panel');
+es(E.hrefCambiarEspacio('/activos/4?area=biomedico#x', 'biomedico'), '/activos/4?area=biomedico&espacio=biomedico#x', 'botón «Cambiar a …»');
+es(E.hrefCambiarEspacio('//ajeno.example/x', 'general'), '/?espacio=general', 'nunca a otro sitio');
+es([E.areaEnEspacio('aires', 'general'), E.areaEnEspacio('biomedico', 'general'), E.areaEnEspacio('biomedico', 'biomedico'), E.areaEnEspacio(null, 'general')], [true, false, true, false], 'areaEnEspacio');
+es(E.espacioDeTrabajo(null, { rubro: null, tipo: 'biomedico' }), 'biomedico', 'orden sin rubro de un equipo biomédico');
+es([E.espacioDeTrabajo('aires', { tipo: 'biomedico' }), E.espacioDeTrabajo(null, null), E.espacioDeTrabajo('biomedico')], ['general', 'general', 'biomedico'], 'el rubro manda; sin nada, General');
+{
+  // espacioDelContexto: locals del middleware, o resolverEspacio sin él.
+  const u = { rol: 'jefe', especialidad: 'ambos' };
+  es(E.espacioDelContexto({ locals: { espacio: 'biomedico', user: u } }), 'biomedico', 'el del middleware');
+  es(E.espacioDelContexto({ locals: { espacio: 'biomedico' } }, { rol: 'jefe', especialidad: 'general' }), 'general', 'nunca uno que el usuario no tiene');
+  es(E.espacioDelContexto({ request: new Request('https://x.local/a?espacio=biomedico') }, u), 'biomedico', 'sin middleware: ?espacio=');
+  es(E.espacioDelContexto({ cookies: { get: () => ({ value: 'biomedico' }) }, url: new URL('https://x.local/') }, u), 'biomedico', 'sin middleware: la cookie');
+  es(E.espacioDelContexto({ cookies: { get: () => { throw new Error('x'); } } }, u), 'general', 'cookies que fallan: el primero');
+  es(E.espacioDeLista({}, { rol: 'tecnico', especialidad: 'biomedico' }, 'aires'), { espacio: 'general', permitido: false }, 'un área del otro espacio no se permite');
+  es(E.espacioDeLista({}, u, 'biomedico'), { espacio: 'biomedico', permitido: true }, 'con los dos, el área manda');
+}
+{
+  // condicionTrabajoEspacio / condicionActivoIdEspacio / condicionLinkEspacio en SQLite, sin parámetros.
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE activos (id INTEGER PRIMARY KEY, rubro TEXT, tipo TEXT)');
+  db.exec('CREATE TABLE ordenes (id INTEGER PRIMARY KEY, rubro TEXT, activo_id INTEGER)');
+  db.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, rubro TEXT, activo_id INTEGER)');
+  db.exec('CREATE TABLE conjuntos (id INTEGER PRIMARY KEY, rubro TEXT)');
+  db.exec('CREATE TABLE notificaciones (id INTEGER PRIMARY KEY, link TEXT)');
+  db.exec("INSERT INTO activos VALUES (1,'biomedico','biomedico'),(2,'aires','general'),(3,NULL,'biomedico'),(4,NULL,NULL)");
+  const filas = [[1, 'biomedico', 2], [2, 'aires', 1], [3, null, 1], [4, null, 3], [5, null, 2], [6, null, null], [7, 'otra', 1], [8, null, 99]];
+  const ins = db.prepare('INSERT INTO ordenes VALUES (?,?,?)');
+  filas.forEach((r) => ins.run(...r));
+  db.exec('INSERT INTO tickets SELECT * FROM ordenes');
+  db.exec("INSERT INTO conjuntos VALUES (1,'biomedico'),(2,'aires')");
+  const dialecto = new E.SQLiteSyncDialect();
+  const q = (cond, tabla = 'ordenes') => { const { sql, params } = dialecto.sqlToQuery(E.sql`select id from ${E.sql.raw(tabla)} where ${cond} order by id`); return { ids: db.prepare(sql).all(...params).map((r) => r.id), params }; };
+  const bio = [1, 3, 4];
+  for (const e of E.ESPACIO_KEYS) {
+    const r = q(E.condicionOrdenEspacio(e));
+    es(r.ids, e === 'biomedico' ? bio : [2, 5, 6, 7, 8], `órdenes de ${e}: rubro y, sin rubro, el equipo`);
+    es(r.params.length, 0, `condicionOrdenEspacio(${e}) sin parámetros`);
+    es(q(E.condicionTicketEspacio(e), 'tickets').ids, r.ids, `solicitudes de ${e}: la misma regla`);
+    es(filas.filter(([id]) => r.ids.includes(id)).every(([, rubro, act]) => E.espacioDeTrabajo(rubro, act ? db.prepare('select rubro, tipo from activos where id=?').get(act) : null) === e), true, `espacioDeTrabajo coincide (${e})`);
+    const p = q(E.condicionActivoIdEspacio(E.sql.raw('activo_id'), e));
+    es(p.ids, e === 'biomedico' ? [2, 3, 4, 7] : [1, 5], `activo_id del espacio ${e} (sin equipo o inexistente: ninguno)`);
+    es(p.params.length, 0, 'sin parámetros');
+  }
+  es([...q(E.condicionOrdenEspacio('general')).ids, ...q(E.condicionOrdenEspacio('biomedico')).ids].sort(), filas.map(([id]) => id).sort(), 'cada orden en un solo espacio');
+  const links = ['/ordenes/1', '/ordenes/2?area=aires', '/ordenes/3', '/ordenes/4#x', '/ordenes/6', '/tickets/1', '/tickets/2', '/activos/1', '/activos/2/historial', '/activos/3', '/conjuntos/1', '/conjuntos/2',
+    '/ronda', '/ronda/semana', '/aop?x=1', '/calibraciones', '/alertas/3', '/licencias#a', '/proyectos/1', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
+  const insL = db.prepare('INSERT INTO notificaciones (link) VALUES (?)');
+  links.forEach((l) => insL.run(l));
+  const ver = (e) => { const { sql, params } = dialecto.sqlToQuery(E.sql`select link from notificaciones where ${E.condicionLinkEspacio(E.notificaciones.link, e)} order by id`); es(params.length, 0, 'campana sin parámetros'); return db.prepare(sql).all(...params).map((r) => r.link); };
+  const comunes = ['/proyectos/1', '/preventivos', '/ordenes/999', null, '/rondax', '/calibracionesx'];
+  es(ver('biomedico'), ['/ordenes/1', '/ordenes/3', '/ordenes/4#x', '/tickets/1', '/activos/1', '/activos/3', '/conjuntos/1', '/calibraciones', '/alertas/3', '/licencias#a', ...comunes], 'campana de Biomédico');
+  es(ver('general'), ['/ordenes/2?area=aires', '/ordenes/6', '/tickets/2', '/activos/2/historial', '/conjuntos/2', '/ronda', '/ronda/semana', '/aop?x=1', ...comunes], 'campana de General');
+  es(E.respuestaOtroEspacio('general').status, 403, '403');
+  es(await E.respuestaOtroEspacio('biomedico').json(), { error: 'Este registro es del espacio Biomédico.' }, '403 JSON { error }');
+}
 
 // ── Middleware: locals.espacio y locals.espaciosPermitidos ──────────────────
 const M = await cargar(`export { onRequest } from './src/middleware';`, [{

@@ -5,6 +5,7 @@ import { ordenes, activos, planesMantenimiento, encuestasSatisfaccion, contratos
 import { sql, eq, and, lte, gte, asc, isNotNull, inArray, desc } from "drizzle-orm";
 import { diasParaVencer } from "@/lib/contratos";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
+import { ESPACIOS, condicionActivoEspacio, espacioDelContexto, condicionOrdenEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 // Tecnico y Motorista → su panel personal
@@ -12,23 +13,29 @@ const user = Astro.locals.user;
 if (user?.rol === "tecnico" || user?.rol === "motorista") return Astro.redirect("/mi-panel");
 
 const db = getDb(Astro);
+// El resumen del espacio; los contratos (empresas) son comunes.
+const espacio = espacioDelContexto(Astro, user);
+const deOrdenes = condicionOrdenEspacio(espacio);
 
 const ordenesPorEstado = await db
   .select({ estado: ordenes.estado, n: sql<number>`count(*)` })
   .from(ordenes)
+  .where(deOrdenes)
   .groupBy(ordenes.estado);
 
 const activosPorEstado = await db
   .select({ estado: activos.estado, n: sql<number>`count(*)` })
   .from(activos)
+  .where(condicionActivoEspacio(espacio))
   .groupBy(activos.estado);
 
 const vencidas = await db
   .select({ n: sql<number>`count(*)` })
   .from(ordenes)
-  .where(
-    sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso')`
-  );
+  .where(and(
+    deOrdenes,
+    sql`${ordenes.vencimiento} IS NOT NULL AND ${ordenes.vencimiento} < datetime('now') AND ${ordenes.estado} IN ('abierta','en_proceso')`,
+  ));
 
 const hoy = new Date().toISOString().slice(0, 10);
 const en14 = new Date(); en14.setDate(en14.getDate() + 14);
@@ -45,7 +52,7 @@ const proximos = await db
   .leftJoin(activos, eq(activos.id, planesMantenimiento.activoId))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en14Str)))
+  .where(and(eq(planesMantenimiento.activo, true), lte(planesMantenimiento.proximaFecha, en14Str), condicionActivoEspacio(espacio)))
   .orderBy(asc(planesMantenimiento.proximaFecha))
   .limit(10);
 
@@ -65,11 +72,14 @@ const [satRow] = await db
     avg: sql<number>`AVG(${encuestasSatisfaccion.calificacion})`,
   })
   .from(encuestasSatisfaccion)
-  .where(isNotNull(encuestasSatisfaccion.respondidaEn));
+  .leftJoin(ordenes, eq(ordenes.id, encuestasSatisfaccion.ordenId))
+  .where(and(isNotNull(encuestasSatisfaccion.respondidaEn), deOrdenes));
 
 const [satEnviadas] = await db
   .select({ n: sql<number>`COUNT(*)` })
-  .from(encuestasSatisfaccion);
+  .from(encuestasSatisfaccion)
+  .leftJoin(ordenes, eq(ordenes.id, encuestasSatisfaccion.ordenId))
+  .where(deOrdenes);
 
 const satN = Number(satRow?.n ?? 0);
 const satAvg = satRow?.avg != null ? Number(satRow.avg) : null;
@@ -103,7 +113,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
-      <p class="mt-0.5 text-sm text-slate-500">Resumen del estado operativo</p>
+      <p class="mt-0.5 text-sm text-slate-500">Resumen del estado operativo · {ESPACIOS[espacio].rotulo}</p>
     </div>
     <span class="text-xs text-slate-400">{new Date().toLocaleDateString("es", { weekday:"long", day:"numeric", month:"long", timeZone:"America/El_Salvador" })}</span>
   </div>

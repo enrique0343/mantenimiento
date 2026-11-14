@@ -11,6 +11,7 @@ import { MESES_CORTOS } from "@/lib/plan-anual";
 import { RUBROS, RUBRO_KEYS, rubroLabel, rubroDeActivo, rubroDeActividad, type RubroKey } from "@/lib/rubros";
 import { areaHref } from "@/lib/areas";
 import { areaDeActividad } from "@/lib/actividades";
+import { areaEnEspacio, condicionActivoEspacio, espacioDeArea, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -23,6 +24,10 @@ const sedeId = sedeParam ? Number(sedeParam) : null;
 const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
 const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
 const esTecnico = user.rol === "tecnico";
+// Solo lo del espacio (las actividades por ubicación son de General).
+const { espacio, permitido } = espacioDeLista(Astro, user, dominio);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const rubrosDelEspacio = RUBRO_KEYS.filter((k) => areaEnEspacio(k, espacio));
 
 const sucursalesList = await db
   .select({ id: sucursales.id, nombre: sucursales.nombre })
@@ -47,6 +52,7 @@ const planRowsAll = await db
   .where(and(
     eq(planesMantenimiento.activo, true),
     ne(activos.estado, "baja"),
+    condicionActivoEspacio(espacio),
     esTecnico ? eq(planesMantenimiento.asignadoA, user.id) : undefined,
   ));
 
@@ -61,7 +67,8 @@ const actRowsAll = await db
     : eq(actividades.activo, true));
 
 const planRowsSede = sedeId ? planRowsAll.filter((r) => r.s?.id === sedeId) : planRowsAll;
-const actRowsSede = sedeId ? actRowsAll.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsAll;
+const actRowsEspacio = actRowsAll.filter((r) => espacioDeArea(areaDeActividad(r.a.rubro, r.c?.rubro)) === espacio);
+const actRowsSede = sedeId ? actRowsEspacio.filter((r) => (r.s?.id ?? r.a.sucursalId) === sedeId) : actRowsEspacio;
 const planRows = dominio ? planRowsSede.filter((r) => rubroDeActivo(r.a?.rubro, r.a?.tipo) === dominio) : planRowsSede;
 const actRows = dominio ? actRowsSede.filter((r) => areaDeActividad(r.a.rubro, r.c?.rubro) === dominio) : actRowsSede;
 
@@ -169,7 +176,7 @@ const fmt = (s: string) => fmtFechaSoloCompacta(s);
       </select>
       <select id="dominioSel" class="input w-auto text-sm py-1.5">
         <option value="">Todas las áreas</option>
-        {RUBRO_KEYS.map((k) => (
+        {rubrosDelEspacio.map((k) => (
           <option value={k} selected={k === dominio}>{RUBROS[k].icono} {RUBROS[k].label}</option>
         ))}
       </select>

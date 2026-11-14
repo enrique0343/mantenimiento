@@ -4,10 +4,11 @@ import Layout from "@/layouts/Layout.astro";
 import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 import { getDb } from "@/lib/db";
 import { activos, centrosCosto, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
-import { asc, desc, sql, eq } from "drizzle-orm";
+import { and, asc, desc, sql, eq } from "drizzle-orm";
 import { normalizarCategoria } from "@/lib/categorias-equipos";
 import { AREAS, AREA_KEYS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { areaEnEspacio, condicionActivoEspacio, condicionActivoIdEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 import { CRITICIDAD_LABEL, CRITICIDAD_COLOR } from "@/lib/inventario-jci";
 import {
   CLASES_RIESGO, ESTADO_ACTIVO_COLOR, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, FRECUENCIAS_RUTINA_EQUIPO, etiquetaFrecuencia, hoySV, puedeVerBio,
@@ -25,6 +26,10 @@ const area = parseArea(url.searchParams.get("area"));
 const filtros = leerFiltrosInventario(url.searchParams, { estadoPorDefecto: "vigentes" });
 const vistaParam = url.searchParams.get("vista") === "grupos" ? "grupos" : "tabla";
 const hoy = hoySV();
+// Solo los equipos del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, Astro.locals.user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const areasDelEspacio = AREA_KEYS.filter((key) => areaEnEspacio(key, espacio));
 
 const rows = await db
   .select({ a: activos, ub: ubicaciones, suc: sucursales, cc: { id: centrosCosto.id, codigo: centrosCosto.codigo, nombre: centrosCosto.nombre } })
@@ -32,7 +37,7 @@ const rows = await db
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
-  .where(area ? activoAreaCondition(area) : undefined)
+  .where(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio))
   .orderBy(desc(activos.id));
 
 // La búsqueda escrita se aplica en el navegador (en vivo); los demás filtros, aquí.
@@ -49,7 +54,7 @@ const puedeDescargar = puedeVerBio(user.rol);
 const planesCount = await db
   .select({ activoId: planesMantenimiento.activoId, n: sql<number>`count(*)` })
   .from(planesMantenimiento)
-  .where(sql`${planesMantenimiento.activo} = 1`)
+  .where(and(sql`${planesMantenimiento.activo} = 1`, condicionActivoIdEspacio(planesMantenimiento.activoId, espacio)))
   .groupBy(planesMantenimiento.activoId);
 const planesByActivo = new Map(planesCount.map((r) => [r.activoId, Number(r.n)]));
 
@@ -149,7 +154,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
   {puedeDescargar && <p class="mt-1 text-right text-xs text-slate-400">La descarga usa los filtros y la búsqueda.</p>}
 
   <nav class="mt-4 flex flex-wrap gap-2" aria-label="Inventario por área">
-    {AREA_KEYS.map((key) => <a href={areaHref("/activos", key)} aria-current={area === key ? "page" : undefined} class:list={["rounded-lg border px-3 py-2 text-sm", area === key ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}>{AREAS[key].label}</a>)}
+    {areasDelEspacio.length > 1 && areasDelEspacio.map((key) => <a href={areaHref("/activos", key)} aria-current={area === key ? "page" : undefined} class:list={["rounded-lg border px-3 py-2 text-sm", area === key ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-brand-400"]}>{AREAS[key].label}</a>)}
   </nav>
 
   {accesos.length > 0 && (
@@ -283,7 +288,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
                   </td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
-                  <td class="px-4 py-1.5 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+                  <td class="px-4 py-1.5 text-xs text-slate-600">{r.ub?.nombre ?? (r.a.ubicacion ? `Pendiente de asignar · según inventario: ${r.a.ubicacion}` : "-")}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.cc ? <span title={r.cc.nombre}>{r.cc.codigo}</span> : "—"}</td>
                   <td class="px-4 py-1.5"><span class={`badge ${CRITICIDAD_COLOR[r.a.criticidadOperacional ?? "media"]}`}>{CRITICIDAD_LABEL[r.a.criticidadOperacional ?? "media"]}</span></td>
                   <td class="px-4 py-1.5"><span class={`badge ${estadoColor(r.a.estado)}`}>{estadoLabel(r.a.estado)}</span></td>
@@ -329,7 +334,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
               </td>
               <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
-              <td class="px-4 py-2 text-xs text-slate-600">{r.ub?.nombre ?? r.a.ubicacion ?? "-"}</td>
+              <td class="px-4 py-2 text-xs text-slate-600">{r.ub?.nombre ?? (r.a.ubicacion ? `Pendiente de asignar · según inventario: ${r.a.ubicacion}` : "-")}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.cc ? <span title={r.cc.nombre}>{r.cc.codigo}</span> : "—"}</td>
               {verClase && (
                 <td class="px-4 py-2 text-xs">

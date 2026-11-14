@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { encuestasSatisfaccion, ordenes, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { espacioDelContexto, condicionOrdenEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -24,7 +25,8 @@ export const GET: APIRoute = async (ctx) => {
   const filtroTec = url.searchParams.get("tecnico");
   const filtroCal = url.searchParams.get("cal");
 
-  const conds: any[] = [isNotNull(encuestasSatisfaccion.respondidaEn)];
+  // Solo las encuestas de las órdenes del espacio de la sesión.
+  const conds: any[] = [isNotNull(encuestasSatisfaccion.respondidaEn), condicionOrdenEspacio(espacioDelContexto(ctx, user))];
   if (filtroTec) conds.push(eq(ordenes.asignadoA, Number(filtroTec)));
   if (filtroCal) conds.push(eq(encuestasSatisfaccion.calificacion, Number(filtroCal)));
 

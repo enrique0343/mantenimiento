@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, actividades } from "@/lib/schema";
-import { desc, inArray, eq } from "drizzle-orm";
+import { desc, eq, sql, type AnyColumn } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
   TIPOS_OT, CLASES_PRIORIDAD, CLASE_PRIORIDAD_COLOR, CLASE_PRIORIDAD_LABEL,
@@ -10,8 +10,8 @@ import {
   type EstadoOT, type TipoOT, type ClasePrioridad,
 } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
-import { tipoActivoFiltro } from "@/lib/especialidad";
 import { parseArea, areaHref, AREAS } from "@/lib/areas";
+import { espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const usrLogged = Astro.locals.user!;
@@ -20,6 +20,11 @@ const url = new URL(Astro.request.url);
 const rawArea = url.searchParams.get("area");
 const area = parseArea(rawArea);
 if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
+// Solo las órdenes del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, usrLogged, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+// Una lista de ids en un solo parámetro: D1 no acepta más de 100 por consulta.
+const enLista = (col: AnyColumn, ids: number[]) => sql`${col} in (select value from json_each(${JSON.stringify(ids)}))`;
 const filtroEstado = url.searchParams.get("estado");
 const filtroTipo = url.searchParams.get("tipo");
 const filtroVista = url.searchParams.get("vista"); // "mias" | null
@@ -27,9 +32,10 @@ const filtroVista = url.searchParams.get("vista"); // "mias" | null
 const filtroClase = url.searchParams.get("clase");
 const verCerradas = url.searchParams.get("verCerradas") === "1"; // por defecto false: solo activas
 
-// Filtro por especialidad (jefe/tecnico): solo OTs cuyo activo coincide
-const aplicaFiltroEsp = (usrLogged.rol === "jefe" || usrLogged.rol === "tecnico");
-const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(usrLogged.especialidad ?? null) : null;
+// La especialidad ya decide el espacio, y el espacio filtra en la consulta (por
+// rubro y, sin rubro, por el equipo). El filtro viejo por tipo de equipo dejaba
+// fuera registros del propio espacio (rubro biomédico con tipo «general»).
+const filtroEspecialidad: string | null = null;
 const esTecnico = usrLogged.rol === "tecnico";
 const esJefe = usrLogged.rol === "jefe";
 
@@ -38,7 +44,7 @@ let rowsRaw: any[] = [];
 
 try {
   // Query simple sin joins para evitar problemas de schema
-  const ots = await db.select().from(ordenes).where(area ? eq(ordenes.rubro, area) : undefined).orderBy(desc(ordenes.id)).limit(500);
+  const ots = await db.select().from(ordenes).where(condicionTrabajoAreaEspacio(ordenes.rubro, ordenes.activoId, espacio, area)).orderBy(desc(ordenes.id)).limit(500);
 
   // Cargo entidades relacionadas en queries separados (en lote)
   const activoIds = Array.from(new Set(ots.map((o) => o.activoId).filter((x): x is number => !!x)));
@@ -47,17 +53,17 @@ try {
 
   const actMap = new Map<number, any>();
   if (activoIds.length > 0) {
-    const ws = await db.select().from(activos).where(inArray(activos.id, activoIds));
+    const ws = await db.select().from(activos).where(enLista(activos.id, activoIds));
     for (const a of ws) actMap.set(a.id, a);
   }
   const actiMap = new Map<number, any>();
   if (actividadIds.length > 0) {
-    const ws = await db.select().from(actividades).where(inArray(actividades.id, actividadIds));
+    const ws = await db.select().from(actividades).where(enLista(actividades.id, actividadIds));
     for (const a of ws) actiMap.set(a.id, a);
   }
   const userMap = new Map<number, any>();
   if (userIds.length > 0) {
-    const ws = await db.select().from(usuarios).where(inArray(usuarios.id, userIds));
+    const ws = await db.select().from(usuarios).where(enLista(usuarios.id, userIds));
     for (const u of ws) userMap.set(u.id, u);
   }
 

@@ -20,6 +20,7 @@ import {
   type RutinaPlan,
 } from "@/lib/plan-anual";
 import { cargarAprobacionesPlan, cargarRutinasPlan, cargarSlaPropios } from "@/lib/plan-anual-datos";
+import { areaEnEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -37,7 +38,12 @@ const anioActual = Number(hoy.slice(0, 4));
 const anioParam = Number(url.searchParams.get("anio"));
 const anio = Number.isInteger(anioParam) && anioParam >= 2000 && anioParam <= 2100 ? anioParam : anioActual;
 const dominioParam = url.searchParams.get("area") ?? url.searchParams.get("dominio");
-const dominio: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+const dominioPedido: RubroKey | null = dominioParam && dominioParam in RUBROS ? (dominioParam as RubroKey) : null;
+// Espacio: el plan de General reúne sus tres áreas; el de Biomédico es el de su área.
+const { espacio, permitido } = espacioDeLista(Astro, user, dominioPedido);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const dominio: RubroKey | null = dominioPedido ?? (espacio === "biomedico" ? "biomedico" : null);
+const rubrosDelEspacio = RUBRO_KEYS.filter((k) => areaEnEspacio(k, espacio));
 // Aprobación por área; «general» = plan de todas las áreas (sin `area` en la URL).
 const areaPlan = dominio ?? "general";
 
@@ -72,7 +78,7 @@ const txtCorrectivo = C("correctivo",
 const txtCorrectivoResp = C("correctivo_responsable", "Jefatura de Mantenimiento");
 
 // ── Rutinas del plan (sin equipos dados de baja) ─────────────────────────────
-const rutinas = await cargarRutinasPlan(db, { area: dominio, sedeId });
+const rutinas = await cargarRutinasPlan(db, { area: dominio, sedeId, espacio });
 const planRows = rutinas.filter((r) => r.tipo === "equipo");
 const actRows = rutinas.filter((r) => r.tipo === "actividad");
 const calendario = new Map(rutinas.map((r) => [`${r.tipo}-${r.id}`, calendarioAnual(r.proximaFecha, r.frecuencia, anio)]));
@@ -93,7 +99,7 @@ const gastoPorRubro = new Map<string, number>();
 for (const g of gastosAnio) gastoPorRubro.set(g.rubro, (gastoPorRubro.get(g.rubro) ?? 0) + g.monto);
 
 // ── Resumen por área ─────────────────────────────────────────────────────────
-const dominiosResumen = dominio ? [dominio] : RUBRO_KEYS;
+const dominiosResumen = dominio ? [dominio] : rubrosDelEspacio;
 const resumenRubros = dominiosResumen.map((k) => ({
   rubro: k,
   nPlanes: planRows.filter((r) => r.area === k).length,
@@ -150,7 +156,7 @@ const totalEjecuciones = ejecucionesMes.reduce((a, b) => a + b, 0);
 
 // ── Atención correctiva (sección 10) ─────────────────────────────────────────
 const PRIORIDADES: Prioridad[] = ["urgente", "alta", "media", "baja"];
-const slaPropios = await cargarSlaPropios(db, { area: dominio, sedeId });
+const slaPropios = await cargarSlaPropios(db, { area: dominio, sedeId, espacio });
 
 // ── Aprobación del plan ──────────────────────────────────────────────────────
 const aprobaciones = await cargarAprobacionesPlan(db, anio, areaPlan);
@@ -207,13 +213,13 @@ const anios = [...new Set([anioActual - 2, anioActual - 1, anioActual, anioActua
 
   <!-- Filtro por área (no se imprime) -->
   <div class="no-print mt-3 flex flex-wrap gap-1.5 text-sm">
-    <a
+    {espacio === "general" && <a
       href={`/plan-mantenimiento${qs({ area: null })}`}
       class:list={["rounded-lg px-3 py-1.5 font-medium", !dominio ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}
     >
       Plan general
-    </a>
-    {RUBRO_KEYS.map((k) => (
+    </a>}
+    {rubrosDelEspacio.map((k) => (
       <a
         href={`/plan-mantenimiento${qs({ area: k })}`}
         class:list={["rounded-lg px-3 py-1.5 font-medium", dominio === k ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"]}

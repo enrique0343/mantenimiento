@@ -8,6 +8,7 @@ import { activarPlanes, eliminarPlanes, motivoValido, MENSAJE_MOTIVO } from "@/l
 
 import { parseArea, activoAreaCondition } from "@/lib/areas";
 import { errorMapEs, respuestaZod } from "@/lib/validacion-api";
+import { condicionActivoEspacio, espacioDeLista, respuestaOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const bulkSchema = z.object({
@@ -29,6 +30,9 @@ export const POST: APIRoute = async (ctx) => {
   const areaParam = ctx.url.searchParams.get("area");
   const area = parseArea(areaParam);
   if (areaParam && !area) return Response.json({ error: "Área no válida" }, { status: 400 });
+  // La selección sale de la lista del espacio (o del área): un plan de otro espacio no entra.
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
   const db = getDb(ctx);
   const ids = [...new Set(parsed.data.ids)];
   // La lista va en un solo parámetro (json_each): D1 no acepta más de 100 por consulta.
@@ -37,8 +41,8 @@ export const POST: APIRoute = async (ctx) => {
     deBaja: sql<number>`coalesce(sum(case when ${activos.estado} = 'baja' then 1 else 0 end), 0)`,
   }).from(planesMantenimiento)
     .innerJoin(activos, eq(activos.id, planesMantenimiento.activoId))
-    .where(and(sql`${planesMantenimiento.id} in (select value from json_each(${JSON.stringify(ids)}))`, area ? activoAreaCondition(area) : undefined));
-  if (Number(n) !== ids.length) return Response.json({ error: "La selección incluye planes fuera de esta área o inexistentes" }, { status: 400 });
+    .where(and(sql`${planesMantenimiento.id} in (select value from json_each(${JSON.stringify(ids)}))`, area ? activoAreaCondition(area) : condicionActivoEspacio(espacio)));
+  if (Number(n) !== ids.length) return Response.json({ error: area ? "La selección incluye planes fuera de esta área o inexistentes" : "La selección incluye planes de otro espacio o inexistentes" }, { status: 400 });
 
   if (accion === "eliminar") {
     const r = await eliminarPlanes(db, ids, user, motivo!);

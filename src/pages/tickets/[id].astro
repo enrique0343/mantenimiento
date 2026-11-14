@@ -1,4 +1,5 @@
 ---
+import { espacioDeTrabajo, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
@@ -22,7 +23,7 @@ const db = getDb(Astro);
 
 const [r] = await db
   // D1 corta el resultado a 100 columnas: del equipo solo se muestran código y nombre.
-  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre } })
+  .select({ t: tickets, a: usuarios, s: sucursales, ub: ubicaciones, act: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo } })
   .from(tickets)
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
@@ -33,6 +34,9 @@ const [r] = await db
 if (!r) return Astro.redirect("/tickets");
 const t = r.t;
 const area = parseArea(t.rubro);
+// Registro del otro espacio: el middleware muestra el aviso; sin él, 403 sin datos.
+const espacioTicket = espacioDeTrabajo(t.rubro, r.act);
+if (!puedeEntrar(user, espacioTicket)) return new Response(mensajeOtroEspacio(espacioTicket), { status: 403 });
 const rawArea = Astro.url.searchParams.get("area");
 if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));

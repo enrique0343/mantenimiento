@@ -5,6 +5,7 @@ import { planesMantenimiento, activos, usuarios, ubicaciones, sucursales, contra
 import { eq, desc, inArray } from "drizzle-orm";
 import { parseArea, areaHref, activoAreaCondition } from "@/lib/areas";
 import { FRECUENCIAS_RUTINA_EQUIPO, etiquetaFrecuencia, fechaCorta } from "@/lib/biomedico";
+import { ESPACIOS, condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -16,6 +17,9 @@ const area = parseArea(url.searchParams.get("area"));
 const fSucursal = url.searchParams.get("sucursal");
 const fFrecuencia = url.searchParams.get("frecuencia");
 const fEstado = url.searchParams.get("estado") ?? "activos";
+// Solo los preventivos de los equipos del espacio (o del área pedida).
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
 
 const rows = await db
   // D1 corta el resultado a 100 columnas: del equipo y del técnico, solo lo que se muestra.
@@ -31,7 +35,7 @@ const rows = await db
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(area ? activoAreaCondition(area) : undefined)
+  .where(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio))
   .orderBy(desc(planesMantenimiento.id));
 
 const filtered = rows.filter((r) =>
@@ -72,7 +76,7 @@ const fmt = (s: string) => fechaCorta(s);
       <p class="text-sm text-slate-500">{rows.length} en total · mostrando {filtered.length}</p>
     </div>
     <div class="flex gap-2">
-      <a href={area ? `/preventivos?area=${area}` : "/preventivos"} class="btn-secondary">Tablero de preventivos</a>
+      <a href={area ? `/preventivos?area=${area}` : "/preventivos"} class="btn-secondary">{ESPACIOS[espacio].tablero}</a>
       <a href={areaHref("/planificador", area)} class="btn-secondary">Planificador mensual</a>
       <a href={areaHref("/cronograma", area)} class="btn-secondary">Cronograma</a>
     </div>

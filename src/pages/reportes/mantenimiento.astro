@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db";
 import { sucursales, usuarios } from "@/lib/schema";
 import { consolidadoMantenimiento, etiquetaMinutos, TIPO_ORDEN } from "@/lib/reporte-mantenimiento";
 import { AREA_KEYS, AREAS, parseArea } from "@/lib/areas";
+import { areaEnEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -24,7 +25,11 @@ const sede = Number(q.get("sede")) || null;
 const tecnico = Number(q.get("tecnico")) || null;
 const rubro = parseArea(q.get("area"));
 const tipo = q.get("tipo") && TIPO_ORDEN[q.get("tipo") as string] ? q.get("tipo") : null;
-const { filas, resumen } = await consolidadoMantenimiento(db, { desde, hasta, sede, rubro, tecnico, tipo });
+// Lo ejecutado en el espacio (o en el área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, user, rubro);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const areasDelEspacio = AREA_KEYS.filter((k) => areaEnEspacio(k, espacio));
+const { filas, resumen } = await consolidadoMantenimiento(db, { desde, hasta, sede, rubro, tecnico, tipo, espacio });
 const sedes = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).where(eq(sucursales.activa, true)).orderBy(asc(sucursales.nombre));
 const tecnicos = await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios).where(eq(usuarios.rol, "tecnico")).orderBy(asc(usuarios.nombre));
 const parametros = new URLSearchParams({ desde, hasta });
@@ -57,7 +62,7 @@ const difTotal = resumen.estimadoMin ? resumen.realContraEstimadoMin - resumen.e
       <div><label class="label" for="desde">Desde</label><input class="input" id="desde" type="date" name="desde" value={desde} /></div>
       <div><label class="label" for="hasta">Hasta</label><input class="input" id="hasta" type="date" name="hasta" value={hasta} /></div>
       <div><label class="label" for="sede">Sede</label><select class="input" id="sede" name="sede"><option value="">Todas</option>{sedes.map((s) => <option value={s.id} selected={s.id === sede}>{s.nombre}</option>)}</select></div>
-      <div><label class="label" for="area">Área</label><select class="input" id="area" name="area"><option value="">Todas</option>{AREA_KEYS.map((k) => <option value={k} selected={k === rubro}>{AREAS[k].label}</option>)}</select></div>
+      <div><label class="label" for="area">Área</label><select class="input" id="area" name="area"><option value="">Todas</option>{areasDelEspacio.map((k) => <option value={k} selected={k === rubro}>{AREAS[k].label}</option>)}</select></div>
       <div><label class="label" for="tecnico">Técnico</label><select class="input" id="tecnico" name="tecnico"><option value="">Todos</option>{tecnicos.map((t) => <option value={t.id} selected={t.id === tecnico}>{t.nombre}</option>)}</select></div>
       <div><label class="label" for="tipo">Tipo</label><select class="input" id="tipo" name="tipo"><option value="">Todos</option>{Object.entries(TIPO_ORDEN).map(([k, v]) => <option value={k} selected={k === tipo}>{v}</option>)}</select></div>
       <div class="col-span-2 md:col-span-6"><button class="btn-primary" type="submit">Aplicar</button></div>

@@ -5,6 +5,7 @@ import { encuestasSatisfaccion, ordenes, usuarios } from "@/lib/schema";
 import { eq, and, isNotNull, isNull, desc, asc, sql } from "drizzle-orm";
 import { fmtFechaLarga, fmtFechaSimple } from "@/lib/datetime";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { espacioDelContexto, condicionOrdenEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -25,7 +26,8 @@ const tecnicos = await db
   .orderBy(asc(usuarios.nombre));
 
 // Todas las encuestas respondidas
-const conds: any[] = [isNotNull(encuestasSatisfaccion.respondidaEn)];
+// Las encuestas de las órdenes del espacio.
+const conds: any[] = [isNotNull(encuestasSatisfaccion.respondidaEn), condicionOrdenEspacio(espacioDelContexto(Astro, user))];
 if (filtroTec) conds.push(eq(ordenes.asignadoA, Number(filtroTec)));
 if (filtroCal) conds.push(eq(encuestasSatisfaccion.calificacion, Number(filtroCal)));
 

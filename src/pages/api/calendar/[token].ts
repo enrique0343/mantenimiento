@@ -3,6 +3,8 @@ import { eq, and } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { usuarios, ordenes, planesMantenimiento, actividades, activos } from "@/lib/schema";
 import { etiquetaOT } from "@/lib/orden-codigo";
+import { ESPACIOS, condicionActivoEspacio, espacioDeArea, espaciosPermitidos, parseEspacio, type Espacio, condicionOrdenEspacio } from "@/lib/espacio";
+import { areaDeActividad } from "@/lib/actividades";
 
 export const prerender = false;
 
@@ -32,9 +34,19 @@ export const GET: APIRoute = async (ctx) => {
   const token = tokenWithExt.replace(/\.ics$/, "");
   const db = getDb(ctx);
 
-  const [u] = await db.select({ id: usuarios.id, nombre: usuarios.nombre })
+  const [u] = await db.select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol, especialidad: usuarios.especialidad })
     .from(usuarios).where(eq(usuarios.calendarToken, token)).limit(1);
   if (!u) return new Response("Token inválido", { status: 404 });
+
+  // Espacio del calendario: ?espacio= (si el usuario entra a él); sin él, el suyo si
+  // está atado a uno, o los dos si tiene los dos (las suscripciones de antes siguen).
+  const permitidos = espaciosPermitidos(u);
+  const pedidoRaw = ctx.url.searchParams.get("espacio");
+  const pedido = parseEspacio(pedidoRaw);
+  if (pedidoRaw !== null && (!pedido || !permitidos.includes(pedido))) return new Response("Espacio no disponible para este calendario", { status: 403 });
+  const espacio: Espacio | null = pedido ?? (permitidos.length === 1 ? permitidos[0] : null);
+  const deOrdenes = espacio ? condicionOrdenEspacio(espacio) : undefined;
+  const deEquipos = espacio ? condicionActivoEspacio(espacio) : undefined;
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
   const baseUrl = env.APP_URL || `${ctx.url.origin}`;
@@ -48,6 +60,7 @@ export const GET: APIRoute = async (ctx) => {
     .where(and(
       eq(ordenes.asignadoA, u.id),
       eq(ordenes.estado, "abierta"),
+      deOrdenes,
     ));
 
   const otsEnProceso = await db
@@ -58,6 +71,7 @@ export const GET: APIRoute = async (ctx) => {
     .where(and(
       eq(ordenes.asignadoA, u.id),
       eq(ordenes.estado, "en_proceso"),
+      deOrdenes,
     ));
 
   // Planes preventivos asignados
@@ -68,16 +82,19 @@ export const GET: APIRoute = async (ctx) => {
     .where(and(
       eq(planesMantenimiento.asignadoA, u.id),
       eq(planesMantenimiento.activo, true),
+      deEquipos,
     ));
 
   // Actividades recurrentes asignadas
-  const acts = await db
+  const acts = (await db
     .select()
     .from(actividades)
     .where(and(
       eq(actividades.asignadoA, u.id),
       eq(actividades.activo, true),
-    ));
+    )))
+    // Las actividades por ubicación son de General.
+    .filter((a) => !espacio || espacioDeArea(areaDeActividad(a.rubro, null)) === espacio);
 
   const lines: string[] = [
     "BEGIN:VCALENDAR",
@@ -85,7 +102,7 @@ export const GET: APIRoute = async (ctx) => {
     "PRODID:-//Mantenimiento Avante//ES",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:Mantenimiento - ${u.nombre}`,
+    `X-WR-CALNAME:${espacio ? ESPACIOS[espacio].rotulo : "Mantenimiento"} - ${u.nombre}`,
   ];
 
   function addEvent(uid: string, summary: string, dtStart: string, isDate: boolean, descripcion: string, url: string) {
