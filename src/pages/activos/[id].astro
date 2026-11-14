@@ -35,6 +35,8 @@ import {
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
 import { historialDePlanes, MOTIVO_MINIMO } from "@/lib/preventivos";
+import AsignarUbicacion from "@/components/AsignarUbicacion.astro";
+import { arbolUbicaciones, AYUDA_EMPRESA, PERSONAL_PROPIO, textoUbicacionPendiente } from "@/lib/tablero-bio";
 import {
   queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
   SISTEMA_LABEL, type Sistema,
@@ -86,10 +88,13 @@ if (a.aceptacionPor) {
   aceptadoPorNombre = ap?.nombre ?? null;
 }
 
+// Quién realiza cada preventivo: la empresa del plan (fase 59) o, si no tiene, la del equipo.
+const empresaDelPlan = alias(proveedores, "empresa_plan");
 const planes = await db
-  .select({ p: planesMantenimiento, u: usuarios })
+  .select({ p: planesMantenimiento, u: usuarios, empresa: empresaDelPlan.nombre })
   .from(planesMantenimiento)
   .leftJoin(usuarios, eq(usuarios.id, planesMantenimiento.asignadoA))
+  .leftJoin(empresaDelPlan, eq(empresaDelPlan.id, planesMantenimiento.proveedorId))
   .where(eq(planesMantenimiento.activoId, id))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
@@ -115,6 +120,9 @@ const canEdit = user.rol === "admin" || user.rol === "jefe" || user.rol === "tec
 const conjuntosHistorial = ["admin", "jefe", "tecnico", "visualizador"].includes(user.rol)
   ? await getConjuntosDelActivo(Astro, id) : [];
 const canJefe = user.rol === "admin" || user.rol === "jefe";
+// Sin ubicación de la lista: pendiente de asignar (con el texto del inventario); la jefatura la asigna aquí.
+const ubicacionPendiente = !a.ubicacionId;
+const arbolUbic = ubicacionPendiente && canJefe ? await arbolUbicaciones(db) : null;
 // Fase 59: lo biomédico de la ficha (resumen JCI, baja, calibraciones, documentos) solo
 // para quien ve biomédico; registrar para admin, jefe y técnico; corregir y dar de baja,
 // admin y jefe. El resto de la ficha sigue abierta como antes.
@@ -949,13 +957,17 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
         <div>
           <div class="text-xs uppercase text-slate-500">Ubicación</div>
           <div>
-            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span> : "-"}
-            {a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
+            {ubicacionInfo ? <span><span class="font-medium">{ubicacionInfo.nombre}</span> <span class="text-xs text-slate-400 capitalize">({ubicacionInfo.tipo})</span></span>
+              : ubicacionPendiente ? <span class="font-medium text-amber-800" data-ubicacion-pendiente>{textoUbicacionPendiente(a.ubicacion)}</span> : "-"}
+            {ubicacionInfo && a.ubicacion && <div class="text-xs text-slate-500">{a.ubicacion}</div>}
+            {arbolUbic && <div class="mt-1"><button type="button" class="btn-secondary btn-sm" data-asignar-ubicacion data-activos={String(a.id)} data-titulo={`${a.codigo} · ${a.nombre}. ${textoUbicacionPendiente(a.ubicacion)}.`}>Asignar ubicación</button></div>}
           </div>
         </div>
-        {proveedorInfo && (
-          <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Proveedor</div><div>{proveedorInfo.nombre}</div></div>
-        )}
+        <div class="col-span-2" data-empresa-mantenimiento>
+          <div class="text-xs uppercase text-slate-500">Empresa que da mantenimiento <span class="normal-case text-slate-400">(opcional)</span></div>
+          <div>{proveedorInfo ? <span class="font-medium">{proveedorInfo.nombre}</span> : <span class="text-slate-600">{PERSONAL_PROPIO}</span>}</div>
+          {!proveedorInfo && <div class="text-xs text-slate-400">{AYUDA_EMPRESA}</div>}
+        </div>
         <div><div class="text-xs uppercase text-slate-500">Fecha de adquisición</div><div>{fmt(a.fechaAdquisicion)}</div></div>
         <div>
           <div class="text-xs uppercase text-slate-500">Vida útil</div>
@@ -2016,6 +2028,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                       : <span class="rounded bg-amber-100 px-2 py-0.5 text-amber-700">Sin asignar</span>
                     }
                     {r.p.prioridad && <span class="rounded bg-slate-100 px-2 py-0.5 capitalize text-slate-600">{r.p.prioridad}</span>}
+                    {(r.empresa || proveedorInfo) && <span class="rounded bg-indigo-50 px-2 py-0.5 text-indigo-700" data-lo-realiza>Lo realiza: {r.empresa ?? proveedorInfo!.nombre}</span>}
                   </div>
                   {r.p.ultimaGeneracion && <div class="mt-1 text-xs text-slate-400">Última OT generada: {fmt(r.p.ultimaGeneracion)}</div>}
                   {r.p.descripcion && <div class="mt-1 text-sm text-slate-600">{r.p.descripcion}</div>}
@@ -2872,4 +2885,5 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       })();
     </script>
   )}
+  {arbolUbic && <AsignarUbicacion arbol={arbolUbic} />}
 </Layout>

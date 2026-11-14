@@ -1,16 +1,23 @@
 ---
 // Una fila del tablero de preventivos (/preventivos): programado o atrasado.
+// En Biomédico lleva «Lo realiza» (empresa externa o personal propio); el
+// visualizador la ve sin selector, sin marcar y sin generar la OT.
 import { areaHref } from "@/lib/areas";
 import { ESTADO_LABEL, ESTADO_COLOR, type EstadoOT } from "@/lib/ordenes";
 import type { FilaTablero } from "@/lib/preventivos";
+import { PERSONAL_PROPIO } from "@/lib/tablero-bio";
 
 interface Props {
   fila: FilaTablero;
   tecnicos: { id: number; nombre: string; abiertas: number; preventivos: number }[];
   modo: "programado" | "atrasado";
   grupo: string;
+  /** Columna «Lo realiza» (solo en el tablero biomédico). */
+  conEmpresa?: boolean;
+  /** El visualizador: ve todo, no cambia nada. */
+  soloLectura?: boolean;
 }
-const { fila: f, tecnicos, modo, grupo } = Astro.props;
+const { fila: f, tecnicos, modo, grupo, conEmpresa = false, soloLectura = false } = Astro.props;
 const fueraDeLista = f.tecnico && !tecnicos.some((t) => t.id === f.tecnico!.id);
 const otroEnElPlan = f.ot && (f.tecnicoPlan?.id ?? null) !== (f.ot.asignadoA ?? null);
 const fichaHref = areaHref(`/activos/${f.equipo.id}`, f.equipo.area) + `#plan-${f.planId}`;
@@ -19,7 +26,7 @@ const cuando = modo === "atrasado"
   : f.diasParaFecha === 0 ? "hoy" : f.diasParaFecha === 1 ? "mañana" : `en ${f.diasParaFecha} días`;
 ---
 <tr class="align-top hover:bg-slate-50 max-sm:block max-sm:py-2" data-fila={f.planId}>
-  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-plan h-5 w-5" data-plan={f.planId} data-grupo={grupo} aria-label={`Seleccionar ${f.equipo.codigo}`} /></td>
+  {!soloLectura && <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-plan h-5 w-5" data-plan={f.planId} data-grupo={grupo} aria-label={`Seleccionar ${f.equipo.codigo}`} /></td>}
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 whitespace-nowrap px-3 py-2">
     <div class="font-medium tabular-nums">{f.fechaTexto}</div>
     <span class={`badge mt-1 ${modo === "atrasado" ? (f.diasAtraso >= 7 ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800") : "bg-slate-100 text-slate-600"}`}>{cuando}</span>
@@ -31,9 +38,22 @@ const cuando = modo === "atrasado"
     {f.equipo.estado === "baja" && <span class="badge mt-1 bg-slate-200 text-slate-600">Equipo dado de baja</span>}
   </td>
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[12rem] text-xs text-slate-600">
-    <div>{f.ubicacion ?? "Sin ubicación"}</div>
+    {f.ubicacionPendiente ? (
+      <>
+        <span class="badge bg-amber-100 text-amber-800">Pendiente de ubicación</span>
+        {f.ubicacionInventario && <div class="mt-1">Inventario: {f.ubicacionInventario}</div>}
+      </>
+    ) : (
+      <div>{f.ubicacion ?? "Sin ubicación"}</div>
+    )}
     {f.sede && <div class="text-slate-400">{f.sede}</div>}
   </td>
+  {conEmpresa && (
+    <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 text-xs" data-lo-realiza>
+      <span class="max-sm:inline hidden text-slate-500">Lo realiza: </span>
+      {f.empresa ? <span class="font-medium text-slate-800">{f.empresa.nombre}</span> : <span class="text-slate-500">{PERSONAL_PROPIO}</span>}
+    </td>
+  )}
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 text-xs">
     {f.ot ? (
       <>
@@ -45,13 +65,16 @@ const cuando = modo === "atrasado"
     ) : modo === "atrasado" ? (
       <>
         <span class="text-slate-600">Sin OT generada</span>
-        {f.planActivo && <div><button type="button" class="btn-secondary btn-sm mt-1" data-generar={f.planId}>Generar OT</button></div>}
+        {f.planActivo && !soloLectura && <div><button type="button" class="btn-secondary btn-sm mt-1" data-generar={f.planId}>Generar OT</button></div>}
       </>
     ) : (
       <span class="text-slate-500">Sin OT aún (sale el día programado)</span>
     )}
   </td>
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[13rem]">
+    {soloLectura ? (
+      <div class="text-sm" data-tecnico>{f.tecnico ? f.tecnico.nombre : <span class="text-amber-700">Sin asignar</span>}</div>
+    ) : (<>
     <label class="sr-only" for={`tec-${grupo}-${f.planId}`}>Técnico de {f.equipo.codigo}</label>
     <select id={`tec-${grupo}-${f.planId}`} class="input tecnico-sel text-sm" data-plan={f.planId} data-prev={f.tecnico?.id ?? ""}>
       <option value="" selected={!f.tecnico}>Sin asignar</option>
@@ -61,6 +84,7 @@ const cuando = modo === "atrasado"
       ))}
     </select>
     {otroEnElPlan && <div class="mt-1 text-[11px] text-slate-500">En el preventivo: {f.tecnicoPlan?.nombre ?? "sin asignar"}. Al elegir aquí quedan iguales.</div>}
+    </>)}
   </td>
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2">
     <button type="button" class="btn-secondary btn-sm" data-historial={f.planId} data-titulo={`${f.equipo.codigo} · ${f.titulo}`}>Historial</button>

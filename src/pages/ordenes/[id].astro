@@ -6,6 +6,7 @@ import Layout from "@/layouts/Layout.astro";
 import { getConjuntoDeOrden } from "@/lib/conjuntos";
 import { getDb } from "@/lib/db";
 import { ordenes, activos, usuarios, comentarios, adjuntos, items as itemsTable, sucursales, ubicaciones, ordenRepuestos, stock, empresa, solicitudesCompra, ordenPrerrequisitos, ordenLiberaciones, procedimientos, eopFicha, planesMantenimiento } from "@/lib/schema";
+import { empresaQueRealiza } from "@/lib/tablero-bio";
 import { eq, desc, and, inArray, asc } from "drizzle-orm";
 import {
   ESTADO_LABEL, ESTADO_COLOR, TIPO_COLOR, TIPO_LABEL, TIPO_ICONO, PRIO_COLOR,
@@ -360,6 +361,8 @@ const verComprasSection = ["admin", "jefe", "tecnico"].includes(user.rol);
 const seguimiento = await leerVerificacionOrden(db, id);
 const roundsOrigins = await leerOrigenesRondaOrden(db, id);
 const [scheduledPM] = o.planId ? await db.select().from(planesMantenimiento).where(eq(planesMantenimiento.id, o.planId)).limit(1) : [];
+// Quién realiza el trabajo: la empresa del preventivo o, si no tiene, la del equipo (opcional).
+const empresaRealiza = await empresaQueRealiza(db, { planId: o.planId, activoId: row.activo?.id ?? null });
 const esRevisor = esRevisorOrden(user, seguimiento.control);
 const puedeVerificar = puedeVerificarOrden(user, o, seguimiento.control);
 // El técnico solo mueve una orden suya mientras no la envía a verificación, o
@@ -1150,6 +1153,12 @@ const muestraIncidente = verIncidente && incidenteDisponible && (!!incidente || 
                 </span>
               </div>
             </div>
+            {empresaRealiza && (
+              <div class="col-span-2" data-lo-realiza>
+                <div class="text-xs uppercase text-slate-500">Lo realiza</div>
+                <div class="mt-0.5 font-medium">{empresaRealiza.nombre}</div>
+              </div>
+            )}
             <div>
               <div class="text-xs uppercase text-slate-500">Sucursal</div>
               <div class="mt-0.5">{row.sucursal?.nombre ?? <span class="text-slate-400">—</span>}</div>

@@ -12,6 +12,7 @@ import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo, SUBCAT_KEYS, SUBCATS_BIOMEDICO } from "@/lib/rubros";
 import { CLASES_RIESGO, ENTIDADES_REGISTRO, fechaCorta } from "@/lib/biomedico";
 import { CODIGO_MAX } from "@/lib/registro-activos";
+import { AYUDA_EMPRESA, ETIQUETA_EMPRESA, PERSONAL_PROPIO } from "@/lib/tablero-bio";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -21,6 +22,8 @@ const user = Astro.locals.user!;
 if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect(`/activos/${id}`);
 
 const db = getDb(Astro);
+// La empresa que da mantenimiento la pone o la cambia la jefatura (la API lo exige).
+const puedeEmpresa = user.rol === "admin" || user.rol === "jefe";
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
 if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const area = rubroDeActivo(a.rubro, a.tipo);
@@ -41,7 +44,9 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre, 
   .orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones)
   .where(a.ubicacionId != null ? or(eq(ubicaciones.activa, true), eq(ubicaciones.id, a.ubicacionId)) : eq(ubicaciones.activa, true));
-const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
+// La empresa que ya tiene el equipo sigue en la lista aunque esté desactivada: guardar otra cosa no la borra.
+const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre, activo: proveedores.activo }).from(proveedores)
+  .where(a.proveedorId != null ? or(eq(proveedores.activo, true), eq(proveedores.id, a.proveedorId)) : eq(proveedores.activo, true)).orderBy(proveedores.nombre);
 const userRows = await db
   .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
   .from(usuarios)
@@ -173,11 +178,12 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
 
       {provRows.length > 0 && (
         <div>
-          <label class="label">Proveedor / Fabricante</label>
-          <select class="input" id="proveedorSel">
-            <option value="">— Sin proveedor —</option>
-            {provRows.map((p) => <option value={p.id} selected={p.id === a.proveedorId}>{p.nombre}</option>)}
+          <label class="label" for="proveedorSel">{ETIQUETA_EMPRESA}</label>
+          <select class="input" id="proveedorSel" disabled={!puedeEmpresa}>
+            <option value="">{PERSONAL_PROPIO} (sin empresa)</option>
+            {provRows.map((p) => <option value={p.id} selected={p.id === a.proveedorId}>{p.nombre}{!p.activo ? " (desactivada)" : ""}</option>)}
           </select>
+          <p class="mt-1 text-xs text-slate-500">{AYUDA_EMPRESA}{!puedeEmpresa && " La define la jefatura."}</p>
         </div>
       )}
     </div>

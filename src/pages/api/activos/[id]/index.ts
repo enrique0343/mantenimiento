@@ -2,8 +2,9 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { activos, procedimientos, tickets, ordenes, proyectos, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
+import { activos, procedimientos, tickets, ordenes, proyectos, centrosCosto, sucursales, ubicaciones, proveedores } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { errorEmpresaEquipo, PERSONAL_PROPIO } from "@/lib/tablero-bio";
 import { logAudit, calcularDiff } from "@/lib/audit";
 import { NIVELES_JERARQUIA, validarPadre } from "@/lib/jerarquia";
 import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
@@ -219,6 +220,10 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
+  // ── Empresa que da mantenimiento (opcional): existe, activa (o la que ya tenía), y la cambia la jefatura ──
+  const errorEmpresa = await errorEmpresaEquipo(db, user.rol, llega.proveedorId, actual.proveedorId);
+  if (errorEmpresa) return Response.json({ error: errorEmpresa.error }, { status: errorEmpresa.status });
+
   // Los trabajos conservan su área, incluso al cerrarse. La comprobación forma
   // parte de la escritura para no separar el control de vínculos del cambio.
   let row: typeof activos.$inferSelect | undefined;
@@ -256,6 +261,14 @@ export const PATCH: APIRoute = async (ctx) => {
     const centros = ids.length ? await db.select({ id: centrosCosto.id, codigo: centrosCosto.codigo, nombre: centrosCosto.nombre }).from(centrosCosto).where(inArray(centrosCosto.id, ids)) : [];
     const etiqueta = (v: unknown) => etiquetaCentroCosto(centros.find((c) => c.id === v) ?? null);
     diff.centroCostoId = { antes: etiqueta(cambioCentro.antes), despues: etiqueta(cambioCentro.despues) };
+  }
+  // La empresa con su nombre; vacío = personal propio.
+  const cambioEmpresa = diff.proveedorId as { antes: unknown; despues: unknown } | undefined;
+  if (cambioEmpresa && typeof cambioEmpresa === "object" && "antes" in cambioEmpresa) {
+    const ids = [cambioEmpresa.antes, cambioEmpresa.despues].filter((v): v is number => typeof v === "number");
+    const empresas = ids.length ? await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(inArray(proveedores.id, ids)) : [];
+    const nombre = (v: unknown) => typeof v === "number" ? empresas.find((e) => e.id === v)?.nombre ?? `#${v}` : PERSONAL_PROPIO;
+    diff.proveedorId = { antes: nombre(cambioEmpresa.antes), despues: nombre(cambioEmpresa.despues) };
   }
   if (Object.keys(diff).length > 0) {
     await logAudit(ctx, { entidad: "activo", entidadId: id, accion: "update", cambios: diff });

@@ -65,13 +65,20 @@ try {
   const pInactivo = plan(eA, dia(3), { activo: false, titulo: 'Plan pausado' });
 
   // ── Roles ──────────────────────────────────────────────────────────────────
+  // El técnico no entra al tablero; el visualizador lo ve, pero no asigna (solo lectura).
   for (const rol of ['tecnico', 'visualizador']) {
-    const r = await tablero('', rol);
-    igual(r.status, 403, rol); ok(typeof r.body.error === 'string', `${rol}: error en JSON`);
     const a = await asignar([pA], 20, rol);
-    igual(a.status, 403); ok(typeof a.body.error === 'string');
-    const h = await call(app.historial.GET, `/api/preventivos/${pA}/historial`, { id: pA, rol });
-    igual(h.status, 403);
+    igual(a.status, 403, `${rol} no asigna`); ok(typeof a.body.error === 'string');
+    igual(one('SELECT asignado_a FROM planes_mantenimiento WHERE id=?', pA).asignado_a, null, 'Y no cambió nada');
+  }
+  {
+    const r = await tablero('', 'tecnico');
+    igual(r.status, 403, 'tecnico'); ok(typeof r.body.error === 'string', 'tecnico: error en JSON');
+    igual((await call(app.historial.GET, `/api/preventivos/${pA}/historial`, { id: pA, rol: 'tecnico' })).status, 403);
+    const v = await tablero('', 'visualizador');
+    igual(v.status, 200, 'El visualizador ve el tablero');
+    ok(v.body.programados.some((f) => f.planId === pA), 'Con sus filas');
+    igual((await call(app.historial.GET, `/api/preventivos/${pA}/historial`, { id: pA, rol: 'visualizador' })).status, 200, 'Y el historial');
   }
   const sinSesion = await tablero('', null);
   igual(sinSesion.status, 401); ok(typeof sinSesion.body.error === 'string', '401 en JSON');
@@ -82,7 +89,8 @@ try {
   // ── Programados ────────────────────────────────────────────────────────────
   let t = (await tablero()).body;
   igual(t.hoy, HOY);
-  iguales(t.programados.map((f) => f.planId), [pB, pA, pD], 'Próximos 14 días, activos, por fecha');
+  igual(t.espacio, 'general', 'Sin cookie, el admin entra a General');
+  iguales(t.programados.map((f) => f.planId), [pB, pA], 'Próximos 14 días, activos, por fecha, sin lo biomédico');
   const filaA = t.programados.find((f) => f.planId === pA);
   igual(filaA.ubicacion, 'Nivel 2 · Bloque quirúrgico · Quirófano 1', 'Ruta con sus padres');
   igual(filaA.sede, 'Sede de prueba');
@@ -94,10 +102,15 @@ try {
   ok(t.tecnicos.some((x) => x.id === 20) && !t.tecnicos.some((x) => x.id === 22), 'Solo técnicos activos');
   t = (await tablero(`?hasta=${dia(40)}`)).body;
   ok(t.programados.some((f) => f.planId === pC), 'El rango se amplía');
-  t = (await tablero('?sede=7')).body;
+  t = (await tablero('?espacio=biomedico')).body;
+  igual(t.espacio, 'biomedico');
+  iguales(t.programados.map((f) => f.planId), [pD], 'El tablero biomédico solo trae lo biomédico');
+  t = (await tablero('?espacio=biomedico&sede=7')).body;
   ok(!t.programados.some((f) => f.planId === pD), 'Filtro de sede');
   t = (await tablero('?area=biomedico')).body;
-  iguales(t.programados.map((f) => f.planId), [pD], 'Filtro de área');
+  iguales(t.programados.map((f) => f.planId), [pB, pA], 'Un área del otro espacio no trae lo biomédico a General');
+  t = (await tablero('?area=aires')).body;
+  iguales(t.programados.map((f) => f.planId), [pB, pA], 'Filtro de área');
   t = (await tablero('?q=quirofano')).body;
   ok(t.programados.some((f) => f.planId === pA) && !t.programados.some((f) => f.planId === pD), 'Busca en la ruta, sin tildes');
   igual((await tablero('?desde=2026-13-01')).status, 400);

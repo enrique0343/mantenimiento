@@ -1,30 +1,52 @@
 ---
-// Tablero de preventivos para la jefatura (admin y jefe): los que vienen, los
-// atrasados de 1 día o más y quién los tiene. Las reglas viven en lib/preventivos.
+// Tablero de preventivos, uno por espacio (src/lib/espacio.ts): en General
+// («Tablero de preventivos») no sale nada biomédico; en Biomédico («Tablero
+// biomédico») solo lo biomédico, con quién lo realiza, las calibraciones que vencen
+// y los equipos pendientes de ubicación. La jefatura (admin y jefe) asigna; el
+// visualizador solo mira. Las reglas viven en lib/preventivos y lib/tablero-bio.
 import Layout from "@/layouts/Layout.astro";
 import FilaPreventivo from "@/components/FilaPreventivo.astro";
+import AsignarUbicacion from "@/components/AsignarUbicacion.astro";
 import { getDb } from "@/lib/db";
-import { datosTablero, leerFiltros, esJefatura, DIAS_POR_DEFECTO, MOTIVO_MINIMO } from "@/lib/preventivos";
-import { AREAS, AREA_KEYS } from "@/lib/areas";
+import { datosTablero, espacioDelPedido, leerFiltros, esJefatura, DIAS_POR_DEFECTO, MOTIVO_MINIMO } from "@/lib/preventivos";
+import { ESPACIOS, areasDeEspacio } from "@/lib/espacio";
+import { arbolUbicaciones, PERSONAL_PROPIO } from "@/lib/tablero-bio";
+import { ESTADO_CALIBRACION_COLOR } from "@/lib/biomedico";
+import { AREAS, areaHref } from "@/lib/areas";
 import { fmtFechaSoloCompacta } from "@/lib/datetime";
 export const prerender = false;
 
 const user = Astro.locals.user!;
-// El técnico sigue con su panel; el tablero es de la jefatura.
-if (!esJefatura(user.rol)) return Astro.redirect(user.rol === "tecnico" ? "/campo" : "/");
+// El técnico sigue con su panel; el tablero es de la jefatura, y el visualizador lo ve sin cambiar nada.
+const soloLectura = user.rol === "visualizador";
+if (!esJefatura(user.rol) && !soloLectura) return Astro.redirect(user.rol === "tecnico" ? "/campo" : "/");
 
-const { filtros, error } = leerFiltros(Astro.url.searchParams);
-const d = await datosTablero(getDb(Astro), filtros);
+const espacio = espacioDelPedido(Astro, user);
+const esBio = espacio === "biomedico";
+const titulo = ESPACIOS[espacio].tablero;
+const db = getDb(Astro);
+const { filtros, error } = leerFiltros(Astro.url.searchParams, undefined, espacio);
+const d = await datosTablero(db, filtros);
+const bio = d.biomedico;
+const arbol = esBio && !soloLectura ? await arbolUbicaciones(db) : null;
 const progSinAsignar = d.programados.filter((f) => !f.tecnico).length;
-const hayFiltros = ["desde", "hasta", "sede", "area", "q"].some((k) => Astro.url.searchParams.get(k));
-const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "Orden de trabajo", "Técnico", ""];
+const hayFiltros = ["desde", "hasta", "sede", "area", "q", "empresa"].some((k) => Astro.url.searchParams.get(k));
+const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", ...(esBio ? ["Lo realiza"] : []), "Orden de trabajo", "Técnico", ""];
+const columnas = encabezados.length + (soloLectura ? 0 : 1);
+const areasDelEspacio = areasDeEspacio(espacio);
+const empresaSel = d.filtros.empresa ?? null;
+const calibraciones = bio ? [...bio.calibraciones.vencidas, ...bio.calibraciones.porVencer] : [];
 ---
 
-<Layout title="Tablero de preventivos">
+<Layout title={titulo}>
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold">Tablero de preventivos</h1>
-      <p class="text-sm text-slate-500">Hoy, {fmtFechaSoloCompacta(d.hoy)}. Elige el técnico en cada fila o marca varias y asígnalas juntas.</p>
+      <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">{ESPACIOS[espacio].rotulo}</p>
+      <h1 class="text-2xl font-bold">{titulo}</h1>
+      <p class="text-sm text-slate-500">
+        Hoy, {fmtFechaSoloCompacta(d.hoy)}. {esBio ? "Solo equipos biomédicos." : "Aires, infraestructura y equipos generales; lo biomédico está en su propio tablero."}
+        {soloLectura ? " Vista de consulta: la asignación la hace la jefatura." : " Elige el técnico en cada fila o marca varias y asígnalas juntas."}
+      </p>
     </div>
     <a href="/cronograma" class="btn-secondary">Cronograma</a>
   </div>
@@ -46,6 +68,26 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       <div class="text-xs text-slate-500">Programados sin asignar</div>
       <div class="text-3xl font-bold tabular-nums">{progSinAsignar}</div>
     </a>
+    {bio && (
+      <>
+        <a href="#calibraciones" class="card border-l-4 border-red-500 p-4 hover:shadow-md" data-tarjeta="cal-vencidas">
+          <div class="text-xs text-slate-500">Calibraciones vencidas</div>
+          <div class="text-3xl font-bold text-red-700 tabular-nums">{bio.calibraciones.vencidas.length}</div>
+        </a>
+        <a href="#calibraciones" class="card border-l-4 border-amber-500 p-4 hover:shadow-md" data-tarjeta="cal-por-vencer">
+          <div class="text-xs text-slate-500">Calibraciones por vencer (30 días)</div>
+          <div class="text-3xl font-bold text-amber-700 tabular-nums">{bio.calibraciones.porVencer.length}</div>
+        </a>
+        <a href="#pendientes-ubicacion" class="card border-l-4 border-amber-500 p-4 hover:shadow-md" data-tarjeta="pendientes">
+          <div class="text-xs text-slate-500">Pendientes de ubicación</div>
+          <div class="text-3xl font-bold tabular-nums">{bio.pendientes.length}{bio.pendientesTruncado ? "+" : ""}</div>
+        </a>
+        <a href="?empresa=externa#programados" class="card p-4 hover:shadow-md" data-tarjeta="con-empresa">
+          <div class="text-xs text-slate-500">Con empresa externa (equipos)</div>
+          <div class="text-3xl font-bold tabular-nums">{bio.conEmpresa}</div>
+        </a>
+      </>
+    )}
   </div>
 
   <form class="card mt-4 flex flex-wrap items-end gap-3 p-3" method="get">
@@ -58,20 +100,33 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
         {d.sedes.map((s) => <option value={s.id} selected={s.id === d.filtros.sedeId}>{s.nombre}</option>)}
       </select>
     </div>
-    <div>
-      <label class="label text-xs" for="f-area">Área de mantenimiento</label>
-      <select id="f-area" name="area" class="input text-sm">
-        <option value="">Todas</option>
-        {AREA_KEYS.map((k) => <option value={k} selected={k === d.filtros.area}>{AREAS[k].label}</option>)}
-      </select>
-    </div>
+    {areasDelEspacio.length > 1 && (
+      <div>
+        <label class="label text-xs" for="f-area">Área de mantenimiento</label>
+        <select id="f-area" name="area" class="input text-sm">
+          <option value="">Todas</option>
+          {areasDelEspacio.map((k) => <option value={k} selected={k === d.filtros.area}>{AREAS[k].label}</option>)}
+        </select>
+      </div>
+    )}
+    {bio && (
+      <div>
+        <label class="label text-xs" for="f-empresa">Lo realiza</label>
+        <select id="f-empresa" name="empresa" class="input text-sm">
+          <option value="">Todos</option>
+          <option value="propio" selected={empresaSel === "propio"}>{PERSONAL_PROPIO}</option>
+          <option value="externa" selected={empresaSel === "externa"}>Cualquier empresa externa</option>
+          {bio.empresas.map((e) => <option value={e.id} selected={empresaSel === e.id}>{e.nombre}</option>)}
+        </select>
+      </div>
+    )}
     <div class="min-w-[12rem] flex-1"><label class="label text-xs" for="f-q">Buscar</label><input id="f-q" class="input text-sm" type="search" name="q" value={d.filtros.q} placeholder="Código, equipo, ubicación o técnico" /></div>
     <button class="btn-primary text-sm">Filtrar</button>
     {hayFiltros && <a href="/preventivos" class="btn-secondary text-sm">Limpiar</a>}
   </form>
   {error && <p class="mt-2 text-sm text-red-700" role="alert">{error} Se muestran los próximos {DIAS_POR_DEFECTO} días.</p>}
   {!error && d.desdeAjustado && <p class="mt-2 text-sm text-slate-600">Programados empieza hoy: lo de fechas pasadas está en Atrasados (o ya se completó).</p>}
-  {d.truncado && <p class="mt-2 text-sm text-amber-800">Hay más de 500 preventivos en esta vista: acota el rango o filtra por sede o área.</p>}
+  {d.truncado && <p class="mt-2 text-sm text-amber-800">Hay más de 500 preventivos en esta vista: acota el rango o filtra por sede{esBio ? " o empresa" : " o área"}.</p>}
 
   <details class="card mt-4 p-4 text-sm text-slate-700">
     <summary class="cursor-pointer font-semibold">Cómo se cuenta un atraso</summary>
@@ -81,6 +136,7 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       <li><strong>Completado:</strong> cuando el técnico envía la orden a verificación («Pendiente de verificación») ya no cuenta como atraso; queda pendiente de la jefatura.</li>
       <li><strong>Técnico:</strong> con orden abierta, el de la orden; sin orden, el del preventivo. Al elegir un técnico aquí queda en el preventivo para las próximas órdenes y en la orden abierta, y se le avisa.</li>
       <li><strong>Vencimiento de la orden:</strong> es la fecha programada más los días de alerta del preventivo. Es otro plazo: aquí el atraso se cuenta desde la fecha programada.</li>
+      {esBio && <li><strong>Lo realiza:</strong> la empresa externa del preventivo; si no tiene, la del equipo («Empresa que da mantenimiento» en su ficha). Sin empresa, lo hace el personal propio.</li>}
       <li><strong>Responsabilidad:</strong> solo la jefatura asigna, cambia la fecha programada o la frecuencia, desactiva o elimina un preventivo. Lo de la fecha, la frecuencia, desactivar y eliminar pide un motivo de al menos {MOTIVO_MINIMO} caracteres. Todo queda en el historial con quién, cuándo, el antes, el después y el motivo, igual que las asignaciones y los cambios que hace el sistema al verificar una orden.</li>
     </ul>
   </details>
@@ -93,11 +149,11 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
     <div class="card mt-2 overflow-x-auto">
       <table class="w-full text-left text-sm max-sm:block">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
-          <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo="prog" aria-label="Seleccionar todos los programados" /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
+          <tr>{!soloLectura && <th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo="prog" aria-label="Seleccionar todos los programados" /></th>}{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
         </thead>
         <tbody class="divide-y divide-slate-100 max-sm:block">
-          {d.programados.length === 0 && <tr><td colspan="7" class="max-sm:block px-4 py-6 text-center text-slate-400">No hay preventivos programados con esos filtros.</td></tr>}
-          {d.programados.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="programado" grupo="prog" />)}
+          {d.programados.length === 0 && <tr><td colspan={columnas} class="max-sm:block px-4 py-6 text-center text-slate-400">No hay preventivos programados con esos filtros.</td></tr>}
+          {d.programados.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="programado" grupo="prog" conEmpresa={esBio} soloLectura={soloLectura} />)}
         </tbody>
       </table>
     </div>
@@ -116,11 +172,11 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
         <div class="card mt-2 overflow-x-auto">
           <table class="w-full text-left text-sm max-sm:block">
             <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
-              <tr><th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo={g.grupo} aria-label={`Seleccionar todos: ${g.titulo}`} /></th>{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
+              <tr>{!soloLectura && <th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos h-5 w-5" data-grupo={g.grupo} aria-label={`Seleccionar todos: ${g.titulo}`} /></th>}{encabezados.map((h) => <th class="px-3 py-2">{h}</th>)}</tr>
             </thead>
             <tbody class="divide-y divide-slate-100 max-sm:block">
-              {g.filas.length === 0 && <tr><td colspan="7" class="max-sm:block px-4 py-6 text-center text-slate-400">{g.vacio}</td></tr>}
-              {g.filas.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="atrasado" grupo={g.grupo} />)}
+              {g.filas.length === 0 && <tr><td colspan={columnas} class="max-sm:block px-4 py-6 text-center text-slate-400">{g.vacio}</td></tr>}
+              {g.filas.map((f) => <FilaPreventivo fila={f} tecnicos={d.tecnicos} modo="atrasado" grupo={g.grupo} conEmpresa={esBio} soloLectura={soloLectura} />)}
             </tbody>
           </table>
         </div>
@@ -128,8 +184,78 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
     ))}
   </section>
 
+  {bio && (
+    <section id="calibraciones" class="mt-8 scroll-mt-24">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="text-lg font-semibold">Calibraciones vencidas y por vencer en 30 días <span class="badge bg-slate-100 text-slate-600">{calibraciones.length}</span></h2>
+        <a href="/calibraciones" class="text-sm text-brand-700 hover:underline">Ver todas las calibraciones</a>
+      </div>
+      <p class="text-xs text-slate-500">Equipos biomédicos que no están de baja, con la misma regla de la pantalla de Calibraciones. Vencida: sin próxima fecha o con la fecha ya pasada.</p>
+      <div class="card mt-2 overflow-x-auto">
+        <table class="w-full text-left text-sm max-sm:block">
+          <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
+            <tr><th class="px-3 py-2">Equipo</th><th class="px-3 py-2">Ubicación</th><th class="px-3 py-2">Última</th><th class="px-3 py-2">Próxima</th><th class="px-3 py-2">Estado</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 max-sm:block">
+            {calibraciones.length === 0 && <tr><td colspan="5" class="max-sm:block px-4 py-6 text-center text-slate-400">Ninguna calibración vencida ni por vencer en 30 días.</td></tr>}
+            {calibraciones.map((c) => (
+              <tr class="align-top max-sm:block max-sm:py-2" data-calibracion={c.activoId}>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2"><a href={areaHref(`/activos/${c.activoId}`, "biomedico") + "#calibraciones"} class="font-medium text-brand-700 hover:underline">{c.codigo} · {c.nombre}</a></td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2 text-xs text-slate-600">{c.ubicacion ?? "Sin ubicación"}{c.sede && <div class="text-slate-400">{c.sede}</div>}</td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2 tabular-nums"><span class="sm:hidden text-xs text-slate-500">Última: </span>{c.ultimaTexto}</td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2 tabular-nums"><span class="sm:hidden text-xs text-slate-500">Próxima: </span>{c.proximaTexto}{c.vence && <div class="text-xs text-slate-500">{c.vence}</div>}</td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2"><span class={`badge ${ESTADO_CALIBRACION_COLOR[c.estado]}`}>{c.estado === "vencida" ? c.estadoTexto : "Por vencer"}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )}
+
+  {bio && (
+    <section id="pendientes-ubicacion" class="mt-8 scroll-mt-24">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-lg font-semibold">Pendientes de ubicación <span class="badge bg-slate-100 text-slate-600">{bio.pendientes.length}{bio.pendientesTruncado ? "+" : ""}</span></h2>
+        {!soloLectura && bio.pendientes.length > 0 && <button type="button" class="btn-primary btn-sm" data-asignar-ubicacion>Asignar ubicación a los marcados</button>}
+      </div>
+      <p class="text-xs text-slate-500">Equipos biomédicos sin ubicación de la lista. «Según inventario» es lo que decía el archivo, para saber dónde buscarlos.</p>
+      <div class="card mt-2 overflow-x-auto">
+        <table class="w-full text-left text-sm max-sm:block">
+          <thead class="bg-slate-50 text-xs uppercase text-slate-500 max-sm:hidden">
+            <tr>
+              {!soloLectura && <th class="px-3 py-2 w-8"><input type="checkbox" class="sel-todos-pend h-5 w-5" aria-label="Marcar todos los pendientes" /></th>}
+              <th class="px-3 py-2">Equipo</th><th class="px-3 py-2">Según inventario</th><th class="px-3 py-2">Lo realiza</th>{!soloLectura && <th class="px-3 py-2"></th>}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 max-sm:block">
+            {bio.pendientes.length === 0 && <tr><td colspan={soloLectura ? 3 : 5} class="max-sm:block px-4 py-6 text-center text-slate-400">Todos los equipos biomédicos tienen ubicación.</td></tr>}
+            {bio.pendientes.map((p) => (
+              <tr class="align-top max-sm:block max-sm:py-2" data-pendiente={p.activoId}>
+                {!soloLectura && <td class="max-sm:block max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-pendiente h-5 w-5" data-activo={p.activoId} aria-label={`Marcar ${p.codigo}`} /></td>}
+                <td class="max-sm:block max-sm:py-1 px-3 py-2">
+                  <a href={areaHref(`/activos/${p.activoId}`, "biomedico")} class="font-medium text-brand-700 hover:underline">{p.codigo} · {p.nombre}</a>
+                  {p.marcaModelo && <div class="text-xs text-slate-500">{p.marcaModelo}</div>}
+                </td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2 text-xs text-slate-700">
+                  <span class="badge bg-amber-100 text-amber-800">Pendiente de asignar</span>
+                  <div class="mt-1">{p.inventario ? `según inventario: ${p.inventario}` : "El inventario no dice dónde está."}</div>
+                </td>
+                <td class="max-sm:block max-sm:py-1 px-3 py-2 text-xs">{p.empresa ?? <span class="text-slate-500">{PERSONAL_PROPIO}</span>}</td>
+                {!soloLectura && <td class="max-sm:block max-sm:py-1 px-3 py-2"><button type="button" class="btn-secondary btn-sm" data-asignar-ubicacion data-activos={String(p.activoId)} data-titulo={`${p.codigo} · ${p.nombre}. ${p.texto}.`}>Asignar ubicación</button></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {bio.pendientesTruncado && <p class="mt-2 text-sm text-amber-800">Se muestran los primeros 500 pendientes.</p>}
+    </section>
+  )}
+
+  {arbol && <AsignarUbicacion arbol={arbol} />}
+
   <!-- Barra de asignación en lote -->
-  <div id="loteBar" class="fixed inset-x-0 bottom-0 z-[90] hidden border-t border-brand-200 bg-white p-3 shadow-lg">
+  {!soloLectura && <div id="loteBar" class="fixed inset-x-0 bottom-0 z-[90] hidden border-t border-brand-200 bg-white p-3 shadow-lg">
     <div class="mx-auto flex max-w-7xl flex-wrap items-center gap-2 text-sm">
       <span><strong id="loteN">0</strong> seleccionados</span>
       <label class="sr-only" for="loteTecnico">Técnico para el lote</label>
@@ -142,7 +268,7 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       <button id="loteLimpiar" type="button" class="btn-secondary btn-sm">Desmarcar</button>
       <span id="loteMsg" class="text-red-700" role="alert"></span>
     </div>
-  </div>
+  </div>}
 
   <!-- Historial de un preventivo -->
   <dialog id="histDialog" class="w-full max-w-2xl rounded-sm p-0 backdrop:bg-slate-900/60" aria-labelledby="histTitulo">
@@ -189,9 +315,10 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       });
     });
 
-    // ── Selección y lote ──
-    const bar = document.getElementById("loteBar")!;
-    const msg = document.getElementById("loteMsg")!;
+    // ── Selección y lote (el visualizador no tiene barra) ──
+    const bar = document.getElementById("loteBar");
+    const msg = document.getElementById("loteMsg");
+    if (bar && msg) {
     const marcados = () => Array.from(document.querySelectorAll<HTMLInputElement>(".sel-plan:checked")).map((c) => Number(c.dataset.plan));
     const refrescar = () => {
       const n = new Set(marcados()).size;
@@ -235,6 +362,13 @@ const encabezados = ["Fecha programada", "Equipo y preventivo", "Ubicación", "O
       lote(Number(v));
     });
     botonesLote[1].addEventListener("click", () => lote(null));
+    }
+
+    // ── Pendientes de ubicación: marcar todos ──
+    document.querySelector<HTMLInputElement>(".sel-todos-pend")?.addEventListener("change", (ev) => {
+      const todos = ev.currentTarget as HTMLInputElement;
+      document.querySelectorAll<HTMLInputElement>(".sel-pendiente").forEach((c) => (c.checked = todos.checked));
+    });
 
     // ── Generar la OT de un atrasado sin orden ──
     document.querySelectorAll<HTMLButtonElement>("[data-generar]").forEach((b) => b.addEventListener("click", async () => {
