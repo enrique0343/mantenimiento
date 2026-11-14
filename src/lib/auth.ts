@@ -127,6 +127,17 @@ export async function requireUser(ctx: APIContext, roles?: Array<Rol>) {
   return { user, response: null as null };
 }
 
+/** Como requireUser, pero el 401 y el 403 salen en JSON { error }, para que la vista muestre j.error. */
+export async function requireUserJson(ctx: APIContext, roles?: Array<Rol>) {
+  const r = await requireUser(ctx, roles);
+  if (r.user) return r;
+  const status = r.response!.status;
+  return {
+    user: null as null,
+    response: Response.json({ error: status === 401 ? "No autenticado" : "Sin permisos para esta acción" }, { status }),
+  };
+}
+
 export async function countUsers(ctx: APIContext): Promise<number> {
   const db = getDb(ctx);
   const rows = await db.select({ id: usuarios.id }).from(usuarios).limit(1);

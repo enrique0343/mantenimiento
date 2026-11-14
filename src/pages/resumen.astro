@@ -190,6 +190,7 @@ const contratosProximos = contratosProximosRaw.map(({ c, prov }) => {
       </ul>
       <div class="mt-4 border-t border-slate-100 pt-3">
         <a class="btn-secondary btn-sm" href="/cronograma">Ver cronograma →</a>
+        {(user?.rol === "admin" || user?.rol === "jefe") && <a class="btn-secondary btn-sm ml-2" href="/preventivos">Asignar en el tablero →</a>}
       </div>
     </div>
 

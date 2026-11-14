@@ -4,6 +4,7 @@ import { eq, asc } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { planesMantenimiento, usuarios, activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { fechaValida } from "@/lib/preventivos";
 import { logAudit } from "@/lib/audit";
 
 import { parseArea } from "@/lib/areas";
@@ -47,7 +48,7 @@ const createSchema = z.object({
     "semestral",
     "anual",
   ]),
-  proximaFecha: z.string().min(8),
+  proximaFecha: z.string().refine(fechaValida, "La fecha debe ser un día que exista, con el formato AAAA-MM-DD."),
   alertaDiasAntes: z.number().int().min(0).max(90).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   horasEstimadas: z.number().positive().nullable().optional(),

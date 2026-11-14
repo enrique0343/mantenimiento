@@ -1,0 +1,68 @@
+---
+// Una fila del tablero de preventivos (/preventivos): programado o atrasado.
+import { areaHref } from "@/lib/areas";
+import { ESTADO_LABEL, ESTADO_COLOR, type EstadoOT } from "@/lib/ordenes";
+import type { FilaTablero } from "@/lib/preventivos";
+
+interface Props {
+  fila: FilaTablero;
+  tecnicos: { id: number; nombre: string; abiertas: number; preventivos: number }[];
+  modo: "programado" | "atrasado";
+  grupo: string;
+}
+const { fila: f, tecnicos, modo, grupo } = Astro.props;
+const fueraDeLista = f.tecnico && !tecnicos.some((t) => t.id === f.tecnico!.id);
+const otroEnElPlan = f.ot && (f.tecnicoPlan?.id ?? null) !== (f.ot.asignadoA ?? null);
+const fichaHref = areaHref(`/activos/${f.equipo.id}`, f.equipo.area) + `#plan-${f.planId}`;
+const cuando = modo === "atrasado"
+  ? `${f.diasAtraso} ${f.diasAtraso === 1 ? "día" : "días"} de atraso`
+  : f.diasParaFecha === 0 ? "hoy" : f.diasParaFecha === 1 ? "mañana" : `en ${f.diasParaFecha} días`;
+---
+<tr class="align-top hover:bg-slate-50 max-sm:block max-sm:py-2" data-fila={f.planId}>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2"><input type="checkbox" class="sel-plan h-5 w-5" data-plan={f.planId} data-grupo={grupo} aria-label={`Seleccionar ${f.equipo.codigo}`} /></td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 whitespace-nowrap px-3 py-2">
+    <div class="font-medium tabular-nums">{f.fechaTexto}</div>
+    <span class={`badge mt-1 ${modo === "atrasado" ? (f.diasAtraso >= 7 ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800") : "bg-slate-100 text-slate-600"}`}>{cuando}</span>
+  </td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[14rem]">
+    <a href={fichaHref} class="font-medium text-brand-700 hover:underline">{f.equipo.codigo} · {f.equipo.nombre}</a>
+    <div class="text-xs text-slate-600">{f.titulo} · {f.frecuenciaTexto}</div>
+    {!f.planActivo && <span class="badge mt-1 bg-slate-200 text-slate-600">Preventivo desactivado</span>}
+    {f.equipo.estado === "baja" && <span class="badge mt-1 bg-slate-200 text-slate-600">Equipo dado de baja</span>}
+  </td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[12rem] text-xs text-slate-600">
+    <div>{f.ubicacion ?? "Sin ubicación"}</div>
+    {f.sede && <div class="text-slate-400">{f.sede}</div>}
+  </td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 text-xs">
+    {f.ot ? (
+      <>
+        <a href={areaHref(`/ordenes/${f.ot.id}`, f.equipo.area)} class="font-medium text-brand-700 hover:underline">{f.ot.etiqueta}</a>
+        <div><span class={`badge mt-1 ${ESTADO_COLOR[f.ot.estado as EstadoOT] ?? ""}`}>{ESTADO_LABEL[f.ot.estado as EstadoOT] ?? f.ot.estado}</span></div>
+      </>
+    ) : f.otCancelada ? (
+      <span class="text-red-700">La OT del ciclo se canceló. El sistema no genera otra hasta que cambies la fecha (con su motivo) en la <a class="underline" href={fichaHref}>ficha</a>.</span>
+    ) : modo === "atrasado" ? (
+      <>
+        <span class="text-slate-600">Sin OT generada</span>
+        {f.planActivo && <div><button type="button" class="btn-secondary btn-sm mt-1" data-generar={f.planId}>Generar OT</button></div>}
+      </>
+    ) : (
+      <span class="text-slate-500">Sin OT aún (sale el día programado)</span>
+    )}
+  </td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[13rem]">
+    <label class="sr-only" for={`tec-${grupo}-${f.planId}`}>Técnico de {f.equipo.codigo}</label>
+    <select id={`tec-${grupo}-${f.planId}`} class="input tecnico-sel text-sm" data-plan={f.planId} data-prev={f.tecnico?.id ?? ""}>
+      <option value="" selected={!f.tecnico}>Sin asignar</option>
+      {fueraDeLista && <option value={f.tecnico!.id} selected disabled>{f.tecnico!.nombre} (no es técnico activo)</option>}
+      {tecnicos.map((t) => (
+        <option value={t.id} selected={f.tecnico?.id === t.id}>{t.nombre} · {t.abiertas} OT abiertas</option>
+      ))}
+    </select>
+    {otroEnElPlan && <div class="mt-1 text-[11px] text-slate-500">En el preventivo: {f.tecnicoPlan?.nombre ?? "sin asignar"}. Al elegir aquí quedan iguales.</div>}
+  </td>
+  <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2">
+    <button type="button" class="btn-secondary btn-sm" data-historial={f.planId} data-titulo={`${f.equipo.codigo} · ${f.titulo}`}>Historial</button>
+  </td>
+</tr>

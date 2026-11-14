@@ -85,6 +85,7 @@ const isActive = (href: string) =>
             <div class="app-nav-label">Áreas de mantenimiento</div>
             {AREA_KEYS.map(key => <a href={`/areas/${key}`} class:list={["app-nav-link", {active:area === key}]} aria-current={area === key ? "page" : undefined}><AppIcon name={AREAS[key].icon}/><span>{AREAS[key].label}</span></a>)}
             <div class="app-nav-label">Gestión compartida</div>
+            {isAdminOrJefe && <a href="/preventivos" class:list={["app-nav-link", {active:isActive("/preventivos")}]} aria-current={isActive("/preventivos") ? "page" : undefined}><AppIcon name="calendar"/><span>Tablero de preventivos</span></a>}
             {(isOperativo || user.rol === "visualizador") && <a href="/ronda" class:list={["app-nav-link", {active:isActive("/ronda")}]} aria-current={isActive("/ronda") ? "page" : undefined}><AppIcon name="clipboard"/><span>Ronda de turno</span></a>}
             {isOperativo && <a href="/aop" class:list={["app-nav-link", {active:isActive("/aop")}]} aria-current={isActive("/aop") ? "page" : undefined}><AppIcon name="clock"/><span>Desviaciones (AOP)</span></a>}
             {isOperativo && <a href="/eop" class:list={["app-nav-link", {active:isActive("/eop")}]} aria-current={isActive("/eop") ? "page" : undefined}><AppIcon name="alert"/><span>Emergencias (EOP)</span></a>}
@@ -174,6 +175,24 @@ const isActive = (href: string) =>
     </div>
 
     <!-- Toast container -->
+    <!-- Motivo obligatorio (fecha, frecuencia, desactivar o eliminar un preventivo) -->
+    <div id="motivoModal" class="fixed inset-0 z-[150] hidden items-center justify-center p-4" style="background:rgba(30,33,66,.6)" role="dialog" aria-modal="true" aria-labelledby="motivoTitle">
+      <div class="w-full max-w-md overflow-hidden bg-white" style="border-top:3px solid var(--azul)">
+        <div class="px-5 pt-5 pb-2">
+          <h3 id="motivoTitle" class="text-base font-semibold"></h3>
+          <p id="motivoMsg" class="mt-1 text-sm text-slate-600 leading-relaxed"></p>
+          <label for="motivoInput" class="label mt-3">Motivo *</label>
+          <textarea id="motivoInput" class="input" rows="3" maxlength="1000" placeholder="Por qué se hace este cambio"></textarea>
+          <p class="mt-1 text-xs text-slate-500">Queda en el historial con tu nombre, la hora, el antes y el después.</p>
+          <p id="motivoErr" class="mt-1 hidden text-sm text-red-600" role="alert"></p>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-5 py-4">
+          <button id="motivoCancel" type="button" class="btn btn-secondary btn-sm">Cancelar</button>
+          <button id="motivoOk" type="button" class="btn btn-primary btn-sm">Confirmar con motivo</button>
+        </div>
+      </div>
+    </div>
+
     <div id="toastContainer" class="fixed bottom-5 right-5 left-5 sm:left-auto z-[200] flex flex-col gap-2 pointer-events-none sm:max-w-xs" aria-live="polite"></div>
 
 
@@ -256,6 +275,50 @@ const isActive = (href: string) =>
         okBtn && okBtn.addEventListener("click", function () { closeModal(true); });
         cancelBtn && cancelBtn.addEventListener("click", function () { closeModal(false); });
         modal && modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(false); });
+      })();
+
+      // ─── Motivo obligatorio ───────────────────────────────────────────────────
+      // pedirMotivo(título, mensaje) → el motivo escrito (mínimo 10 caracteres) o null si se cancela.
+      (function () {
+        var modal = document.getElementById("motivoModal");
+        var input = document.getElementById("motivoInput");
+        var err = document.getElementById("motivoErr");
+        if (!modal || !input || !err) return;
+        var _resolve = null;
+        var minimo = 10;
+        function cerrar(val) {
+          modal.classList.add("hidden");
+          modal.classList.remove("flex");
+          if (_resolve) { _resolve(val); _resolve = null; }
+        }
+        window.pedirMotivo = function (titulo, mensaje, opts) {
+          opts = opts || {};
+          minimo = opts.minimo || 10;
+          if (_resolve) { _resolve(null); _resolve = null; }
+          return new Promise(function (resolve) {
+            _resolve = resolve;
+            document.getElementById("motivoTitle").textContent = titulo || "Motivo del cambio";
+            document.getElementById("motivoMsg").textContent = mensaje || "";
+            input.value = "";
+            err.classList.add("hidden");
+            modal.classList.remove("hidden");
+            modal.classList.add("flex");
+            input.focus();
+          });
+        };
+        document.getElementById("motivoOk").addEventListener("click", function () {
+          var texto = input.value.trim();
+          if (texto.length < minimo) {
+            err.textContent = "Escribe al menos " + minimo + " caracteres.";
+            err.classList.remove("hidden");
+            input.focus();
+            return;
+          }
+          cerrar(texto);
+        });
+        document.getElementById("motivoCancel").addEventListener("click", function () { cerrar(null); });
+        modal.addEventListener("click", function (e) { if (e.target === modal) cerrar(null); });
+        modal.addEventListener("keydown", function (e) { if (e.key === "Escape") cerrar(null); });
       })();
 
       document.getElementById("logoutBtn")?.addEventListener("click", async () => {

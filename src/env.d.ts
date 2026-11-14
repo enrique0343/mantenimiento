@@ -51,6 +51,8 @@ interface Env {
 interface Window {
   showToast?: (msg: string, type?: "success" | "error" | "warning" | "info", duration?: number) => void;
   confirmAction?: (title: string, msg: string, opts?: { danger?: boolean; confirmLabel?: string }) => Promise<boolean>;
+  /** Pide el motivo de un cambio (mínimo 10 caracteres). null si se cancela. */
+  pedirMotivo?: (title: string, msg?: string, opts?: { minimo?: number }) => Promise<string | null>;
 }
 
 declare namespace App {

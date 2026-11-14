@@ -75,6 +75,25 @@ export function fmtFechaCompacta(d: Date | string | null | undefined): string {
   });
 }
 
+// Milisegundos de una marca de tiempo guardada: el ISO con Z que escribe la app o
+// el "AAAA-MM-DD HH:MM:SS" (UTC, sin zona) de CURRENT_TIMESTAMP. null si no se lee.
+export function msDeMarca(d: string | null | undefined): number | null {
+  const s = String(d ?? "").trim();
+  if (!s) return null;
+  const iso = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s.replace(" ", "T") : `${s.replace(" ", "T")}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// "06/05/2026 14:32" en hora de El Salvador (UTC-6, sin horario de verano), sin
+// depender de la zona del runtime ni del navegador. Para registros de auditoría.
+export function fmtMarcaSV(d: string | null | undefined): string {
+  const ms = msDeMarca(d);
+  if (ms === null) return "—";
+  const iso = new Date(ms - 6 * 3_600_000).toISOString();
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} ${iso.slice(11, 16)}`;
+}
+
 // "14:32" en hora de El Salvador. Acepta tanto el ISO con Z que escribe la app
 // como el "AAAA-MM-DD HH:MM:SS" (UTC, sin zona) que pone SQLite con
 // CURRENT_TIMESTAMP; sin normalizar, el segundo se interpretaría como local.

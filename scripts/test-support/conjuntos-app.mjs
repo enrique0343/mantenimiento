@@ -34,7 +34,10 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
       builder.onResolve({ filter: /^@\/lib\/(email|smtp-worker|telegram|notificaciones|notif-app|audit|especialidad)$/ }, (args) => ({ path: args.path.split('/').at(-1), namespace: 'no-effects' }));
       builder.onLoad({ filter: /.*/, namespace: 'no-effects' }, () => ({ contents: `
         export const sendMail=async()=>{}; export const emailLayout=()=>'';
-        export const sendTelegram=async()=>{}; export const crearNotificacion=async()=>{};
+        // Los avisos no salen de la prueba, pero quedan anotados para contarlos.
+        const anotar=(x)=>{ (globalThis.__efectosPrueba ??= []).push(x); };
+        export const sendTelegram=async(env,chat,texto)=>{ anotar({canal:'telegram',chat,texto}); };
+        export const crearNotificacion=async(ctx,n)=>{ anotar({canal:'app',...n}); };
         export const logAudit=async()=>{}; export const calcularDiff=(a,b)=>b;
         export const jefesNotificar=async()=>[]; export const disparadorOT=async()=>{};
         export const disparadorProyecto=async()=>{};
@@ -58,7 +61,7 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
   assert.equal(sqlite.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
 
-  const faults = { beforeBatch: null, beforeStatement: null, statement: null, batchCount: 0, rollbackCount: 0, enforceColumnLimit: false };
+  const faults = { beforeBatch: null, beforeStatement: null, statement: null, batchCount: 0, rollbackCount: 0, enforceColumnLimit: false, enforceParameterLimit: false };
   const queries = [];
   function prepared(sql, parameters = []) {
     async function beforeStatement() {
@@ -71,8 +74,9 @@ export async function setupConjuntos({ modules = {}, beforeMigration, migrationS
     function execute(mode = 'all') {
       const query = sqlite.prepare(sql);
       const columns = query.columns();
-      queries.push({ sql, columns: columns.map((column) => column.name) });
+      queries.push({ sql, columns: columns.map((column) => column.name), parameters: parameters.length });
       if (faults.enforceColumnLimit && columns.length > 100) throw new Error(`D1 query projection exceeds 100 columns (${columns.length})`);
+      if (faults.enforceParameterLimit && parameters.length > 100) throw new Error(`D1 query binds more than 100 parameters (${parameters.length})`);
       let results;
       if (mode === 'raw') query.setReturnArrays(true);
       if (mode === 'run') { query.run(...parameters); results = []; }

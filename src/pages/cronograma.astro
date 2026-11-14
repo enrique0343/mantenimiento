@@ -449,12 +449,18 @@ const maxMes = Math.max(1, ...meses.map((m) => m.total));
       });
 
       // Cambio inline de la próxima fecha de realización. Acepta cualquier
-      // fecha válida (incluye pasadas, por si se quiere marcar atraso).
+      // fecha válida (incluye pasadas, por si se quiere marcar atraso). En un
+      // preventivo de equipo pide el motivo: queda en su historial.
       document.querySelectorAll<HTMLInputElement>(".fecha-prox").forEach((inp) => {
         let prev = inp.value;
         inp.addEventListener("change", async () => {
           if (!inp.value) { inp.value = prev; return; }
-          const ok = await patchInline(inp, { proximaFecha: inp.value }, prev);
+          let motivo: string | null = null;
+          if (inp.dataset.tipo === "plan") {
+            motivo = window.pedirMotivo ? await window.pedirMotivo("Cambiar la fecha programada", "La fecha de un preventivo no cambia sin motivo.") : null;
+            if (!motivo) { inp.value = prev; return; }
+          }
+          const ok = await patchInline(inp, { proximaFecha: inp.value, ...(motivo ? { motivo } : {}) }, prev);
           if (ok) {
             prev = inp.value;
             // Recarga suave para que la tarjeta caiga al bucket correcto
