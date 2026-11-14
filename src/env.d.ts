@@ -58,6 +58,10 @@ interface Window {
 declare namespace App {
   interface Locals extends Runtime {
     area?: import("./lib/areas").AreaKey | null;
+    /** Espacio de trabajo del request (src/lib/espacio.ts). Solo con usuario. */
+    espacio?: import("./lib/espacio").Espacio;
+    /** Espacios a los que el usuario puede entrar; más de uno = interruptor. */
+    espaciosPermitidos?: import("./lib/espacio").Espacio[];
     user?: {
       id: number;
       email: string;

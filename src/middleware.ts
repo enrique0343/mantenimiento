@@ -6,6 +6,7 @@ import { getDb } from "./lib/db";
 import { activos, ordenes, tickets, actividades, conjuntos } from "./lib/schema";
 import { eq } from "drizzle-orm";
 import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
+import { COOKIE_ESPACIO, PARAM_ESPACIO, espaciosPermitidos, opcionesCookieEspacio, resolverEspacio } from "./lib/espacio";
 
 const PUBLIC_PATHS = new Set(["/login"]);
 const PUBLIC_PATH_PREFIXES = ["/soporte", "/encuesta", "/solicitudes-compra/r"];
@@ -44,7 +45,19 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   }
 
   const user = await getCurrentUser(ctx).catch(() => null);
-  if (user) ctx.locals.user = user;
+  if (user) {
+    ctx.locals.user = user;
+    // Espacio de trabajo (src/lib/espacio.ts): el pedido en ?espacio= si se puede,
+    // si no el último recordado, si no el primero permitido. Se recuerda en la cookie.
+    // cookies?.: las pruebas que llaman al middleware sin cookies siguen sirviendo.
+    const cookieEspacio = ctx.cookies?.get(COOKIE_ESPACIO)?.value ?? null;
+    const espacio = resolverEspacio(user, cookieEspacio, url.searchParams.get(PARAM_ESPACIO));
+    ctx.locals.espacio = espacio;
+    ctx.locals.espaciosPermitidos = espaciosPermitidos(user);
+    if (url.searchParams.has(PARAM_ESPACIO) && espacio !== cookieEspacio) {
+      ctx.cookies?.set(COOKIE_ESPACIO, espacio, opcionesCookieEspacio(url.protocol === "https:"));
+    }
+  }
 
   if (isPublic(path)) {
     return next();
