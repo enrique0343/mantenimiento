@@ -51,11 +51,14 @@ type ItemMenu = { href: string; label: string; icon: string; show: boolean };
 type GrupoMenu = { label: string | null; items: ItemMenu[] };
 const rol = user?.rol ?? "";
 const verPlanes = isOperativo || rol === "visualizador";
+// El tablero de cada espacio: la jefatura asigna y el visualizador lo consulta (los
+// mismos roles que ROLES_TABLERO_VER de lib/preventivos; la prueba de páginas lo cuida).
+const verTablero = isAdminOrJefe || rol === "visualizador";
 const AREAS_GENERAL = ESPACIOS.general.areas as readonly AreaKey[];
 const menu: GrupoMenu[] = !user ? [] : esBio ? [
   { label: null, items: [
     { href: "/", label: "Panorama biomédico", icon: "home", show: true },
-    { href: "/preventivos", label: ESPACIOS.biomedico.tablero, icon: "calendar", show: isAdminOrJefe },
+    { href: "/preventivos", label: ESPACIOS.biomedico.tablero, icon: "calendar", show: verTablero },
   ]},
   { label: "Trabajo", items: [
     { href: areaHref("/activos", "biomedico"), label: "Equipos", icon: "heart", show: rol !== "motorista" },
@@ -89,7 +92,7 @@ const menu: GrupoMenu[] = !user ? [] : esBio ? [
   ]},
   { label: "Áreas de mantenimiento", items: AREAS_GENERAL.map((key) => ({ href: `/areas/${key}`, label: AREAS[key].label, icon: AREAS[key].icon, show: true })) },
   { label: "Operación", items: [
-    { href: "/preventivos", label: ESPACIOS.general.tablero, icon: "calendar", show: isAdminOrJefe },
+    { href: "/preventivos", label: ESPACIOS.general.tablero, icon: "calendar", show: verTablero },
     { href: "/ronda", label: "Ronda de turno", icon: "clipboard", show: verPlanes },
     { href: "/aop", label: "Desviaciones (AOP)", icon: "clock", show: isOperativo },
     { href: "/eop", label: "Emergencias (EOP)", icon: "alert", show: isOperativo },

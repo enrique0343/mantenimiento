@@ -1635,8 +1635,9 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
   <!-- Documentos y expediente, licencias y capacitaciones: los pinta WP-D (K-BASE-2).
        Cada componente revisa el rol y consulta la base; anclas #documentos, #licencias y #capacitaciones. -->
   <DocumentosEquipo activoId={a.id} />
-  <LicenciasEquipo activoId={a.id} />
-  <CapacitacionesEquipo activoId={a.id} />
+  {/* Licencias y capacitaciones son del espacio Biomédico: solo en sus equipos. */}
+  {area === "biomedico" && <LicenciasEquipo activoId={a.id} />}
+  {area === "biomedico" && <CapacitacionesEquipo activoId={a.id} />}
 
   <!-- Contingencia / equipos de respaldo -->
   <div class="card mt-6 p-5" id="contingencia">

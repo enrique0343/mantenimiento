@@ -248,7 +248,7 @@ try {
     ok([...doc.querySelectorAll('#programados thead th')].some((th) => th.textContent.includes('Lo realiza')), 'Columna «Lo realiza»');
     ok(doc.querySelector('tr[data-fila="10"] [data-lo-realiza]').textContent.includes('Empresa Uno'), 'Con la empresa del equipo');
     ok(doc.querySelector('tr[data-fila="11"] [data-lo-realiza]').textContent.includes('Personal propio'), 'O el personal propio');
-    ok(doc.querySelector('tr[data-fila="11"]').textContent.includes('Pendiente de ubicación') && doc.querySelector('tr[data-fila="11"]').textContent.includes('Inventario: Quirófano Azul C. M.'), 'La fila dice que falta la ubicación');
+    ok(doc.querySelector('tr[data-fila="11"]').textContent.includes('Pendiente de asignar') && doc.querySelector('tr[data-fila="11"]').textContent.includes('según inventario: Quirófano Azul C. M.'), 'La fila dice que falta la ubicación');
     const empresas = [...doc.querySelectorAll('#f-empresa option')].map((o) => o.textContent.trim());
     ok(empresas.includes('Personal propio') && empresas.includes('Empresa Uno'), `Filtro por empresa: ${empresas}`);
     ok(!doc.querySelector('#f-area'), 'Sin filtro de área: es una sola');

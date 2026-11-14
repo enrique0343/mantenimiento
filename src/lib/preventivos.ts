@@ -44,8 +44,8 @@ import { ahoraSV } from "./turnos";
 import { aplicarCambioOrden } from "./orden-cambio";
 import { crearNotificacion } from "@/lib/notif-app";
 import {
-  COOKIE_ESPACIO, PARAM_ESPACIO, areasDeEspacio, condicionActivoEspacio, espacioDeActivo, espaciosPermitidos, mensajeOtroEspacio,
-  puedeEntrar, resolverEspacio, type Espacio, type UsuarioEspacio,
+  areasDeEspacio, condicionActivoEspacio, espacioDeActivo, espacioDelContexto, espaciosPermitidos, mensajeOtroEspacio,
+  puedeEntrar, type Espacio, type UsuarioEspacio,
 } from "./espacio";
 import { condicionEmpresa, datosBiomedicos, empresaDelPlanSql, leerFiltroEmpresa, rutasDeUbicaciones, textoUbicacionPendiente, type FiltroEmpresa } from "./tablero-bio";
 
@@ -81,11 +81,12 @@ export const fechaValida = (f: string) => esFechaISO(f);
 
 // ─── Espacio del pedido ──────────────────────────────────────────────────────
 /**
- * El espacio de este request: el que dejó el middleware (Astro.locals.espacio); si
- * no está (pruebas, rutas sin middleware), la misma regla con ?espacio= y la cookie.
+ * El espacio de este request: el mismo que el resto de la app (espacioDelContexto):
+ * el que dejó el middleware (Astro.locals.espacio) si el usuario entra a él; si no
+ * está (pruebas, rutas sin middleware), la misma regla con ?espacio= y la cookie.
  */
 export function espacioDelPedido(ctx: { locals?: any; cookies?: any; url: URL }, user: UsuarioEspacio): Espacio {
-  return ctx.locals?.espacio ?? resolverEspacio(user, ctx.cookies?.get?.(COOKIE_ESPACIO)?.value ?? null, ctx.url.searchParams.get(PARAM_ESPACIO));
+  return espacioDelContexto(ctx, user);
 }
 
 /** El espacio de un plan (por su equipo); null si el plan no existe. */
@@ -320,11 +321,23 @@ export async function asignarPreventivos(ctx: APIContext, db: Db, usuario: Usuar
       await crearNotificacion(ctx, {
         usuarioId: tecnicoId, tipo: "preventivo_asignado",
         titulo: sinOrden.length === 1 ? `Te asignaron el preventivo de ${codigo}` : `Te asignaron ${sinOrden.length} preventivos`,
-        mensaje: "La orden te llega el día programado.", link: "/cronograma",
+        // El enlace lleva al cronograma del espacio de esos preventivos: así la campana
+        // lo muestra solo en ese espacio (condicionLinkEspacio lee ?espacio=).
+        mensaje: "La orden te llega el día programado.", link: linkCronograma([...espacios]),
       });
     } catch {}
   }
   return { ok: true, planes: cambiados.length, ordenes: ots.cambiadas, errores: ots.errores };
+}
+
+/**
+ * Enlace del aviso «Te asignaron …»: el cronograma del espacio de los preventivos
+ * (en Biomédico, con su área); si el lote mezcla espacios, el cronograma sin espacio.
+ */
+export function linkCronograma(espacios: readonly Espacio[]): string {
+  const unicos = [...new Set(espacios)];
+  if (unicos.length !== 1) return "/cronograma";
+  return unicos[0] === "biomedico" ? "/cronograma?area=biomedico&espacio=biomedico" : "/cronograma?espacio=general";
 }
 
 // ─── El tablero ──────────────────────────────────────────────────────────────
@@ -433,7 +446,7 @@ function armarFila(r: Awaited<ReturnType<typeof consultarFilas>>[number], hoy: s
 
 const normalizar = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV()) {
+export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(), opciones: { sinBiomedico?: boolean } = {}) {
   // Rutas de ubicación: el árbol completo en una consulta sin parámetros.
   const ubs = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, padreId: ubicaciones.padreId }).from(ubicaciones);
   const ruta = rutasDeUbicaciones(ubs);
@@ -487,7 +500,9 @@ export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(
     // Solo los técnicos que ven ese espacio (especialidad vacía o «ambos»: los dos).
     espacio ? sql`(${usuarios.especialidad} is null or ${usuarios.especialidad} in ('ambos', ${espacio}))` : undefined,
   )).orderBy(asc(usuarios.nombre));
-  const biomedico = espacio === "biomedico" ? await datosBiomedicos(db, { hoy, sedeId: filtros.sedeId }) : null;
+  // El bloque biomédico (calibraciones, pendientes de ubicación) solo en Biomédico;
+  // el aviso del panel principal no lo necesita (sinBiomedico).
+  const biomedico = espacio === "biomedico" && !opciones.sinBiomedico ? await datosBiomedicos(db, { hoy, sedeId: filtros.sedeId }) : null;
 
   return {
     hoy, filtros: { ...filtros, ...rango }, desdeAjustado,

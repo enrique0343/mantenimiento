@@ -42,8 +42,10 @@ try {
 let preventivos: { sinAsignar: number; asignados: number; programados: number; programadosSinAsignar: number } | null = null;
 if (esJefatura(user.rol)) {
   try {
-    // El tablero del espacio (en Biomédico, su área).
-    const d = await datosTablero(db, leerFiltros(new URLSearchParams(esBio ? { area: "biomedico", espacio } : { espacio })).filtros);
+    // El tablero del espacio: las mismas cifras que /preventivos en este espacio
+    // (en General, nada biomédico). Sin lo extra del tablero biomédico.
+    const { filtros } = leerFiltros(new URLSearchParams(), undefined, espacio);
+    const d = await datosTablero(db, filtros, undefined, { sinBiomedico: true });
     preventivos = { sinAsignar: d.atrasados.sinAsignar.length, asignados: d.atrasados.asignados.length, programados: d.programados.length, programadosSinAsignar: d.programados.filter((f) => !f.tecnico).length };
   } catch {
     console.error("preventivos_unavailable");

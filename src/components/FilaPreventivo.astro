@@ -40,8 +40,9 @@ const cuando = modo === "atrasado"
   <td class="max-sm:block max-sm:min-w-0 max-sm:py-1 px-3 py-2 min-w-[12rem] text-xs text-slate-600">
     {f.ubicacionPendiente ? (
       <>
-        <span class="badge bg-amber-100 text-amber-800">Pendiente de ubicación</span>
-        {f.ubicacionInventario && <div class="mt-1">Inventario: {f.ubicacionInventario}</div>}
+        {/* El mismo texto que la ficha y la lista de equipos: «Pendiente de asignar · según inventario: …». */}
+        <span class="badge bg-amber-100 text-amber-800">Pendiente de asignar</span>
+        {f.ubicacionInventario && <div class="mt-1">según inventario: {f.ubicacionInventario}</div>}
       </>
     ) : (
       <div>{f.ubicacion ?? "Sin ubicación"}</div>

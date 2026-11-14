@@ -332,7 +332,8 @@ const globRuta = (columna: SQLWrapper, r: string) => sql`(${columna} = ${sql.raw
 /**
  * Espacio del enlace de una notificación ('general', 'biomedico' o NULL = común):
  * por el registro al que apunta (/ordenes/5, /tickets/3, /activos/9, /conjuntos/2,
- * /actividades/1) o por la ruta fija (/ronda…, /calibraciones…).
+ * /actividades/1), por la ruta fija (/ronda…, /calibraciones…) o, en una lista
+ * común, por el ?espacio= del enlace (/cronograma?espacio=biomedico).
  */
 export function expresionEspacioDeLink(columna: SQLWrapper): SQL {
   const porRubro = (tabla: string, desde: number) =>
@@ -349,6 +350,8 @@ export function expresionEspacioDeLink(columna: SQLWrapper): SQL {
     when ${columna} glob '/activos/[0-9]*' then (select case when ${activoAreaExpression} = 'biomedico' then 'biomedico' else 'general' end from "activos" where "activos"."id" = cast(substr(${columna}, 10) as integer))
     when ${rutasGeneral} then 'general'
     when ${rutasBio} then 'biomedico'
+    when ${columna} glob '*[?&]espacio=biomedico*' then 'biomedico'
+    when ${columna} glob '*[?&]espacio=general*' then 'general'
     else null end)`;
 }
 
