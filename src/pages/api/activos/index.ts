@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { activos, planesMantenimiento, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { errorEmpresaEquipo } from "@/lib/tablero-bio";
 import { desc, eq, sql } from "drizzle-orm";
 import { siguienteFecha, type Frecuencia } from "@/lib/frecuencias";
 import { activoAreaCondition, parseArea, AREA_KEYS } from "@/lib/areas";
@@ -143,6 +144,10 @@ export const POST: APIRoute = async (ctx) => {
     const errorCentro = errorCentroCostoEquipo(centro, ubic, null);
     if (errorCentro) return Response.json({ error: errorCentro }, { status: 400 });
   }
+
+  // Empresa que da mantenimiento (opcional): existe, activa, y la pone la jefatura.
+  const errorEmpresa = await errorEmpresaEquipo(db, user.rol, r.proveedorId, null);
+  if (errorEmpresa) return Response.json({ error: errorEmpresa.error }, { status: errorEmpresa.status });
 
   const automatico = !activoData.codigo;
   if (!automatico) {

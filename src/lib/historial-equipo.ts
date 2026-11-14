@@ -519,6 +519,7 @@ const ACCION_TARJETA: Record<string, { label: string; color: string }> = {
   desactivacion: { label: "Desactivó", color: "bg-amber-50 text-amber-700" },
   activacion: { label: "Activó", color: "bg-emerald-50 text-emerald-700" },
   asignacion: { label: "Asignó", color: "bg-blue-50 text-blue-700" },
+  ubicacion: { label: "Asignó ubicación", color: "bg-blue-50 text-blue-700" },
 };
 
 /**

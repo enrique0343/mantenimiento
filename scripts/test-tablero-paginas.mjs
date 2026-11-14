@@ -1,7 +1,10 @@
 // Las páginas construidas del tablero de preventivos, contra migraciones reales: qué ve la
-// jefatura en /preventivos, que el técnico no entra, el aviso del panel principal y la ficha
-// del equipo, que pide el motivo antes de mover la fecha y muestra el historial junto al
-// preventivo. Correr después de npm run build. Sin red.
+// jefatura en /preventivos, que el técnico no entra, que el visualizador solo mira, el
+// aviso del panel principal y la ficha del equipo, que pide el motivo antes de mover la
+// fecha y muestra el historial junto al preventivo. Y el tablero por espacio (14/11/2026):
+// General sin nada biomédico; Biomédico con «Lo realiza», calibraciones y pendientes de
+// ubicación, que se asignan desde el tablero y desde la ficha. Correr después de npm run
+// build. Sin red.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,7 +17,7 @@ import { fijarReloj } from './test-support/reloj.mjs';
 fijarReloj();
 const require = createRequire(import.meta.url);
 const { JSDOM, VirtualConsole } = require('jsdom');
-const f = await setupConjuntos({ modules: { plan: 'pages/api/planes/[id]', asignar: 'pages/api/preventivos/asignar' } });
+const f = await setupConjuntos({ modules: { plan: 'pages/api/planes/[id]', asignar: 'pages/api/preventivos/asignar', ubicar: 'pages/api/activos/asignar-ubicacion' } });
 const { app, sqlite, call, DB, close } = f;
 const one = (q, ...a) => sqlite.prepare(q).get(...a);
 const modulo = async (ruta) => (await import(pathToFileURL(path.join(process.cwd(), 'dist/_worker.js/pages', ruta)).href)).page().default;
@@ -66,9 +69,23 @@ try {
     ok(doc.querySelector('#loteBar select#loteTecnico'), 'Asignación en lote');
     ok(doc.querySelector('a[href="/preventivos"].app-nav-link'), 'En el menú');
   }
-  for (const [rol, destino] of [['tecnico', '/campo'], ['visualizador', '/']]) {
-    const res = await respuesta(tablero, '/preventivos', rol);
-    ok(res.status >= 300 && res.status < 400 && res.headers.get('location') === destino, `${rol} no ve el tablero (${res.status} ${res.headers.get('location')})`);
+  {
+    const res = await respuesta(tablero, '/preventivos', 'tecnico');
+    ok(res.status >= 300 && res.status < 400 && res.headers.get('location') === '/campo', `El técnico no ve el tablero (${res.status} ${res.headers.get('location')})`);
+    for (const rol of ['solicitante', 'motorista']) {
+      const r = await respuesta(tablero, '/preventivos', rol);
+      ok(r.status >= 300 && r.status < 400 && r.headers.get('location') === '/', `${rol} tampoco (${r.status})`);
+    }
+  }
+  { // El visualizador lo ve sin cambiar nada: sin selector de técnico, sin marcar, sin lote ni «Generar OT».
+    const { doc, texto } = await ver(tablero, '/preventivos', 'visualizador');
+    ok(texto.includes('Tablero de preventivos') && texto.includes('Vista de consulta'), 'El visualizador entra en modo consulta');
+    const fila1 = doc.querySelector('#programados tr[data-fila="1"]');
+    ok(fila1 && fila1.querySelector('[data-tecnico]').textContent.includes('Sin asignar'), 'Ve quién lo tiene');
+    ok(!doc.querySelector('select.tecnico-sel') && !doc.querySelector('.sel-plan') && !doc.querySelector('.sel-todos'), 'Sin selector ni casillas');
+    ok(!doc.querySelector('#loteBar') && !doc.querySelector('[data-generar]'), 'Sin lote ni «Generar OT»');
+    ok(doc.querySelector('#atrasados-con tr[data-fila="2"] [data-tecnico]').textContent.includes('Técnico Retirado'), 'El técnico del atrasado');
+    ok(doc.querySelector('[data-historial="1"]'), 'El historial sí');
   }
   { // el técnico no ve el enlace en el menú
     const { doc } = await ver(await modulo('activos/_id_.astro.mjs'), '/activos/1?area=aires', 'tecnico', { id: '1' });
@@ -199,6 +216,148 @@ try {
     const envio = enviados.at(-1);
     ok(!('asignadoA' in envio.data) && !('proximaFecha' in envio.data) && !('frecuencia' in envio.data) && !envio.data.motivo, `El técnico guarda sin tocar la programación: ${JSON.stringify(envio.data)}`);
     ok(one('SELECT titulo FROM planes_mantenimiento WHERE id=1').titulo === 'Preventivo mensual de filtros HEPA y serpentín', 'Y se guarda');
+  }
+
+  // ── Tablero por espacio: General sin lo biomédico, Biomédico con lo suyo ──
+  sqlite.exec(`
+    INSERT INTO usuarios(id,nombre,email,password_hash,rol,activo,especialidad) VALUES(21,'Técnico Bio','tecnico.bio@prueba.local','x','tecnico',1,'biomedico');
+    INSERT INTO proveedores(id,nombre,activo) VALUES(1,'Empresa Uno',1);
+    INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo,padre_id) VALUES(73,7,'Sunshine','sala',71);
+    INSERT INTO activos(id,codigo,nombre,rubro,tipo,ubicacion_id,ubicacion,proveedor_id) VALUES
+      (10,'BIO-010','Monitor de signos vitales','biomedico','biomedico',72,NULL,1),
+      (11,'BIO-011','Máquina de anestesia','biomedico','biomedico',NULL,'Quirófano Azul C. M.',NULL),
+      (12,'BIO-012','Desfibrilador','biomedico','biomedico',72,NULL,NULL);
+    INSERT INTO planes_mantenimiento(id,activo_id,titulo,frecuencia,proxima_fecha) VALUES(10,10,'Preventivo semestral','semestral','${dia(4)}'),(11,11,'Preventivo semestral','semestral','${dia(6)}');
+    INSERT INTO calibraciones(activo_id,fecha_calibracion,proxima_calibracion,resultado,certificado_r2_key,usuario_id) VALUES(12,'${dia(-370)}','${dia(-5)}','conforme','c/x.pdf',1),(10,'${dia(-340)}','${dia(20)}','conforme','c/y.pdf',1);
+  `);
+  {
+    const { doc, texto } = await ver(tablero, '/preventivos', 'jefe');
+    ok(texto.includes('Tablero de preventivos') && !texto.includes('Tablero biomédico'), 'General');
+    ok(!doc.querySelector('tr[data-fila="10"]') && !doc.querySelector('tr[data-fila="11"]'), 'General no muestra lo biomédico');
+    ok(![...doc.querySelectorAll('thead th')].some((th) => th.textContent.includes('Lo realiza')), 'Ni la columna de la empresa');
+    ok(!doc.querySelector('#calibraciones') && !doc.querySelector('#pendientes-ubicacion') && !doc.querySelector('#f-empresa'), 'Ni las secciones biomédicas');
+    const areas = [...doc.querySelectorAll('#f-area option')].map((o) => o.value).filter(Boolean);
+    ok(areas.length === 3 && !areas.includes('biomedico'), `Áreas de General: ${areas}`);
+    const tecnicos = [...doc.querySelectorAll('#loteTecnico option')].map((o) => o.textContent);
+    ok(!tecnicos.some((x) => x.includes('Técnico Bio')), 'El técnico de biomédico no sale en General');
+  }
+  {
+    const { doc, texto } = await ver(tablero, '/preventivos?espacio=biomedico', 'jefe');
+    ok(doc.querySelector('h1').textContent.trim() === 'Tablero biomédico' && texto.includes('Ingeniería biomédica'), 'El título del espacio');
+    ok(!doc.querySelector('tr[data-fila="1"]') && !doc.querySelector('tr[data-fila="2"]'), 'Biomédico no muestra los aires');
+    ok([...doc.querySelectorAll('#programados thead th')].some((th) => th.textContent.includes('Lo realiza')), 'Columna «Lo realiza»');
+    ok(doc.querySelector('tr[data-fila="10"] [data-lo-realiza]').textContent.includes('Empresa Uno'), 'Con la empresa del equipo');
+    ok(doc.querySelector('tr[data-fila="11"] [data-lo-realiza]').textContent.includes('Personal propio'), 'O el personal propio');
+    ok(doc.querySelector('tr[data-fila="11"]').textContent.includes('Pendiente de ubicación') && doc.querySelector('tr[data-fila="11"]').textContent.includes('Inventario: Quirófano Azul C. M.'), 'La fila dice que falta la ubicación');
+    const empresas = [...doc.querySelectorAll('#f-empresa option')].map((o) => o.textContent.trim());
+    ok(empresas.includes('Personal propio') && empresas.includes('Empresa Uno'), `Filtro por empresa: ${empresas}`);
+    ok(!doc.querySelector('#f-area'), 'Sin filtro de área: es una sola');
+    const tarjeta = (k) => doc.querySelector(`[data-tarjeta="${k}"]`)?.textContent.replace(/\s+/g, ' ');
+    ok(/Calibraciones vencidas 1/.test(tarjeta('cal-vencidas')) && /por vencer \(30 días\) 1/.test(tarjeta('cal-por-vencer')), `Tarjetas de calibración: ${tarjeta('cal-vencidas')} | ${tarjeta('cal-por-vencer')}`);
+    ok(/Pendientes de ubicación 1/.test(tarjeta('pendientes')) && /Con empresa externa \(equipos\) 1/.test(tarjeta('con-empresa')), `Tarjetas: ${tarjeta('pendientes')} | ${tarjeta('con-empresa')}`);
+    const cal = doc.querySelector('#calibraciones');
+    ok(cal.querySelector('tr[data-calibracion="12"]').textContent.includes(ddmm(dia(-5))) && cal.querySelector('tr[data-calibracion="12"]').textContent.includes('Vencida'), 'La vencida, en DD/MM/AAAA');
+    ok(cal.querySelector('tr[data-calibracion="10"]').textContent.includes('vence en 20 días'), 'La que vence en 20 días');
+    const pend = doc.querySelector('#pendientes-ubicacion tr[data-pendiente="11"]');
+    ok(pend && pend.textContent.includes('según inventario: Quirófano Azul C. M.'), 'Pendiente con el texto del inventario');
+    ok(pend.querySelector('[data-asignar-ubicacion][data-activos="11"]') && doc.querySelector('#pendientes-ubicacion button[data-asignar-ubicacion]:not([data-activos])'), 'Asignar uno o los marcados');
+    const opciones = [...doc.querySelectorAll('#ubicLugar option[data-sede]')].map((o) => o.textContent);
+    ok(opciones.includes('Nivel 2 · Bloque quirúrgico · Sunshine'), `El árbol con su ruta: ${opciones}`);
+    const tecnicos = [...doc.querySelectorAll('#loteTecnico option')].map((o) => o.textContent);
+    ok(tecnicos.some((x) => x.includes('Técnico Bio')), 'El técnico de biomédico sí sale');
+  }
+  { // El visualizador ve el tablero biomédico sin asignar ubicaciones.
+    const { doc } = await ver(tablero, '/preventivos?espacio=biomedico', 'visualizador');
+    ok(doc.querySelector('#pendientes-ubicacion tr[data-pendiente="11"]') && !doc.querySelector('[data-asignar-ubicacion]') && !doc.querySelector('#ubicDialog') && !doc.querySelector('.sel-pendiente'), 'Solo lectura');
+  }
+  { // El script del diálogo de ubicación: Astro lo deja en línea (es corto); se toma del manifiesto construido.
+    const manifiesto = fs.readdirSync('dist/_worker.js').find((x) => /^manifest_.*\.mjs$/.test(x));
+    const fuente = fs.readFileSync(path.join('dist/_worker.js', manifiesto), 'utf8');
+    const m = fuente.match(/AsignarUbicacion\.astro\?astro&type=script&index=0&lang\.ts","((?:[^"\\]|\\.)*)"/);
+    ok(m, 'El script del diálogo');
+    const codigo = JSON.parse(`"${m[1]}"`);
+    const abrir = async (ruta, params) => {
+      const html = (await (await respuesta(params ? ficha0 : tablero, ruta, 'jefe', params)).text()).replace('</body>', () => `<script>${codigo}</script></body>`);
+      const consola = new VirtualConsole();
+      const avisos = [];
+      consola.on('jsdomError', (e) => { const msg = e.detail?.message ?? e.message; if (/navigation/i.test(msg)) avisos.push('recarga'); else if (!/Not implemented/.test(e.message)) errores.push(msg); });
+      const dom = new JSDOM(html, {
+        url: `https://local.test${ruta}`, runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: consola,
+        beforeParse(w) {
+          w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+          w.HTMLDialogElement.prototype.close = function () { this.open = false; };
+          w.fetch = async (url, init = {}) => {
+            const data = init.body ? JSON.parse(init.body) : undefined;
+            const r = new URL(url, 'https://local.test').pathname === '/api/activos/asignar-ubicacion' ? await call(app.ubicar.POST, '/api/activos/asignar-ubicacion', { method: 'POST', data, rol: 'jefe' }) : { status: 200, body: {} };
+            return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'content-type': 'application/json' } });
+          };
+        },
+      });
+      await pausa(30);
+      return { w: dom.window, avisos };
+    };
+    const ficha0 = await modulo('activos/_id_.astro.mjs');
+    // Desde la ficha: la sede deja solo sus ubicaciones; sin elegir, no se envía.
+    const { w, avisos } = await abrir('/activos/11?area=biomedico', { id: '11' });
+    const d = w.document;
+    d.querySelector('[data-asignar-ubicacion][data-activos="11"]').click();
+    ok(d.querySelector('#ubicDialog').open, 'Abre el diálogo');
+    ok(d.querySelector('#ubicLugar').disabled, 'Primero la sede');
+    d.querySelector('#ubicConfirmar').click();
+    await pausa(20);
+    ok(!d.querySelector('#ubicErr').classList.contains('hidden') && one('SELECT ubicacion_id u FROM activos WHERE id=11').u === null, 'Sin ubicación no envía');
+    const sede = d.querySelector('#ubicSede'); sede.value = '7'; sede.dispatchEvent(new w.Event('change'));
+    const lugares = [...d.querySelectorAll('#ubicLugar option')].map((o) => o.value).filter(Boolean);
+    ok(!d.querySelector('#ubicLugar').disabled && lugares.includes('73') && lugares.every((v) => ['70', '71', '72', '73'].includes(v)), `Solo las de la sede: ${lugares}`);
+    d.querySelector('#ubicLugar').value = '73';
+    d.querySelector('#ubicConfirmar').click();
+    for (let i = 0; i < 200 && !avisos.length; i++) await pausa(10);
+    ok(one('SELECT ubicacion_id u FROM activos WHERE id=11').u === 73, 'Asignada desde la ficha');
+    ok(avisos.length > 0, 'Y la página se recarga');
+    ok(one("SELECT count(*) n FROM audit_log WHERE entidad='activo' AND entidad_id=11 AND accion='ubicacion'").n === 1, 'Con su registro');
+  }
+
+  // ── Ficha: empresa que da mantenimiento y ubicación pendiente ──
+  {
+    sqlite.exec("INSERT INTO activos(id,codigo,nombre,rubro,tipo,ubicacion_id,ubicacion) VALUES(13,'BIO-013','Electrocauterio','biomedico','biomedico',NULL,'Arsenal H. E.')");
+    const ficha = await modulo('activos/_id_.astro.mjs');
+    let { doc, texto } = await ver(ficha, '/activos/13?area=biomedico', 'jefe', { id: '13' });
+    ok(doc.querySelector('[data-ubicacion-pendiente]').textContent.includes('Pendiente de asignar · según inventario: Arsenal H. E.'), 'Pendiente en la ficha');
+    ok(doc.querySelector('[data-asignar-ubicacion][data-activos="13"]') && doc.querySelector('#ubicDialog'), 'La jefatura la asigna desde la ficha');
+    ok(doc.querySelector('[data-empresa-mantenimiento]').textContent.includes('Personal propio') && texto.includes('Vacío = lo hace el personal propio'), 'Sin empresa: personal propio');
+    ({ doc } = await ver(ficha, '/activos/13?area=biomedico', 'tecnico', { id: '13' }));
+    ok(doc.querySelector('[data-ubicacion-pendiente]') && !doc.querySelector('[data-asignar-ubicacion]') && !doc.querySelector('#ubicDialog'), 'El técnico la ve, no la asigna');
+    ({ doc } = await ver(ficha, '/activos/10?area=biomedico', 'jefe', { id: '10' }));
+    ok(doc.querySelector('[data-empresa-mantenimiento]').textContent.includes('Empresa Uno'), 'La empresa en la ficha');
+    ok(doc.querySelector('#plan-10 [data-lo-realiza]').textContent.includes('Lo realiza: Empresa Uno'), 'Y en su preventivo');
+    ok(!doc.querySelector('[data-ubicacion-pendiente]') && !doc.querySelector('#ubicDialog'), 'Con ubicación no hay nada que asignar');
+    // Nuevo y editar: el campo se llama como lo pidió la gerencia; el técnico no lo cambia.
+    const editar = await modulo('activos/_id_/editar.astro.mjs');
+    ({ doc, texto } = await ver(editar, '/activos/10/editar?area=biomedico', 'jefe', { id: '10' }));
+    ok(doc.querySelector('label[for="proveedorSel"]').textContent.includes('Empresa que da mantenimiento (opcional)') && texto.includes('Vacío = lo hace el personal propio'), 'Editar: la etiqueta y su ayuda');
+    ok(doc.querySelector('#proveedorSel option[value=""]').textContent.includes('Personal propio') && doc.querySelector('#proveedorSel').value === '1' && !doc.querySelector('#proveedorSel').disabled, 'Con la empresa elegida');
+    sqlite.exec('UPDATE proveedores SET activo=0 WHERE id=1');
+    ({ doc } = await ver(editar, '/activos/10/editar?area=biomedico', 'jefe', { id: '10' }));
+    ok(doc.querySelector('#proveedorSel').value === '1' && doc.querySelector('#proveedorSel option[value="1"]').textContent.includes('(desactivada)'), 'Una empresa desactivada no se pierde al editar');
+    sqlite.exec('UPDATE proveedores SET activo=1 WHERE id=1');
+    ({ doc } = await ver(editar, '/activos/10/editar?area=biomedico', 'tecnico', { id: '10' }));
+    ok(doc.querySelector('#proveedorSel').disabled, 'El técnico no la cambia');
+    const nuevo = await modulo('activos/nuevo.astro.mjs');
+    ({ doc } = await ver(nuevo, '/activos/nuevo?area=biomedico', 'jefe'));
+    ok(doc.querySelector('label[for="proveedorSel"]').textContent.includes('Empresa que da mantenimiento (opcional)') && !doc.querySelector('#proveedorSel').disabled, 'Nuevo: la etiqueta');
+  }
+
+  // ── La OT de un equipo con empresa dice quién la realiza ──
+  {
+    sqlite.exec(`INSERT INTO ordenes(id,titulo,tipo,estado,activo_id,rubro,plan_id,creado_por) VALUES(500,'[Preventivo] Monitor','preventivo','abierta',10,'biomedico',10,1),(501,'Falla del desfibrilador','correctivo','abierta',12,'biomedico',NULL,1)`);
+    const orden = await modulo('ordenes/_id_.astro.mjs');
+    let { doc } = await ver(orden, '/ordenes/500?area=biomedico', 'jefe', { id: '500' });
+    ok(doc.querySelector('[data-lo-realiza]')?.textContent.includes('Empresa Uno'), `La OT preventiva: ${doc.querySelector('[data-lo-realiza]')?.textContent}`);
+    ({ doc } = await ver(orden, '/ordenes/501?area=biomedico', 'jefe', { id: '501' }));
+    ok(!doc.querySelector('[data-lo-realiza]'), 'Sin empresa no se muestra');
+    sqlite.exec('UPDATE activos SET proveedor_id=1 WHERE id=12');
+    ({ doc } = await ver(orden, '/ordenes/501?area=biomedico', 'jefe', { id: '501' }));
+    ok(doc.querySelector('[data-lo-realiza]')?.textContent.includes('Empresa Uno'), 'La correctiva también');
   }
 
   // ── Tablero: asignar desde una fila recarga la vista (contadores, grupo y carga) ──

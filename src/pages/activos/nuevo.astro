@@ -13,6 +13,7 @@ import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { SUBCAT_KEYS, SUBCATS_BIOMEDICO } from "@/lib/rubros";
 import { CLASES_RIESGO, ENTIDADES_REGISTRO } from "@/lib/biomedico";
 import { CODIGO_MAX } from "@/lib/registro-activos";
+import { AYUDA_EMPRESA, ETIQUETA_EMPRESA, PERSONAL_PROPIO } from "@/lib/tablero-bio";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area")) ?? "equipo_general";
 const titulo = AREAS[area].createLabel;
@@ -26,6 +27,8 @@ if (!["admin", "jefe", "tecnico"].includes(user.rol)) {
 }
 
 const db = getDb(Astro);
+// La empresa que da mantenimiento la pone o la cambia la jefatura (la API lo exige).
+const puedeEmpresa = user.rol === "admin" || user.rol === "jefe";
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
 const ubRows = await db.select().from(ubicaciones).orderBy(ubicaciones.nombre);
 const provRows = await db.select({ id: proveedores.id, nombre: proveedores.nombre }).from(proveedores).where(eq(proveedores.activo, true)).orderBy(proveedores.nombre);
@@ -142,11 +145,12 @@ const PREFIJO: Record<string, string> = { biomedico: "BIO", equipo_general: "EQ"
 
       {provRows.length > 0 && (
         <div>
-          <label class="label">Proveedor / Fabricante</label>
-          <select class="input" id="proveedorSel">
-            <option value="">— Sin proveedor —</option>
+          <label class="label" for="proveedorSel">{ETIQUETA_EMPRESA}</label>
+          <select class="input" id="proveedorSel" disabled={!puedeEmpresa}>
+            <option value="">{PERSONAL_PROPIO} (sin empresa)</option>
             {provRows.map((p) => <option value={p.id}>{p.nombre}</option>)}
           </select>
+          <p class="mt-1 text-xs text-slate-500">{AYUDA_EMPRESA}{!puedeEmpresa && " La define la jefatura."}</p>
         </div>
       )}
     </div>

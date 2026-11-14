@@ -51,7 +51,7 @@ const CAMPO_LABEL: Record<string, string> = {
   anio: "Año",
   categoria: "Categoría",
   tipo: "Tipo",
-  proveedorId: "Proveedor",
+  proveedorId: "Empresa que da mantenimiento",
   fechaAdquisicion: "Fecha de adquisición",
   vidaUtilAnios: "Vida útil (años)",
   valorAdquisicion: "Valor de adquisición",
