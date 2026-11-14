@@ -1,4 +1,5 @@
 ---
+import { espacioDeTrabajo, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 import { fmtFechaCompacta, fmtFechaSoloCompacta } from "@/lib/datetime";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
@@ -54,6 +55,7 @@ const [row] = await db
       codigo: activos.codigo,
       nombre: activos.nombre,
       tipo: activos.tipo,
+      rubro: activos.rubro,
       marca: activos.marca,
       modelo: activos.modelo,
       serial: activos.serial,
@@ -76,6 +78,9 @@ if (!row) return Astro.redirect("/ordenes");
 
 const o = row.orden;
 const area = parseArea(o.rubro);
+// Registro del otro espacio: el middleware muestra el aviso; sin él, 403 sin datos.
+const espacioOrden = espacioDeTrabajo(o.rubro, row.activo);
+if (!puedeEntrar(user, espacioOrden)) return new Response(mensajeOtroEspacio(espacioOrden), { status: 403 });
 const rawArea = Astro.url.searchParams.get("area");
 if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));

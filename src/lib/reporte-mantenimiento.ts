@@ -10,6 +10,7 @@ import { etiquetaOT } from "./orden-codigo";
 import { fechaHoraSV } from "./biomedico";
 // La marca de incidente con el texto de K-G1 (la misma de la hoja de vida y el historial).
 import { textoIncidente } from "./historial-equipo";
+import { type Espacio, condicionOrdenEspacio } from "./espacio";
 import type { getDb } from "./db";
 
 type Db = ReturnType<typeof getDb>;
@@ -271,6 +272,8 @@ export interface FiltrosConsolidado {
   rubro?: string | null;
   tecnico?: number | null;
   tipo?: string | null;
+  /** Sin rubro, solo las órdenes de este espacio (sin ninguno de los dos, todas). */
+  espacio?: Espacio | null;
 }
 
 /** Inicio y fin del día en El Salvador (UTC-6), para comparar contra fechas guardadas en UTC. */
@@ -282,6 +285,7 @@ export async function consolidadoMantenimiento(db: Db, f: FiltrosConsolidado) {
   if (f.desde) conds.push(gte(ordenes.completadaEn, inicioDiaSV(f.desde)));
   if (f.hasta) conds.push(lte(ordenes.completadaEn, finDiaSV(f.hasta)));
   if (f.rubro) conds.push(eq(ordenes.rubro, f.rubro as any));
+  else if (f.espacio) conds.push(condicionOrdenEspacio(f.espacio));
   if (f.tecnico) conds.push(eq(ordenes.asignadoA, f.tecnico));
   if (f.tipo) conds.push(eq(ordenes.tipo, f.tipo as any));
   const filas = await db

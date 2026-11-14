@@ -3,10 +3,20 @@ import { handleSgoRequest, handleSnapshotPublish } from "./lib/sgo/handler.mjs";
 import { getCurrentUser } from "./lib/auth";
 import { parseArea } from "./lib/areas";
 import { getDb } from "./lib/db";
-import { activos, ordenes, tickets, actividades, conjuntos } from "./lib/schema";
+import { activos, ordenes, tickets, actividades, conjuntos, planesMantenimiento } from "./lib/schema";
 import { eq } from "drizzle-orm";
 import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
-import { COOKIE_ESPACIO, PARAM_ESPACIO, espaciosPermitidos, opcionesCookieEspacio, resolverEspacio } from "./lib/espacio";
+import {
+  COOKIE_ESPACIO, PAGINA_OTRO_ESPACIO, PARAM_ESPACIO, espacioDeArea, espacioDeRuta, espaciosPermitidos, opcionesCookieEspacio, puedeEntrar,
+  espacioDeTrabajo, registroDeRuta, resolverEspacio, respuestaOtroEspacio, type Espacio,
+} from "./lib/espacio";
+
+/** Espacio de una orden o solicitud guardada: su rubro o, sin rubro, el de su equipo. */
+async function espacioDeTrabajoGuardado(db: ReturnType<typeof getDb>, rubro: string | null, activoId: number | null): Promise<Espacio> {
+  if (rubro || !activoId) return espacioDeTrabajo(rubro, null);
+  const [a] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1);
+  return espacioDeTrabajo(null, a ?? null);
+}
 
 const PUBLIC_PATHS = new Set(["/login"]);
 const PUBLIC_PATH_PREFIXES = ["/soporte", "/encuesta", "/solicitudes-compra/r"];
@@ -88,36 +98,63 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   }
   ctx.locals.area = pathArea ?? parseArea(requestedArea);
   // Detail pages derive their workspace from the saved record, even when opened
-  // from a notification or QR without a query string.
-  const recordPath = path.match(/^\/(activos|ordenes|tickets|actividades|conjuntos)\/(\d+)(?:\/|$)/);
-  if (recordPath) {
+  // from a notification or QR without a query string. The API only looks the
+  // record up for users locked to one space (the others may read both).
+  const registro = registroDeRuta(path);
+  let espacioRegistro: Espacio | null = null;
+  if (registro && (!registro.api || ctx.locals.espaciosPermitidos!.length === 1)) {
     const db = getDb(ctx);
-    const id = Number(recordPath[2]);
-    if (recordPath[1] === "conjuntos") {
+    const { tipo, id } = registro;
+    let areaRegistro: ReturnType<typeof parseArea> = null;
+    if (tipo === "conjuntos") {
       const [c] = await db.select({ rubro: conjuntos.rubro }).from(conjuntos).where(eq(conjuntos.id, id)).limit(1);
-      if (c) ctx.locals.area = parseArea(c.rubro);
-    } else if (recordPath[1] === "activos") {
+      if (c) areaRegistro = parseArea(c.rubro);
+    } else if (tipo === "activos") {
       const [a] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, id)).limit(1);
-      if (a) ctx.locals.area = rubroDeActivo(a.rubro, a.tipo);
-    } else if (recordPath[1] === "actividades") {
+      if (a) areaRegistro = rubroDeActivo(a.rubro, a.tipo);
+    } else if (tipo === "planes") {
+      const [a] = await db.select({ rubro: activos.rubro, tipo: activos.tipo }).from(planesMantenimiento).innerJoin(activos, eq(activos.id, planesMantenimiento.activoId)).where(eq(planesMantenimiento.id, id)).limit(1);
+      if (a) areaRegistro = rubroDeActivo(a.rubro, a.tipo);
+    } else if (tipo === "actividades") {
       const [a] = await db.select({ rubro: actividades.rubro }).from(actividades).where(eq(actividades.id, id)).limit(1);
-      if (a) ctx.locals.area = rubroDeActividad(a.rubro);
-    } else if (recordPath[1] === "ordenes") {
-      const [o] = await db.select({ rubro: ordenes.rubro, estado: ordenes.estado, asignadoA: ordenes.asignadoA }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
-      if (o) ctx.locals.area = parseArea(o.rubro);
+      if (a) areaRegistro = rubroDeActividad(a.rubro);
+    } else if (tipo === "ordenes" || tipo === "firmas") {
+      const [o] = await db.select({ rubro: ordenes.rubro, estado: ordenes.estado, asignadoA: ordenes.asignadoA, activoId: ordenes.activoId }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
+      if (o) areaRegistro = parseArea(o.rubro);
       // Un aviso o un correo también lleva al técnico a su pantalla de trabajo,
       // con cualquier tipo de orden: la emergencia y la intervención también se
       // trabajan en el celular. ?completa=1 abre la ficha (para verificar).
       if (
-        o && user.rol === "tecnico" && /^\/ordenes\/\d+\/?$/.test(path) && !url.searchParams.has("completa")
+        o && !registro.api && user.rol === "tecnico" && /^\/ordenes\/\d+\/?$/.test(path) && !url.searchParams.has("completa")
         && ["abierta", "en_proceso", "en_espera"].includes(o.estado)
         && (o.asignadoA === user.id || !o.asignadoA)
       ) {
         return ctx.redirect(`/campo#orden-${id}`);
       }
+      // Sin rubro, la orden es del espacio de su equipo (como la serie OT-MB/OT-MG).
+      if (o) espacioRegistro = await espacioDeTrabajoGuardado(db, o.rubro, o.activoId);
     } else {
-      const [t] = await db.select({ rubro: tickets.rubro }).from(tickets).where(eq(tickets.id, id)).limit(1);
-      if (t) ctx.locals.area = parseArea(t.rubro);
+      const [t] = await db.select({ rubro: tickets.rubro, activoId: tickets.activoId }).from(tickets).where(eq(tickets.id, id)).limit(1);
+      if (t) areaRegistro = parseArea(t.rubro);
+      if (t) espacioRegistro = await espacioDeTrabajoGuardado(db, t.rubro, t.activoId);
+    }
+    if (areaRegistro) {
+      espacioRegistro ??= espacioDeArea(areaRegistro);
+      if (!registro.api) ctx.locals.area = areaRegistro;
+    }
+  }
+
+  // Espacio de lo pedido: la ruta (solo de un espacio), el registro o el área.
+  const destino = espacioDeRuta(path) ?? espacioRegistro ?? (ctx.locals.area ? espacioDeArea(ctx.locals.area) : null);
+  if (destino && destino !== ctx.locals.espacio) {
+    const puede = puedeEntrar(user, destino);
+    if (path.startsWith("/api/")) {
+      // Quien tiene los dos espacios puede leer el otro; quien está atado a uno, no.
+      if (!puede) return respuestaOtroEspacio(destino);
+    } else {
+      // La página no se arma: en su lugar va el aviso, sin datos del registro.
+      ctx.locals.avisoEspacio = { espacio: destino, puedeCambiar: puede, volver: path + url.search };
+      return next(PAGINA_OTRO_ESPACIO);
     }
   }
   return next();

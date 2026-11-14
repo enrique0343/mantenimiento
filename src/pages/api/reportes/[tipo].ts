@@ -13,6 +13,8 @@ import { activoAreaCondition } from "@/lib/areas";
 import { ROLES_BIO_VER, hoySV } from "@/lib/biomedico";
 import { aFilaInventario, leerFiltrosInventario, pasaFiltros } from "@/lib/inventario-filtros";
 import { columnasExportacion, filaExportacion } from "@/lib/importar-equipos";
+import { parseArea } from "@/lib/areas";
+import { condicionActivoEspacio, espacioDeLista, respuestaOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -24,6 +26,14 @@ export const GET: APIRoute = async (ctx) => {
   const url = new URL(ctx.request.url);
   const { desde, hasta } = rangoFechas(url);
   const db = getDb(ctx);
+  // Las exportaciones de órdenes, equipos, encuestas y mantenimiento son del espacio
+  // (o del área pedida dentro de él). Inventario, movimientos y requisiciones son comunes.
+  const rawArea = url.searchParams.get("area");
+  const areaPedida = parseArea(rawArea);
+  if (rawArea && !areaPedida) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  const { espacio, permitido } = espacioDeLista(ctx, user, areaPedida);
+  if (!permitido) return respuestaOtroEspacio(espacio);
+  const deOrdenes = condicionTrabajoAreaEspacio(ordenes.rubro, ordenes.activoId, espacio, areaPedida);
 
   if (tipo === "mantenimiento") {
     const q = url.searchParams;
@@ -31,8 +41,9 @@ export const GET: APIRoute = async (ctx) => {
       desde, hasta,
       sede: Number(q.get("sede")) || null,
       tecnico: Number(q.get("tecnico")) || null,
-      rubro: q.get("area"),
+      rubro: areaPedida,
       tipo: q.get("tipo"),
+      espacio,
     });
     const cols = [
       { key: "registro", label: "Orden" },
@@ -55,7 +66,7 @@ export const GET: APIRoute = async (ctx) => {
   }
 
   if (tipo === "ordenes") {
-    const conds: any[] = [];
+    const conds: any[] = [deOrdenes];
     if (desde) conds.push(gte(ordenes.createdAt, desde));
     if (hasta) conds.push(lte(ordenes.createdAt, hasta + "T23:59:59"));
     const estado = url.searchParams.get("estado");
@@ -256,7 +267,7 @@ export const GET: APIRoute = async (ctx) => {
   }
 
   if (tipo === "encuestas") {
-    const conds: any[] = [];
+    const conds: any[] = [deOrdenes];
     if (desde) conds.push(gte(encuestasSatisfaccion.enviadaEn, desde));
     if (hasta) conds.push(lte(encuestasSatisfaccion.enviadaEn, hasta + "T23:59:59"));
 
@@ -321,7 +332,7 @@ export const GET: APIRoute = async (ctx) => {
       .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
       .leftJoin(proveedores, eq(proveedores.id, activos.proveedorId))
       .leftJoin(activoBajas, and(eq(activoBajas.activoId, activos.id), eq(activoBajas.estado, "vigente")))
-      .where(filtros.area ? activoAreaCondition(filtros.area) : undefined)
+      .where(filtros.area ? activoAreaCondition(filtros.area) : condicionActivoEspacio(espacio))
       .orderBy(activos.codigo);
 
     const filas = rows.filter((r) => pasaFiltros(aFilaInventario({

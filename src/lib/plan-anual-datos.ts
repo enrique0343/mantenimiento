@@ -13,12 +13,14 @@ import { rubroDeActivo, subcatLabel } from "./rubros";
 import { areaDeActividad } from "./actividades";
 import { horasSlaPara } from "./sla";
 import type { RutinaPlan } from "./plan-anual";
+import { condicionActivoEspacio, espacioDeArea, type Espacio } from "./espacio";
 
 type Db = ReturnType<typeof getDb>;
-export interface FiltroPlan { area: AreaKey | null; sedeId: number | null }
+/** espacio: sin área, solo lo de ese espacio (sin espacio ni área = todo, como antes). */
+export interface FiltroPlan { area: AreaKey | null; sedeId: number | null; espacio?: Espacio | null }
 
 /** Rutinas activas del plan: planes de equipos (sin bajas) y actividades recurrentes. */
-export async function cargarRutinasPlan(db: Db, { area, sedeId }: FiltroPlan): Promise<RutinaPlan[]> {
+export async function cargarRutinasPlan(db: Db, { area, sedeId, espacio }: FiltroPlan): Promise<RutinaPlan[]> {
   const provPlan = alias(proveedores, "prov_plan");
   const provContrato = alias(proveedores, "prov_contrato");
   const planes = await db
@@ -41,7 +43,7 @@ export async function cargarRutinasPlan(db: Db, { area, sedeId }: FiltroPlan): P
     .leftJoin(contratosMantenimiento, eq(contratosMantenimiento.id, planesMantenimiento.contratoId))
     .leftJoin(provPlan, eq(provPlan.id, planesMantenimiento.proveedorId))
     .leftJoin(provContrato, eq(provContrato.id, contratosMantenimiento.proveedorId))
-    .where(and(eq(planesMantenimiento.activo, true), ne(activos.estado, "baja"), area ? activoAreaCondition(area) : undefined))
+    .where(and(eq(planesMantenimiento.activo, true), ne(activos.estado, "baja"), area ? activoAreaCondition(area) : espacio ? condicionActivoEspacio(espacio) : undefined))
     .orderBy(asc(planesMantenimiento.proximaFecha), asc(activos.codigo));
 
   const acts = await db
@@ -85,6 +87,7 @@ export async function cargarRutinasPlan(db: Db, { area, sedeId }: FiltroPlan): P
   for (const a of acts) {
     const areaAct = areaDeActividad(a.rubro, a.categoriaRubro);
     if (area && areaAct !== area) continue;
+    if (!area && espacio && espacioDeArea(areaAct) !== espacio) continue;
     if (sedeId && a.sucursalId !== sedeId) continue;
     rutinas.push({
       tipo: "actividad", id: a.id, activoId: null, area: areaAct ?? "",
@@ -103,7 +106,7 @@ export async function cargarRutinasPlan(db: Db, { area, sedeId }: FiltroPlan): P
 export interface SlaPropio { id: number; codigo: string; nombre: string; urgente: number; alta: number; media: number; baja: number }
 
 /** Equipos no dados de baja con algún tiempo de atención distinto de los generales. */
-export async function cargarSlaPropios(db: Db, { area, sedeId }: FiltroPlan): Promise<SlaPropio[]> {
+export async function cargarSlaPropios(db: Db, { area, sedeId, espacio }: FiltroPlan): Promise<SlaPropio[]> {
   const filas = await db
     .select({
       id: activos.id, codigo: activos.codigo, nombre: activos.nombre,
@@ -121,7 +124,7 @@ export async function cargarSlaPropios(db: Db, { area, sedeId }: FiltroPlan): Pr
         ne(activos.slaMediaHoras, horasSlaPara(null, "media")),
         ne(activos.slaBajaHoras, horasSlaPara(null, "baja")),
       ),
-      area ? activoAreaCondition(area) : undefined,
+      area ? activoAreaCondition(area) : espacio ? condicionActivoEspacio(espacio) : undefined,
     ))
     .orderBy(asc(activos.codigo));
   return filas

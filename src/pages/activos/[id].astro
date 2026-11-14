@@ -43,6 +43,7 @@ import { TIPO_PROC, SISTEMAS, estadoInfo } from "@/lib/procedimientos";
 import { AREAS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { leerDatosTecnicos } from "@/lib/activo-area";
+import { espacioDeArea, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -52,6 +53,8 @@ const db = getDb(Astro);
 const [a] = await db.select().from(activos).where(eq(activos.id, id)).limit(1);
 if (!a) return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const area = rubroDeActivo(a.rubro, a.tipo);
+// Registro del otro espacio: el middleware muestra el aviso; sin él, 403 sin datos.
+if (!puedeEntrar(Astro.locals.user, espacioDeArea(area))) return new Response(mensajeOtroEspacio(espacioDeArea(area)), { status: 403 });
 if (parseArea(Astro.url.searchParams.get("area")) !== area) return Astro.redirect(areaHref(Astro.url.pathname + Astro.url.search, area));
 const datosTecnicos = leerDatosTecnicos(a.datosTecnicos);
 

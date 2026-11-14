@@ -1,15 +1,19 @@
 ---
 import ModuleHub from "@/components/ModuleHub.astro";
+import { ESPACIOS, espacioDelContexto } from "@/lib/espacio";
 export const prerender=false;
 if(!["admin","jefe"].includes(Astro.locals.user!.rol))return Astro.redirect("/");
+// Cada espacio con sus indicadores: lo de abajo filtra por el espacio de la sesión.
+const espacio=espacioDelContexto(Astro,Astro.locals.user);
+const esBio=espacio==="biomedico";
 const groups=[{label:"Resultados y seguimiento",links:[
 {href:"/resumen",label:"Resumen global",description:"Estado operativo, contratos y próximos servicios."},
 {href:"/kpis",label:"Indicadores",description:"Cumplimiento, tiempos, disponibilidad y costos."},
 {href:"/reportes",label:"Reportes",description:"Consulta y exportación de resultados."},
 {href:"/satisfaccion",label:"Satisfacción",description:"Encuestas y seguimiento de la atención."},
 {href:"/presupuesto",label:"Presupuesto",description:"Plan y ejecución de gastos por área."},
-{href:"/cumplimiento",label:"Cumplimiento",description:"Documentos y cobertura del mantenimiento."},
-{href:"/cobertura",label:"Cobertura documental",description:"Qué familias de equipos tienen sus cinco documentos."},
+{href:"/cumplimiento",label:"Cumplimiento JCI",description:"Inventario, mantenimiento, metrología, expediente y seguridad de los equipos biomédicos.",show:esBio},
+{href:"/cobertura",label:"Cobertura documental",description:"Qué familias de equipos tienen sus cinco documentos.",show:!esBio},
 ]}];
 ---
-<ModuleHub title="Indicadores y reportes" description="Una vista conjunta de las cuatro áreas." groups={groups}/>
+<ModuleHub title="Indicadores y reportes" description={`Resultados del espacio ${ESPACIOS[espacio].etiqueta}. Para ver los del otro espacio, cámbialo arriba.`} groups={groups}/>

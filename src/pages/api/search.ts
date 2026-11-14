@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { parseArea } from "@/lib/areas";
 import { codigoDeBusqueda } from "@/lib/orden-codigo";
+import { condicionTrabajoAreaEspacio, espacioDeLista, respuestaOtroEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -29,6 +30,13 @@ export const GET: APIRoute = async (ctx) => {
   const areaParam = url.searchParams.get("area");
   const area = parseArea(areaParam);
   if (areaParam !== null && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  // Solo lo del espacio (o del área, dentro de un espacio al que el usuario entra).
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
+  // Órdenes y solicitudes: su rubro o, sin rubro, el espacio de su equipo.
+  const deRubro = (alias: string) => sql` AND ${condicionTrabajoAreaEspacio(sql.raw(`${alias}rubro`), sql.raw(`${alias}activo_id`), espacio, area)}`;
+  const areaActivo = sql.raw(`(CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END)`);
+  const deActivo = area ? sql` AND ${areaActivo} = ${area}` : espacio === "biomedico" ? sql` AND ${areaActivo} = 'biomedico'` : sql` AND ${areaActivo} <> 'biomedico'`;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || (q.length < 2 && !/^\d$/.test(q))) {
     return Response.json({ resultados: { ordenes: [], equipos: [], tickets: [], items: [], requisiciones: [], comentarios: [] } });
@@ -48,7 +56,7 @@ export const GET: APIRoute = async (ctx) => {
     const r = await db.all(sql`
       SELECT id, codigo, titulo, estado, tipo, rubro, NULL as snippet
       FROM ordenes WHERE codigo = ${codigoBuscado}
-      ${area ? sql`AND rubro = ${area}` : sql``} LIMIT 1
+      ${deRubro("")} LIMIT 1
     `);
     ordenesList = (r as any).results ?? r ?? [];
   } else if (isNumeric) {
@@ -56,7 +64,7 @@ export const GET: APIRoute = async (ctx) => {
     const r = await db.all(sql`
       SELECT id, codigo, titulo, estado, tipo, rubro, NULL as snippet
       FROM ordenes WHERE (codigo IN (${mg}, ${mb}) OR id = ${idNum})
-      ${area ? sql`AND rubro = ${area}` : sql``}
+      ${deRubro("")}
       ORDER BY (codigo IN (${mg}, ${mb})) DESC, id LIMIT 3
     `);
     ordenesList = (r as any).results ?? r ?? [];
@@ -68,7 +76,7 @@ export const GET: APIRoute = async (ctx) => {
       FROM ordenes_fts
       JOIN ordenes o ON o.id = ordenes_fts.rowid
       WHERE ordenes_fts MATCH ${ftsQ}
-      ${area ? sql`AND o.rubro = ${area}` : sql``}
+      ${deRubro("o.")}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -90,7 +98,7 @@ export const GET: APIRoute = async (ctx) => {
       FROM activos_fts
       JOIN activos a ON a.id = activos_fts.rowid
       WHERE activos_fts MATCH ${ftsQ}
-      ${area ? sql`AND (CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END) = ${area}` : sql``}
+      ${deActivo}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -103,7 +111,7 @@ export const GET: APIRoute = async (ctx) => {
     const r = await db.all(sql`
       SELECT id, asunto, estado, rubro, tracking_token as trackingToken, NULL as snippet
       FROM tickets WHERE id = ${idNum}
-      ${area ? sql`AND rubro = ${area}` : sql``} LIMIT 1
+      ${deRubro("")} LIMIT 1
     `);
     ticketsList = (r as any).results ?? r ?? [];
   }
@@ -114,7 +122,7 @@ export const GET: APIRoute = async (ctx) => {
       FROM tickets_fts
       JOIN tickets t ON t.id = tickets_fts.rowid
       WHERE tickets_fts MATCH ${ftsQ}
-      ${area ? sql`AND t.rubro = ${area}` : sql``}
+      ${deRubro("t.")}
       ORDER BY rank
       LIMIT ${N}
     `);
@@ -163,7 +171,7 @@ export const GET: APIRoute = async (ctx) => {
       JOIN comentarios c ON c.id = comentarios_fts.rowid
       JOIN ordenes o ON o.id = c.orden_id
       WHERE comentarios_fts MATCH ${ftsQ}
-      ${area ? sql`AND o.rubro = ${area}` : sql``}
+      ${deRubro("o.")}
       ORDER BY rank
       LIMIT ${N}
     `);

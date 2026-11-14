@@ -6,6 +6,7 @@ import { eq, and, inArray, gte, lt, isNotNull, asc, desc, sql } from "drizzle-or
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { parseArea, areaHref } from "@/lib/areas";
+import { espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -13,7 +14,10 @@ if (!["admin", "jefe", "tecnico"].includes(user.rol)) return Astro.redirect("/")
 
 const db = getDb(Astro);
 const area = parseArea(Astro.url.searchParams.get("area"));
-const areaCondition = area ? eq(ordenes.rubro, area) : undefined;
+// Solo las órdenes del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
+const areaCondition = condicionTrabajoAreaEspacio(ordenes.rubro, ordenes.activoId, espacio, area);
 
 // Semana actual (lunes–domingo) en hora de El Salvador.
 const sv = new Date(Date.now() - 6 * 3600_000);

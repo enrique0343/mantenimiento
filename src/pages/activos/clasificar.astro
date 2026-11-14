@@ -14,19 +14,22 @@ import {
 } from "@/lib/resolver";
 import { areaHref, parseArea, activoAreaCondition, AREAS } from "@/lib/areas";
 import { CLASES_RIESGO } from "@/lib/biomedico";
+import { condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 export const prerender = false;
 const area = parseArea(Astro.url.searchParams.get("area"));
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/activos", parseArea(Astro.url.searchParams.get("area"))));
 const db = getDb(Astro);
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
 
 const rows = await db
   .select({ a: activos, ub: ubicaciones, s: sucursales })
   .from(activos)
   .leftJoin(ubicaciones, eq(ubicaciones.id, activos.ubicacionId))
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
-  .where(and(ne(activos.estado, "baja"), area ? activoAreaCondition(area) : undefined))
+  .where(and(ne(activos.estado, "baja"), area ? activoAreaCondition(area) : condicionActivoEspacio(espacio)))
   .orderBy(asc(activos.codigo));
 
 const sucursalesList = await db

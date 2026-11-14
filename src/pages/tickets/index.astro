@@ -5,8 +5,8 @@ import { tickets, usuarios, sucursales, activos } from "@/lib/schema";
 import { desc, eq } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
-import { tipoActivoFiltro } from "@/lib/especialidad";
 import { parseArea, areaHref, AREAS } from "@/lib/areas";
+import { espacioDeLista, mensajeOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 export const prerender = false;
 
 const user = Astro.locals.user!;
@@ -16,13 +16,17 @@ const url = new URL(Astro.request.url);
 const rawArea = url.searchParams.get("area");
 const area = parseArea(rawArea);
 if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
+// Solo las solicitudes del espacio (o del área pedida dentro de él).
+const { espacio, permitido } = espacioDeLista(Astro, user, area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
 const filtroEstado = url.searchParams.get("estado");
 const filtroVista = url.searchParams.get("vista"); // "mios" | null
 const verCerrados = url.searchParams.get("verCerrados") === "1";
 
-// Filtro por especialidad (jefe/tecnico)
-const aplicaFiltroEsp = (user.rol === "jefe" || user.rol === "tecnico");
-const filtroEspecialidad = aplicaFiltroEsp ? tipoActivoFiltro(user.especialidad ?? null) : null;
+// La especialidad ya decide el espacio, y el espacio filtra en la consulta (por
+// rubro y, sin rubro, por el equipo). El filtro viejo por tipo de equipo dejaba
+// fuera registros del propio espacio (rubro biomédico con tipo «general»).
+const filtroEspecialidad: string | null = null;
 const esTecnico = user.rol === "tecnico";
 
 const rowsRaw = await db
@@ -31,7 +35,7 @@ const rowsRaw = await db
   .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
   .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
   .leftJoin(activos, eq(activos.id, tickets.activoId))
-  .where(area ? eq(tickets.rubro, area) : undefined)
+  .where(condicionTrabajoAreaEspacio(tickets.rubro, tickets.activoId, espacio, area))
   .orderBy(desc(tickets.id));
 
 // Estados activos: los que se muestran por defecto (vista limpia).

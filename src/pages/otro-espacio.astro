@@ -1,0 +1,34 @@
+---
+// Lo que se ve en lugar de una página o un registro del otro espacio. Lo pone el
+// middleware (locals.avisoEspacio); la página pedida no se arma, así que aquí no
+// hay ningún dato del registro. Con los dos espacios: botón «Cambiar a …».
+// Atado a un espacio: 403, sin botón.
+import Layout from "@/layouts/Layout.astro";
+import { ESPACIOS, hrefCambiarEspacio, mensajeOtroEspacio } from "@/lib/espacio";
+export const prerender = false;
+
+const aviso = Astro.locals.avisoEspacio;
+if (!aviso) return Astro.redirect("/");
+const info = ESPACIOS[aviso.espacio];
+if (!aviso.puedeCambiar) Astro.response.status = 403;
+---
+<Layout title={`Espacio ${info.etiqueta}`}>
+  <section class="card mx-auto mt-4 max-w-lg p-6" data-aviso-espacio={aviso.espacio} aria-labelledby="aviso-espacio-titulo">
+    <span class="etq">Otro espacio de trabajo</span>
+    <h1 id="aviso-espacio-titulo" class="mt-1 text-xl font-semibold">{mensajeOtroEspacio(aviso.espacio)}</h1>
+    {aviso.puedeCambiar ? (
+      <>
+        <p class="mt-2 text-sm text-slate-600">Estás en el espacio {ESPACIOS[aviso.espacio === "general" ? "biomedico" : "general"].etiqueta}. Para verlo, cambia al espacio {info.etiqueta}: el menú y las listas cambiarán con él.</p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <a class="btn-primary" href={hrefCambiarEspacio(aviso.volver, aviso.espacio)} data-cambiar-espacio={aviso.espacio}>Cambiar a {info.etiqueta}</a>
+          <a class="btn-secondary" href="/">Quedarme aquí</a>
+        </div>
+      </>
+    ) : (
+      <>
+        <p class="mt-2 text-sm text-slate-600">Tu usuario trabaja solo en su espacio y no tiene acceso a este registro. Si lo necesitas, pídelo a la jefatura.</p>
+        <a class="btn-secondary mt-4" href="/">Ir al inicio</a>
+      </>
+    )}
+  </section>
+</Layout>

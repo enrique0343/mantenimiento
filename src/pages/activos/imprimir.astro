@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db";
 import { activoBajas, activos, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
 import { and, eq } from "drizzle-orm";
 import { AREAS, activoAreaCondition, areaHref } from "@/lib/areas";
+import { condicionActivoEspacio, espacioDeLista, mensajeOtroEspacio } from "@/lib/espacio";
 import {
   DESTINOS_BAJA, ESTADO_ACTIVO_LABEL, ESTADO_REGISTRO_LABEL, MOTIVOS_BAJA, estadoRegistroSanitario, fechaCorta, folioActaBaja, hoySV, puedeVerBio,
   type EstadoActivo,
@@ -23,6 +24,8 @@ if (!puedeVerBio(user.rol)) return Astro.redirect("/");
 const db = getDb(Astro);
 const filtros = leerFiltrosInventario(Astro.url.searchParams, { estadoPorDefecto: "vigentes" });
 const hoy = hoySV();
+const { espacio, permitido } = espacioDeLista(Astro, user, filtros.area);
+if (!permitido) return new Response(mensajeOtroEspacio(espacio), { status: 403 });
 const rows = await db
   .select({
     id: activos.id, codigo: activos.codigo, numeroActivo: activos.numeroActivo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo,
@@ -40,7 +43,7 @@ const rows = await db
   .leftJoin(sucursales, eq(sucursales.id, ubicaciones.sucursalId))
   .leftJoin(centrosCosto, eq(centrosCosto.id, activos.centroCostoId))
   .leftJoin(activoBajas, and(eq(activoBajas.activoId, activos.id), eq(activoBajas.estado, "vigente")))
-  .where(filtros.area ? activoAreaCondition(filtros.area) : undefined);
+  .where(filtros.area ? activoAreaCondition(filtros.area) : condicionActivoEspacio(espacio));
 
 const filas = rows
   .map((r) => ({ r, fila: aFilaInventario({

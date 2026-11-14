@@ -15,6 +15,7 @@ import {
 import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErrorCatalogoAire } from "@/lib/catalogo-aires";
 import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, FRECUENCIAS_RUTINA_EQUIPO, esFechaISO, hoySV } from "@/lib/biomedico";
 import { logAudit } from "@/lib/audit";
+import { condicionActivoEspacio, espacioDeArea, espacioDeLista, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -24,8 +25,10 @@ export const GET: APIRoute = async (ctx) => {
   const requestedArea = new URL(ctx.request.url).searchParams.get("area");
   const area = parseArea(requestedArea);
   if (requestedArea && !area) return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
+  const { espacio, permitido } = espacioDeLista(ctx, user, area);
+  if (!permitido) return respuestaOtroEspacio(espacio);
   const db = getDb(ctx);
-  const rows = await db.select().from(activos).where(area ? activoAreaCondition(area) : undefined).orderBy(desc(activos.id));
+  const rows = await db.select().from(activos).where(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio)).orderBy(desc(activos.id));
   return Response.json({ activos: rows });
 };
 
@@ -101,6 +104,8 @@ export const POST: APIRoute = async (ctx) => {
   const rubro = rubroDeActivo(activoData.rubro, activoData.tipo);
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (activoData.tipo && activoData.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
+  // Un equipo del otro espacio no lo registra quien no entra a ese espacio.
+  if (!puedeEntrar(user, espacioDeArea(rubro))) return respuestaOtroEspacio(espacioDeArea(rubro));
   let modeloAireSnapshot: string | null = null;
   if (modeloAireId !== undefined && modeloAireVersion !== undefined) {
     if (rubro !== "aires") return Response.json({ error: "Las fichas del catálogo solo se pueden usar para aires acondicionados" }, { status: 400 });

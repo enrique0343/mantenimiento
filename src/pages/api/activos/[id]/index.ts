@@ -8,6 +8,7 @@ import { logAudit, calcularDiff } from "@/lib/audit";
 import { NIVELES_JERARQUIA, validarPadre } from "@/lib/jerarquia";
 import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
 import { activoAreaCondition } from "@/lib/areas";
+import { espacioDeArea, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
 import {
   textoRegistro, nombrePendienteActivo, esCodigoDuplicado, errorCodigoActivo, mensajeCodigoDuplicado, errorDeDatos,
@@ -127,6 +128,8 @@ export const PATCH: APIRoute = async (ctx) => {
   if (actual.modeloAireId !== null && cambiaArea) return Response.json({ error: "Esta unidad proviene de una ficha de aire acondicionado y debe conservar esa área. Puedes editar sus demás datos." }, { status: 409 });
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (llega.tipo && llega.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
+  // Pasar un equipo al otro espacio solo lo hace quien entra a los dos.
+  if (cambiaArea && !puedeEntrar(user, espacioDeArea(rubro))) return respuestaOtroEspacio(espacioDeArea(rubro));
   if (!datosTecnicosValidosParaArea(rubro, llega.datosTecnicos)) return Response.json({ error: "Los datos técnicos no corresponden al área seleccionada" }, { status: 400 });
   data.rubro = rubro;
   data.tipo = tipo;

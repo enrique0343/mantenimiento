@@ -222,7 +222,9 @@ try {
   const csvBaja = await descargar('area=biomedico&estado=baja', 'tecnico');
   es(csvBaja.texto.replace(/^\uFEFF/, '').split('\r\n').slice(1).map((l) => l.split(',')[0]), ['CM-5'], 'solo las bajas');
   es((await descargar('area=biomedico', 'solicitante')).status, 403, 'el solicitante no descarga');
-  es((await descargar('q=abc-1', 'admin')).texto.split('\r\n').length, 2, 'la búsqueda filtra la descarga');
+  es((await descargar('q=abc-1&espacio=biomedico', 'admin')).texto.split('\r\n').length, 2, 'la búsqueda filtra la descarga');
+  // Sin área, la descarga es la del espacio: el equipo biomédico no sale en General.
+  es((await descargar('q=abc-1', 'admin')).texto.split('\r\n').length, 1, 'en General no sale el equipo biomédico');
 
   // ── Ronda 2 · A6: las APIs del inventario responden 401 y 403 en JSON { error } (§c),
   //    no en texto plano: las pantallas muestran j.error. ──
