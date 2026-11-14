@@ -242,6 +242,20 @@ try {
   igual(b.body.ubicaciones.length, 2);
   igual(b.body.ubicaciones.find((u) => u.id === 2).equipos, 1, 'Un equipo dado de baja no cuenta');
   igual(b.body.sinUbicacion, 1);
+  {
+    // Una sede con más de 99 ubicaciones: D1 rechaza consultas con más de 100 parámetros.
+    const ins = fixture.sqlite.prepare("INSERT INTO ubicaciones (sucursal_id, nombre, tipo, activa) VALUES (1, ?, 'sala', 1)");
+    const nuevas = [];
+    for (let i = 0; i < 120; i++) nuevas.push(Number(ins.run(`Sala de prueba ${String(i).padStart(3, '0')}`).lastInsertRowid));
+    const desde = fixture.queries.length;
+    const grande = await call(app.buscar.GET, '/api/campo/buscar?sede=1', { rol: 'tecnico' });
+    igual(grande.status, 200, JSON.stringify(grande.body));
+    igual(grande.body.ubicaciones.length, 122, 'Las 2 de antes y las 120 nuevas');
+    igual(grande.body.ubicaciones.find((u) => u.id === 2).equipos, 1, 'El conteo por ubicación no cambia');
+    const parametros = Math.max(...fixture.queries.slice(desde).map((q) => (q.sql.match(/\?/g) ?? []).length));
+    ok(parametros <= 100, `Ninguna consulta pasa de 100 parámetros (la mayor tiene ${parametros})`);
+    fixture.sqlite.prepare(`DELETE FROM ubicaciones WHERE id IN (${nuevas.join(',')})`).run();
+  }
   b = await call(app.buscar.GET, '/api/campo/buscar?ubicacion=2', { rol: 'tecnico' });
   igual(b.body.equipos.map((e) => e.codigo).join(), 'AC-02');
   ok(b.body.equipos[0].vencido, 'Plan vencido a la vista');

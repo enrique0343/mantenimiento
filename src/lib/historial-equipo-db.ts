@@ -16,7 +16,7 @@ import { labelCampo } from "@/lib/audit";
 import { ESTADO_ORDEN, TIPO_ORDEN } from "./reporte-mantenimiento";
 import { patronVigenteEn, type CalMin } from "./biomedico";
 import type { getDb } from "./db";
-import { leerCambiosBitacora, type BitacoraH, type CambioH, type HistorialEquipo } from "./historial-equipo";
+import { leerCambiosBitacora, motivoBitacora, type BitacoraH, type CambioH, type HistorialEquipo } from "./historial-equipo";
 
 type Db = ReturnType<typeof getDb>;
 
@@ -169,7 +169,7 @@ export async function cargarHistorialEquipo(db: Db, activoId: number): Promise<H
   }
 
   const bitacoraH: BitacoraH[] = bitacora.map((r) => ({
-    id: r.id, createdAt: r.createdAt, accion: r.accion, resumen: r.resumen, usuario: nombre(r.usuarioId), cambios: cambiosDeBitacora(r.cambios),
+    id: r.id, createdAt: r.createdAt, accion: r.accion, resumen: r.resumen, usuario: nombre(r.usuarioId), cambios: cambiosDeBitacora(r.cambios), motivo: motivoBitacora(r.cambios),
   }));
 
   return {

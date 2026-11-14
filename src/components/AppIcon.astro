@@ -18,6 +18,7 @@ const paths: Record<string, string[]> = {
   search: ["M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15Z", "m16 16 5 5"],
   help: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z", "M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1.9-1.1 1.8M12 17v.5"],
   bell: ["M18 16V11a6 6 0 1 0-12 0v5l-2 2h16Z", "M10 21h4"],
+  calendar: ["M4 5h16v16H4Z", "M4 10h16M8 3v4M16 3v4", "m9 15 2 2 4-4"],
 };
 ---
 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{(paths[name] ?? paths.equipment).map(d => <path d={d} />)}</svg>

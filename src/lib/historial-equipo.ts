@@ -9,7 +9,7 @@
 import {
   APLICABILIDAD_LABEL, DESTINOS_BAJA, ESTADO_ALERTA_LABEL, FUENTE_ALERTA_LABEL, MOTIVOS_BAJA,
   RESULTADO_SE_LABEL, TIPO_ALERTA_LABEL, TIPO_PRUEBA_ELECTRICA_LABEL,
-  aplicaCalibracion, diaSV, esFechaISO, etiquetaCategoriaDocumento, fechaCorta, fechaHoraSV, folioActaBaja, horaSV,
+  aplicaCalibracion, diaSV, esFechaISO, etiquetaCategoriaDocumento, etiquetaFrecuencia, fechaCorta, fechaHoraSV, folioActaBaja, horaSV,
   puedeRegistrarBio, puedeVerBio, type EquipoCalibracion,
 } from "./biomedico";
 import { etiquetaOT } from "./orden-codigo";
@@ -51,6 +51,8 @@ const TIPO_CAPACITACION_LABEL: Record<string, string> = {
 };
 const ACCION_BITACORA: Record<string, string> = {
   create: "Creó el registro", update: "Modificó el registro", delete: "Eliminó", estado: "Cambió el estado", asignacion: "Asignó",
+  // Cambios de un preventivo con motivo (tablero de preventivos, src/lib/preventivos.ts).
+  reprogramacion: "Reprogramó", activacion: "Activó", desactivacion: "Desactivó",
 };
 const etiquetaDe = (mapa: Record<string, string>, clave: string | null | undefined) => (clave ? mapa[clave] ?? clave : "");
 
@@ -119,7 +121,11 @@ export interface BajaH {
   reversionMotivo: string | null;
 }
 export interface CambioH { campo: string; etiqueta: string; antes: string; despues: string }
-export interface BitacoraH { id: number; createdAt: string; accion: string; resumen: string | null; usuario: string | null; cambios: CambioH[] }
+export interface BitacoraH {
+  id: number; createdAt: string; accion: string; resumen: string | null; usuario: string | null; cambios: CambioH[];
+  /** El motivo que pidió el cambio (fecha, frecuencia, pausa o borrado de un preventivo), si lo hubo. */
+  motivo?: string | null;
+}
 
 export interface HistorialEquipo {
   activoId: number;
@@ -387,7 +393,7 @@ export function construirEventos(h: HistorialEquipo, opciones: OpcionesEventos =
     ev.push({
       ...base, fecha: r.createdAt, tipo: "bitacora", subtipo: r.accion,
       titulo: r.resumen?.trim() || etiquetaDe(ACCION_BITACORA, r.accion) || "Cambio",
-      detalle: r.cambios.map((c) => `${c.etiqueta}: ${V(c.antes)} → ${V(c.despues)}`).join("; "),
+      detalle: [...r.cambios.map((c) => `${c.etiqueta}: ${V(c.antes)} → ${V(c.despues)}`), ...(r.motivo ? [`Motivo: ${r.motivo}`] : [])].join("; "),
       responsable: r.usuario ?? "Sistema", resultado: etiquetaDe(ACCION_BITACORA, r.accion),
     });
   }
@@ -474,11 +480,23 @@ export function leerCambiosBitacora(json: string | null | undefined, etiqueta: (
   try {
     const obj = JSON.parse(json) as Record<string, { antes?: unknown; despues?: unknown } | null>;
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
-    return Object.entries(obj).map(([campo, val]) => ({
+    // «motivo» no es un campo con antes y después: va aparte (motivoBitacora).
+    return Object.entries(obj).filter(([campo]) => campo !== "motivo").map(([campo, val]) => ({
       campo, etiqueta: etiqueta(campo), antes: textoValorBitacora(val?.antes), despues: textoValorBitacora(val?.despues),
     }));
   } catch {
     return [];
+  }
+}
+
+/** El motivo guardado junto a los cambios ({…, motivo: "texto"}); null si no hay o no se lee. */
+export function motivoBitacora(json: string | null | undefined): string | null {
+  if (!json) return null;
+  try {
+    const m = (JSON.parse(json) as { motivo?: unknown } | null)?.motivo;
+    return typeof m === "string" && m.trim() ? m.trim() : null;
+  } catch {
+    return null;
   }
 }
 
@@ -490,7 +508,18 @@ export interface EntradaHistorialCambios {
   cuando: string;
   /** Valores a la vista (valorBitacoraVista). */
   cambios: Array<{ etiqueta: string; antes: string; despues: string }>;
+  /** Solo si el cambio llevó motivo (preventivos: fecha, frecuencia, pausa o borrado). */
+  motivo?: string;
 }
+
+const ACCION_TARJETA: Record<string, { label: string; color: string }> = {
+  create: { label: "Creó", color: "bg-emerald-50 text-emerald-700" },
+  delete: { label: "Eliminó", color: "bg-red-50 text-red-700" },
+  reprogramacion: { label: "Reprogramó", color: "bg-amber-50 text-amber-700" },
+  desactivacion: { label: "Desactivó", color: "bg-amber-50 text-amber-700" },
+  activacion: { label: "Activó", color: "bg-emerald-50 text-emerald-700" },
+  asignacion: { label: "Asignó", color: "bg-blue-50 text-blue-700" },
+};
 
 /**
  * Tarjeta «Historial de cambios» de la ficha. La bitácora del equipo lleva calibraciones, documentos,
@@ -501,19 +530,31 @@ export function tarjetaHistorialCambios(
   rol: string | null | undefined,
   filas: readonly FilaBitacoraFicha[],
   etiqueta: (campo: string) => string,
+  /** Nombre de un usuario por id: el técnico de un preventivo se lee por su nombre. */
+  nombreUsuario?: (id: number) => string | null | undefined,
 ): EntradaHistorialCambios[] | null {
   if (!puedeVerBio(rol)) return null;
-  return filas.map((f) => ({
-    accion: f.accion,
-    accionLabel: f.accion === "create" ? "Creó" : f.accion === "delete" ? "Eliminó" : "Modificó",
-    accionColor: f.accion === "create" ? "bg-emerald-50 text-emerald-700" : f.accion === "delete" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700",
-    usuario: f.usuario?.trim() || "Sistema",
-    resumen: f.resumen?.trim() || null,
-    cuando: fechaHoraSV(f.createdAt),
-    cambios: leerCambiosBitacora(f.cambios, etiqueta).map((c) => ({
-      etiqueta: c.etiqueta, antes: valorBitacoraVista(c.antes), despues: valorBitacoraVista(c.despues),
-    })),
-  }));
+  const vista = (campo: string, v: string) => {
+    if (campo === "asignadoA" && nombreUsuario) return v === "(vacío)" ? "Sin asignar" : nombreUsuario(Number(v)) ?? `#${v}`;
+    if (campo === "frecuencia" && v !== "(vacío)") return etiquetaFrecuencia(v);
+    return valorBitacoraVista(v);
+  };
+  return filas.map((f) => {
+    const motivo = motivoBitacora(f.cambios);
+    const accion = ACCION_TARJETA[f.accion] ?? { label: "Modificó", color: "bg-blue-50 text-blue-700" };
+    return {
+      accion: f.accion,
+      accionLabel: accion.label,
+      accionColor: accion.color,
+      usuario: f.usuario?.trim() || "Sistema",
+      resumen: f.resumen?.trim() || null,
+      cuando: fechaHoraSV(f.createdAt),
+      cambios: leerCambiosBitacora(f.cambios, etiqueta).map((c) => ({
+        etiqueta: c.etiqueta, antes: vista(c.campo, c.antes), despues: vista(c.campo, c.despues),
+      })),
+      ...(motivo ? { motivo } : {}),
+    };
+  });
 }
 
 // ═══ CSV ═════════════════════════════════════════════════════════════════════

@@ -34,6 +34,7 @@ import {
   valorNominalTexto, rutaAscendente, hijosConOrdenesAbiertas, descendientesDe,
   type NivelJerarquia, type RolUbicacionServida, type TipoAtributo,
 } from "@/lib/jerarquia";
+import { historialDePlanes, MOTIVO_MINIMO } from "@/lib/preventivos";
 import {
   queRigeEsteActivo, queSigue, juegoDeFamilia, equiposPorFamilia,
   SISTEMA_LABEL, type Sistema,
@@ -89,6 +90,10 @@ const planes = await db
   .where(eq(planesMantenimiento.activoId, id))
   .orderBy(asc(planesMantenimiento.proximaFecha));
 
+// Historial de cada preventivo (fecha, frecuencia, técnico, activación), junto al preventivo.
+const historialPreventivos = await historialDePlanes(db, { activoId: id });
+const historialDe = (planId: number) => historialPreventivos.filter((e) => e.planId === planId);
+
 const ordsRel = await db
   .select()
   .from(ordenes)
@@ -131,7 +136,11 @@ const auditRows = verBio
       .limit(LIMITE_BITACORA_FICHA)
   : [];
 // Valores a la vista: fechas DD/MM/AAAA y marcas en hora de El Salvador (el CSV del historial las deja en AAAA-MM-DD).
-const historialCambios = tarjetaHistorialCambios(user.rol, auditRows, labelCampo);
+// El técnico de un preventivo se lee por su nombre (los cambios guardan su id).
+const nombresUsuarios = verBio
+  ? new Map((await db.select({ id: usuarios.id, nombre: usuarios.nombre }).from(usuarios)).map((u) => [u.id, u.nombre]))
+  : new Map<number, string>();
+const historialCambios = tarjetaHistorialCambios(user.rol, auditRows, labelCampo, (uid) => nombresUsuarios.get(uid));
 
 // Fechas en El Salvador: una fecha sola se parte como texto (sin el día de menos);
 // una marca de tiempo se pasa a la hora de El Salvador.
@@ -2007,17 +2016,33 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                   </div>
                   {r.p.ultimaGeneracion && <div class="mt-1 text-xs text-slate-400">Última OT generada: {fmt(r.p.ultimaGeneracion)}</div>}
                   {r.p.descripcion && <div class="mt-1 text-sm text-slate-600">{r.p.descripcion}</div>}
+                  {historialDe(r.p.id).length > 0 && (
+                    <details class="mt-2 text-xs">
+                      <summary class="cursor-pointer text-brand-700">Historial del preventivo ({historialDe(r.p.id).length})</summary>
+                      <ul class="mt-2 space-y-2 border-l-2 border-slate-200 pl-3">
+                        {historialDe(r.p.id).map((e) => (
+                          <li>
+                            <div><span class="font-medium">{e.accionTexto}</span> · {e.autor} · <span class="text-slate-500">{e.cuandoTexto}</span></div>
+                            {e.resumen && <div class="text-slate-600">{e.resumen}</div>}
+                            {e.cambios.map((c) => <div class="text-slate-600">{c.label}: <span class="text-red-600 line-through">{c.antes}</span> → <span class="text-emerald-700">{c.despues}</span></div>)}
+                            {e.motivo && <div class="text-slate-700">Motivo: {e.motivo}</div>}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </div>
                 <div class="flex items-center gap-2">
                   <span class={`badge ${r.p.activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
                     {r.p.activo ? "activo" : "pausado"}
                   </span>
-                  {canEdit && (
+                  {/* De baja, la API de rutinas (WP-E) solo deja pausar o eliminar: editar y activar responden 409. */}
+                  {canEdit && a.estado !== "baja" && <button data-id={r.p.id} data-edit class="btn-secondary text-xs">Editar</button>}
+                  {/* Pausar, activar y eliminar son de la jefatura: cambian cuándo toca el preventivo. */}
+                  {canJefe && (
                     <>
-                      {/* De baja, la API de rutinas (WP-E) solo deja pausar o eliminar: editar y activar responden 409. */}
-                      {a.estado !== "baja" && <button data-id={r.p.id} data-edit class="btn-secondary text-xs">Editar</button>}
                       {(a.estado !== "baja" || r.p.activo) && <button data-id={r.p.id} data-pause class="btn-secondary text-xs">{r.p.activo ? "Pausar" : "Activar"}</button>}
-                      {canJefe && <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>}
+                      <button data-id={r.p.id} data-del class="btn-secondary text-xs text-red-600">Eliminar</button>
                     </>
                   )}
                 </div>
@@ -2034,17 +2059,23 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                       <label class="label">Descripción</label>
                       <textarea class="input edit-descripcion" data-id={r.p.id} rows="2">{r.p.descripcion ?? ""}</textarea>
                     </div>
-                    <div>
-                      <label class="label">Frecuencia</label>
-                      <select class="input edit-frecuencia" data-id={r.p.id}>
-                        {!frecuenciaOfrecida(r.p.frecuencia) && <option value={r.p.frecuencia} selected>{etiquetaFrecuencia(r.p.frecuencia)} (no disponible)</option>}
-                        {OPCIONES_FRECUENCIA.map((f) => <option value={f.value} selected={f.value === r.p.frecuencia}>{f.label}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label class="label">Próxima ejecución</label>
-                      <input class="input edit-proxima" data-id={r.p.id} type="date" value={r.p.proximaFecha} />
-                    </div>
+                    {canJefe ? (
+                      <>
+                        <div>
+                          <label class="label">Frecuencia</label>
+                          <select class="input edit-frecuencia" data-id={r.p.id}>
+                            {!frecuenciaOfrecida(r.p.frecuencia) && <option value={r.p.frecuencia} selected>{etiquetaFrecuencia(r.p.frecuencia)} (no disponible)</option>}
+                            {OPCIONES_FRECUENCIA.map((f) => <option value={f.value} selected={f.value === r.p.frecuencia}>{f.label}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label class="label">Próxima ejecución</label>
+                          <input class="input edit-proxima" data-id={r.p.id} type="date" value={r.p.proximaFecha} />
+                        </div>
+                      </>
+                    ) : (
+                      <p class="sm:col-span-2 text-xs text-slate-600">Frecuencia: <strong>{etiquetaFrecuencia(r.p.frecuencia)}</strong> · Próxima ejecución: <strong>{fmt(r.p.proximaFecha)}</strong> · {r.u ? r.u.nombre : "Sin asignar"}. La fecha, la frecuencia y el técnico los cambia la jefatura.</p>
+                    )}
                     <div>
                       <label class="label">Alerta días antes</label>
                       <input class="input edit-alerta" data-id={r.p.id} type="number" min="0" max="90" value={r.p.alertaDiasAntes} />
@@ -2062,15 +2093,19 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
                       <label class="label">Horas estimadas</label>
                       <input class="input edit-horas" data-id={r.p.id} type="number" step="0.5" min="0" value={r.p.horasEstimadas ?? ""} />
                     </div>
-                    <div>
-                      <label class="label">Asignar a</label>
-                      <select class="input edit-asignado" data-id={r.p.id}>
-                        <option value="">- Sin asignar -</option>
-                        {tecnicos.map((t) => <option value={t.id} selected={t.id === r.p.asignadoA}>{t.nombre}</option>)}
-                      </select>
-                    </div>
+                    {canJefe && (
+                      <div>
+                        <label class="label">Asignar a</label>
+                        <select class="input edit-asignado" data-id={r.p.id}>
+                          <option value="">- Sin asignar -</option>
+                          {/* El responsable que ya no está en la lista (desactivado o con otro rol) sigue elegido: guardar otro cambio no lo quita. */}
+                          {r.p.asignadoA && !tecnicos.some((t) => t.id === r.p.asignadoA) && <option value={r.p.asignadoA} selected>{r.u?.nombre ?? `#${r.p.asignadoA}`} (ya no está en la lista)</option>}
+                          {tecnicos.map((t) => <option value={t.id} selected={t.id === r.p.asignadoA}>{t.nombre}</option>)}
+                        </select>
+                      </div>
+                    )}
                   </div>
-                  <p class="mt-2 text-xs text-slate-500">Si cambias la frecuencia o la próxima fecha, los próximos ciclos se calcularán a partir de aquí.</p>
+                  {canJefe && <p class="mt-2 text-xs text-slate-500">Si cambias la frecuencia o la próxima fecha, los próximos ciclos se calcularán a partir de aquí. Te pediremos el motivo (mínimo {MOTIVO_MINIMO} caracteres): queda en el historial con tu nombre. Con la orden del ciclo sin verificar, la fecha no se puede cambiar.</p>}
                   <p class="edit-msg mt-2 hidden text-xs" data-id={r.p.id}></p>
                   <div class="mt-2 flex gap-2">
                     <button data-id={r.p.id} data-save class="btn-primary text-sm">Guardar</button>
@@ -2127,6 +2162,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
               </div>
               <span class="whitespace-nowrap text-xs text-slate-400">{r.cuando}</span>
             </div>
+            {r.motivo && <p class="mt-1 ml-2 text-xs text-slate-700">Motivo: {r.motivo}</p>}
             {r.cambios.length > 0 && (
               <table class="mt-2 ml-2 text-xs text-slate-600">
                 <tbody>
@@ -2273,41 +2309,48 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       }
     });
 
+    // Pausar o eliminar un preventivo pide motivo: si no, sería una forma de mover la fecha sin rastro.
     // Si la API responde con error, se dice; antes se recargaba como si nada.
-    const avisoRutina = async (res, texto) => {
-      const j = await res.json().catch(() => ({}));
-      const msg = typeof j.error === "string" ? j.error : texto;
-      if (window.showToast) window.showToast(msg, "error"); else alert(msg);
-    };
+    const errorDe = async (res) => { const j = await res.json().catch(() => ({})); return typeof j.error === "string" ? j.error : "No se pudo guardar."; };
+    const avisar = (msg) => { if (window.showToast) window.showToast(msg, "error"); else alert(msg); };
+    const pedirMotivo = (titulo, mensaje) => window.pedirMotivo ? window.pedirMotivo(titulo, mensaje) : Promise.resolve(prompt(`${titulo}\n${mensaje}\nMotivo (mínimo 10 caracteres):`));
     document.querySelectorAll("[data-pause]").forEach((b) => {
       b.addEventListener("click", async (e) => {
-        const id = e.currentTarget.dataset.id;
-        const isActive = e.currentTarget.textContent.trim() === "Pausar";
-        try {
-          const res = await fetch(`/api/planes/${id}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ activo: !isActive }),
-          });
-          if (!res.ok) return avisoRutina(res, isActive ? "No se pudo pausar la rutina." : "No se pudo activar la rutina.");
-          location.reload();
-        } catch {
-          alert(isActive ? "No se pudo pausar la rutina." : "No se pudo activar la rutina.");
+        const boton = e.currentTarget;
+        if (boton.disabled) return;
+        const id = boton.dataset.id;
+        const isActive = boton.textContent.trim() === "Pausar";
+        let motivo = null;
+        if (isActive) {
+          motivo = await pedirMotivo("Pausar el preventivo", "Mientras esté pausado no se generan órdenes.");
+          if (!motivo) return;
         }
+        boton.disabled = true;
+        const res = await fetch(`/api/planes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ activo: !isActive, ...(motivo ? { motivo } : {}) }),
+        }).catch(() => null);
+        if (!res || !res.ok) { avisar(res ? await errorDe(res) : "No hay conexión. Intenta de nuevo."); boton.disabled = false; return; }
+        location.reload();
       });
     });
 
     document.querySelectorAll("[data-del]").forEach((b) => {
       b.addEventListener("click", async (e) => {
-        if (!confirm("¿Eliminar esta rutina de mantenimiento?")) return;
-        const id = e.currentTarget.dataset.id;
-        try {
-          const res = await fetch(`/api/planes/${id}`, { method: "DELETE" });
-          if (!res.ok) return avisoRutina(res, "No se pudo eliminar la rutina.");
-          location.reload();
-        } catch {
-          alert("No se pudo eliminar la rutina.");
-        }
+        const boton = e.currentTarget;
+        if (boton.disabled) return;
+        const id = boton.dataset.id;
+        const motivo = await pedirMotivo("Eliminar el preventivo", "Se borra del cronograma. Si ya tiene órdenes, no se puede eliminar: desactívalo.");
+        if (!motivo) return;
+        boton.disabled = true;
+        const res = await fetch(`/api/planes/${id}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ motivo }),
+        }).catch(() => null);
+        if (!res || !res.ok) { avisar(res ? await errorDe(res) : "No hay conexión. Intenta de nuevo."); boton.disabled = false; return; }
+        location.reload();
       });
     });
 
@@ -2327,20 +2370,36 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     document.querySelectorAll("[data-save]").forEach((b) => {
       b.addEventListener("click", async (e) => {
         const boton = e.currentTarget;
+        if (boton.disabled) return;
         const id = boton.dataset.id;
         const get = (cls) => document.querySelector(`.${cls}[data-id="${id}"]`);
         const v = (cls) => get(cls)?.value?.trim() ?? "";
         const num = (cls) => { const x = get(cls)?.value; return x === "" || x == null ? null : Number(x); };
-        const asign = get("edit-asignado")?.value;
+        // Fecha, frecuencia y técnico van solo si cambiaron (y solo la jefatura los ve):
+        // así guardar el título no toca al responsable ni la fecha.
+        const cambio = (cls) => {
+          const el = get(cls);
+          if (!el) return false;
+          if (el.tagName === "SELECT") return el.value !== (Array.from(el.options).find((o) => o.defaultSelected) ?? el.options[0])?.value;
+          return el.value.trim() !== el.defaultValue;
+        };
+        const cambiaFrecuencia = cambio("edit-frecuencia"), cambiaFecha = cambio("edit-proxima"), cambiaTecnico = cambio("edit-asignado");
+        const cambiaProgramacion = cambiaFecha || cambiaFrecuencia;
+        let motivo = null;
+        if (cambiaProgramacion) {
+          motivo = await pedirMotivo("Cambiar la fecha o la frecuencia", "La fecha programada y la frecuencia no cambian sin motivo.");
+          if (!motivo) return;
+        }
         const payload = {
           titulo: v("edit-titulo"),
           descripcion: v("edit-descripcion") || null,
-          frecuencia: get("edit-frecuencia").value,
-          proximaFecha: v("edit-proxima"),
+          ...(cambiaFrecuencia ? { frecuencia: get("edit-frecuencia").value } : {}),
+          ...(cambiaFecha ? { proximaFecha: v("edit-proxima") } : {}),
           alertaDiasAntes: num("edit-alerta") ?? 7,
           prioridad: get("edit-prioridad").value,
           horasEstimadas: num("edit-horas"),
-          asignadoA: asign ? Number(asign) : null,
+          ...(cambiaTecnico ? { asignadoA: get("edit-asignado").value ? Number(get("edit-asignado").value) : null } : {}),
+          ...(motivo ? { motivo } : {}),
         };
         const msg = document.querySelector(`.edit-msg[data-id="${id}"]`);
         msg?.classList.add("hidden");
@@ -2353,20 +2412,14 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           boton.disabled = false;
         };
         boton.disabled = true;
-        try {
-          const res = await fetch(`/api/planes/${id}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          if (!res.ok) {
-            const j = await res.json().catch(() => ({}));
-            return fallo(typeof j.error === "string" ? j.error : "No se pudo guardar la rutina.");
-          }
-          location.reload();
-        } catch {
-          fallo("No hay conexión. Intenta de nuevo.");
-        }
+        const res = await fetch(`/api/planes/${id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        }).catch(() => null);
+        if (!res) return fallo("No hay conexión. Intenta de nuevo.");
+        if (!res.ok) return fallo(await errorDe(res));
+        location.reload();
       });
     });
 

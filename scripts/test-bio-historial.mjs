@@ -377,7 +377,9 @@ function correrScript(html, codigo, vars, responder) {
   si(limpio.includes('{verBio && a.estado === "baja" && bajaVigente && ( <a href={areaHref(`/activos/${a.id}/acta-baja?baja=${bajaVigente.id}`, area)} class="btn-secondary">Acta de baja</a>'),
     '«Acta de baja» solo con un acta registrada (sin ella, el enlace devolvía a la ficha)');
   no(limpio.includes('Completar datos de baja'), 'sin acta no se promete «completar» lo que la pantalla de baja no deja hacer');
-  si(limpio.includes('{a.estado !== "baja" && <button data-id={r.p.id} data-edit'), 'equipo de baja: sin «Editar» rutina (la API responde 409)');
+  si(limpio.includes('{canEdit && a.estado !== "baja" && <button data-id={r.p.id} data-edit'), 'equipo de baja: sin «Editar» rutina (la API responde 409)');
+  // PR #22: pausar, activar y eliminar son de la jefatura; editar sigue abierto al técnico.
+  si(/\{canJefe && \( <> \{\(a\.estado !== "baja" \|\| r\.p\.activo\) && <button data-id=\{r\.p\.id\} data-pause/.test(limpio), 'pausar y activar solo la jefatura');
   si(limpio.includes('{(a.estado !== "baja" || r.p.activo) && <button data-id={r.p.id} data-pause'), 'equipo de baja: sin «Activar» rutina');
   si(limpio.includes('{registraBio && isBio && a.estado !== "baja" && <a href={`/activos/${a.id}/seguridad-electrica/nueva`}'), 'registrar prueba eléctrica solo en biomédicos');
   si(limpio.includes('lineasExp.vencidos.length > 0') && !limpio.includes('expediente.documentosVencidos'), 'la tarjeta del expediente usa los requisitos vencidos');
@@ -476,7 +478,7 @@ const etiquetaPrueba = (c) => ({ version: 'Versión', fechaVencimiento: 'Vence',
 {
   // La ficha arma la tarjeta con tarjetaHistorialCambios y pinta los valores ya convertidos.
   const limpio = fuenteFicha.replace(/\s+/g, ' ');
-  si(limpio.includes('const historialCambios = tarjetaHistorialCambios(user.rol, auditRows, labelCampo);'), 'la ficha arma la tarjeta con tarjetaHistorialCambios');
+  si(limpio.includes('const historialCambios = tarjetaHistorialCambios(user.rol, auditRows, labelCampo, (uid) => nombresUsuarios.get(uid));'), 'la ficha arma la tarjeta con tarjetaHistorialCambios (y el nombre del técnico)');
   si(limpio.includes('<td class="pr-2 text-red-600 line-through">{c.antes}</td> <td class="pr-2">→</td> <td class="text-emerald-700">{c.despues}</td>'), 'la tabla pinta los valores ya convertidos');
   no(/parsearCambios|String\(c\.antes\)|r\.a\.cambios/.test(fuenteFicha), 'ya no queda el lector anterior (valores crudos, «true/false»)');
   const pantalla = await fs.readFile('src/pages/activos/[id]/historial.astro', 'utf8');

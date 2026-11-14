@@ -7,6 +7,7 @@ import { activos, ordenes } from "@/lib/schema";
 import { sql, eq, and, inArray } from "drizzle-orm";
 import CadenaAhora from "@/components/CadenaAhora.astro";
 import { bloqueRonda, estadoAhora, ordenarPorTono, tituloAhora, type BloqueAhora } from "@/lib/ahora";
+import { datosTablero, leerFiltros, esJefatura, DIAS_POR_DEFECTO } from "@/lib/preventivos";
 export const prerender = false;
 const db = getDb(Astro);
 const user = Astro.locals.user!;
@@ -29,6 +30,16 @@ try {
   ahoraNoDisponible = true;
   console.error("ahora_unavailable");
 }
+// Tablero de preventivos: el aviso de la jefatura.
+let preventivos: { sinAsignar: number; asignados: number; programados: number; programadosSinAsignar: number } | null = null;
+if (esJefatura(user.rol)) {
+  try {
+    const d = await datosTablero(db, leerFiltros(new URLSearchParams()).filtros);
+    preventivos = { sinAsignar: d.atrasados.sinAsignar.length, asignados: d.atrasados.asignados.length, programados: d.programados.length, programadosSinAsignar: d.programados.filter((f) => !f.tecnico).length };
+  } catch {
+    console.error("preventivos_unavailable");
+  }
+}
 // El visualizador solo consulta la ronda: su resumen no puede hablar de desviaciones ni de emergencias.
 const resumenAhora = !bloquesAhora.length ? null
   : user.rol === "visualizador" ? { texto: bloquesAhora[0].detalle, tono: bloquesAhora[0].tono }
@@ -38,6 +49,20 @@ const resumenAhora = !bloquesAhora.length ? null
   <div class="workspace-heading"><div><span class="area-eyebrow">Operación</span><h1>Panorama general</h1><p>Elige el área en la que vas a trabajar.</p></div><span class="workspace-date">{now.toLocaleDateString("es-SV",{day:"numeric",month:"long",timeZone:"America/El_Salvador"})}</span></div>
   {resumenAhora && <div class="mb-6"><CadenaAhora bloques={bloquesAhora} resumen={resumenAhora} /></div>}
   {ahoraNoDisponible && <section class="card mb-6 p-5" aria-labelledby="ahora-no-disponible"><h2 id="ahora-no-disponible" class="font-semibold">Ronda de turno</h2><p class="mt-2 text-sm text-slate-600">No se pudo cargar el estado de la ronda. Recarga la página o consulta el tablero.</p><a class="mt-3 inline-block text-sm font-semibold text-emerald-800 underline" href="/ronda">Abrir el tablero</a></section>}
+  {preventivos && (
+    <a href="/preventivos" class:list={["card mb-6 flex flex-wrap items-center justify-between gap-3 border-l-4 p-5 hover:shadow-md", preventivos.sinAsignar + preventivos.asignados > 0 ? "border-red-500" : "border-emerald-500"]}>
+      <div>
+        <h2 class="font-semibold">Tablero de preventivos</h2>
+        <p class="mt-1 text-sm text-slate-600">
+          {preventivos.sinAsignar + preventivos.asignados > 0
+            ? `${preventivos.sinAsignar + preventivos.asignados} atrasados de 1 día o más (${preventivos.sinAsignar} sin asignar).`
+            : "Sin preventivos atrasados."}
+          {` ${preventivos.programados} programados en los próximos ${DIAS_POR_DEFECTO} días`}{preventivos.programadosSinAsignar ? `, ${preventivos.programadosSinAsignar} sin técnico.` : "."}
+        </p>
+      </div>
+      <span class="text-sm font-semibold text-brand-700">Asignar técnicos →</span>
+    </a>
+  )}
   <h2 class="mb-4 text-lg font-semibold">Áreas de mantenimiento</h2>
   <div class="workspace-grid">
     {AREA_KEYS.map(key=><a href={`/areas/${key}`} class="workspace-card"><span class="area-symbol"><AppIcon name={AREAS[key].icon} size={24}/></span><h3>{AREAS[key].label}</h3><p>{AREAS[key].description}</p><div class="workspace-counts"><span>{count(assetCounts,key)} {AREAS[key].inventoryLabel.toLowerCase()}</span><span>{count(orderCounts,key)} órdenes abiertas</span></div><span class="workspace-enter">Entrar al área <AppIcon name="arrow" size={18}/></span></a>)}
