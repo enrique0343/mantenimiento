@@ -34,16 +34,21 @@ export const POST: APIRoute = async (ctx) => {
   }
 
   const recibido = new Date().toISOString();
+  let acceso: Awaited<ReturnType<typeof leerOrdenConAlcance>> | null = null;
   const rechazar = async (mensaje: string, status: number) => {
-    // El rechazo pertenece a la cola del usuario; no agrega evidencia a una
-    // orden que pudo cambiar de espacio mientras se enviaba la foto.
-    await db.insert(campoOperaciones).values({ opId, usuarioId: user.id, tipo: "foto", ordenId: null, capturadoEn: at || recibido, recibidoEn: recibido, resultado: "rechazada", detalle: mensaje }).onConflictDoNothing();
+    // Los rechazos de una orden reasignada o cerrada conservan su vínculo para
+    // «Ver por qué». Si cambió de espacio, quedan solo en la cola del usuario:
+    // la comprobación ocurre en el INSERT, no antes de escribir en el destino.
+    const vigente = acceso ? guardAlcanceD1(db, acceso.guard) : { sql: "0", params: [] };
+    await getEnv(ctx).DB.prepare(`INSERT INTO campo_operaciones(op_id,usuario_id,tipo,orden_id,capturado_en,recibido_en,resultado,detalle)
+      SELECT ?,?,'foto',CASE WHEN (${vigente.sql}) THEN ? ELSE NULL END,?,?,'rechazada',?
+      ON CONFLICT(op_id) DO NOTHING`)
+      .bind(opId,user.id,...vigente.params,acceso?.orden.id ?? null,at || recibido,recibido,mensaje).run();
     return Response.json({ ok: false, error: mensaje }, { status });
   };
   if (!Number.isInteger(ordenId) || ordenId <= 0) return rechazar("Orden inválida.", 400);
   if (!(file instanceof File)) return rechazar("Falta la foto.", 400);
   if (file.size > MAX_BYTES) return rechazar("La foto supera 10 MB.", 413);
-  let acceso: Awaited<ReturnType<typeof leerOrdenConAlcance>>;
   try { acceso = await leerOrdenConAlcance(db, ordenId, user); }
   catch (error) {
     if (error instanceof ErrorAlcanceOrden) return rechazar(error.message, error.status);

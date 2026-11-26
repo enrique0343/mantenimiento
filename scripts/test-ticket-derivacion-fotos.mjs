@@ -48,6 +48,15 @@ try {
     equal(one('SELECT rubro FROM ordenes WHERE id=?',t.ot).rubro,'tecnologia');
   }
   let t=await nueva(); equal((await move(t)).status,200); equal((await photo(t)).status,403);
+  // Un rechazo dentro del mismo espacio conserva el vínculo que «Ver por qué»
+  // necesita para agrupar lo capturado sin señal en la orden original.
+  t=await nueva(); s.prepare('UPDATE ordenes SET asignado_a=1 WHERE id=?').run(t.ot);
+  equal((await photo(t)).status,403);
+  equal(one("SELECT count(*) n FROM campo_operaciones WHERE orden_id=? AND resultado='rechazada'",t.ot).n,1);
+  equal(one('SELECT count(*) n FROM adjuntos WHERE orden_id=?',t.ot).n,0);
+  t=await nueva(); s.prepare("UPDATE ordenes SET estado='cerrada' WHERE id=?").run(t.ot);
+  equal((await photo(t)).status,409);
+  equal(one("SELECT count(*) n FROM campo_operaciones WHERE orden_id=? AND resultado='rechazada'",t.ot).n,1);
   t=await nueva(); equal((await photo(t)).status,201); equal((await photo(t)).body.repetida,true);
   equal(one('SELECT count(*) n FROM adjuntos WHERE orden_id=?',t.ot).n,1);
   equal((await move(t)).status,409);
