@@ -196,13 +196,22 @@ const oculto = (el) => el.classList.contains('hidden');
 }
 
 // ═══ Formulario público de soporte: equipo opcional ═════════════════════════
-const htmlSoporte = (area = '') => `
+const htmlSoporte = (area = '') => {
+  const tipo = ['biomedico', 'tecnologia'].includes(area) ? area : area ? 'general' : '';
+  return `
   <div id="successBox" class="hidden"><div id="trackToken"></div><span id="slaInfo"></span></div>
   <div id="formBox"><form id="form">
     <input id="solicitanteNombre" value="Ana Pérez"><input id="solicitanteEmail" value="ana@example.invalid"><input id="solicitanteTelefono" value="">
-    <select id="rubro" ${area ? 'disabled' : ''}><option value="">—</option><option value="aires">A</option><option value="infraestructura">I</option>
-      <option value="equipo_general">G</option><option value="biomedico" ${area === 'biomedico' ? 'selected' : ''}>B</option></select>
-    <select id="prioridad"><option value="media" selected>Media</option></select>
+    <select id="tipoReporte" required><option value="">— Selecciona una opción —</option>
+      <option value="general" ${tipo === 'general' ? 'selected' : ''}>General</option>
+      <option value="biomedico" ${tipo === 'biomedico' ? 'selected' : ''}>Biomédico</option>
+      <option value="tecnologia" ${tipo === 'tecnologia' ? 'selected' : ''}>Tecnología</option></select>
+    <input type="hidden" id="rubro" value="${area}">
+    <div id="rubroGeneralBox" ${tipo !== 'general' ? 'hidden' : ''}><select id="rubroGeneral">
+      <option value="">— No estoy seguro —</option><option value="aires" ${area === 'aires' ? 'selected' : ''}>Aire acondicionado</option>
+      <option value="infraestructura" ${area === 'infraestructura' ? 'selected' : ''}>Infraestructura</option>
+      <option value="equipo_general" ${area === 'equipo_general' ? 'selected' : ''}>Equipos generales</option></select></div>
+    <select id="prioridad"><option value="baja">Baja</option><option value="media" selected>Media</option><option value="alta">Alta</option><option value="urgente">Urgente (paro / riesgo)</option></select>
     <input id="asunto" value="Monitor sin imagen"><textarea id="descripcion">La pantalla quedó en negro</textarea>
     <select id="sucursalId"><option value="">—</option><option value="1">Sede</option></select>
     <select id="ubicacionId"><option value="">—</option></select>
@@ -210,6 +219,7 @@ const htmlSoporte = (area = '') => `
     <input id="ubicacion" value=""><input type="file" id="fotoFile"><input type="file" id="fotoCamara"><div id="fotosPreview"></div>
     <p id="err" class="hidden"></p><button id="btnSubmit" type="submit">Enviar solicitud</button>
   </form></div>`;
+};
 {
   const codigo = await scriptDe('src/pages/soporte/index.astro', 'activoId');
   const ubJson = JSON.stringify([{ id: 10, nombre: 'UCI', sucursalId: 1, tipo: 'area' }, { id: 11, nombre: 'Bodega', sucursalId: 1, tipo: 'area' }]);
@@ -217,24 +227,32 @@ const htmlSoporte = (area = '') => `
   let alEnviar = sinRed;
   const red = async (url, opciones) => {
     if (url.startsWith('/api/tickets/publico/equipos')) {
-      return url.includes('ubicacionId=10') ? respuesta(200, EQUIPOS) : url.includes('ubicacionId=11') ? respuesta(200, { equipos: [] }) : respuesta(404, { error: 'Ubicación no encontrada' });
+      const q = new URL(url, 'https://local.test').searchParams;
+      const equipos = EQUIPOS.equipos.filter(e => q.get('espacio') === (e.area === 'biomedico' ? 'biomedico' : 'general') && (!q.get('area') || q.get('area') === e.area));
+      return q.get('ubicacionId') === '10' ? respuesta(200, { equipos }) : q.get('ubicacionId') === '11' ? respuesta(200, { equipos: [] }) : respuesta(404, { error: 'Ubicación no encontrada' });
     }
     return alEnviar(url, opciones);
   };
-  const p = pagina(htmlSoporte(), codigo, { ubJson }, { url: 'https://local.test/soporte', red });
+  const p = pagina(htmlSoporte(), codigo, { ubJson, equipoInicial: null }, { url: 'https://local.test/soporte', red });
   cambiar(p, 'sucursalId', '1');
   es(oculto(p.$('activoBox')), true, 'sin ubicación no hay equipo');
   cambiar(p, 'ubicacionId', '10');
   await pausa();
-  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10', 'pide los equipos de la ubicación');
-  es([oculto(p.$('activoBox')), [...p.$('activoId').options].map((o) => o.textContent)],
-    [false, ['— No sé / no está en la lista —', 'BIO-901 · Monitor', 'GEN-903 · Refrigerador']], 'lista con código · nombre');
-  cambiar(p, 'activoId', '903');
-  es(p.$('rubro').value, 'equipo_general', 'un equipo de otra área ajusta el área');
-  cambiar(p, 'rubro', 'biomedico');
+  es(p.llamadas.length, 0, 'sin tipo seleccionado no se consulta el inventario');
+  cambiar(p, 'tipoReporte', 'general');
   await pausa();
-  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&area=biomedico', 'cambiar el área vuelve a pedir la lista con el área');
+  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&espacio=general', 'pide los equipos de la ubicación y tipo');
+  es([oculto(p.$('activoBox')), [...p.$('activoId').options].map((o) => o.textContent)],
+    [false, ['— No sé / no está en la lista —', 'GEN-903 · Refrigerador']], 'lista filtrada con código · nombre');
+  cambiar(p, 'activoId', '903');
+  es(p.$('rubro').value, 'equipo_general', 'el equipo general aporta su área concreta');
+  cambiar(p, 'tipoReporte', 'biomedico');
+  es(p.$('activoId').value, '', 'cambiar a Biomédico elimina inmediatamente el equipo general');
+  await pausa();
+  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&espacio=biomedico&area=biomedico', 'cambiar el tipo vuelve a pedir la lista biomédica');
+  es([...p.$('activoId').options].map(o => o.textContent), ['— No sé / no está en la lista —', 'BIO-901 · Monitor'], 'el tipo Biomédico muestra sus equipos');
   cambiar(p, 'activoId', '901');
+  cambiar(p, 'prioridad', 'urgente');
   cambiar(p, 'ubicacionId', '11');
   await pausa();
   es([oculto(p.$('activoBox')), p.$('activoId').value], [true, ''], 'ubicación sin equipos: el campo se oculta y se vacía');
@@ -246,7 +264,8 @@ const htmlSoporte = (area = '') => `
   p.$('form').dispatchEvent(new p.w.Event('submit', { bubbles: true, cancelable: true }));
   await pausa();
   const envio = p.llamadas.find((l) => l.url === '/api/tickets/publico');
-  es(JSON.parse(envio.opciones.body).activoId, 901, 'el ticket lleva el equipo');
+  es([JSON.parse(envio.opciones.body).activoId, JSON.parse(envio.opciones.body).rubro, JSON.parse(envio.opciones.body).prioridad],
+    [901, 'biomedico', 'urgente'], 'el ticket conserva equipo, área biomédica y urgencia');
   es([p.$('err').textContent, oculto(p.$('err')), p.$('btnSubmit').disabled, p.$('btnSubmit').textContent],
     ['No pudimos enviar tu solicitud: revisa tu conexión e inténtalo de nuevo. Lo que escribiste sigue aquí.', false, false, 'Enviar solicitud'], 'sin red: aviso y botón libre');
   es([p.$('descripcion').value, p.$('activoId').value], ['La pantalla quedó en negro', '901'], 'lo escrito sigue');
@@ -258,21 +277,31 @@ const htmlSoporte = (area = '') => `
   p.$('form').dispatchEvent(new p.w.Event('submit', { bubbles: true, cancelable: true }));
   await pausa();
   es([oculto(p.$('successBox')), p.$('trackToken').textContent], [false, 'TK-123'], 'ticket creado');
+  es(p.$('slaInfo').textContent, '2 horas', 'el formulario conserva el plazo existente para prioridad urgente');
   es(p.errores, [], 'sin errores de JavaScript');
 }
 {
-  // Con ?area= el área queda fija: elegir un equipo no la cambia; si la lista falla, el campo se oculta.
+  // Un enlace biomédico preselecciona, pero permite cambiar el destinatario del reporte.
   const codigo = await scriptDe('src/pages/soporte/index.astro', 'activoId');
   let falla = false;
-  const p = pagina(htmlSoporte('biomedico'), codigo, { ubJson: JSON.stringify([{ id: 10, nombre: 'UCI', sucursalId: 1, tipo: 'area' }]) }, {
-    red: async (url) => (falla ? sinRed() : respuesta(200, { equipos: [{ id: 903, codigo: 'GEN-903', nombre: 'Refrigerador', area: 'equipo_general' }] })),
+  const p = pagina(htmlSoporte('biomedico'), codigo, { equipoInicial: null, ubJson: JSON.stringify([{ id: 10, nombre: 'UCI', sucursalId: 1, tipo: 'area' }]) }, {
+    url: 'https://local.test/soporte?area=biomedico',
+    red: async (url) => (falla ? sinRed() : respuesta(200, { equipos: url.includes('espacio=biomedico')
+      ? [{ id: 901, codigo: 'BIO-901', nombre: 'Monitor', area: 'biomedico' }]
+      : [{ id: 903, codigo: 'GEN-903', nombre: 'Refrigerador', area: 'equipo_general' }] })),
   });
   cambiar(p, 'sucursalId', '1');
   cambiar(p, 'ubicacionId', '10');
   await pausa();
-  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&area=biomedico', 'con área fija la lista va filtrada');
+  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&espacio=biomedico&area=biomedico', 'el enlace preseleccionado carga la lista biomédica');
+  es(p.$('tipoReporte').disabled, false, 'el enlace no bloquea el tipo de reporte');
+  cambiar(p, 'activoId', '901');
+  cambiar(p, 'tipoReporte', 'general');
+  es(p.$('activoId').value, '', 'el cambio de destinatario limpia el equipo anterior');
+  await pausa();
+  es(p.llamadas.at(-1).url, '/api/tickets/publico/equipos?ubicacionId=10&espacio=general', 'el mismo formulario cambia a la lista general');
   cambiar(p, 'activoId', '903');
-  es(p.$('rubro').value, 'biomedico', 'el área fija no cambia');
+  es(p.$('rubro').value, 'equipo_general', 'el nuevo equipo aporta el área General elegida');
   falla = true;
   cambiar(p, 'ubicacionId', '10');
   await pausa();
