@@ -21,6 +21,8 @@ export const CATEGORIAS_GENERAL = [
   "Otros",
 ] as const;
 
+export const CATEGORIAS_TECNOLOGIA = ["COMPUTADORAS DE ESCRITORIO", "COMPUTADORAS PORTÁTILES", "IMPRESORAS", "ESCÁNERES", "MONITORES", "SWITCHES", "ROUTERS", "PUNTOS DE ACCESO", "FIREWALLS", "SERVIDORES", "ALMACENAMIENTO / NAS", "TELEFONÍA IP", "UPS DE TECNOLOGÍA", "RACKS Y GABINETES", "PERIFÉRICOS", "OTRO HARDWARE"] as const;
+
 export const CATEGORIAS_AIRES = ["Mini split", "Cassette", "Piso techo", "Ventana", "Unidad central", "VRF / VRV", "Chiller", "Manejadora de aire", "Otros aires acondicionados"] as const;
 export const CATEGORIAS_INFRAESTRUCTURA = ["Cubiertas y techos", "Muros y acabados", "Puertas y ventanas", "Red hidráulica", "Red sanitaria", "Red eléctrica", "Iluminación", "Pisos y pavimentos", "Drenajes", "Otras instalaciones"] as const;
 
@@ -54,12 +56,17 @@ export const CATEGORIAS_POR_AREA = {
   infraestructura: CATEGORIAS_INFRAESTRUCTURA,
   equipo_general: CATEGORIAS_GENERAL,
   biomedico: CATEGORIAS_BIOMEDICO,
+  tecnologia: CATEGORIAS_TECNOLOGIA,
 } as const;
 
 // Para vista agrupada: dado un texto libre devuelve un grupo "normalizado"
 // (busca coincidencia parcial; si no encaja, lo devuelve como "Otros")
-export function normalizarCategoria(cat: string | null | undefined, tipo: string | null | undefined): string {
+export function normalizarCategoria(cat: string | null | undefined, tipo: string | null | undefined, area?: string | null): string {
   if (!cat) return "Sin categoría";
+  if (area === "tecnologia") {
+    const texto = cat.trim().toUpperCase();
+    return CATEGORIAS_TECNOLOGIA.find((categoria) => categoria === texto) ?? texto;
+  }
   const lista = tipo === "biomedico" ? CATEGORIAS_BIOMEDICO : CATEGORIAS_GENERAL;
   const lower = cat.toLowerCase();
   for (const c of lista) {

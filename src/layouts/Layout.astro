@@ -27,6 +27,7 @@ const permitidos = Astro.locals.espaciosPermitidos ?? espaciosPermitidos(user);
 // El solicitante no gestiona ningún espacio: sin interruptor (ve sus solicitudes de los dos juntas).
 const conInterruptor = permitidos.length > 1 && gestionaEspacio(user);
 const esBio = espacio === "biomedico";
+const esTecnologia = espacio === "tecnologia";
 // Un área del otro espacio no se muestra (la página del aviso, por ejemplo).
 const areaPedida = Astro.locals.area ?? parseArea(Astro.url.searchParams.get("area")) ?? parseArea(Astro.params.area);
 const area = areaEnEspacio(areaPedida, espacio) ? areaPedida : null;
@@ -56,7 +57,25 @@ const verPlanes = isOperativo || rol === "visualizador";
 // mismos roles que ROLES_TABLERO_VER de lib/preventivos; la prueba de páginas lo cuida).
 const verTablero = isAdminOrJefe || rol === "visualizador";
 const AREAS_GENERAL = ESPACIOS.general.areas as readonly AreaKey[];
-const menu: GrupoMenu[] = !user ? [] : esBio ? [
+const menu: GrupoMenu[] = !user ? [] : esTecnologia ? [
+  { label: null, items: [
+    { href: "/", label: "Panorama de tecnología", icon: "home", show: true },
+    { href: "/preventivos", label: ESPACIOS.tecnologia.tablero, icon: "calendar", show: verTablero },
+  ]},
+  { label: "Tecnología hospitalaria", items: [
+    { href: areaHref("/activos", "tecnologia"), label: "Inventario de hardware", icon: "equipment", show: rol !== "motorista" },
+    { href: areaHref("/tickets", "tecnologia"), label: "Mesa de ayuda", icon: "alert", show: true },
+    { href: areaHref("/ordenes", "tecnologia"), label: "Órdenes de trabajo", icon: "clipboard", show: !["motorista", "proveedor"].includes(rol) },
+    { href: areaHref("/planes", "tecnologia"), label: "Planes preventivos", icon: "calendar", show: verPlanes },
+    { href: areaHref("/cronograma", "tecnologia"), label: "Cronograma", icon: "clock", show: verPlanes },
+    { href: areaHref("/conjuntos", "tecnologia"), label: "Conjuntos de equipos", icon: "box", show: verPlanes },
+  ]},
+  { label: "Gestión", items: [
+    { href: "/indicadores", label: "Indicadores y reportes", icon: "report", show: isAdminOrJefe },
+    { href: "/recursos", label: "Recursos", icon: "box", show: true },
+    { href: "/administracion", label: "Administración", icon: "settings", show: isAdminOrJefe },
+  ]},
+] : esBio ? [
   { label: null, items: [
     { href: "/", label: "Panorama biomédico", icon: "home", show: true },
     { href: "/preventivos", label: ESPACIOS.biomedico.tablero, icon: "calendar", show: verTablero },

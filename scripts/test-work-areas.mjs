@@ -51,18 +51,28 @@ try {
     });
     sqlite.exec(`CREATE TABLE "${config.name}" (${columns.join(', ')})`);
   }
-  // Minimal D1 binding backed by SQLite, keeping Drizzle's real SQL filters.
-  const DB = { prepare(query) {
-    return { bind(...params) {
+  // D1 con batch real: convertir la solicitud debe confirmar orden, vínculo y auditoría juntos.
+  function prepare(query, params = []) {
+    function execute() {
       const statement = sqlite.prepare(query);
-      return {
-        async all() { return { results: statement.all(...params), success: true }; },
-        async raw() { statement.setReturnArrays(true); return statement.all(...params); },
-        async run() { return { success: true, meta: statement.run(...params) }; },
-        async first() { return statement.get(...params) ?? null; },
-      };
-    }};
+      const results = statement.all(...params);
+      const meta = sqlite.prepare('SELECT changes() AS changes,last_insert_rowid() AS last_row_id').get();
+      return { results, success:true, meta };
+    }
+    return {
+      execute, bind(...args) { return prepare(query,args); },
+      async all() { return execute(); },
+      async raw() { const statement=sqlite.prepare(query); statement.setReturnArrays(true); return statement.all(...params); },
+      async run() { return execute(); },
+      async first() { return sqlite.prepare(query).get(...params) ?? null; },
+    };
+  }
+  const DB = { prepare, async batch(statements) {
+    sqlite.exec('BEGIN IMMEDIATE');
+    try { const results=statements.map(s=>s.execute()); sqlite.exec('COMMIT'); return results; }
+    catch(error) { sqlite.exec('ROLLBACK'); throw error; }
   }};
+  sqlite.exec("INSERT INTO usuarios(id,nombre,email,password_hash,rol) VALUES(1,'Test','test@example.com','test-only','admin')");
   const user = { id: 1, nombre: 'Test', email: 'test@example.com', rol: 'admin' };
   const ctx = (url, body, id, method = 'POST') => ({
     request: new Request(`https://test.local${url}`, { method, ...(method === 'GET' ? {} : { body: JSON.stringify(body ?? {}), headers: { 'content-type': 'application/json' } }) }),

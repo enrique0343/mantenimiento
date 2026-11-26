@@ -8,7 +8,8 @@ import { errorEmpresaEquipo, PERSONAL_PROPIO } from "@/lib/tablero-bio";
 import { logAudit, calcularDiff } from "@/lib/audit";
 import { NIVELES_JERARQUIA, validarPadre } from "@/lib/jerarquia";
 import { rubroDeActivo, SUBCAT_KEYS, type SubcatKey } from "@/lib/rubros";
-import { activoAreaCondition } from "@/lib/areas";
+import { MENSAJE_TRASLADO_TI } from "@/lib/tecnologia";
+import { AREA_KEYS, activoAreaCondition } from "@/lib/areas";
 import { ESPACIOS, espacioDeActivo, espacioDeArea, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
 import { espacioDeActivoId } from "@/lib/espacio-db";
 import { datosTecnicosRegistroSchema as datosTecnicosSchema, datosTecnicosValidosParaArea, serializarDatosTecnicos, leerDatosTecnicos } from "@/lib/activo-area";
@@ -55,7 +56,7 @@ const updateSchema = z.object({
   valorAdquisicion: z.number().nonnegative().nullable().optional(),
   responsableId: z.number().int().nullable().optional(),
   criticidadOperacional: z.enum(["alta", "media", "baja"]).optional(),
-  rubro: z.enum(["infraestructura", "aires", "equipo_general", "biomedico"]).nullable().optional(),
+  rubro: z.enum(AREA_KEYS).nullable().optional(),
   datosTecnicos: datosTecnicosSchema,
   subcategoria: z.enum(SUBCAT_KEYS as [SubcatKey, ...SubcatKey[]]).nullable().optional(),
   aceptacionFecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -133,6 +134,17 @@ export const PATCH: APIRoute = async (ctx) => {
   const areaActual = rubroDeActivo(actual.rubro, actual.tipo);
   const rubro = rubroDeActivo(llega.rubro === undefined ? actual.rubro : llega.rubro, llega.tipo ?? actual.tipo);
   const cambiaArea = rubro !== areaActual;
+  if (areaActual === "tecnologia") {
+    if (!puedeEntrar(user, "tecnologia")) return respuestaOtroEspacio("tecnologia");
+    if ((llega.ubicacionId !== undefined && llega.ubicacionId !== actual.ubicacionId)
+      || (llega.ubicacion !== undefined && llega.ubicacion !== actual.ubicacion)) {
+      return Response.json({ error: MENSAJE_TRASLADO_TI }, { status: 409 });
+    }
+    if (cambiaArea) {
+      const historial = await db.get(sql`SELECT 1 AS existe FROM tecnologia_custodia_eventos WHERE activo_id=${id} LIMIT 1`);
+      if (historial) return Response.json({ error: "El equipo conserva historial de custodia y debe permanecer en Tecnología." }, { status: 409 });
+    }
+  }
   if (actual.modeloAireId !== null && cambiaArea) return Response.json({ error: "Esta unidad proviene de una ficha de aire acondicionado y debe conservar esa área. Puedes editar sus demás datos." }, { status: 409 });
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (llega.tipo && llega.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });

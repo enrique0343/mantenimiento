@@ -4,7 +4,7 @@
 // hay ningún dato del registro. Con los dos espacios: botón «Cambiar a …».
 // Atado a un espacio: 403, sin botón.
 import Layout from "@/layouts/Layout.astro";
-import { ESPACIOS, hrefCambiarEspacio, mensajeOtroEspacio } from "@/lib/espacio";
+import { ESPACIOS, hrefCambiarEspacio, mensajeOtroEspacio, espacioDelContexto } from "@/lib/espacio";
 export const prerender = false;
 
 const aviso = Astro.locals.avisoEspacio;
@@ -18,7 +18,7 @@ if (!aviso.puedeCambiar) Astro.response.status = 403;
     <h1 id="aviso-espacio-titulo" class="mt-1 text-xl font-semibold">{mensajeOtroEspacio(aviso.espacio)}</h1>
     {aviso.puedeCambiar ? (
       <>
-        <p class="mt-2 text-sm text-slate-600">Estás en el espacio {ESPACIOS[aviso.espacio === "general" ? "biomedico" : "general"].etiqueta}. Para verlo, cambia al espacio {info.etiqueta}: el menú y las listas cambiarán con él.</p>
+        <p class="mt-2 text-sm text-slate-600">Estás en el espacio {ESPACIOS[espacioDelContexto(Astro, Astro.locals.user)].etiqueta}. Para verlo, cambia al espacio {info.etiqueta}: el menú y las listas cambiarán con él.</p>
         <div class="mt-4 flex flex-wrap gap-2">
           <a class="btn-primary" href={hrefCambiarEspacio(aviso.volver, aviso.espacio)} data-cambiar-espacio={aviso.espacio}>Cambiar a {info.etiqueta}</a>
           <a class="btn-secondary" href="/">Quedarme aquí</a>

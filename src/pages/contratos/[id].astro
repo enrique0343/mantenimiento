@@ -12,7 +12,7 @@ import {
   diasParaVencer, puedeGestionarContratos, puedeVerContratos,
 } from "@/lib/contratos";
 import { fmtFechaLarga, fmtFechaSimple } from "@/lib/datetime";
-import { condicionActivoEspacio, espacioDelContexto, ESPACIOS } from "@/lib/espacio";
+import { condicionActivoEspacio, espacioDelContexto } from "@/lib/espacio";
 export const prerender = false;
 
 const id = Number(Astro.params.id);
@@ -34,7 +34,6 @@ if (!row) return Astro.redirect("/contratos");
 // El contrato es común (proveedores), pero sus equipos se ven por espacio: los del
 // otro solo se cuentan. Renovar copia todos en el servidor, se vean o no aquí.
 const espacio = espacioDelContexto(Astro, user);
-const otroEspacio = espacio === "general" ? "biomedico" : "general";
 const delEspacio = condicionActivoEspacio(espacio);
 const equipos = await db
   .select({ a: activos })
@@ -46,7 +45,7 @@ const [{ n: equiposDelOtro } = { n: 0 }] = await db
   .select({ n: sql<number>`count(*)` })
   .from(contratoEquipos)
   .innerJoin(activos, eq(activos.id, contratoEquipos.activoId))
-  .where(and(eq(contratoEquipos.contratoId, id), condicionActivoEspacio(otroEspacio)));
+  .where(and(eq(contratoEquipos.contratoId, id), sql`not (${delEspacio})`));
 
 const equiposIds = new Set(equipos.map((e) => e.a.id));
 const equiposDisponibles = await db
@@ -182,7 +181,7 @@ const equiposDispJson = JSON.stringify(equiposDisponibles.filter((e) => !equipos
           <h2 class="font-semibold text-slate-900">Equipos cubiertos ({equipos.length})</h2>
           {puedeGestionar && <button id="btnAgregarEquipo" type="button" class="text-sm text-brand-600 hover:underline">+ Agregar equipo</button>}
         </div>
-        {Number(equiposDelOtro) > 0 && <p class="mt-1 text-xs text-slate-500" data-equipos-otro-espacio>Y {Number(equiposDelOtro)} equipo(s) del espacio {ESPACIOS[otroEspacio].etiqueta}: se ven desde ese espacio.</p>}
+        {Number(equiposDelOtro) > 0 && <p class="mt-1 text-xs text-slate-500" data-equipos-otro-espacio>Y {Number(equiposDelOtro)} equipo(s) de otros espacios: se consultan desde su espacio.</p>}
         {equipos.length === 0 ? (
           <p class="mt-2 text-sm text-slate-400">Sin equipos vinculados en este espacio.</p>
         ) : (

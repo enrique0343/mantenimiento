@@ -9,6 +9,8 @@ import { sendMail, emailLayout } from "./email";
 import { sendTelegram } from "./telegram";
 import { crearNotificacion } from "./notif-app";
 import { fmtFechaLarga } from "./datetime";
+import { espacioDeOrdenId } from "./espacio-db";
+import { puedeEntrar, ESPACIOS } from "./espacio";
 import { etiquetaOT } from "@/lib/orden-codigo";
 
 // URL base del despliegue. Se puede sobrescribir por env APP_URL.
@@ -303,22 +305,10 @@ export async function notificarOTCerradaConEncuesta(ctx: APIContext, orden: Orde
 // ─── Notificación: OT cerrada → AVISO AL JEFE (#14) ──────────────────────────
 export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) {
   const db = getDb(ctx);
-  // Determinar tipo del equipo (general/biomedico) para routing del jefe
-  let tipoEquipo: "general" | "biomedico" | null = null;
-  if ((orden as any).activoId) {
-    try {
-      const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, (orden as any).activoId)).limit(1);
-      tipoEquipo = (a?.tipo as any) ?? null;
-    } catch {}
-  }
-
-  // Buscar jefes que deban recibir el aviso
+  // El espacio se deriva del rubro de la orden o de su activo, nunca del nombre.
+  const tipoEquipo = await espacioDeOrdenId(db, orden.id);
   const jefes = await db.select().from(usuarios).where(eq(usuarios.rol, "jefe"));
-  const destinatarios = jefes.filter((j) => {
-    if (!tipoEquipo) return true;
-    const esp = j.especialidad;
-    return !esp || esp === "ambos" || esp === tipoEquipo;
-  });
+  const destinatarios = jefes.filter((j) => tipoEquipo ? puedeEntrar(j, tipoEquipo) : j.especialidad !== "tecnologia");
   if (destinatarios.length === 0) return;
 
   const sol = await obtenerSolicitante(ctx, orden);
@@ -349,7 +339,7 @@ export async function notificarOTCerradaJefe(ctx: APIContext, orden: OrdenLite) 
          <ul style="margin:0 0 14px 0;padding-left:20px;line-height:1.7;font-size:14px">
            <li><strong>Técnico:</strong> ${nombreTec}</li>
            <li><strong>Tipo:</strong> ${orden.tipo} · <strong>Prioridad:</strong> ${orden.prioridad}</li>
-           ${tipoEquipo ? `<li><strong>Especialidad:</strong> ${tipoEquipo === "biomedico" ? "Biomédico" : "General"}</li>` : ""}
+           ${tipoEquipo ? `<li><strong>Especialidad:</strong> ${ESPACIOS[tipoEquipo].etiqueta}</li>` : ""}
            <li><strong>Fecha de cierre:</strong> ${fechaCierre}</li>
            <li><strong>Horas trabajadas:</strong> ${horas}</li>
            ${sol ? `<li><strong>Solicitante:</strong> ${sol.nombre} &lt;${sol.email}&gt;</li>` : ""}

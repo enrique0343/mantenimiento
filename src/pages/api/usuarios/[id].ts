@@ -11,7 +11,7 @@ const updateSchema = z.object({
   nombre: z.string().min(2).optional(),
   email: z.string().email().optional(),
   rol: z.enum(ROLES).optional(),
-  especialidad: z.enum(["general", "biomedico", "ambos"]).nullable().optional(),
+  especialidad: z.enum(["general", "biomedico", "ambos", "tecnologia"]).nullable().optional(),
   tarifaHora: z.number().nonnegative().optional(),
   sucursalId: z.number().int().nullable().optional(),
   activo: z.boolean().optional(),

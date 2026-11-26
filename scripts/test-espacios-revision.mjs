@@ -287,6 +287,7 @@ try {
   }
 
   // ── 9. El solicitante: sus solicitudes de los dos espacios, sin aviso ─────
+  run('UPDATE tickets SET solicitante_usuario_id=5 WHERE id IN (301,304)');
   {
     es([app.E.tieneInterruptor({ rol: 'solicitante', especialidad: null }), app.E.gestionaEspacio({ rol: 'solicitante' })], [false, false], 'el solicitante no tiene interruptor');
     const r = await pedir('/tickets/304', { rol: 'solicitante' });

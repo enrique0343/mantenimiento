@@ -1,16 +1,20 @@
+import { crearOrdenDeTicketAtomica, actualizarTicketConcurrente, ConflictoTicket } from "@/lib/ticket-orden-atomica";
+import { esSolicitudPropia } from "@/lib/ticket-acceso";
+import { espacioDeTrabajo, espacioDeArea, respuestaOtroEspacio, puedeEntrar } from "@/lib/espacio";
+import { espacioDeTrabajoGuardado, bloqueoEspacio, asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
+import { AREA_KEYS } from "@/lib/areas";
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { eq, asc } from "drizzle-orm";
+import { and, eq, asc } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
-import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos, ordenes, adjuntos } from "@/lib/schema";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos, adjuntos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { calcularVencimientoSla } from "@/lib/tickets";
 import { sendMail, emailLayout } from "@/lib/email";
-import { logAudit } from "@/lib/audit";
 import { crearNotificacion } from "@/lib/notif-app";
 import { fmtFechaLarga } from "@/lib/datetime";
 
-import { conCodigo, validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
+import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
 import { MENSAJE_ORDEN_EQUIPO_BAJA, equipoDeBaja } from "@/lib/equipo-baja";
 
@@ -23,7 +27,7 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
 
   const [r] = await db
-    .select({ t: tickets, a: usuarios, s: sucursales, act: activos })
+    .select({ t: tickets, a: { id: usuarios.id, nombre: usuarios.nombre }, s: { id: sucursales.id, nombre: sucursales.nombre }, act: { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo } })
     .from(tickets)
     .leftJoin(usuarios, eq(usuarios.id, tickets.asignadoA))
     .leftJoin(sucursales, eq(sucursales.id, tickets.sucursalId))
@@ -32,6 +36,8 @@ export const GET: APIRoute = async (ctx) => {
     .limit(1);
   if (!r) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const espacio = espacioDeTrabajo(r.t.rubro, r.act);
+  if (user.rol === "solicitante" ? !esSolicitudPropia(user, r.t) : !puedeEntrar(user, espacio)) return respuestaOtroEspacio(espacio);
   const contextError = validarContextoArea(ctx.request, r.t.rubro);
   if (contextError) return contextError;
 
@@ -39,7 +45,7 @@ export const GET: APIRoute = async (ctx) => {
     .select({ c: ticketComentarios, u: usuarios })
     .from(ticketComentarios)
     .leftJoin(usuarios, eq(usuarios.id, ticketComentarios.usuarioId))
-    .where(eq(ticketComentarios.ticketId, id))
+    .where(and(eq(ticketComentarios.ticketId, id), user.rol === "solicitante" ? eq(ticketComentarios.publico, true) : undefined))
     .orderBy(asc(ticketComentarios.id));
 
   const adjs = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
@@ -60,7 +66,7 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 const updateSchema = z.object({
-  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
   estado: z.enum(["nuevo", "asignado", "en_proceso", "resuelto", "cerrado", "descartado"]).optional(),
   prioridad: z.enum(["baja", "media", "alta", "urgente"]).optional(),
   asignadoA: z.number().int().nullable().optional(),
@@ -83,12 +89,21 @@ export const PATCH: APIRoute = async (ctx) => {
   const [actual] = await db.select().from(tickets).where(eq(tickets.id, id)).limit(1);
   if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
 
+  const espacio = await espacioDeTrabajoGuardado(db, actual.rubro, actual.activoId);
+  const bloqueo = bloqueoEspacio(user, espacio);
+  if (bloqueo) return bloqueo;
   const contextError = validarContextoArea(ctx.request, actual.rubro);
   if (contextError) return contextError;
   if (parsed.data.rubro && parsed.data.rubro !== actual.rubro) return Response.json({ error: "El área de una solicitud no puede cambiarse" }, { status: 400 });
   const effective = { ...actual, ...parsed.data };
   const areaResult = await validarAreaTrabajo(db, effective);
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+
+  const espacioEfectivo = espacioDeArea(areaResult.rubro);
+  const bloqueoDestino = bloqueoEspacio(user, espacioEfectivo);
+  if (bloqueoDestino) return bloqueoDestino;
+  const asignadoEfectivo = await asignadoFueraDeEspacio(db, effective.asignadoA, [espacioEfectivo]);
+  if (asignadoEfectivo) return Response.json({ error: mensajeAsignadoFuera(asignadoEfectivo) }, { status: 400 });
 
   const data: Record<string, unknown> = { ...parsed.data, updatedAt: new Date().toISOString() };
 
@@ -143,32 +158,29 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
-  if (crearOT) {
-    try {
+  let row;
+  let ordenCreada;
+  try {
+    if (crearOT) {
       const desc = `${actual.descripcion}\n\n— Ticket #${actual.id} de ${actual.solicitanteNombre} <${actual.solicitanteEmail}>`;
-      const [fila] = await db
-        .insert(ordenes)
-        .values({
-          titulo: actual.asunto,
-          descripcion: desc,
-          tipo: "correctivo",
-          prioridad: effective.prioridad,
-          estado: "abierta",
-          rubro: areaResult.rubro,
-          activoId: effective.activoId,
-          sucursalId: effective.sucursalId,
-          ubicacionId: effective.ubicacionId,
-          ubicacionDetalle: effective.ubicacion,
-          asignadoA: parsed.data.asignadoA!,
-          asignadoEn: parsed.data.asignadoA ? new Date().toISOString() : null,
-          creadoPor: user.id,
-          vencimiento: (data.vencimientoSla as string | undefined) ?? actual.vencimientoSla,
-        })
-        .returning();
-      nuevaOtId = fila.id;
-      data.otId = fila.id;
-      const orden = await conCodigo(db, fila);
-
+      const guardado = await crearOrdenDeTicketAtomica(ctx, actual, data, {
+        titulo: actual.asunto, descripcion: desc, prioridad: effective.prioridad, rubro: areaResult.rubro,
+        activoId: effective.activoId, sucursalId: effective.sucursalId, ubicacionId: effective.ubicacionId,
+        ubicacionDetalle: effective.ubicacion, asignadoA: parsed.data.asignadoA!, creadoPor: user.id,
+        vencimiento: (data.vencimientoSla as string | undefined) ?? actual.vencimientoSla,
+      }, `OT generada al asignar Ticket #${actual.id} de ${actual.solicitanteNombre} <${actual.solicitanteEmail}>`);
+      row = guardado.ticket; ordenCreada = guardado.orden; nuevaOtId = guardado.orden.id;
+    } else {
+      row = await actualizarTicketConcurrente(ctx, actual, data);
+    }
+  } catch (error) {
+    if (error instanceof ConflictoTicket) return Response.json({ error: error.message }, { status: 409 });
+    console.error("No se pudo guardar la solicitud", error instanceof Error ? error.message : "error");
+    return Response.json({ error: "No se pudo guardar la solicitud. No se registraron cambios; vuelve a intentarlo." }, { status: 500 });
+  }
+  if (ordenCreada) {
+    try {
+      const orden = ordenCreada;
       // Copiar fotos del ticket como adjuntos "antes" de la OT
       try {
         const tas = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
@@ -189,16 +201,6 @@ export const PATCH: APIRoute = async (ctx) => {
           }
         }
       } catch (e) { console.error("ticket photos transfer:", e); }
-
-      // Audit
-      await logAudit(ctx, {
-        entidad: "orden", entidadId: orden.id, accion: "create",
-        resumen: `OT generada al asignar Ticket #${actual.id} de ${actual.solicitanteNombre} <${actual.solicitanteEmail}>`,
-      });
-      await logAudit(ctx, {
-        entidad: "orden", entidadId: orden.id, accion: "asignacion",
-        resumen: `Asignada al técnico (id: ${parsed.data.asignadoA}) en la creación`,
-      });
 
       // Email al técnico (formato "Nueva orden para ti")
       const [tec] = await db.select({ email: usuarios.email, nombre: usuarios.nombre })
@@ -267,7 +269,6 @@ export const PATCH: APIRoute = async (ctx) => {
     }
   }
 
-  const [row] = await db.update(tickets).set(data).where(eq(tickets.id, id)).returning();
   return Response.json({ ticket: row, otCreada: nuevaOtId, ...(otOmitida ? { otOmitida } : {}) });
 };
 

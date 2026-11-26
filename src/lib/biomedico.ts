@@ -347,6 +347,7 @@ export const HISTORIAL_ACTIVO: ReadonlyArray<{ tabla: string; columna: string; e
   { tabla: "orden_conjuntos", columna: "activo_id", etiqueta: "órdenes de conjuntos donde se usó" },
   { tabla: "checklist_plantilla_items", columna: "activo_id", etiqueta: "pasos de plantillas de checklist" },
   { tabla: "rondas_proposals", columna: "asset_id", etiqueta: "propuestas de ronda" },
+  { tabla: "tecnologia_custodia_eventos", columna: "activo_id", etiqueta: "historial de asignaciones y traslados de tecnología" },
 ];
 
 /** Lo que le falta al registro de un biomédico, en este orden. Completo → []. */

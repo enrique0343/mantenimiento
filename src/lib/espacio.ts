@@ -1,88 +1,14 @@
-// ─── Espacios de trabajo: «General» y «Biomédico» ───────────────────────────
-//
-// CONTRATO (lo usan las pantallas, las API y el middleware; no cambiarlo sin
-// cambiar sus pruebas en scripts/test-espacio.mjs).
-//
-// 1. Hay dos espacios en la misma app:
-//    - 'general'   = Mantenimiento general: áreas aires, infraestructura y
-//                    equipo_general, más rondas, AOP, EOP, eléctrico, flota,
-//                    extintores, actividades y todo lo no biomédico.
-//    - 'biomedico' = Ingeniería biomédica: área biomedico y lo de la fase 59
-//                    (calibraciones, seguridad eléctrica, expedientes, licencias,
-//                    capacitaciones, alertas, incidentes, cumplimiento JCI,
-//                    plantillas, centros de costo y plan anual).
-//    ESPACIOS trae la etiqueta del interruptor, el rótulo largo, los colores de
-//    la barra lateral y de la franja superior, el título del tablero y las áreas.
-//
-// 2. Quién entra a cada espacio (espaciosPermitidos):
-//    - admin y visualizador: a los dos (con interruptor).
-//    - el resto de los roles, según su especialidad:
-//        'general'   → solo General (sin interruptor)
-//        'biomedico' → solo Biomédico (sin interruptor)
-//        'ambos' o NULL → a los dos (con interruptor).
-//      NULL se trata como 'ambos', igual que tipoActivoFiltro y jefesNotificar
-//      en src/lib/especialidad.ts y el filtro de órdenes libres de /campo.
-//    - sin usuario: ninguno ([]).
-//    - el solicitante (gestionaEspacio = false) entra a los dos pero no gestiona
-//      ninguno: sin interruptor, ve sus solicitudes de los dos juntas en /tickets y
-//      abre las del otro espacio sin el aviso.
-//
-// 3. Qué espacio se usa en un request (resolverEspacio): el de ?espacio= si está
-//    permitido; si no, el de la cookie COOKIE_ESPACIO si está permitido; si no,
-//    el primero permitido (General antes que Biomédico). Nunca devuelve uno que
-//    el usuario no tenga, salvo el caso sin usuario, que devuelve 'general'.
-//
-// 4. El middleware (src/middleware.ts) deja en cada request autenticado:
-//      Astro.locals.espacio            → Espacio resuelto
-//      Astro.locals.espaciosPermitidos → Espacio[] (length > 1 = hay interruptor)
-//    y, si llega ?espacio= permitido distinto de la cookie, la actualiza (se
-//    recuerda el último). No redirige ni cambia ninguna pantalla.
-//
-// 5. Filtrar en el SERVIDOR por espacio:
-//    - activos: condicionActivoEspacio(e), sobre activoAreaExpression de
-//      src/lib/areas.ts (la misma regla que rubroDeActivo, con los equipos
-//      viejos sin rubro: tipo 'biomedico' → biomédico; lo demás → general).
-//    - tablas con columna rubro (órdenes, tickets, actividades, conjuntos):
-//      condicionRubroEspacio(columna, e). Un rubro NULL o desconocido es General.
-//    - un registro suelto: espacioDeActivo({ rubro, tipo }) o espacioDeArea(area).
-//    - un recurso del otro espacio: la página muestra «Este registro es del
-//      espacio …» (con botón para cambiar si puedeEntrar), o 403 si no puede;
-//      las API responden 403 JSON { error: mensajeOtroEspacio(e) } al usuario
-//      que no puede entrar a ese espacio.
-//
-// 6. Común a los dos (no se filtra por espacio): usuarios, sedes y ubicaciones,
-//    proveedores y empresas, compras y requisiciones, inventario de repuestos.
-//    Los contratos son comunes, pero sus equipos se muestran por espacio. Los
-//    proyectos NO son comunes: van con su equipo o, sin equipo, con su solicitud
-//    (condicionProyectoEspacio; sin ninguno, General).
-//
-// 7. Rutas de un solo espacio (RUTAS_SOLO_GENERAL / RUTAS_SOLO_BIOMEDICO) y
-//    registros (registroDeRuta): el middleware muestra en su lugar la página
-//    /otro-espacio (aviso, con botón «Cambiar a …» si puedeEntrar; 403 si no) y,
-//    en la API, responde 403 JSON al usuario que no puede entrar a ese espacio.
-//    El interruptor es POST /api/espacio (cookie) o cualquier enlace con ?espacio=.
-//    El middleware decide con rutaDecodificada (la ruta como la ve Astro): con %xx
-//    no se salta el control. Las API por id que no pasan por registroDeRuta
-//    (adjuntos, documentos, /campo, proyectos/adjunto) usan src/lib/espacio-db.ts.
-//
-// 8. En páginas y API: espacioDelContexto(ctx, user) (locals.espacio o, sin
-//    middleware, resolverEspacio) y espacioDeLista(ctx, user, area) cuando la
-//    lista trae ?area= (manda el área, si el usuario entra a su espacio).
-//
-// 9. Más filtros sin parámetros: condicionActivoIdEspacio (planes y todo lo que
-//    tiene activo_id), condicionTrabajoEspacio / condicionOrdenEspacio /
-//    condicionTicketEspacio (órdenes y solicitudes: rubro y, sin rubro, el equipo,
-//    como la serie OT-MB de la 0057), condicionRubroAreaEspacio (tablas solo con
-//    rubro: conjuntos), condicionProyectoEspacio y condicionLinkEspacio (campana).
-//
-// Puro salvo por drizzle (sql): sin base de datos ni Astro.
+// Espacios independientes sobre la misma app. Los roles admin y visualizador
+// conservan alcance global; las especialidades previas conservan General/Biomédico.
+// Tecnología requiere especialidad explícita y no reclasifica equipos existentes.
+// Los filtros SQL, la navegación y el middleware comparten este contrato.
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { activoAreaExpression, type AreaKey } from "./areas";
 import { rubroDeActivo } from "./rubros";
 import { ordenes, proyectos, tickets } from "./schema";
 
-export type Espacio = "general" | "biomedico";
-export const ESPACIO_KEYS = ["general", "biomedico"] as const satisfies readonly Espacio[];
+export type Espacio = "general" | "biomedico" | "tecnologia";
+export const ESPACIO_KEYS = ["general", "biomedico", "tecnologia"] as const satisfies readonly Espacio[];
 export const COOKIE_ESPACIO = "espacio";
 /** Página que el middleware muestra en lugar de la de otro espacio (src/pages/otro-espacio.astro). */
 export const PAGINA_OTRO_ESPACIO = "/otro-espacio";
@@ -91,7 +17,7 @@ export const PARAM_ESPACIO = "espacio";
 
 export interface InfoEspacio {
   key: Espacio;
-  /** Texto del interruptor «General | Biomédico». */
+  /** Texto del interruptor de los tres espacios. */
   etiqueta: string;
   /** Rótulo junto al logo. */
   rotulo: string;
@@ -115,6 +41,11 @@ export const ESPACIOS: Record<Espacio, InfoEspacio> = {
     tablero: "Tablero de preventivos",
     areas: ["aires", "infraestructura", "equipo_general"],
   },
+  tecnologia: {
+    key: "tecnologia", etiqueta: "Tecnología", rotulo: "Mantenimiento de tecnología",
+    colorBarra: "#155E63", colorFranja: "#155E63", tablero: "Preventivos de tecnología",
+    areas: ["tecnologia"],
+  },
   biomedico: {
     key: "biomedico",
     etiqueta: "Biomédico",
@@ -130,19 +61,20 @@ export const ESPACIOS: Record<Espacio, InfoEspacio> = {
 export type UsuarioEspacio = { rol: string; especialidad?: string | null } | null | undefined;
 
 export function parseEspacio(valor: unknown): Espacio | null {
-  return valor === "general" || valor === "biomedico" ? valor : null;
+  return valor === "general" || valor === "biomedico" || valor === "tecnologia" ? valor : null;
 }
 
-/** Roles que ven los dos espacios sin importar su especialidad. */
-const ROLES_AMBOS = new Set(["admin", "visualizador"]);
+/** Roles de alcance global, sin importar su especialidad. */
+const ROLES_GLOBALES = new Set(["admin", "visualizador"]);
 
 export function espaciosPermitidos(user: UsuarioEspacio): Espacio[] {
   if (!user) return [];
-  if (ROLES_AMBOS.has(user.rol)) return [...ESPACIO_KEYS];
+  if (ROLES_GLOBALES.has(user.rol)) return [...ESPACIO_KEYS];
   if (user.especialidad === "general") return ["general"];
   if (user.especialidad === "biomedico") return ["biomedico"];
-  // 'ambos', NULL (o un valor que la base no admite): los dos, como hoy.
-  return [...ESPACIO_KEYS];
+  if (user.especialidad === "tecnologia") return ["tecnologia"];
+  // No ampliar el acceso histórico de ambos/NULL al nuevo inventario TI.
+  return ["general", "biomedico"];
 }
 
 /** true si el usuario puede entrar a ese espacio. */
@@ -178,7 +110,7 @@ export function areasDeEspacio(e: Espacio): AreaKey[] {
 }
 
 export function espacioDeArea(area: string | null | undefined): Espacio {
-  return area === "biomedico" ? "biomedico" : "general";
+  return area === "biomedico" || area === "tecnologia" ? area : "general";
 }
 
 /** Espacio de una fila de activos (rubro y tipo), con la regla de rubroDeActivo. */
@@ -188,19 +120,17 @@ export function espacioDeActivo(row: { rubro?: string | null; tipo?: string | nu
 
 /** Condición de drizzle sobre activos: solo los equipos del espacio. */
 export function condicionActivoEspacio(e: Espacio): SQL {
-  return e === "biomedico"
-    ? sql`${activoAreaExpression} = 'biomedico'`
-    : sql`${activoAreaExpression} <> 'biomedico'`;
+  return condicionRubroEspacio(activoAreaExpression, e);
 }
 
 /**
  * Condición sobre una columna rubro (órdenes, tickets, actividades, conjuntos…).
- * Biomédico = 'biomedico'; General = todo lo demás, también NULL.
+ * Biomédico y Tecnología tienen rubro propio; General conserva los demás y NULL.
  */
 export function condicionRubroEspacio(columna: SQLWrapper, e: Espacio): SQL {
-  return e === "biomedico"
-    ? sql`${columna} = 'biomedico'`
-    : sql`(${columna} is null or ${columna} <> 'biomedico')`;
+  if (e === "biomedico") return sql`${columna} = 'biomedico'`;
+  if (e === "tecnologia") return sql`${columna} = 'tecnologia'`;
+  return sql`(${columna} is null or ${columna} not in ('biomedico', 'tecnologia'))`;
 }
 
 /** Texto del aviso (y del 403) para un recurso del otro espacio. */
@@ -337,11 +267,14 @@ export function condicionActivoIdEspacio(columna: SQLWrapper, e: Espacio): SQL {
 /**
  * Órdenes y solicitudes: por su rubro; sin rubro, por su equipo (la misma regla
  * que la serie OT-MB/OT-MG de la migración 0057). Sin rubro ni equipo: General.
- * Nunca es NULL, así que General es exactamente lo que no es Biomédico.
+ * Nunca es NULL; cada registro pertenece a exactamente uno de los tres espacios.
  */
 export function condicionTrabajoEspacio(rubro: SQLWrapper, activoId: SQLWrapper, e: Espacio): SQL {
-  const bio = sql`(case when ${rubro} is not null then ${rubro} = 'biomedico' when ${activoId} is null then 0 else ${activoId} in (select "activos"."id" from "activos" where ${condicionActivoEspacio("biomedico")}) end)`;
-  return e === "biomedico" ? sql`${bio} = 1` : sql`${bio} = 0`;
+  const porActivo = e === "general"
+    ? sql`not (${condicionActivoIdEspacio(activoId, "biomedico")} or ${condicionActivoIdEspacio(activoId, "tecnologia")})`
+    : condicionActivoIdEspacio(activoId, e);
+  const pertenece = sql`(case when ${rubro} is not null then ${condicionRubroEspacio(rubro, e)} when ${activoId} is null then ${sql.raw(e === "general" ? "1" : "0")} else ${porActivo} end)`;
+  return sql`${pertenece} = 1`;
 }
 export const condicionOrdenEspacio = (e: Espacio) => condicionTrabajoEspacio(ordenes.rubro, ordenes.activoId, e);
 /**
@@ -349,8 +282,13 @@ export const condicionOrdenEspacio = (e: Espacio) => condicionTrabajoEspacio(ord
  * solicitud; sin ninguno, General. Nunca es NULL.
  */
 export function condicionProyectoEspacioDe(activoId: SQLWrapper, ticketId: SQLWrapper, e: Espacio): SQL {
-  const bio = sql`(case when ${activoId} is not null then ${activoId} in (select "activos"."id" from "activos" where ${condicionActivoEspacio("biomedico")}) when ${ticketId} is not null then ${ticketId} in (select x.id from "tickets" x where ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), "biomedico")}) else 0 end)`;
-  return e === "biomedico" ? sql`${bio} = 1` : sql`${bio} = 0`;
+  const porActivo = e === "general"
+    ? sql`not (${condicionActivoIdEspacio(activoId, "biomedico")} or ${condicionActivoIdEspacio(activoId, "tecnologia")})`
+    : condicionActivoIdEspacio(activoId, e);
+  const porTicket = (espacio: Espacio) => sql`${ticketId} in (select x.id from "tickets" x where ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), espacio)})`;
+  const solicitud = e === "general" ? sql`not (${porTicket("biomedico")} or ${porTicket("tecnologia")})` : porTicket(e);
+  const pertenece = sql`(case when ${activoId} is not null then ${porActivo} when ${ticketId} is not null then ${solicitud} else ${sql.raw(e === "general" ? "1" : "0")} end)`;
+  return sql`${pertenece} = 1`;
 }
 export const condicionProyectoEspacio = (e: Espacio) => condicionProyectoEspacioDe(proyectos.activoId, proyectos.ticketId, e);
 export const condicionTicketEspacio = (e: Espacio) => condicionTrabajoEspacio(tickets.rubro, tickets.activoId, e);
@@ -379,9 +317,9 @@ const globRuta = (columna: SQLWrapper, r: string) => sql`(${columna} = ${sql.raw
  */
 export function expresionEspacioDeLink(columna: SQLWrapper): SQL {
   const porRubro = (tabla: string, desde: number) =>
-    sql`(select case when x.rubro = 'biomedico' then 'biomedico' else 'general' end from ${sql.raw(tabla)} x where x.id = cast(substr(${columna}, ${sql.raw(String(desde))}) as integer))`;
+    sql`(select case when x.rubro in ('biomedico', 'tecnologia') then x.rubro else 'general' end from ${sql.raw(tabla)} x where x.id = cast(substr(${columna}, ${sql.raw(String(desde))}) as integer))`;
   const porTrabajo = (tabla: string, desde: number) =>
-    sql`(select case when ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), "biomedico")} then 'biomedico' else 'general' end from ${sql.raw(tabla)} x where x.id = cast(substr(${columna}, ${sql.raw(String(desde))}) as integer))`;
+    sql`(select case when ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), "biomedico")} then 'biomedico' when ${condicionTrabajoEspacio(sql.raw("x.rubro"), sql.raw("x.activo_id"), "tecnologia")} then 'tecnologia' else 'general' end from ${sql.raw(tabla)} x where x.id = cast(substr(${columna}, ${sql.raw(String(desde))}) as integer))`;
   const rutasGeneral = sql.join(RUTAS_SOLO_GENERAL.filter((r) => !r.startsWith("/api/")).map((r) => globRuta(columna, r)), sql` or `);
   const rutasBio = sql.join(RUTAS_SOLO_BIOMEDICO.filter((r) => !r.startsWith("/api/")).map((r) => globRuta(columna, r)), sql` or `);
   return sql`(case
@@ -389,10 +327,12 @@ export function expresionEspacioDeLink(columna: SQLWrapper): SQL {
     when ${columna} glob '/ordenes/[0-9]*' then ${porTrabajo("ordenes", 10)}
     when ${columna} glob '/tickets/[0-9]*' then ${porTrabajo("tickets", 10)}
     when ${columna} glob '/conjuntos/[0-9]*' then ${porRubro("conjuntos", 12)}
-    when ${columna} glob '/proyectos/[0-9]*' then (select case when ${condicionProyectoEspacioDe(sql.raw("x.activo_id"), sql.raw("x.ticket_id"), "biomedico")} then 'biomedico' else 'general' end from "proyectos" x where x.id = cast(substr(${columna}, 12) as integer))
-    when ${columna} glob '/activos/[0-9]*' then (select case when ${activoAreaExpression} = 'biomedico' then 'biomedico' else 'general' end from "activos" where "activos"."id" = cast(substr(${columna}, 10) as integer))
+    when ${columna} glob '/proyectos/[0-9]*' then (select case when ${condicionProyectoEspacioDe(sql.raw("x.activo_id"), sql.raw("x.ticket_id"), "biomedico")} then 'biomedico' when ${condicionProyectoEspacioDe(sql.raw("x.activo_id"), sql.raw("x.ticket_id"), "tecnologia")} then 'tecnologia' else 'general' end from "proyectos" x where x.id = cast(substr(${columna}, 12) as integer))
+    when ${columna} glob '/activos/[0-9]*' then (select case when ${activoAreaExpression} in ('biomedico', 'tecnologia') then ${activoAreaExpression} else 'general' end from "activos" where "activos"."id" = cast(substr(${columna}, 10) as integer))
     when ${rutasGeneral} then 'general'
     when ${rutasBio} then 'biomedico'
+    when ${columna} glob '*[?&]espacio=tecnologia*' then 'tecnologia'
+    when ${columna} glob '*[?&]area=tecnologia*' then 'tecnologia'
     when ${columna} glob '*[?&]espacio=biomedico*' then 'biomedico'
     when ${columna} glob '*[?&]espacio=general*' then 'general'
     else null end)`;

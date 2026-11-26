@@ -17,7 +17,8 @@ const rows = await db
 const ESP_LABEL: Record<string, string> = {
   general: "General",
   biomedico: "Biomédico",
-  ambos: "Ambos",
+  ambos: "General y Biomédico",
+  tecnologia: "Tecnología",
 };
 
 const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }).from(sucursales).orderBy(sucursales.nombre);
@@ -78,7 +79,8 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
           <option value="">— Sin asignar —</option>
           <option value="general">General</option>
           <option value="biomedico">Biomédico</option>
-          <option value="ambos">Ambos</option>
+          <option value="ambos">General y Biomédico</option>
+          <option value="tecnologia">Tecnología</option>
         </select>
         <p class="mt-1 text-xs text-slate-500">Para jefes/técnicos: filtra qué OTs y tickets verá.</p>
       </div>
@@ -208,7 +210,8 @@ const sucMap = new Map(sucRows.map((s) => [s.id, s.nombre]));
             <option value="">— Sin asignar —</option>
             <option value="general">General</option>
             <option value="biomedico">Biomédico</option>
-            <option value="ambos">Ambos</option>
+            <option value="ambos">General y Biomédico</option>
+          <option value="tecnologia">Tecnología</option>
           </select>
         </div>
         <div>

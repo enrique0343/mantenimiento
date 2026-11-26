@@ -1,3 +1,5 @@
+import { requireUser } from "@/lib/auth";
+import { AREA_KEYS } from "@/lib/areas";
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
@@ -17,7 +19,7 @@ const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 const createSchema = z.object({
-  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
   solicitanteNombre: z.string().min(2),
   solicitanteEmail: z.string().email(),
   solicitanteTelefono: z.string().optional().nullable(),
@@ -53,6 +55,7 @@ export const POST: APIRoute = async (ctx) => {
     }
     equipo = a ? { codigo: a.codigo, nombre: a.nombre } : null;
   }
+  const { user: solicitante } = await requireUser(ctx); // La sesión es opcional en este formulario público.
   const trackingToken = generateTrackingToken();
   const { slaHoras, vencimiento } = calcularVencimientoSla(parsed.data.prioridad);
 
@@ -60,6 +63,7 @@ export const POST: APIRoute = async (ctx) => {
     .insert(tickets)
     .values({
       ...parsed.data,
+      solicitanteUsuarioId: solicitante?.id ?? null,
       rubro: areaResult.rubro,
       tipoMantenimiento: areaResult.rubro === "biomedico" ? "biomedico" : "general",
       trackingToken,
@@ -77,7 +81,7 @@ export const POST: APIRoute = async (ctx) => {
       const [a] = await db.select({ tipo: activos.tipo }).from(activos).where(eq(activos.id, row.activoId)).limit(1);
       tipoEquipo = a?.tipo as any ?? null;
     }
-    const jefes = await jefesNotificar(ctx, tipoEquipo);
+    const jefes = await jefesNotificar(ctx, row.rubro === "tecnologia" ? "tecnologia" : tipoEquipo);
     const jefesEmails = jefes.map((j) => j.email).filter(Boolean);
     if (jefesEmails.length > 0) {
       const tipoLabel = rubroLabel(row.rubro);

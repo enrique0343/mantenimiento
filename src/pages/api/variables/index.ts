@@ -1,8 +1,10 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, or } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { variablesPredictivas } from "@/lib/schema";
+import { espaciosPermitidos, condicionActivoIdEspacio } from "@/lib/espacio";
+import { bloqueoEspacio, espacioDeActivoId } from "@/lib/espacio-db";
 import { requireUser } from "@/lib/auth";
 
 export const prerender = false;
@@ -13,14 +15,21 @@ export const GET: APIRoute = async (ctx) => {
   const db = getDb(ctx);
   const url = new URL(ctx.request.url);
   const activoId = url.searchParams.get("activo_id");
+  if (activoId !== null) {
+    const id = Number(activoId);
+    if (!Number.isSafeInteger(id) || id <= 0) return Response.json({ error: "Equipo no válido." }, { status: 400 });
+    const fuera = bloqueoEspacio(user, await espacioDeActivoId(db, id));
+    if (fuera) return fuera;
+  }
+  const deSusEquipos = or(...espaciosPermitidos(user).map((e) => condicionActivoIdEspacio(variablesPredictivas.activoId, e)));
   const tipoAtributo = url.searchParams.get("tipo_atributo");
   const filtros = [
+    deSusEquipos,
     activoId ? eq(variablesPredictivas.activoId, Number(activoId)) : undefined,
     tipoAtributo ? eq(variablesPredictivas.tipoAtributo, tipoAtributo as any) : undefined,
   ].filter(Boolean) as any[];
-  const rows = filtros.length > 0
-    ? await db.select().from(variablesPredictivas).where(and(...filtros)).orderBy(variablesPredictivas.nombre)
-    : await db.select().from(variablesPredictivas).orderBy(desc(variablesPredictivas.id));
+  const rows = await db.select().from(variablesPredictivas).where(and(...filtros))
+    .orderBy(activoId || tipoAtributo ? variablesPredictivas.nombre : desc(variablesPredictivas.id));
   return Response.json({ variables: rows });
 };
 
@@ -52,6 +61,10 @@ export const POST: APIRoute = async (ctx) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   const db = getDb(ctx);
+  const espacio = await espacioDeActivoId(db, parsed.data.activoId);
+  if (!espacio) return Response.json({ error: "Equipo no encontrado." }, { status: 404 });
+  const fuera = bloqueoEspacio(user, espacio);
+  if (fuera) return fuera;
   const [row] = await db.insert(variablesPredictivas).values(parsed.data).returning();
   return Response.json({ variable: row }, { status: 201 });
 };

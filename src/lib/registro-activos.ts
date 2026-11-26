@@ -6,7 +6,7 @@ import type { RubroKey } from "./rubros";
 export const textoRegistro = z.string().trim().toUpperCase().nullable().optional();
 
 const prefijos: Record<RubroKey, string> = {
-  biomedico: "BIO", equipo_general: "EQ", aires: "AC", infraestructura: "INF",
+  biomedico: "BIO", equipo_general: "EQ", aires: "AC", infraestructura: "INF", tecnologia: "TEC",
 };
 
 export function generarCodigoActivo(area: RubroKey): string {
@@ -16,7 +16,7 @@ export function generarCodigoActivo(area: RubroKey): string {
 }
 
 export function nombrePendienteActivo(area: RubroKey): string {
-  const tipo = area === "aires" ? "UNIDAD DE AIRE" : area === "infraestructura" ? "INSTALACIÓN" : area === "biomedico" ? "EQUIPO BIOMÉDICO" : "EQUIPO";
+  const tipo = area === "aires" ? "UNIDAD DE AIRE" : area === "infraestructura" ? "INSTALACIÓN" : area === "biomedico" ? "EQUIPO BIOMÉDICO" : area === "tecnologia" ? "EQUIPO DE TECNOLOGÍA" : "EQUIPO";
   return `${tipo} PENDIENTE DE IDENTIFICAR`;
 }
 

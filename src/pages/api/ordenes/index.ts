@@ -11,7 +11,7 @@ import { crearNotificacion } from "@/lib/notif-app";
 import { logAudit } from "@/lib/audit";
 import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 
-import { parseArea } from "@/lib/areas";
+import { parseArea, AREA_KEYS } from "@/lib/areas";
 import { espacioDeArea, espacioDeLista, puedeEntrar, respuestaOtroEspacio, condicionTrabajoAreaEspacio } from "@/lib/espacio";
 import { asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
 import { conCodigo, validarAreaTrabajo, validarContextoArea, vencimientoCausaRaiz } from "@/lib/ordenes";
@@ -22,7 +22,7 @@ import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 export const prerender = false;
 
 const createSchema = z.object({
-  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().optional().nullable(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),

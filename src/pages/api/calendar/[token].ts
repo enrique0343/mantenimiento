@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { usuarios, ordenes, planesMantenimiento, actividades, activos } from "@/lib/schema";
 import { etiquetaOT } from "@/lib/orden-codigo";
@@ -45,8 +45,9 @@ export const GET: APIRoute = async (ctx) => {
   const pedido = parseEspacio(pedidoRaw);
   if (pedidoRaw !== null && (!pedido || !permitidos.includes(pedido))) return new Response("Espacio no disponible para este calendario", { status: 403 });
   const espacio: Espacio | null = pedido ?? (permitidos.length === 1 ? permitidos[0] : null);
-  const deOrdenes = espacio ? condicionOrdenEspacio(espacio) : undefined;
-  const deEquipos = espacio ? condicionActivoEspacio(espacio) : undefined;
+  const incluidos = espacio ? [espacio] : permitidos;
+  const deOrdenes = or(...incluidos.map(condicionOrdenEspacio));
+  const deEquipos = or(...incluidos.map(condicionActivoEspacio));
 
   const env = (ctx.locals as any)?.runtime?.env ?? {};
   const baseUrl = env.APP_URL || `${ctx.url.origin}`;
@@ -94,7 +95,7 @@ export const GET: APIRoute = async (ctx) => {
       eq(actividades.activo, true),
     )))
     // Las actividades por ubicación son de General.
-    .filter((a) => !espacio || espacioDeArea(areaDeActividad(a.rubro, null)) === espacio);
+    .filter((a) => incluidos.includes(espacioDeArea(areaDeActividad(a.rubro, null))));
 
   const lines: string[] = [
     "BEGIN:VCALENDAR",

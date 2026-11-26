@@ -3,6 +3,7 @@ import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { alertasEquipo, alertasEquipoActivos } from "@/lib/schema";
+import { bloqueoEspacio, espacioDeActivoId } from "@/lib/espacio-db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { ROLES_BIO_GESTIONAR, ROLES_BIO_VER, esFechaISO, hoySV } from "@/lib/biomedico";
@@ -23,6 +24,10 @@ export const GET: APIRoute = async (ctx) => {
   const param = ctx.url.searchParams.get("activoId");
   const activoId = param === null ? null : Number(param);
   if (activoId !== null && !(Number.isInteger(activoId) && activoId > 0)) return Response.json({ error: "Equipo no válido." }, { status: 400 });
+  if (activoId !== null) {
+    const fuera = bloqueoEspacio(user, await espacioDeActivoId(db, activoId));
+    if (fuera) return fuera;
+  }
   const campos = {
     id: alertasEquipo.id, tipo: alertasEquipo.tipo, fuente: alertasEquipo.fuente, titulo: alertasEquipo.titulo,
     referencia: alertasEquipo.referencia, fechaAlerta: alertasEquipo.fechaAlerta, aplicabilidad: alertasEquipo.aplicabilidad,

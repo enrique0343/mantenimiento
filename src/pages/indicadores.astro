@@ -13,7 +13,7 @@ const groups=[{label:"Resultados y seguimiento",links:[
 {href:"/satisfaccion",label:"Satisfacción",description:"Encuestas y seguimiento de la atención."},
 {href:"/presupuesto",label:"Presupuesto",description:"Plan y ejecución de gastos por área."},
 {href:"/cumplimiento",label:"Cumplimiento JCI",description:"Inventario, mantenimiento, metrología, expediente y seguridad de los equipos biomédicos.",show:esBio},
-{href:"/cobertura",label:"Cobertura documental",description:"Qué familias de equipos tienen sus cinco documentos.",show:!esBio},
+{href:"/cobertura",label:"Cobertura documental",description:"Qué familias de equipos tienen sus cinco documentos.",show:espacio==="general"},
 ]}];
 ---
 <ModuleHub title="Indicadores y reportes" description={`Resultados del espacio ${ESPACIOS[espacio].etiqueta}. Para ver los del otro espacio, cámbialo arriba.`} groups={groups}/>

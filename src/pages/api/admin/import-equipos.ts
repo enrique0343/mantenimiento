@@ -1,12 +1,14 @@
 import type { APIRoute } from "astro";
 import type { BatchItem } from "drizzle-orm/batch";
 import { z } from "zod";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos, auditLog, centrosCosto, proveedores, sucursales, ubicaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { AREA_KEYS, parseArea } from "@/lib/areas";
 import { csvResponse } from "@/lib/csv";
+import { MENSAJE_TRASLADO_TI } from "@/lib/tecnologia";
+import { puedeEntrar, espacioDeActivo, espacioDeArea } from "@/lib/espacio";
 import { hoySV } from "@/lib/biomedico";
 import {
   planificarImportacion, plantillaCsv, resumenActualizacionCarga, resumenAltaCarga,
@@ -67,6 +69,7 @@ export const POST: APIRoute = async (ctx) => {
     return Response.json({ error }, { status: 400 });
   }
   const { csv, modo, area = null } = parsed.data;
+  if (area && !puedeEntrar(user, espacioDeArea(area))) return Response.json({ error: "No tienes permiso para cargar equipos de ese espacio." }, { status: 403 });
   const dryRun = parsed.data.dryRun ?? false;
   const archivo = parsed.data.archivo?.replace(/[\u0000-\u001f\u007f]/g, "").trim() || null;
   const db = getDb(ctx);
@@ -91,11 +94,29 @@ export const POST: APIRoute = async (ctx) => {
   ]);
 
   const plan = planificarImportacion(csv, {
-    modo, area, hoy: hoySV(), activos: activosCtx, ubicaciones: ubicacionesCtx, sucursales: sucursalesCtx,
+    modo, area, hoy: hoySV(), activos: activosCtx.filter((a) => puedeEntrar(user, espacioDeActivo(a))), ubicaciones: ubicacionesCtx, sucursales: sucursalesCtx,
     centros: centrosCtx, proveedores: proveedoresCtx,
   });
   if (plan.error) return Response.json({ error: plan.error }, { status: 400 });
 
+
+  // Aplicar también al simulador: la importación no es una excepción a permisos ni trazabilidad.
+  const equiposPorId = new Map(activosCtx.map((a) => [a.id, a]));
+  const equiposPorCodigo = new Map(activosCtx.map((a) => [a.codigo.trim().toUpperCase(), a]));
+  for (const fila of plan.resultados) {
+    const previo = (fila.activoId ? equiposPorId.get(fila.activoId) : undefined) ?? equiposPorCodigo.get(fila.codigo.trim().toUpperCase());
+    if (previo && !puedeEntrar(user, espacioDeActivo(previo))) {
+      fila.accion = "error"; fila.detalle = ["No tienes permiso para cargar equipos de ese espacio."]; fila.avisos = [];
+      continue;
+    }
+    if (fila.accion !== "crear" && fila.accion !== "actualizar") continue;
+    const destino = fila.nuevo?.rubro ?? fila.cambios?.rubro?.despues ?? previo?.rubro;
+    if ((previo && !puedeEntrar(user, espacioDeActivo(previo))) || !puedeEntrar(user, espacioDeArea(typeof destino === "string" ? destino : null))) {
+      fila.accion = "error"; fila.detalle = ["No tienes permiso para cargar equipos de ese espacio."];
+    } else if (previo?.rubro === "tecnologia" && ("ubicacionId" in (fila.cambios ?? {}) || "ubicacion" in (fila.cambios ?? {}))) {
+      fila.accion = "error"; fila.detalle = [MENSAJE_TRASLADO_TI];
+    }
+  }
   const total = plan.resultados.length;
   const desde = Math.min(parsed.data.desde ?? 0, total);
   const hasta = Math.min(Math.max(parsed.data.hasta ?? total, desde), total);
@@ -112,7 +133,7 @@ export const POST: APIRoute = async (ctx) => {
     const sentencias = (r: ResultadoFila): BatchItem<"sqlite">[] => {
       if (r.accion === "crear") {
         return [
-          db.insert(activos).values(r.nuevo!),
+          db.insert(activos).values(r.nuevo!).returning({ id: activos.id }),
           db.insert(auditLog).values({
             entidad: "activo", entidadId: sql`(SELECT id FROM activos WHERE codigo = ${r.codigo})`, accion: "create",
             usuarioId: user.id, cambios: null, resumen: resumenAltaCarga(archivo),
@@ -120,27 +141,54 @@ export const POST: APIRoute = async (ctx) => {
         ];
       }
       const set = Object.fromEntries(Object.entries(r.cambios ?? {}).map(([campo, c]) => [campo, c.despues]));
-      return [
-        db.update(activos).set(set).where(and(eq(activos.id, r.activoId!), "estado" in set ? ne(activos.estado, "baja") : undefined)),
-        db.insert(auditLog).values({
-          entidad: "activo", entidadId: r.activoId!, accion: "update", usuarioId: user.id,
-          cambios: JSON.stringify(r.cambiosBitacora ?? r.cambios ?? {}), resumen: resumenActualizacionCarga(r.cambiosLegibles ?? []),
+      const previo = equiposPorId.get(r.activoId!)!;
+      // El área y los valores usados al simular siguen vigentes al escribir. Un
+      // traslado/reclasificación concurrente no convierte una carga autorizada
+      // en una escritura de otro espacio ni deja un "antes" falso en bitácora.
+      const donde = and(
+        eq(activos.id, r.activoId!), eq(activos.codigo, previo.codigo),
+        previo.rubro == null ? isNull(activos.rubro) : eq(activos.rubro, previo.rubro),
+        eq(activos.tipo, previo.tipo),
+        ...Object.entries(r.cambios ?? {}).map(([campo, cambio]) => {
+          const columna = activos[campo as keyof typeof activos.$inferSelect];
+          return cambio.antes == null ? isNull(columna) : eq(columna, cambio.antes as any);
         }),
+        "centroCostoId" in set ? (previo.ubicacionId == null ? isNull(activos.ubicacionId) : eq(activos.ubicacionId, previo.ubicacionId)) : undefined,
+        "estado" in set ? ne(activos.estado, "baja") : undefined,
+      )!;
+      // Ambas sentencias comparten guarda y transacción. Si pierde la carrera,
+      // no se escribe ni auditoría ni activo, y RETURNING permite contarlo bien.
+      return [
+        db.insert(auditLog).select(db.select({
+          id: sql<number>`null`.as("id"), entidad: sql<string>`'activo'`.as("entidad"),
+          entidadId: sql<number>`${activos.id}`.as("entidad_id"), accion: sql<string>`'update'`.as("accion"),
+          usuarioId: sql<number>`${user.id}`.as("usuario_id"),
+          cambios: sql<string>`${JSON.stringify(r.cambiosBitacora ?? r.cambios ?? {})}`.as("cambios"),
+          resumen: sql<string>`${resumenActualizacionCarga(r.cambiosLegibles ?? [])}`.as("resumen"),
+          createdAt: sql<string>`CURRENT_TIMESTAMP`.as("created_at"),
+        }).from(activos).where(donde)),
+        db.update(activos).set(set).where(donde).returning({ id: activos.id }),
       ];
     };
-    const contar = (filas: ResultadoFila[]) => {
-      for (const r of filas) { if (r.accion === "crear") insertados++; else actualizados++; }
+    const contar = (filas: ResultadoFila[], resultados: unknown[]) => {
+      for (const [i, r] of filas.entries()) {
+        const guardadas = resultados[i * 2 + (r.accion === "crear" ? 0 : 1)];
+        if (!Array.isArray(guardadas) || guardadas.length !== 1) {
+          fallos.set(r.fila, "El equipo cambió mientras se procesaba la carga. Vuelve a simular; esta fila no se modificó.");
+        } else if (r.accion === "crear") insertados++;
+        else actualizados++;
+      }
     };
     const grabar = (lista: BatchItem<"sqlite">[]) => db.batch(lista as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
     const aplicar = rango.filter((r) => r.accion === "crear" || r.accion === "actualizar");
     for (let i = 0; i < aplicar.length; i += LOTE_FILAS_IMPORTACION) {
       const lote = aplicar.slice(i, i + LOTE_FILAS_IMPORTACION);
       try {
-        await grabar(lote.flatMap(sentencias));
-        contar(lote);
+        const guardados = await grabar(lote.flatMap(sentencias));
+        contar(lote, guardados);
       } catch {
         for (const r of lote) {
-          try { await grabar(sentencias(r)); contar([r]); }
+          try { const guardados = await grabar(sentencias(r)); contar([r], guardados); }
           catch (error) { fallos.set(r.fila, `No se pudo grabar: ${mensajeCorto(error)}`); }
         }
       }

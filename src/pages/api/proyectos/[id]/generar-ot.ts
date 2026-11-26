@@ -1,3 +1,5 @@
+import { espacioDeArea } from "@/lib/espacio";
+import { bloqueoEspacio, asignadoFueraDeEspacio, mensajeAsignadoFuera } from "@/lib/espacio-db";
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
@@ -8,14 +10,14 @@ import { logAudit } from "@/lib/audit";
 import { disparadorProyecto } from "@/lib/notificaciones";
 
 import { conCodigo, validarAreaTrabajo } from "@/lib/ordenes";
-import { parseArea } from "@/lib/areas";
+import { parseArea, AREA_KEYS } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
 import { rechazoOrdenEquipoBaja } from "@/lib/equipo-baja";
 
 export const prerender = false;
 
 const schema = z.object({
-  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
   titulo: z.string().min(1),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo"]).default("correctivo"),
@@ -50,6 +52,11 @@ export const POST: APIRoute = async (ctx) => {
   const activoId = parsed.data.activoId !== undefined ? parsed.data.activoId : p.activoId;
   const areaResult = await validarAreaTrabajo(db, { rubro: inheritedArea ?? parsed.data.rubro, activoId, sucursalId: p.sucursalId, ubicacionId: p.ubicacionId });
   if ("error" in areaResult) return Response.json({ error: areaResult.error }, { status: 400 });
+  const espacio = espacioDeArea(areaResult.rubro);
+  const bloqueo = bloqueoEspacio(user, espacio);
+  if (bloqueo) return bloqueo;
+  const fuera = await asignadoFueraDeEspacio(db, parsed.data.asignadoA, [espacio]);
+  if (fuera) return Response.json({ error: mensajeAsignadoFuera(fuera) }, { status: 400 });
   // Fase 59 · requisito 13: equipo dado de baja → 409, antes de mover el proyecto a «en ejecución».
   const rechazoBaja = await rechazoOrdenEquipoBaja(db, activoId);
   if (rechazoBaja) return rechazoBaja;

@@ -1,4 +1,6 @@
 ---
+import { requireUser } from "@/lib/auth";
+import { equipoInicialSoporte } from "@/lib/soporte-equipo";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
@@ -10,8 +12,15 @@ export const prerender = false;
 const db = getDb(Astro);
 const url = new URL(Astro.request.url);
 const rawArea = url.searchParams.get("area");
-const area = parseArea(rawArea);
+let area = parseArea(rawArea);
 if (rawArea !== null && !area) return new Response("Área de mantenimiento inválida", { status: 400 });
+
+const { user: usuarioSesion } = await requireUser(Astro);
+const equipoInicial = await equipoInicialSoporte(db, usuarioSesion, url.searchParams.get("activoId"), area);
+if (equipoInicial) {
+  area ??= equipoInicial.area;
+  Astro.response.headers.set("Cache-Control", "private, no-store");
+}
 
 const [emp] = await db.select().from(empresa).limit(1);
 const tieneLogo = !!emp?.logoR2Key;
@@ -143,12 +152,12 @@ const ubJson = JSON.stringify(ubRows);
       </div>
     </main>
 
-    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubJson }) }}>
-      const { ubJson } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+    <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ ubJson, equipoInicial }) }}>
+      const { ubJson, equipoInicial } = JSON.parse(decodeURIComponent(__encodedScriptVars));
       const allUbs = JSON.parse(ubJson);
       const sucEl = document.getElementById("sucursalId");
       const ubEl = document.getElementById("ubicacionId");
-      sucEl?.addEventListener("change", () => {
+      function cargarUbicaciones() {
         const sid = Number(sucEl.value);
         const filtered = sid ? allUbs.filter((u) => u.sucursalId === sid) : [];
         ubEl.innerHTML = sid
@@ -160,7 +169,8 @@ const ubJson = JSON.stringify(ubRows);
           o.textContent = u.nombre;
           ubEl.appendChild(o);
         });
-      });
+      }
+      sucEl?.addEventListener("change", cargarUbicaciones);
 
       // ─── Equipo (opcional): los de la ubicación elegida, sin los dados de baja ───
       const rubroEl = document.getElementById("rubro");
@@ -184,11 +194,20 @@ const ubJson = JSON.stringify(ubRows);
         const n = ++consultaEquipos;
         const ubicacionId = ubEl?.value || "";
         const previo = actEl.value;
-        if (!ubicacionId) { vaciarEquipos(); return; }
+        if (!ubicacionId) {
+          vaciarEquipos();
+          if (equipoInicial && !equipoInicial.ubicacionId && rubroEl.value === equipoInicial.area) agregarEquipoInicial();
+          return;
+        }
         const area = rubroEl?.value || "";
+        const conservaInicial = equipoInicial && previo === String(equipoInicial.id)
+          && ubicacionId === String(equipoInicial.ubicacionId)
+          && sucEl.value === String(equipoInicial.sucursalId) && area === equipoInicial.area;
         try {
           const res = await fetch("/api/tickets/publico/equipos?ubicacionId=" + encodeURIComponent(ubicacionId) + (area ? "&area=" + encodeURIComponent(area) : ""));
-          const j = res.ok ? await res.json().catch(() => null) : null;
+          if (!res.ok) throw new Error("No se pudo cargar la lista de equipos");
+          const j = await res.json();
+          if (!Array.isArray(j?.equipos)) throw new Error("Respuesta de equipos inválida");
           if (n !== consultaEquipos) return; // llegó una consulta más nueva
           const equipos = Array.isArray(j?.equipos) ? j.equipos : [];
           vaciarEquipos();
@@ -202,7 +221,7 @@ const ubJson = JSON.stringify(ubRows);
           if (previo && equipos.some((e) => String(e.id) === previo)) actEl.value = previo;
           actBox.classList.toggle("hidden", equipos.length === 0);
         } catch {
-          if (n === consultaEquipos) vaciarEquipos();
+          if (n === consultaEquipos && !conservaInicial) vaciarEquipos();
         }
       }
       sucEl?.addEventListener("change", cargarEquipos);
@@ -213,6 +232,24 @@ const ubJson = JSON.stringify(ubRows);
         const area = actEl.selectedOptions[0]?.dataset.area || "";
         if (area && rubroEl && !rubroFijo && rubroEl.value !== area) rubroEl.value = area;
       });
+
+      function agregarEquipoInicial() {
+        const o = document.createElement("option");
+        o.value = String(equipoInicial.id);
+        o.textContent = equipoInicial.codigo + " · " + equipoInicial.nombre;
+        o.dataset.area = equipoInicial.area;
+        actEl.appendChild(o);
+        actEl.value = o.value;
+        actBox.classList.remove("hidden");
+      }
+      if (equipoInicial) {
+        rubroEl.value = equipoInicial.area;
+        sucEl.value = equipoInicial.sucursalId ? String(equipoInicial.sucursalId) : "";
+        cargarUbicaciones();
+        ubEl.value = equipoInicial.ubicacionId ? String(equipoInicial.ubicacionId) : "";
+        agregarEquipoInicial();
+        if (equipoInicial.ubicacionId) cargarEquipos();
+      }
 
       // ─── Fotos pendientes ──────────────────────────────────────────────
       const pendingFotos = [];

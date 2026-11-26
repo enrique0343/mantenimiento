@@ -1,0 +1,153 @@
+// Inventario y formularios TI construidos por Astro, con migraciones SQLite reales.
+// También ejecuta el JS servido de custodia en DOM para probar errores, revisión,
+// reintentos idempotentes, paginación y contenido escapado. Sin llamadas externas.
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+import { JSDOM } from 'jsdom';
+import { experimental_AstroContainer } from 'astro/container';
+import { setupConjuntos } from './test-support/conjuntos-app.mjs';
+import { fijarReloj } from './test-support/reloj.mjs';
+fijarReloj();
+const f = await setupConjuntos({ modules: { categorias: 'lib/categorias-equipos', filtros: 'lib/inventario-filtros' } });
+const { sqlite, DB, app } = f;
+let checks = 0;
+const ok = (c, m) => { assert.ok(c, m); checks++; };
+const es = (a, b, m) => { assert.deepEqual(a, b, m); checks++; };
+const page = async (file) => (await import(pathToFileURL(path.join(process.cwd(), 'dist/_worker.js/pages', file)).href)).page().default;
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+try {
+  sqlite.exec(`INSERT INTO sucursales(id,nombre,activa) VALUES(1,'SEDE TI',1);
+    INSERT INTO ubicaciones(id,sucursal_id,nombre,tipo,activa) VALUES(1,1,'ADMISIONES','area',1),(2,1,'OFICINA TI','area',1);
+    INSERT INTO activos(id,codigo,nombre,rubro,tipo,ubicacion_id,categoria,datos_tecnicos) VALUES
+    (801,'TEC-801','PC DE ADMISIONES','tecnologia','general',1,'MONITORES','{"nombreRed":"PC-ADMISION","memoriaRamGb":16,"direccionIp":"192.168.10.20"}'),
+    (802,'TEC-802','IMPRESORA TI','tecnologia','general',1,'IMPRESORAS',NULL),
+    (803,'BIO-803','MONITOR CLINICO','biomedico','biomedico',1,'MONITORES',NULL);
+    INSERT INTO tecnologia_custodia(activo_id,nombre,departamento,revision,updated_at,asignado_en) VALUES(801,'PERSONA TI','ADMISIONES',1,'2026-11-26T14:00:00Z','2026-11-26T14:00:00Z');`);
+  es(app.categorias.normalizarCategoria('monitores', 'general', 'tecnologia'), 'MONITORES', 'Monitores TI no se convierten en signos vitales');
+  es(app.categorias.normalizarCategoria('monitores', 'biomedico', 'biomedico'), 'Monitores de signos vitales', 'Se conserva normalización biomédica');
+  const tech = app.assetArea.datosTecnicosRegistroSchema.parse({ nombreRed: 'pc-sala', memoriaRamGb: 16, direccionMac: 'aa:bb:cc:dd:ee:ff' });
+  es(tech.nombreRed, 'PC-SALA', 'Ficha técnica normaliza mayúsculas al guardar');
+  ok(app.assetArea.datosTecnicosValidosParaArea('tecnologia', tech), 'Campos TI válidos en TI');
+  ok(!app.assetArea.datosTecnicosValidosParaArea('biomedico', tech), 'No se filtran campos TI a otras áreas');
+  ok(!app.assetArea.datosTecnicosRegistroSchema.safeParse({ puertosRed: 1.5 }).success, 'Puertos enteros');
+  const container = await experimental_AstroContainer.create();
+  const render = async (file, route, rol = 'admin', id, especialidad = null) => {
+    const response = await container.renderToResponse(await page(file), { partial: false, request: new Request(`https://test.invalid${route}`), params: id ? { id: String(id) } : {}, locals: { user: { id: rol === 'admin' ? 1 : 4, nombre: 'PRUEBA TI', email: 'prueba@example.invalid', rol, especialidad }, runtime: { env: { DB } } } });
+    es(response.status, 200, `Render ${file}`); const html = await response.text();
+    return { html, dom: new JSDOM(html, { url: `https://test.invalid${route}`, runScripts: 'outside-only' }) };
+  };
+  const panorama = await render('index.astro.mjs', '/?espacio=tecnologia');
+  const pd = panorama.dom.window.document;
+  es(pd.querySelector('h1').textContent, 'Panorama de tecnología', 'Panorama TI tiene título propio');
+  es(pd.querySelector('#sidebar').dataset.espacio, 'tecnologia', 'Navegación corresponde a TI');
+  es([...pd.querySelectorAll('#espacioSwitch button[name="espacio"]')].map((b) => b.value), ['general', 'biomedico', 'tecnologia'], 'Admin cambia entre los tres espacios');
+  const menu = [...pd.querySelectorAll('#sidebar a.app-nav-link')].map((a) => a.getAttribute('href'));
+  ok(menu.some((href) => href.startsWith('/activos?area=tecnologia')), 'Menú TI abre inventario de hardware');
+  ok(menu.some((href) => href.startsWith('/tickets?area=tecnologia')), 'Menú TI abre helpdesk');
+  ok(!menu.some((href) => /^\/(ronda|aop|eop|electrico|calibraciones|cumplimiento|expedientes)(?:[/?]|$)/.test(href)), 'TI no incluye módulos de rondas, JCI ni calibraciones');
+  const jefeTi = await render('index.astro.mjs', '/?espacio=tecnologia', 'jefe', undefined, 'tecnologia');
+  ok(!jefeTi.dom.window.document.querySelector('#espacioSwitch'), 'Jefe TI no ofrece otros espacios');
+  const preventivos = await render('preventivos.astro.mjs', '/preventivos?espacio=tecnologia');
+  ok(preventivos.dom.window.document.body.textContent.includes('Solo hardware del espacio Tecnología.'), 'Preventivos TI conserva alcance explícito');
+  const listar = await render('activos.astro.mjs', '/activos?area=tecnologia&espacio=tecnologia');
+  const doc = listar.dom.window.document;
+  ok(doc.body.textContent.includes('PERSONA TI'), 'Inventario incluye custodio actual');
+  ok(!doc.querySelector('#resultsContainer').textContent.includes('MONITOR CLINICO'), 'Inventario aislado de Biomédico');
+  ok(doc.querySelector('#custodiaFiltro'), 'Filtro de persona visible');
+  for (const script of doc.querySelectorAll('script:not([src])')) if (script.textContent.includes('function aplicarBusqueda')) listar.dom.window.eval(script.textContent);
+  const filter = doc.querySelector('#custodiaFiltro'); filter.value = '__sin__'; filter.dispatchEvent(new listar.dom.window.Event('change'));
+  es(doc.querySelector('#visibleCount').textContent, '1', 'Filtro sin asignación cuenta sólo impresora');
+  ok([...doc.querySelectorAll('[data-con-busqueda]')].every((a) => a.hidden), 'No ofrece descargar una selección distinta a la visible');
+  filter.value = 'PERSONA TI'; filter.dispatchEvent(new listar.dom.window.Event('change'));
+  es(doc.querySelector('#visibleCount').textContent, '1', 'Filtro por persona');
+  const nuevo = await render('activos/nuevo.astro.mjs', '/activos/nuevo?espacio=tecnologia');
+  const nd = nuevo.dom.window.document;
+  for (const script of nd.querySelectorAll('script:not([src])')) if (script.textContent.includes('function actualizarArea')) nuevo.dom.window.eval(script.textContent);
+  es(nd.querySelector('#rubro').value, 'tecnologia', 'Nuevo en espacio TI conserva área aunque no venga query area');
+  es([...nd.querySelector('#rubro').options].map((o) => o.value), ['tecnologia'], 'Registro ofrece área TI, no cruza espacios');
+  ok(!nd.querySelector('#tecnologiaFields').classList.contains('hidden'), 'Perfil hardware visible');
+  ok([...nd.querySelectorAll('#tecnologiaFields input')].every((input) => !input.required && !input.disabled), 'Todos los campos nuevos de hardware opcionales');
+  ok(nd.querySelector('#codigoPrefijo').textContent === 'TEC', 'Código automático TEC');
+  ok([...nd.querySelector('#categoriasList').children].some((o) => o.value === 'SWITCHES'), 'Categorías de red disponibles');
+  let nuevoPayload;
+  nuevo.dom.window.fetch = async (_url, options) => { nuevoPayload = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'VALIDACIÓN DE PRUEBA' }) }; };
+  nd.querySelector('#nombreRed').value = 'PC-PRUEBA'; nd.querySelector('#memoriaRamGb').value = '8';
+  nd.querySelector('#form').dispatchEvent(new nuevo.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  es(nuevoPayload.rubro, 'tecnologia', 'Registro envía área TI');
+  es(nuevoPayload.datosTecnicos.nombreRed, 'PC-PRUEBA', 'Registro envía ficha técnica');
+  es(nuevoPayload.datosTecnicos.memoriaRamGb, 8, 'Registro conserva valores numéricos');
+  es(nuevoPayload.codigo, null, 'Código vacío se delega al generador automático');
+  ok(!('tipoUnidad' in nuevoPayload.datosTecnicos), 'Registro no mezcla campos de aire');
+  const importar = await render('activos/importar.astro.mjs', '/activos/importar?espacio=tecnologia');
+  es(importar.dom.window.document.querySelector('#file').dataset.area, 'tecnologia', 'Carga masiva en TI no cae en General');
+  const editar = await render('activos/_id_/editar.astro.mjs', '/activos/801/editar?area=tecnologia&espacio=tecnologia', 'admin', 801);
+  ok(editar.dom.window.document.querySelector('#ubicacionSel').disabled, 'Editar no permite mover ubicación por fuera del historial');
+  ok(editar.dom.window.document.querySelector('#ubicacion').disabled, 'Texto de ubicación también protegido');
+  es(editar.dom.window.document.querySelector('#nombreRed').value, 'PC-ADMISION', 'Ficha editada conserva hardware registrado');
+  const ed = editar.dom.window.document;
+  for (const script of ed.querySelectorAll('script:not([src])')) if (script.textContent.includes('function actualizarArea')) editar.dom.window.eval(script.textContent);
+  let editarPayload;
+  editar.dom.window.fetch = async (_url, options) => { editarPayload = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'VALIDACIÓN DE PRUEBA' }) }; };
+  ed.querySelector('#nombreRed').value = 'PC-EDITADO';
+  ed.querySelector('#form').dispatchEvent(new editar.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  es(editarPayload.datosTecnicos.nombreRed, 'PC-EDITADO', 'Editar envía datos técnicos TI');
+  ok(!('ubicacion' in editarPayload) && !('ubicacionId' in editarPayload), 'Editar no reenvía ubicaciones de una ficha antigua');
+  ok(!('centroCostoId' in editarPayload), 'Editar no reenvía centro de costo que el usuario no cambió');
+  const ficha = await render('activos/_id_.astro.mjs', '/activos/801?area=tecnologia&espacio=tecnologia', 'admin', 801);
+  const fd = ficha.dom.window.document;
+  ok(!fd.querySelector('#scp') && !fd.querySelector('#mapa-distribucion'), 'Equipo TI nuevo no muestra configuración de sistemas generales vacía');
+  ok(fd.querySelector('[data-custodia]'), 'Ficha incluye asignación y movimientos');
+  ok(fd.querySelector('a[href="/soporte?area=tecnologia&activoId=801&espacio=tecnologia"]'), 'Helpdesk recibe equipo preseleccionado');
+  ok(fd.body.textContent.includes('PC-ADMISION'), 'Ficha muestra especificaciones');
+  ok(!fd.querySelector('[data-asignar-ubicacion]'), 'No hay segunda ruta de ubicación sin trazabilidad');
+
+  // Ejecuta únicamente el bundle real de custodia; el resto de la página no realiza IO.
+  const widgetFile = (await fs.readdir('dist/_astro')).find((x) => x.startsWith('TecnologiaCustodia.') && x.endsWith('.js'));
+  const widget = await fs.readFile(path.join('dist/_astro', widgetFile), 'utf8');
+  const snapshot = { revision: 1, usuarioId: null, nombre: 'PERSONA TI', departamento: 'ADMISIONES', cargo: null, asignadoEn: '2026-11-26T14:00:00Z', ubicacionId: 1, ubicacionNombre: 'ADMISIONES', sedeId: 1, sedeNombre: 'SEDE TI' };
+  let state = { custodia: snapshot, historial: [{ id: 51, accion: 'asignar', actorNombre: 'ADMIN', fecha: '2026-11-26T14:00:00Z', motivo: '<img src=x onerror=alert(1)>', antes: null, despues: snapshot }], usuarios: [{ id: 1, nombre: 'ADMIN' }], ubicaciones: [{ id: 1, nombre: 'ADMISIONES', sucursalNombre: 'SEDE TI' }, { id: 2, nombre: 'OFICINA TI', sucursalNombre: 'SEDE TI' }], puedeEditar: true, nextCursor: 51 };
+  let posts = []; let mode = 'network';
+  ficha.dom.window.fetch = async (url, options = {}) => {
+    if (String(url).includes('before=')) return { ok: true, json: async () => ({ ...state, historial: [{ ...state.historial[0], id: 1, motivo: 'ENTREGA ANTERIOR' }], nextCursor: null }) };
+    if (options.method === 'POST') {
+      posts.push(JSON.parse(options.body));
+      if (mode === 'network') throw new Error('Conexión interrumpida');
+      if (mode === 'conflict') return { ok: false, status: 409, json: async () => ({ error: 'El equipo cambió.' }) };
+      state = { ...state, custodia: { ...snapshot, revision: 2, nombre: posts.at(-1).nombre }, nextCursor: null };
+      return { ok: true, json: async () => state };
+    }
+    return { ok: true, json: async () => state };
+  };
+  ficha.dom.window.eval(widget); await tick();
+  ok(!fd.querySelector('[data-custodia-editor]').hidden, 'Usuario operativo puede registrar movimientos');
+  es(fd.querySelector('#custodiaAccion').value, 'reasignar', 'Equipo asignado propone reasignar');
+  ok(fd.querySelector('[data-custodia-historial]').textContent.includes('<img src=x'), 'Motivo conserva texto literal');
+  ok(!fd.querySelector('[data-custodia-historial] img'), 'Historial no ejecuta HTML registrado');
+  fd.querySelector('[data-custodia-anteriores]').click(); await tick();
+  es(fd.querySelectorAll('[data-custodia-historial] li').length, 2, 'Paginación añade historial anterior');
+  ok(fd.querySelector('[data-custodia-anteriores]').hidden, 'Fin de paginación visible');
+  const cf = fd.querySelector('[data-custodia-form]');
+  fd.querySelector('#custodiaNombre').value = 'nueva persona'; fd.querySelector('#custodiaMotivo').value = 'cambio de puesto';
+  cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  es(posts.length, 1, 'Formulario envía movimiento');
+  es(posts[0].nombre, 'NUEVA PERSONA', 'Custodio escrito en minúsculas se envía en mayúsculas');
+  es(posts[0].revision, 1, 'Envía revisión observada');
+  es(posts[0].ubicacionActualId, 1, 'Envía ubicación observada para detectar conflictos');
+  cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  es(posts[1].requestId, posts[0].requestId, 'Reintento conserva UUID y evita duplicación');
+  mode = 'conflict'; cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  ok(fd.querySelector('[data-custodia-guardar]').disabled, 'Conflicto exige actualizar antes de reintentar');
+  ok(fd.querySelector('[data-custodia-mensaje]').textContent.includes('Actualizar'), 'Conflicto explica cómo recuperarse');
+  fd.querySelector('[data-custodia-refrescar]').click(); await tick();
+  ok(!fd.querySelector('[data-custodia-guardar]').disabled, 'Actualización explícita permite revisar y reintentar');
+  mode = 'ok'; cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
+  ok(fd.querySelector('[data-custodia-resumen]').textContent.includes('NUEVA PERSONA'), 'Asignación actualizada después de guardar');
+  ok(!fd.querySelector('[data-custodia-editor]').open, 'Editor cerrado tras confirmación');
+  state = { ...state, puedeEditar: false, usuarios: [], ubicaciones: [] };
+  fd.querySelector('[data-custodia-refrescar]').click(); await tick();
+  ok(fd.querySelector('[data-custodia-editor]').hidden, 'Lector conserva historial sin formulario editable');
+  console.log(`Tecnología UI: ${checks} comprobaciones correctas (SSR + DOM servido + SQLite real).`);
+} finally { await f.close(); }
