@@ -4,8 +4,9 @@ import { eq } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { puedeUsarCampo } from "@/lib/campo";
-import { adjuntos, campoOperaciones, ordenes, ordenVerificacion } from "@/lib/schema";
+import { campoOperaciones, ordenVerificacion } from "@/lib/schema";
 import { esRevisorOrden, horaDeAdjunto } from "@/lib/orden-verificacion";
+import { ErrorAlcanceOrden, guardAlcanceD1, leerOrdenConAlcance } from "@/lib/orden-alcance";
 
 export const prerender = false;
 
@@ -27,18 +28,28 @@ export const POST: APIRoute = async (ctx) => {
 
   const db = getDb(ctx);
   const [previa] = await db.select().from(campoOperaciones).where(eq(campoOperaciones.opId, opId)).limit(1);
-  if (previa) return Response.json({ ok: previa.resultado === "ok", repetida: true, error: previa.resultado === "ok" ? undefined : previa.detalle });
+  if (previa) {
+    if (previa.usuarioId !== user.id) return Response.json({ ok: false, error: "Identificador de operación no disponible." }, { status: 409 });
+    return Response.json({ ok: previa.resultado === "ok", repetida: true, error: previa.resultado === "ok" ? undefined : previa.detalle });
+  }
 
   const recibido = new Date().toISOString();
   const rechazar = async (mensaje: string, status: number) => {
-    await db.insert(campoOperaciones).values({ opId, usuarioId: user.id, tipo: "foto", ordenId: Number.isInteger(ordenId) ? ordenId : null, capturadoEn: at || recibido, recibidoEn: recibido, resultado: "rechazada", detalle: mensaje }).onConflictDoNothing();
+    // El rechazo pertenece a la cola del usuario; no agrega evidencia a una
+    // orden que pudo cambiar de espacio mientras se enviaba la foto.
+    await db.insert(campoOperaciones).values({ opId, usuarioId: user.id, tipo: "foto", ordenId: null, capturadoEn: at || recibido, recibidoEn: recibido, resultado: "rechazada", detalle: mensaje }).onConflictDoNothing();
     return Response.json({ ok: false, error: mensaje }, { status });
   };
   if (!Number.isInteger(ordenId) || ordenId <= 0) return rechazar("Orden inválida.", 400);
   if (!(file instanceof File)) return rechazar("Falta la foto.", 400);
   if (file.size > MAX_BYTES) return rechazar("La foto supera 10 MB.", 413);
-  const [order] = await db.select().from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
-  if (!order) return rechazar("La orden ya no existe.", 404);
+  let acceso: Awaited<ReturnType<typeof leerOrdenConAlcance>>;
+  try { acceso = await leerOrdenConAlcance(db, ordenId, user); }
+  catch (error) {
+    if (error instanceof ErrorAlcanceOrden) return rechazar(error.message, error.status);
+    throw error;
+  }
+  const order = acceso.orden;
   if (["cerrada", "cancelada"].includes(order.estado)) return rechazar("La orden ya está cerrada: la foto no se agregó.", 409);
   const [control] = await db.select().from(ordenVerificacion).where(eq(ordenVerificacion.ordenId, ordenId)).limit(1);
   const revisor = esRevisorOrden(user, control);
@@ -47,8 +58,31 @@ export const POST: APIRoute = async (ctx) => {
 
   const seguro = (file.name || "foto.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
   const r2Key = `ordenes/${ordenId}/${categoria}/${Date.now()}-${crypto.randomUUID()}-${seguro}`;
-  await getEnv(ctx).R2.put(r2Key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || "image/jpeg" } });
-  const [fila] = await db.insert(adjuntos).values({ ordenId, usuarioId: user.id, nombre: file.name || "foto.jpg", contentType: file.type || "image/jpeg", tamano: file.size, r2Key, categoria, createdAt: horaDeAdjunto() }).returning();
-  await db.insert(campoOperaciones).values({ opId, usuarioId: user.id, tipo: "foto", ordenId, capturadoEn: at || recibido, recibidoEn: recibido, resultado: "ok", detalle: JSON.stringify({ adjuntoId: fila.id }) }).onConflictDoNothing();
-  return Response.json({ ok: true, adjuntoId: fila.id }, { status: 201 });
+  const env = getEnv(ctx);
+  await env.R2.put(r2Key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || "image/jpeg" } });
+  try {
+    const vigente = guardAlcanceD1(db, acceso.guard);
+    const resultado = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO adjuntos(orden_id,usuario_id,nombre,content_type,tamano,r2_key,categoria,created_at)
+        SELECT ?,?,?,?,?,?,?,? WHERE (${vigente.sql})
+        AND NOT EXISTS(SELECT 1 FROM campo_operaciones WHERE op_id=?) RETURNING id`)
+        .bind(ordenId,user.id,file.name || "foto.jpg",file.type || "image/jpeg",file.size,r2Key,categoria,horaDeAdjunto(),...vigente.params,opId),
+      env.DB.prepare(`INSERT INTO campo_operaciones(op_id,usuario_id,tipo,orden_id,capturado_en,recibido_en,resultado,detalle)
+        SELECT ?,?,'foto',?,?,?,'ok',json_object('adjuntoId',id) FROM adjuntos WHERE r2_key=? AND changes()=1`)
+        .bind(opId,user.id,ordenId,at || recibido,recibido,r2Key),
+    ]);
+    const fila = resultado[0].results[0] as { id: number } | undefined;
+    if (!fila) {
+      await env.R2.delete(r2Key).catch(() => {});
+      const [confirmada] = await db.select().from(campoOperaciones).where(eq(campoOperaciones.opId, opId)).limit(1);
+      if (confirmada?.usuarioId === user.id && confirmada.ordenId === ordenId && confirmada.resultado === "ok") {
+        return Response.json({ ok: true, repetida: true });
+      }
+      return rechazar("La orden cambió mientras se enviaba la foto. Actualiza la ficha.", 409);
+    }
+    return Response.json({ ok: true, adjuntoId: fila.id }, { status: 201 });
+  } catch {
+    await env.R2.delete(r2Key).catch(() => {});
+    return Response.json({ ok: false, error: "No se pudo guardar la foto. Intenta de nuevo." }, { status: 500 });
+  }
 };

@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
 import { getDb, getEnv } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { esRevisorOrden, horaDeAdjunto } from "@/lib/orden-verificacion";
 import { adjuntos, ordenes, ordenVerificacion } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { ErrorAlcanceOrden, leerOrdenConAlcance } from "@/lib/orden-alcance";
 
 export const prerender = false;
 
@@ -15,8 +16,10 @@ export const POST: APIRoute = async (ctx) => {
   const ordenId = Number(ctx.params.id);
   const env = getEnv(ctx);
   const db = getDb(ctx);
-  const [order] = await db.select().from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
-  if (!order) return Response.json({ error: 'Orden no encontrada' }, { status: 404 });
+  let acceso;
+  try { acceso = await leerOrdenConAlcance(db, ordenId, user, { roles: ["admin", "jefe", "tecnico"] }); }
+  catch (error) { if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.message }, { status: error.status }); throw error; }
+  const order = acceso.orden;
   if (['cerrada', 'cancelada'].includes(order.estado)) return Response.json({ error: 'Reabre la orden antes de agregar evidencia nueva.' }, { status: 409 });
   const [control] = await db.select().from(ordenVerificacion).where(eq(ordenVerificacion.ordenId, ordenId)).limit(1);
   const reviewer = esRevisorOrden(user, control);
@@ -43,18 +46,23 @@ export const POST: APIRoute = async (ctx) => {
     httpMetadata: { contentType: file.type || "application/octet-stream" },
   });
 
-  const [row] = await db
-    .insert(adjuntos)
-    .values({
-      ordenId,
-      usuarioId: user.id,
-      nombre: file.name,
-      contentType: file.type || "application/octet-stream",
-      tamano: file.size,
-      r2Key,
-      categoria,
-      createdAt: horaDeAdjunto(),
-    })
-    .returning();
+  let row;
+  try {
+    [row] = await db.insert(adjuntos).select(db.select({
+      id: sql<number>`null`.as("id"), ordenId: sql<number>`${ordenId}`.as("orden_id"),
+      usuarioId: sql<number>`${user.id}`.as("usuario_id"), nombre: sql<string>`${file.name}`.as("nombre"),
+      contentType: sql<string>`${file.type || "application/octet-stream"}`.as("content_type"),
+      tamano: sql<number>`${file.size}`.as("tamano"), r2Key: sql<string>`${r2Key}`.as("r2_key"),
+      categoria: sql<"antes" | "despues" | "documento" | "general">`${categoria}`.as("categoria"),
+      createdAt: sql<string>`${horaDeAdjunto()}`.as("created_at"),
+    }).from(ordenes).where(and(eq(ordenes.id, ordenId), acceso.guard))).returning();
+  } catch (error) {
+    await env.R2.delete(r2Key).catch(() => {});
+    throw error;
+  }
+  if (!row) {
+    await env.R2.delete(r2Key).catch(() => {});
+    return Response.json({ error: "La orden cambió mientras se cargaba el archivo. Actualiza la página." }, { status: 409 });
+  }
   return Response.json({ adjunto: row }, { status: 201 });
 };

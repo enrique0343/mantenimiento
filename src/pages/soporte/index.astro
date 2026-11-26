@@ -6,7 +6,7 @@ import "@/styles/globals.css";
 import { getDb } from "@/lib/db";
 import { sucursales, ubicaciones, empresa } from "@/lib/schema";
 import { eq } from "drizzle-orm";
-import { parseArea, AREAS, AREA_KEYS } from "@/lib/areas";
+import { parseArea } from "@/lib/areas";
 export const prerender = false;
 
 const db = getDb(Astro);
@@ -29,6 +29,8 @@ const sucRows = await db.select({ id: sucursales.id, nombre: sucursales.nombre }
 const ubRows = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId, tipo: ubicaciones.tipo })
   .from(ubicaciones).where(eq(ubicaciones.activa, true)).orderBy(ubicaciones.nombre);
 const ubJson = JSON.stringify(ubRows);
+const tipoReporte = area === "biomedico" || area === "tecnologia" ? area : area ? "general" : "";
+const areaGeneral = tipoReporte === "general" ? area : "";
 ---
 
 <!doctype html>
@@ -59,8 +61,8 @@ const ubJson = JSON.stringify(ubRows);
       </div>
 
       <div id="formBox">
-        <h2 class="text-2xl font-bold">{area ? `Solicitud · ${AREAS[area].label}` : "Cuéntanos qué necesita atención"}</h2>
-        <p class="mt-1 text-sm text-slate-600">Si llegaste hasta aquí es porque algo dejó de funcionar. Gracias por detenerte a contárnoslo; lo resolvemos juntos.</p>
+        <h2 class="text-2xl font-bold">Reportar un problema</h2>
+        <p class="mt-1 text-sm text-slate-600">Un solo formulario para General, Biomédico y Tecnología. Elige dónde crees que corresponde el problema; el equipo que lo reciba podrá derivarlo si hace falta.</p>
 
         <form id="form" class="card mt-5 space-y-4 p-5">
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -77,10 +79,23 @@ const ubJson = JSON.stringify(ubRows);
               <input class="input" id="solicitanteTelefono" type="tel" />
             </div>
             <div>
-              <label class="label" for="rubro">Área de mantenimiento *</label>
-              <select class="input" id="rubro" required disabled={!!area}>
-                <option value="">— Selecciona el área —</option>
-                {AREA_KEYS.map((key) => <option value={key} selected={key === area}>{AREAS[key].label}</option>)}
+              <label class="label" for="tipoReporte">¿Qué tipo de problema quieres reportar? *</label>
+              <select class="input" id="tipoReporte" required aria-describedby="tipoReporteAyuda">
+                <option value="">— Selecciona una opción —</option>
+                <option value="general" selected={tipoReporte === "general"}>General</option>
+                <option value="biomedico" selected={tipoReporte === "biomedico"}>Biomédico</option>
+                <option value="tecnologia" selected={tipoReporte === "tecnologia"}>Tecnología</option>
+              </select>
+              <input type="hidden" id="rubro" value={area ?? ""} />
+              <p class="mt-1 text-xs text-slate-500" id="tipoReporteAyuda">General: instalaciones y aires. Biomédico: equipos de atención médica. Tecnología: computadoras, impresoras, teléfonos y redes.</p>
+            </div>
+            <div class="sm:col-span-2" id="rubroGeneralBox" hidden={tipoReporte !== "general"}>
+              <label class="label" for="rubroGeneral">Tipo de problema general <span class="font-normal text-slate-400">(opcional)</span></label>
+              <select class="input" id="rubroGeneral">
+                <option value="">— No estoy seguro —</option>
+                <option value="aires" selected={areaGeneral === "aires"}>Aire acondicionado</option>
+                <option value="infraestructura" selected={areaGeneral === "infraestructura"}>Infraestructura e instalaciones</option>
+                <option value="equipo_general" selected={areaGeneral === "equipo_general"}>Equipos generales</option>
               </select>
             </div>
             <div class="sm:col-span-2">
@@ -176,8 +191,17 @@ const ubJson = JSON.stringify(ubRows);
       const rubroEl = document.getElementById("rubro");
       const actBox = document.getElementById("activoBox");
       const actEl = document.getElementById("activoId");
-      // Con ?area= el área viene fija: elegir un equipo no la cambia.
-      const rubroFijo = !!rubroEl?.disabled;
+      const tipoEl = document.getElementById("tipoReporte");
+      const generalEl = document.getElementById("rubroGeneral");
+      const generalBox = document.getElementById("rubroGeneralBox");
+      const tipoDeArea = (area) => ["biomedico", "tecnologia"].includes(area) ? area : "general";
+      let permitirEquipoInicial = !!equipoInicial;
+      function ajustarTipo() {
+        generalBox.hidden = tipoEl.value !== "general";
+        generalEl.disabled = tipoEl.value !== "general";
+        rubroEl.value = tipoEl.value === "general" ? (generalEl.value || "equipo_general") : tipoEl.value;
+      }
+      ajustarTipo();
       const OPCION_VACIA = "— No sé / no está en la lista —";
       let consultaEquipos = 0;
       function vaciarEquipos() {
@@ -196,15 +220,18 @@ const ubJson = JSON.stringify(ubRows);
         const previo = actEl.value;
         if (!ubicacionId) {
           vaciarEquipos();
-          if (equipoInicial && !equipoInicial.ubicacionId && rubroEl.value === equipoInicial.area) agregarEquipoInicial();
+          if (permitirEquipoInicial && equipoInicial && !equipoInicial.ubicacionId && rubroEl.value === equipoInicial.area) agregarEquipoInicial();
           return;
         }
-        const area = rubroEl?.value || "";
-        const conservaInicial = equipoInicial && previo === String(equipoInicial.id)
+        const area = tipoEl.value === "general" ? generalEl.value : rubroEl.value;
+        const conservaInicial = permitirEquipoInicial && equipoInicial && previo === String(equipoInicial.id)
           && ubicacionId === String(equipoInicial.ubicacionId)
-          && sucEl.value === String(equipoInicial.sucursalId) && area === equipoInicial.area;
+          && sucEl.value === String(equipoInicial.sucursalId)
+          && tipoEl.value === tipoDeArea(equipoInicial.area) && (!area || area === equipoInicial.area);
+        if (!tipoEl.value) { vaciarEquipos(); return; }
         try {
-          const res = await fetch("/api/tickets/publico/equipos?ubicacionId=" + encodeURIComponent(ubicacionId) + (area ? "&area=" + encodeURIComponent(area) : ""));
+          const res = await fetch("/api/tickets/publico/equipos?ubicacionId=" + encodeURIComponent(ubicacionId)
+            + "&espacio=" + encodeURIComponent(tipoEl.value) + (area ? "&area=" + encodeURIComponent(area) : ""));
           if (!res.ok) throw new Error("No se pudo cargar la lista de equipos");
           const j = await res.json();
           if (!Array.isArray(j?.equipos)) throw new Error("Respuesta de equipos inválida");
@@ -224,13 +251,24 @@ const ubJson = JSON.stringify(ubRows);
           if (n === consultaEquipos && !conservaInicial) vaciarEquipos();
         }
       }
-      sucEl?.addEventListener("change", cargarEquipos);
-      ubEl?.addEventListener("change", cargarEquipos);
-      rubroEl?.addEventListener("change", cargarEquipos);
-      // Un equipo de otra área ajusta el área (sin volver a pedir la lista).
+      // Un cambio de ubicación o de destinatario elimina el equipo previo antes de consultar.
+      // Así ni un envío inmediato ni una respuesta tardía conserva una selección incompatible.
+      const cambiarUbicacion = () => { ajustarTipo(); vaciarEquipos(); void cargarEquipos(); };
+      sucEl?.addEventListener("change", cambiarUbicacion);
+      ubEl?.addEventListener("change", cambiarUbicacion);
+      const cambiarTipo = () => {
+        ajustarTipo();
+        permitirEquipoInicial = false;
+        vaciarEquipos();
+        void cargarEquipos();
+      };
+      tipoEl.addEventListener("change", cambiarTipo);
+      generalEl.addEventListener("change", cambiarTipo);
+      // En General sin especialidad elegida, el equipo aporta su área concreta.
       actEl?.addEventListener("change", () => {
         const area = actEl.selectedOptions[0]?.dataset.area || "";
-        if (area && rubroEl && !rubroFijo && rubroEl.value !== area) rubroEl.value = area;
+        if (area && tipoDeArea(area) === tipoEl.value) rubroEl.value = area;
+        else ajustarTipo();
       });
 
       function agregarEquipoInicial() {
@@ -243,7 +281,9 @@ const ubJson = JSON.stringify(ubRows);
         actBox.classList.remove("hidden");
       }
       if (equipoInicial) {
-        rubroEl.value = equipoInicial.area;
+        tipoEl.value = tipoDeArea(equipoInicial.area);
+        if (tipoEl.value === "general") generalEl.value = equipoInicial.area;
+        ajustarTipo();
         sucEl.value = equipoInicial.sucursalId ? String(equipoInicial.sucursalId) : "";
         cargarUbicaciones();
         ubEl.value = equipoInicial.ubicacionId ? String(equipoInicial.ubicacionId) : "";
@@ -288,12 +328,22 @@ const ubJson = JSON.stringify(ubRows);
         err.classList.add("hidden");
         const v = (id) => document.getElementById(id)?.value?.trim() ?? "";
 
+        if (!tipoEl.value) {
+          err.textContent = "Selecciona General, Biomédico o Tecnología.";
+          err.classList.remove("hidden");
+          tipoEl.focus();
+          return;
+        }
         if (!sucEl?.value) {
           err.textContent = "La sucursal es obligatoria.";
           err.classList.remove("hidden");
           return;
         }
 
+        // El equipo conserva su área concreta; sin equipo, se usa la selección actual.
+        const areaEquipo = actEl?.selectedOptions[0]?.dataset.area || "";
+        if (areaEquipo && tipoDeArea(areaEquipo) === tipoEl.value) rubroEl.value = areaEquipo;
+        else ajustarTipo();
         btn.disabled = true;
         btn.textContent = "Enviando...";
         const payload = {

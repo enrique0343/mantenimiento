@@ -20,6 +20,7 @@ import { fmtFechaLarga, fmtFechaCompacta } from "@/lib/datetime";
 import { validarAreaTrabajo, validarContextoArea } from "@/lib/ordenes";
 import { ordenesTienenConjunto, MENSAJE_ORDEN_TRAZADA } from "@/lib/trazabilidad-conjuntos";
 import { asignadoFueraDeEspacio, espacioDeTrabajoGuardado, mensajeAsignadoFuera } from "@/lib/espacio-db";
+import { leerOrdenConAlcance, ErrorAlcanceOrden } from "@/lib/orden-alcance";
 
 
 // Un solo camino para cambiar una orden. La ficha completa (PATCH) y el celular
@@ -96,8 +97,13 @@ export async function aplicarCambioOrden(
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
-  const [actual] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
-  if (!actual) return Response.json({ error: "No encontrado" }, { status: 404 });
+  let acceso;
+  try { acceso = await leerOrdenConAlcance(db, id, user); }
+  catch (error) {
+    if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+  const actual = acceso.orden;
 
   const contextError = validarContextoArea(ctx.request, actual.rubro);
   if (contextError) return contextError;

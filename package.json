@@ -19,8 +19,8 @@
     "test:inline-script-vars": "node scripts/test-inline-script-vars.mjs",
     "test:preventivos:ssr": "node scripts/test-tablero-paginas.mjs",
     "test:panorama:ssr": "node scripts/test-panorama-render.mjs && node scripts/test-ronda-paginas.mjs && node scripts/test-ficha-orden.mjs && node scripts/test-tablero-paginas.mjs && node scripts/test-espacios-paginas.mjs && node scripts/test-espacios-costura-paginas.mjs && node scripts/test-espacios-revision-paginas.mjs && npm run test:tecnologia:paginas",
-    "test:tecnologia": "node scripts/test-tecnologia-migracion.mjs && node scripts/test-tecnologia-espacios.mjs && node scripts/test-tecnologia-custodia.mjs && node scripts/test-tecnologia-helpdesk.mjs && node scripts/test-tecnologia-ticket-concurrencia.mjs",
-    "test:tecnologia:paginas": "node scripts/test-tecnologia-paginas.mjs && node scripts/test-tecnologia-soporte-pagina.mjs"
+    "test:tecnologia": "node scripts/test-tecnologia-migracion.mjs && node scripts/test-tecnologia-espacios.mjs && node scripts/test-tecnologia-custodia.mjs && node scripts/test-tecnologia-helpdesk.mjs && node scripts/test-tecnologia-ticket-concurrencia.mjs && node scripts/test-tecnologia-alta-custodia.mjs && node scripts/test-ticket-derivacion.mjs && node scripts/test-ticket-derivacion-recursos.mjs && node scripts/test-ticket-derivacion-evidencias.mjs && node scripts/test-ticket-derivacion-fotos.mjs",
+    "test:tecnologia:paginas": "node scripts/test-tecnologia-paginas.mjs && node scripts/test-tecnologia-soporte-pagina.mjs && node scripts/test-soporte-unico.mjs && node scripts/test-ticket-derivacion-paginas.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.2.1",

@@ -10,6 +10,7 @@ import { siguienteFecha } from './frecuencias';
 import { leerNumero } from './numero';
 import { FALTA_LA_FOTO } from './frases-campo';
 import type { getDb } from './db';
+import { condicionAlcanceOrden, leerOrdenConAlcance, ErrorAlcanceOrden } from './orden-alcance';
 
 type DB = ReturnType<typeof getDb>;
 type Orden = typeof ordenes.$inferSelect;
@@ -300,6 +301,13 @@ async function validarCierreDocumental(db: DB, order: Orden, user: User, input: 
  * de un envío): van al final del mismo lote y cada una lleva la guarda que recibe, así que no escriben nada si el
  * cambio no entró. Si no hay nada que cambiar, tampoco se escriben. */
 export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user: User, input: Record<string, any>, now = new Date().toISOString(), conLaEscritura?: (guard: SQL) => unknown[]) {
+  let acceso;
+  try { acceso = await leerOrdenConAlcance(db, order.id, user); }
+  catch (error) {
+    if (error instanceof ErrorAlcanceOrden) throw new ErrorVerificacion(error.message, error.status);
+    throw error;
+  }
+  const alcanceVigente = and(acceso.guard, condicionAlcanceOrden(order))!;
   input = { ...input };
   // Lo que llegó igual a lo guardado, o viejo de una pestaña de antes, no es un
   // cambio: se deja fuera sin error.
@@ -601,9 +609,20 @@ export async function actualizarOrdenConVerificacion(db: DB, order: Orden, user:
       )
     )`;
   const snapshot = JSON.stringify({ antes: order, despues: { ...order, ...data }, adjuntos: currentAttachments, ejecutores: JSON.parse(stateData.executoresJson ?? state.executoresJson), revisorId: stateData.revisorId ?? state.revisorId, revisorSuplenteId: stateData.revisorSuplenteId ?? state.revisorSuplenteId, historicoSinControl: !saved });
+  // Una derivación mantiene la OT abierta, pero cambia quién puede atenderla.
+  // Estado/versión por sí solos permitían que una escritura leída en el espacio
+  // anterior iniciara después la OT ya derivada. El alcance que se autorizó debe
+  // seguir vigente tanto al crear el control como al reservar su nueva versión.
   const batch: any[] = [
-    db.insert(ordenVerificacion).values(initial).onConflictDoNothing(),
-    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), sql`exists (select 1 from ordenes where id = ${order.id} and estado = ${order.estado})`,
+    db.insert(ordenVerificacion).select(db.select({
+      ordenId: sql<number>`${initial.ordenId}`.as('orden_id'), version: sql<number>`0`.as('version'), ciclo: sql<number>`1`.as('ciclo'),
+      ejecutadoPor: sql<number>`null`.as('ejecutado_por'), executoresJson: sql<string>`'[]'`.as('executores_json'),
+      revisorId: sql<number>`null`.as('revisor_id'), revisorSuplenteId: sql<number>`null`.as('revisor_suplente_id'),
+      reprogramarPreventivos: sql<boolean>`1`.as('reprogramar_preventivos'), pmAvanzadoEn: sql<string>`${initial.pmAvanzadoEn}`.as('pm_avanzado_en'),
+      ultimoMotivo: sql<string>`null`.as('ultimo_motivo'), ultimaAccion: sql<string>`null`.as('ultima_accion'),
+      ultimoActorId: sql<number>`null`.as('ultimo_actor_id'), actualizadoEn: sql<string>`null`.as('actualizado_en'), operacionId: sql<string>`null`.as('operacion_id'),
+    }).from(ordenes).where(and(eq(ordenes.id, order.id), alcanceVigente))).onConflictDoNothing(),
+    db.update(ordenVerificacion).set(stateData).where(and(eq(ordenVerificacion.ordenId, order.id), eq(ordenVerificacion.version, state.version), alcanceVigente,
       // La fusión se hizo contra este checklist: si otra escritura lo cambió en medio, no se pisa.
       checklistFusionado ? sql`exists (select 1 from ordenes where id = ${order.id} and checklist_ejecucion is ${order.checklistEjecucion})` : undefined,
       attachmentsUnchanged)).returning({ ordenId: ordenVerificacion.ordenId }),

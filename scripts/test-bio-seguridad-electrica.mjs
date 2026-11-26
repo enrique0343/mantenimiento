@@ -223,7 +223,7 @@ try {
   R2.put = async () => { throw new Error('R2 sin servicio'); };
   es(await error(1001, { tipo: 'aceptacion', informe: pdf() }), [500, 'No se pudo subir el informe. Intenta de nuevo.'], 'R2 caído: error en texto');
   R2.put = putReal;
-  h.faults.beforeStatement = { matches: (q) => /insert into "pruebas_seguridad_electrica"/i.test(q), run: async () => { throw new Error('D1 sin servicio'); } };
+  h.faults.beforeStatement = { matches: (q) => /insert into "?pruebas_seguridad_electrica\b/i.test(q), run: async () => { throw new Error('D1 sin servicio'); } };
   es(await error(1001, { tipo: 'aceptacion', informe: pdf() }), [500, 'No se pudo guardar la prueba. Intenta de nuevo.'], 'la base falla: error en texto');
   es([fila('SELECT COUNT(*) AS c FROM pruebas_seguridad_electrica').c, r2.size], [filasAntes, objetosAntes], 'sin fila y sin archivo huérfano en R2');
 

@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
 import { ordenes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { ErrorAlcanceOrden, leerOrdenConAlcance } from "@/lib/orden-alcance";
 
 export const prerender = false;
 
@@ -40,8 +41,13 @@ export const POST: APIRoute = async (ctx) => {
     return Response.json({ error: "Solo admin/jefe puede firmar como jefe" }, { status: 403 });
   }
 
+  const db = getDb(ctx);
+  let acceso;
+  try { acceso = await leerOrdenConAlcance(db, id, user); }
+  catch (error) { if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.message }, { status: error.status }); throw error; }
+
   const { bytes, contentType } = dataUrlToBytes(parsed.data.imagenDataUrl);
-  const r2Key = `firmas/${id}/${parsed.data.rol}-${Date.now()}.png`;
+  const r2Key = `firmas/${id}/${parsed.data.rol}-${Date.now()}-${crypto.randomUUID()}.png`;
   await env.R2.put(r2Key, bytes, { httpMetadata: { contentType } });
 
   const now = new Date().toISOString();
@@ -60,7 +66,12 @@ export const POST: APIRoute = async (ctx) => {
     data.firmaSolicitanteFecha = now;
   }
 
-  const db = getDb(ctx);
-  await db.update(ordenes).set(data).where(eq(ordenes.id, id));
+  let rows;
+  try { rows = await db.update(ordenes).set(data).where(and(eq(ordenes.id, id), acceso.guard)).returning({ id: ordenes.id }); }
+  catch (error) { await env.R2.delete(r2Key).catch(() => {}); throw error; }
+  if (!rows.length) {
+    await env.R2.delete(r2Key).catch(() => {});
+    return Response.json({ error: "La orden cambió mientras se guardaba la firma. Actualiza la página." }, { status: 409 });
+  }
   return Response.json({ ok: true, r2Key });
 };

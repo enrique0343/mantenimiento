@@ -1,6 +1,6 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
-import { getDb } from "@/lib/db";
+import { getDb, getEnv } from "@/lib/db";
 import { activos, planesMantenimiento, centrosCosto, sucursales, ubicaciones } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { errorEmpresaEquipo } from "@/lib/tablero-bio";
@@ -17,6 +17,7 @@ import { modeloAireParaAlta, snapshotModeloAire, errorCatalogoAire, respuestaErr
 import { CLASES_RIESGO_VALORES, ESTADOS_ACTIVO, FRECUENCIAS_RUTINA_EQUIPO, esFechaISO, hoySV } from "@/lib/biomedico";
 import { logAudit } from "@/lib/audit";
 import { condicionActivoEspacio, espacioDeArea, espacioDeLista, puedeEntrar, respuestaOtroEspacio } from "@/lib/espacio";
+import { custodiaInicialSchema, sentenciasCustodiaInicial } from "@/lib/tecnologia";
 
 export const prerender = false;
 
@@ -79,6 +80,7 @@ const baseSchema = {
 
 const createSchema = z.object({
   ...baseSchema,
+  custodiaInicial: custodiaInicialSchema.nullable().optional(),
   modeloAireId: z.number().int().positive().safe().optional(),
   modeloAireVersion: z.number().int().positive().safe().optional(),
   modeloAireSnapshot: z.never().optional(),
@@ -100,13 +102,15 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: errorDeDatos(parsed.error) }, { status: 400 });
   const db = getDb(ctx);
   const { mantenimientoFrecuencia, mantenimientoProximaFecha, mantenimientoTitulo, mantenimientoPrioridad,
-    modeloAireId, modeloAireVersion, ...datosUnidad } = parsed.data;
+    modeloAireId, modeloAireVersion, custodiaInicial, ...datosUnidad } = parsed.data;
   let activoData = datosUnidad;
   const rubro = rubroDeActivo(activoData.rubro, activoData.tipo);
   const tipo = rubro === "biomedico" ? "biomedico" : "general";
   if (activoData.tipo && activoData.tipo !== tipo) return Response.json({ error: "El tipo de equipo no corresponde al área seleccionada" }, { status: 400 });
   // Un equipo del otro espacio no lo registra quien no entra a ese espacio.
   if (!puedeEntrar(user, espacioDeArea(rubro))) return respuestaOtroEspacio(espacioDeArea(rubro));
+  if (custodiaInicial?.nombre && rubro !== "tecnologia") return Response.json({ error: "La asignación de personas solo está disponible para equipos de Tecnología." }, { status: 400 });
+  if (custodiaInicial?.nombre && activoData.estado === "baja") return Response.json({ error: "Un equipo dado de baja no admite una nueva asignación de persona." }, { status: 409 });
   let modeloAireSnapshot: string | null = null;
   if (modeloAireId !== undefined && modeloAireVersion !== undefined) {
     if (rubro !== "aires") return Response.json({ error: "Las fichas del catálogo solo se pueden usar para aires acondicionados" }, { status: 400 });
@@ -172,26 +176,36 @@ export const POST: APIRoute = async (ctx) => {
     };
     try {
       const registro = db.insert(activos).values(data).returning();
+      const plan = mantenimientoFrecuencia ? db.insert(planesMantenimiento).values({
+        activoId: sql`(SELECT id FROM activos WHERE codigo = ${codigo})`,
+        titulo: mantenimientoTitulo || `MANTENIMIENTO PREVENTIVO ${mantenimientoFrecuencia.toUpperCase()}`,
+        frecuencia: mantenimientoFrecuencia,
+        // «Desde hoy» es hoy en El Salvador, también después de las 18:00 locales.
+        proximaFecha: mantenimientoProximaFecha || siguienteFecha(hoySV(), mantenimientoFrecuencia as Frecuencia),
+        prioridad: mantenimientoPrioridad ?? "media",
+      }) : null;
+      const resumenAlta = automatico ? "Alta del equipo" : "Alta del equipo con código institucional";
       let row: typeof activos.$inferSelect;
-      if (mantenimientoFrecuencia) {
+      if (custodiaInicial?.nombre) {
+        const DB = getEnv(ctx).DB;
+        const consultas = [registro.toSQL(), ...(plan ? [plan.toSQL()] : [])];
+        await DB.batch([
+          ...consultas.map((q) => DB.prepare(q.sql).bind(...q.params)),
+          ...sentenciasCustodiaInicial(ctx, user, codigo, custodiaInicial, resumenAlta),
+        ]);
+        // Recupera el shape Drizzle (booleanos y nombres camelCase) después del batch crudo.
+        [row] = await db.select().from(activos).where(eq(activos.codigo, codigo)).limit(1);
+      } else if (plan) {
         // Asset and optional plan commit together. Retrying cannot leave an
         // orphaned asset if plan creation fails.
-        const [rows] = await db.batch([registro, db.insert(planesMantenimiento).values({
-          activoId: sql`(SELECT id FROM activos WHERE codigo = ${codigo})`,
-          titulo: mantenimientoTitulo || `MANTENIMIENTO PREVENTIVO ${mantenimientoFrecuencia.toUpperCase()}`,
-          frecuencia: mantenimientoFrecuencia,
-          // «Desde hoy» es hoy en El Salvador: con new Date(), después de las 18:00 el
-          // plan arrancaba un día más tarde (la fecha UTC ya es mañana).
-          proximaFecha: mantenimientoProximaFecha || siguienteFecha(hoySV(), mantenimientoFrecuencia as Frecuencia),
-          prioridad: mantenimientoPrioridad ?? "media",
-        })]);
+        const [rows] = await db.batch([registro, plan]);
         row = rows[0];
       } else {
         [row] = await registro;
       }
-      await logAudit(ctx, {
+      if (!custodiaInicial?.nombre) await logAudit(ctx, {
         entidad: "activo", entidadId: row.id, accion: "create",
-        resumen: automatico ? "Alta del equipo" : "Alta del equipo con código institucional",
+        resumen: resumenAlta,
       });
       return Response.json({ activo: row }, { status: 201 });
     } catch (error) {

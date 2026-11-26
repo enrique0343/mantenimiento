@@ -2,10 +2,14 @@
 import { esSolicitudPropia } from "@/lib/ticket-acceso";
 import { espacioDeTrabajo, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
+import { fmtMarcaSV } from "@/lib/datetime";
+import { rubroDeActivo } from "@/lib/rubros";
+import TicketDerivacion from "@/components/TicketDerivacion.astro";
+import { espacioDeActivo, parseEspacio, ESPACIOS } from "@/lib/espacio";
 import Layout from "@/layouts/Layout.astro";
 import { getDb } from "@/lib/db";
-import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos, ordenes } from "@/lib/schema";
-import { eq, asc, and, inArray } from "drizzle-orm";
+import { tickets, usuarios, sucursales, ubicaciones, activos, ticketComentarios, ticketAdjuntos, ordenes, auditLog } from "@/lib/schema";
+import { eq, asc, desc, and, inArray, lt } from "drizzle-orm";
 import { ESTADO_TICKET_LABEL, ESTADO_TICKET_COLOR, slaStatus, type EstadoTicket } from "@/lib/tickets";
 import { PRIO_COLOR } from "@/lib/ordenes";
 import { etiquetaOT } from "@/lib/orden-codigo";
@@ -62,6 +66,28 @@ const tecnicos = candidatosTecnicos.filter((u) => puedeEntrar(u, espacioTicket))
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);
 const puedeEditar = ["admin", "jefe", "tecnico"].includes(user.rol);
+const puedeDerivar = puedeEditar && (user.rol !== "tecnico" || !t.asignadoA || t.asignadoA === user.id);
+// Historial interno mínimo: no se consultan usuarios ni equipos del espacio destino.
+const rawAntes = Astro.url.searchParams.get("derivacionesAntes");
+const antesDerivaciones = rawAntes && /^\d+$/.test(rawAntes) && Number.isSafeInteger(Number(rawAntes)) && Number(rawAntes) > 0 ? Number(rawAntes) : null;
+const derivacionesFilas = user.rol !== "solicitante" ? await db.select({ id: auditLog.id, fecha: auditLog.createdAt, cambios: auditLog.cambios, actor: usuarios.nombre })
+  .from(auditLog).leftJoin(usuarios, eq(usuarios.id, auditLog.usuarioId))
+  .where(and(eq(auditLog.entidad, "ticket"), eq(auditLog.entidadId, id), eq(auditLog.accion, "derivacion"), antesDerivaciones ? lt(auditLog.id, antesDerivaciones) : undefined))
+  .orderBy(desc(auditLog.id)).limit(51) : [];
+const derivaciones = derivacionesFilas.slice(0, 50).map((d) => {
+  let cambios: any = {};
+  try { cambios = JSON.parse(d.cambios ?? "{}") ?? {}; } catch {}
+  const origen = parseEspacio(cambios.antes?.espacio), destino = parseEspacio(cambios.despues?.espacio);
+  return { ...d, origen: origen ? ESPACIOS[origen].etiqueta : "Área registrada", destino: destino ? ESPACIOS[destino].etiqueta : "Área registrada",
+    motivo: typeof cambios.motivo === "string" ? cambios.motivo : "Motivo no disponible",
+    equipoRetirado: cambios.desvincularEquipo && Number.isSafeInteger(cambios.antes?.activoId) ? cambios.antes.activoId : null,
+    orden: typeof cambios.orden?.codigo === "string" ? cambios.orden.codigo : null };
+});
+const historialDerivacionesHref = (antes?: number) => {
+  const u = new URL(Astro.url); u.hash = "historial-derivaciones";
+  if (antes) u.searchParams.set("derivacionesAntes", String(antes)); else u.searchParams.delete("derivacionesAntes");
+  return u.pathname + u.search + u.hash;
+};
 const esAdmin = user.rol === "admin";
 const puedeConvertirAProyecto = puedeCrearProyecto(user.rol) && !t.otId && !t.proyectoId && t.estado !== "cerrado" && t.estado !== "descartado";
 
@@ -209,6 +235,24 @@ const docFalla = rigeFalla?.documento ?? null;
       <a href={areaHref(`/proyectos/${proyectoVinc.id}`, area)} class="btn-secondary">Ver {proyectoVinc.codigo} →</a>
     )}
   </div>
+
+  {puedeDerivar && <TicketDerivacion ticketId={t.id} espacioOrigen={espacioTicket} areaOrigen={area} updatedAt={t.updatedAt} estado={t.estado} proyectoId={t.proyectoId} ordenId={t.otId} activo={r.act ? { codigo: r.act.codigo, nombre: r.act.nombre, espacio: espacioDeActivo(r.act), rubro: rubroDeActivo(r.act.rubro, r.act.tipo) } : null} />}
+
+  {user.rol !== "solicitante" && (derivaciones.length > 0 || antesDerivaciones) && <section id="historial-derivaciones" class="card mt-4 p-5">
+    <h2 class="font-semibold text-slate-900">Historial de derivaciones</h2>
+    <p class="mt-1 text-xs text-slate-500">Cada cambio conserva su motivo y la fecha original de la solicitud. Horario de El Salvador.</p>
+    <ol class="mt-3 space-y-3">
+      {derivaciones.map((d) => <li class="rounded-lg border border-slate-200 p-3 text-sm">
+        <p class="font-medium">{d.origen} → {d.destino}</p>
+        <p class="text-xs text-slate-500">{fmtMarcaSV(d.fecha)} · Registró: {d.actor ?? "Usuario registrado"}</p>
+        <p class="mt-2 whitespace-pre-wrap">{d.motivo}</p>
+        {d.equipoRetirado && <p class="mt-1 text-xs text-slate-500">Se retiró el vínculo con el equipo #{d.equipoRetirado}; el equipo no se modificó.</p>}
+        {d.orden && <p class="mt-1 text-xs text-slate-500">Orden sin trabajo registrado derivada: {d.orden}</p>}
+      </li>)}
+    </ol>
+    {derivacionesFilas.length > 50 && <a class="mt-3 inline-block text-sm text-brand-700 underline" href={historialDerivacionesHref(derivaciones[49].id)}>Ver derivaciones anteriores</a>}
+    {antesDerivaciones && <a class="mt-3 ml-3 inline-block text-sm text-brand-700 underline" href={historialDerivacionesHref()}>Ver las más recientes</a>}
+  </section>}
 
   <!-- ══ QUÉ RIGE ESTA FALLA · el documento no se busca, el sistema lo dice ══ -->
   {rigeFalla && (
