@@ -7,9 +7,10 @@ import { activos, ordenes, tickets, actividades, conjuntos, planesMantenimiento 
 import { eq } from "drizzle-orm";
 import { rubroDeActivo, rubroDeActividad } from "./lib/rubros";
 import {
-  COOKIE_ESPACIO, PAGINA_OTRO_ESPACIO, PARAM_ESPACIO, espacioDeArea, espacioDeRuta, espaciosPermitidos, opcionesCookieEspacio, puedeEntrar,
+  ESPACIO_KEYS, COOKIE_ESPACIO, PAGINA_OTRO_ESPACIO, PARAM_ESPACIO, espacioDeArea, espacioDeRuta, espaciosPermitidos, opcionesCookieEspacio, puedeEntrar,
   espacioDeTrabajo, gestionaEspacio, registroDeRuta, resolverEspacio, respuestaOtroEspacio, rutaDecodificada, type Espacio,
 } from "./lib/espacio";
+import { esSolicitudPropia } from "./lib/ticket-acceso";
 import { espacioDeProyectoId } from "./lib/espacio-db";
 
 /** Espacio de una orden o solicitud guardada: su rubro o, sin rubro, el de su equipo. */
@@ -106,7 +107,8 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   // record up for users locked to one space (the others may read both).
   const registro = registroDeRuta(path);
   let espacioRegistro: Espacio | null = null;
-  if (registro && (!registro.api || ctx.locals.espaciosPermitidos!.length === 1)) {
+  let solicitudPropia = false;
+  if (registro && (!registro.api || ctx.locals.espaciosPermitidos!.length < ESPACIO_KEYS.length)) {
     const db = getDb(ctx);
     const { tipo, id } = registro;
     let areaRegistro: ReturnType<typeof parseArea> = null;
@@ -141,8 +143,8 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
       // Sin rubro: el espacio de su equipo o, sin equipo, el de su solicitud.
       espacioRegistro = await espacioDeProyectoId(db, id);
     } else {
-      const [t] = await db.select({ rubro: tickets.rubro, activoId: tickets.activoId }).from(tickets).where(eq(tickets.id, id)).limit(1);
-      if (t) areaRegistro = parseArea(t.rubro);
+      const [t] = await db.select({ rubro: tickets.rubro, activoId: tickets.activoId, solicitanteUsuarioId: tickets.solicitanteUsuarioId, solicitanteEmail: tickets.solicitanteEmail }).from(tickets).where(eq(tickets.id, id)).limit(1);
+      if (t) { areaRegistro = parseArea(t.rubro); solicitudPropia = esSolicitudPropia(user, t); }
       if (t) espacioRegistro = await espacioDeTrabajoGuardado(db, t.rubro, t.activoId);
     }
     if (areaRegistro) {
@@ -153,7 +155,9 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
 
   // El solicitante abre sus solicitudes de los dos espacios sin el aviso: la página
   // se arma en el espacio de la solicitud (no gestiona ninguno, no tiene interruptor).
-  if (registro?.tipo === "tickets" && espacioRegistro && !gestionaEspacio(user) && puedeEntrar(user, espacioRegistro)) {
+  if (registro?.tipo === "tickets" && !gestionaEspacio(user)) {
+    if (!solicitudPropia) return new Response("No autorizado", { status: 403 });
+    if (!espacioRegistro) return next();
     ctx.locals.espacio = espacioRegistro;
     return next();
   }

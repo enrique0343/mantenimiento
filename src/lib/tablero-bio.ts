@@ -203,7 +203,7 @@ export async function datosBiomedicos(db: Db, opciones: { hoy: string; sedeId: n
   };
 }
 /** La regla de activoAreaExpression (biomédico) sobre el alias a2 de una subconsulta. */
-const BIO_A2 = `CASE WHEN a2.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a2.rubro WHEN a2.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END = 'biomedico'`;
+const BIO_A2 = `CASE WHEN a2.rubro IN ('aires','infraestructura','equipo_general','biomedico','tecnologia') THEN a2.rubro WHEN a2.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END = 'biomedico'`;
 
 // ─── Asignar la ubicación pendiente ──────────────────────────────────────────
 export const ROLES_UBICACION = ["admin", "jefe"] as const;
@@ -234,6 +234,7 @@ export async function asignarUbicacionPendiente(db: Db, usuario: UsuarioUbicacio
   if (equipos.length !== ids.length) return { ok: false, status: 404, error: "Alguno de los equipos ya no existe. Actualiza la página." };
   const ajeno = equipos.find((e) => !puedeEntrar(usuario, espacioDeActivo(e)));
   if (ajeno) return { ok: false, status: 403, error: mensajeOtroEspacio(espacioDeActivo(ajeno)) };
+  if (equipos.some((e) => e.rubro === "tecnologia")) return { ok: false, status: 409, error: "Asigna la ubicación de los equipos de tecnología desde Custodia y traslado en su ficha para conservar su historial." };
   const conUbicacion = equipos.filter((e) => e.ubicacionId !== null);
   if (conUbicacion.length) {
     return { ok: false, status: 409, error: `${conUbicacion.map((e) => e.codigo).slice(0, 5).join(", ")} ya ${conUbicacion.length === 1 ? "tiene" : "tienen"} ubicación (otra persona la asignó). Actualiza la página; no se cambió ningún equipo.` };

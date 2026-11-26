@@ -18,7 +18,7 @@ import type { getDb } from "./db";
 import { activoAreaExpression } from "./areas";
 import { activos, ordenes, proyectos, tickets, usuarios } from "./schema";
 import {
-  espacioDeActivo, espacioDeTrabajo, espaciosPermitidos, puedeEntrar, respuestaOtroEspacio,
+  ESPACIO_KEYS, espacioDeArea, espacioDeActivo, espacioDeTrabajo, espaciosPermitidos, puedeEntrar, respuestaOtroEspacio,
   type Espacio, type UsuarioEspacio,
 } from "./espacio";
 
@@ -65,14 +65,14 @@ export function bloqueoEspacio(user: UsuarioEspacio, e: Espacio | null | undefin
 /** El primer espacio de esos equipos al que el usuario no entra, o null si entra a todos. */
 export async function espacioAjenoDeActivos(db: Db, user: UsuarioEspacio, ids: number[]): Promise<Espacio | null> {
   const permitidos = espaciosPermitidos(user);
-  if (permitidos.length > 1 || !ids.length) return permitidos.length ? null : "general";
+  if (permitidos.length === ESPACIO_KEYS.length || !ids.length) return permitidos.length ? null : "general";
   const filas = await db
     .select({ area: sql<string>`${activoAreaExpression}` })
     .from(activos)
     .where(sql`${activos.id} in (select value from json_each(${JSON.stringify(ids)}))`)
     .groupBy(sql`1`);
   for (const f of filas) {
-    const e: Espacio = f.area === "biomedico" ? "biomedico" : "general";
+    const e = espacioDeArea(f.area);
     if (!permitidos.includes(e)) return e;
   }
   return null;
@@ -96,7 +96,8 @@ export async function asignadoFueraDeEspacio(db: Db, usuarioId: number | null | 
 /** «X es de mantenimiento general: no ve el trabajo biomédico. Elige a alguien de biomédico.» */
 export function mensajeAsignadoFuera({ nombre, espacio }: AsignadoFuera, que: { biomedico: string; general: string; quien?: string } = { biomedico: "el trabajo biomédico", general: "el trabajo de mantenimiento general" }): string {
   const quien = que.quien ?? "a alguien";
+  if (espacio === "tecnologia") return `${nombre} no tiene acceso al trabajo de tecnología. Elige ${quien} de tecnología.`;
   return espacio === "biomedico"
-    ? `${nombre} es de mantenimiento general: no ve ${que.biomedico}. Elige ${quien} de biomédico.`
-    : `${nombre} es de biomédico: no ve ${que.general}. Elige ${quien} de general.`;
+    ? `${nombre} no tiene acceso a biomédico: no ve ${que.biomedico}. Elige ${quien} de biomédico.`
+    : `${nombre} no tiene acceso a general: no ve ${que.general}. Elige ${quien} de general.`;
 }

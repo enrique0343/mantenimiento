@@ -160,7 +160,7 @@ export function aFilaInventario(r: {
     marca: a.marca ?? null,
     modelo: a.modelo ?? null,
     serial: a.serial ?? null,
-    categoria: normalizarCategoria(a.categoria, a.tipo),
+    categoria: normalizarCategoria(a.categoria, a.tipo, a.rubro),
     tipo: a.tipo,
     area: rubroDeActivo(a.rubro, a.tipo),
     estado: a.estado,

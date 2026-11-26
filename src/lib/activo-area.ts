@@ -9,6 +9,14 @@ const camposTecnicos = z.object({
   tipoInstalacion: textoTecnico,
   sector: textoTecnico,
   servicio: textoTecnico,
+  nombreRed: textoTecnico,
+  sistemaOperativo: textoTecnico,
+  procesador: textoTecnico,
+  memoriaRamGb: z.number().finite().positive().max(1000000).nullable().optional(),
+  almacenamientoGb: z.number().finite().positive().max(1000000000).nullable().optional(),
+  direccionIp: textoTecnico,
+  direccionMac: textoTecnico,
+  puertosRed: z.number().int().positive().max(100000).nullable().optional(),
 }).strict();
 
 // Acepta objetos desde formularios/API y JSON desde almacenamiento/importaciones.
@@ -24,6 +32,8 @@ const textoTecnicoRegistro = z.string().trim().toUpperCase().max(200).nullable()
 export const datosTecnicosRegistroSchema = z.preprocess(parsearDatosTecnicos, camposTecnicos.extend({
   tipoUnidad: textoTecnicoRegistro, refrigerante: textoTecnicoRegistro,
   tipoInstalacion: textoTecnicoRegistro, sector: textoTecnicoRegistro, servicio: textoTecnicoRegistro,
+  nombreRed: textoTecnicoRegistro, sistemaOperativo: textoTecnicoRegistro, procesador: textoTecnicoRegistro,
+  direccionIp: textoTecnicoRegistro, direccionMac: textoTecnicoRegistro,
 }).nullable().optional());
 
 export type DatosTecnicos = z.infer<typeof camposTecnicos>;
@@ -32,6 +42,7 @@ const camposPorArea: Record<RubroKey, (keyof DatosTecnicos)[]> = {
   infraestructura: ["tipoInstalacion", "sector"],
   equipo_general: ["servicio"],
   biomedico: ["servicio"],
+  tecnologia: ["servicio", "nombreRed", "sistemaOperativo", "procesador", "memoriaRamGb", "almacenamientoGb", "direccionIp", "direccionMac", "puertosRed"],
 };
 
 export function leerDatosTecnicos(value: unknown): DatosTecnicos {

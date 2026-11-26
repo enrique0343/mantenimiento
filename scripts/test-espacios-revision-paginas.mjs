@@ -149,10 +149,11 @@ try {
     const det = await modulo('contratos/_id_.astro.mjs');
     const dg = await ver(det, '/contratos/1', 'jefeGeneral', { params: { id: '1' } });
     ok(dg.html.includes('RVG-AIRE') && !dg.html.includes('RVB-'), 'el contrato común en General: su aire, sin el monitor');
-    ok(dg.doc.querySelector('[data-equipos-otro-espacio]')?.textContent.includes('1 equipo(s) del espacio Biomédico'), 'y cuenta el del otro espacio sin mostrarlo');
+    ok(dg.doc.querySelector('[data-equipos-otro-espacio]')?.textContent.includes('1 equipo(s) de otros espacios'), 'y cuenta el del otro espacio sin mostrarlo');
   }
 
   // ── El solicitante: sus solicitudes de los dos espacios, sin interruptor ────
+  sqlite.exec('UPDATE tickets SET solicitante_usuario_id=5 WHERE id IN (301,304)');
   {
     const lista = await modulo('tickets.astro.mjs');
     const v = await ver(lista, '/tickets', 'solicitante');

@@ -35,8 +35,8 @@ export const GET: APIRoute = async (ctx) => {
   if (!permitido) return respuestaOtroEspacio(espacio);
   // Órdenes y solicitudes: su rubro o, sin rubro, el espacio de su equipo.
   const deRubro = (alias: string) => sql` AND ${condicionTrabajoAreaEspacio(sql.raw(`${alias}rubro`), sql.raw(`${alias}activo_id`), espacio, area)}`;
-  const areaActivo = sql.raw(`(CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END)`);
-  const deActivo = area ? sql` AND ${areaActivo} = ${area}` : espacio === "biomedico" ? sql` AND ${areaActivo} = 'biomedico'` : sql` AND ${areaActivo} <> 'biomedico'`;
+  const areaActivo = sql.raw(`(CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico','tecnologia') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END)`);
+  const deActivo = area ? sql` AND ${areaActivo} = ${area}` : espacio === "general" ? sql` AND ${areaActivo} NOT IN ('biomedico', 'tecnologia')` : sql` AND ${areaActivo} = ${espacio}`;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || (q.length < 2 && !/^\d$/.test(q))) {
     return Response.json({ resultados: { ordenes: [], equipos: [], tickets: [], items: [], requisiciones: [], comentarios: [] } });
@@ -93,7 +93,7 @@ export const GET: APIRoute = async (ctx) => {
   if (ftsQ) {
     const r = await db.all(sql`
       SELECT a.id, a.codigo, a.nombre, a.tipo, a.estado,
-             CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END as rubro,
+             CASE WHEN a.rubro IN ('aires','infraestructura','equipo_general','biomedico','tecnologia') THEN a.rubro WHEN a.tipo = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END as rubro,
              snippet(activos_fts, -1, '<mark>', '</mark>', '...', 10) as snippet
       FROM activos_fts
       JOIN activos a ON a.id = activos_fts.rowid

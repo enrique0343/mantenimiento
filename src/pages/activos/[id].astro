@@ -2,6 +2,7 @@
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
 import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
+import TecnologiaCustodia from "@/components/TecnologiaCustodia.astro";
 import ActivoConjuntos from "@/components/ActivoConjuntos.astro";
 import CatalogoAireOrigen from "@/components/CatalogoAireOrigen.astro";
 import { getConjuntosDelActivo } from "@/lib/conjuntos";
@@ -122,7 +123,7 @@ const conjuntosHistorial = ["admin", "jefe", "tecnico", "visualizador"].includes
 const canJefe = user.rol === "admin" || user.rol === "jefe";
 // Sin ubicación de la lista: pendiente de asignar (con el texto del inventario); la jefatura la asigna aquí.
 const ubicacionPendiente = !a.ubicacionId;
-const arbolUbic = ubicacionPendiente && canJefe ? await arbolUbicaciones(db) : null;
+const arbolUbic = ubicacionPendiente && canJefe && area !== "tecnologia" ? await arbolUbicaciones(db) : null;
 // Sus componentes también pendientes: la ventana ofrece asignarlos en el mismo paso.
 const componentesPendientes = arbolUbic
   ? (await db.select({ id: activos.id }).from(activos).where(and(eq(activos.padreId, id), sql`${activos.ubicacionId} is null`, ne(activos.estado, "baja")))).map((c) => c.id)
@@ -645,6 +646,14 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     </div>
   </div>
 
+  {area === "tecnologia" && verBio && <>
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 p-4">
+      <div><h2 class="font-semibold">Soporte de tecnología</h2><p class="text-sm text-slate-600">Registra una incidencia vinculada a este equipo y consulta su seguimiento.</p></div>
+      <div class="flex flex-wrap gap-2"><a class="btn-primary" href={`/soporte?area=tecnologia&activoId=${a.id}&espacio=tecnologia`}>Reportar incidencia</a><a class="btn-secondary" href={`/tickets?area=tecnologia&activoId=${a.id}&espacio=tecnologia`}>Ver tickets del equipo</a><a class="btn-secondary" href={areaHref(`/activos/${a.id}#planes`, area)}>Planes de mantenimiento</a></div>
+    </div>
+    <TecnologiaCustodia activoId={a.id} deBaja={a.estado === "baja"} />
+  </>}
+
   <!-- ══ Fase 48 · Qué sigue AHORA: el equipo ya está fuera de servicio ══════ -->
   {sigueFalla && (
     <div class="mt-4 rounded-lg border-2 border-red-400 bg-red-50 p-5" id="que-sigue">
@@ -948,7 +957,14 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           <div><div class="text-xs uppercase text-slate-500">Tipo de instalación</div><div>{datosTecnicos.tipoInstalacion || "—"}</div></div>
           <div><div class="text-xs uppercase text-slate-500">Sector</div><div>{datosTecnicos.sector || "—"}</div></div>
         </>}
-        {(area === "equipo_general" || area === "biomedico") && <div><div class="text-xs uppercase text-slate-500">Servicio / función</div><div>{datosTecnicos.servicio || "—"}</div></div>}
+        {(area === "equipo_general" || area === "biomedico" || area === "tecnologia") && <div><div class="text-xs uppercase text-slate-500">Servicio / función</div><div>{datosTecnicos.servicio || "—"}</div></div>}
+
+        {area === "tecnologia" && [
+          ["Nombre en la red", datosTecnicos.nombreRed], ["Sistema operativo", datosTecnicos.sistemaOperativo],
+          ["Procesador", datosTecnicos.procesador], ["Memoria RAM (GB)", datosTecnicos.memoriaRamGb],
+          ["Almacenamiento (GB)", datosTecnicos.almacenamientoGb], ["Dirección IP", datosTecnicos.direccionIp],
+          ["Dirección MAC", datosTecnicos.direccionMac], ["Puertos de red", datosTecnicos.puertosRed],
+        ].map(([label, value]) => <div><div class="text-xs uppercase text-slate-500">{label}</div><div>{value ?? "—"}</div></div>)}
 
         <div><div class="text-xs uppercase text-slate-500">Marca / Modelo</div><div>{[a.marca, a.modelo].filter(Boolean).join(" / ") || "-"}</div></div>
         <div><div class="text-xs uppercase text-slate-500">Serie</div><div class="font-mono text-xs">{a.serial ?? "-"}</div></div>
@@ -985,7 +1001,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
           )}
         </div>
         <div><div class="text-xs uppercase text-slate-500">Valor de adquisición</div><div>{a.valorAdquisicion != null ? `$${a.valorAdquisicion.toFixed(2)}` : "-"}</div></div>
-        <div><div class="text-xs uppercase text-slate-500">Responsable</div><div>{responsableInfo ? `${responsableInfo.nombre}` : "-"}</div></div>
+        <div><div class="text-xs uppercase text-slate-500">{area === "tecnologia" ? "Responsable de mantenimiento" : "Responsable"}</div><div>{responsableInfo ? `${responsableInfo.nombre}` : "-"}</div></div>
         <div class="col-span-2"><div class="text-xs uppercase text-slate-500">Descripción</div><div class="whitespace-pre-wrap">{a.descripcion ?? "-"}</div></div>
       </div>
 
@@ -1234,6 +1250,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     <a href={areaHref(`/activos/${a.id}/predictivo`, area)} class="btn-secondary text-sm">Mantenimiento predictivo</a>
   </div>
 
+  {(area !== "tecnologia" || scpInfo || componentes.length > 0 || ancestros.length > 0 || atributosScp.length > 0 || servidasRows.length > 0) && <>
   <!-- Configuración de sitio (SCP) — GO-GUI-011-2026 cap. 03 -->
   <div class="grid grid-cols-1 gap-4 mt-6 lg:grid-cols-2">
     <div class="card p-5" id="scp">
@@ -1540,6 +1557,8 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
     </div>
   )}
 
+  </>}
+
   <!-- Inspección de aceptación / entrada en servicio (JCI FMS.07) -->
   <div class="card mt-6 p-5">
     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1559,7 +1578,7 @@ const eopDeLaFamilia = cadena.find((s) => s.tipo === "eop")?.doc ?? null;
       </div>
     ) : (
       <p class="mt-2 text-sm text-slate-400">
-        Sin registro de inspección inicial. JCI FMS.07 pide documentar la inspección de aceptación antes de poner el equipo en servicio.
+        {area === "tecnologia" ? "Sin registro de inspección inicial. Puedes documentar las pruebas de funcionamiento realizadas al recibir o instalar el hardware." : "Sin registro de inspección inicial. JCI FMS.07 pide documentar la inspección de aceptación antes de poner el equipo en servicio."}
       </p>
     )}
   </div>

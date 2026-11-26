@@ -5,6 +5,7 @@ import { ESCANEO_ACTIVOS_HABILITADO } from "@/lib/campo-config";
 import { getDb } from "@/lib/db";
 import { activos, centrosCosto, planesMantenimiento, sucursales, ubicaciones } from "@/lib/schema";
 import { and, asc, desc, sql, eq } from "drizzle-orm";
+import { custodiasParaInventario, puedeVerCustodia } from "@/lib/tecnologia";
 import { normalizarCategoria } from "@/lib/categorias-equipos";
 import { AREAS, AREA_KEYS, areaHref, parseArea, activoAreaCondition } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
@@ -40,8 +41,14 @@ const rows = await db
   .where(area ? activoAreaCondition(area) : condicionActivoEspacio(espacio))
   .orderBy(desc(activos.id));
 
+const esTecnologiaLista = espacio === "tecnologia";
+const verCustodia = esTecnologiaLista && puedeVerCustodia(Astro.locals.user);
+const custodias = verCustodia ? await custodiasParaInventario(Astro, rows.map((r) => r.a.id)) : [];
+const custodiasPorActivo = new Map(custodias.map((c) => [c.activoId, c]));
+const personasCustodia = [...new Set(custodias.map((c) => c.nombre).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+
 // La búsqueda escrita se aplica en el navegador (en vivo); los demás filtros, aquí.
-const todas = rows.map((r) => ({ ...r, fila: aFilaInventario(r) }));
+const todas = rows.map((r) => ({ ...r, fila: aFilaInventario(r), custodia: custodiasPorActivo.get(r.a.id) }));
 const filtered = todas.filter((r) => pasaFiltros(r.fila, { ...filtros, q: null }, hoy));
 
 const user = Astro.locals.user!;
@@ -82,7 +89,7 @@ const centrosList = (await db
 // Conteo por categoría normalizada
 const conteoPorCategoria = new Map<string, { tipo: string; n: number }>();
 for (const r of rows) {
-  const cat = normalizarCategoria(r.a.categoria, r.a.tipo);
+  const cat = normalizarCategoria(r.a.categoria, r.a.tipo, r.a.rubro);
   const cur = conteoPorCategoria.get(cat) ?? { tipo: r.a.tipo, n: 0 };
   cur.n++;
   conteoPorCategoria.set(cat, cur);
@@ -93,7 +100,7 @@ const categoriasOrdenadas = Array.from(conteoPorCategoria.entries())
 // Vista agrupada
 const grupos = new Map<string, typeof filtered>();
 for (const r of filtered) {
-  const cat = normalizarCategoria(r.a.categoria, r.a.tipo);
+  const cat = normalizarCategoria(r.a.categoria, r.a.tipo, r.a.rubro);
   if (!grupos.has(cat)) grupos.set(cat, []);
   grupos.get(cat)!.push(r);
 }
@@ -101,7 +108,7 @@ const gruposOrdenados = Array.from(grupos.entries()).sort((a, b) => b[1].length 
 
 // Accesos rápidos del inventario biomédico: los números cuentan los equipos vigentes.
 const esBioLista = area === "biomedico";
-const verClase = !area || area === "biomedico";
+const verClase = !esTecnologiaLista && (!area || area === "biomedico");
 const vigentesBio = todas.filter((r) => r.fila.area === "biomedico" && r.fila.estado !== "baja");
 const cuenta = (pred: (r: (typeof todas)[number]) => boolean) => vigentesBio.filter(pred).length;
 const nSinClase = cuenta((r) => !r.fila.claseRiesgo);
@@ -119,7 +126,7 @@ const accesos = esBioLista ? [
   { href: enlaceBio({ registro: "sin_registro" }), texto: `Sin registro sanitario (${nSinRegistro})`, alerta: nSinRegistro > 0 },
   { href: enlaceBio({ estado: "baja" }), texto: "Dados de baja" },
 ] : [];
-const consultaActual = filtrosAQuery({ ...filtros, q: null });
+const consultaActual = filtrosAQuery({ ...filtros, q: null }) + `&espacio=${espacio}`;
 
 const conFiltros = filtros.estado !== "vigentes" || filtros.clase || filtros.centro != null || filtros.registro
   || filtros.sucursal != null || filtros.ubicacion != null || filtros.tipo || filtros.categoria || filtros.criticidad;
@@ -130,25 +137,25 @@ function urlConVista(v: string) {
 const estadoLabel = (e: string) => ESTADO_ACTIVO_LABEL[e as EstadoActivo] ?? e;
 const estadoColor = (e: string) => ESTADO_ACTIVO_COLOR[e as EstadoActivo] ?? "bg-slate-100 text-slate-600";
 const ESTADOS_FILTRO: FiltroEstado[] = ["vigentes", "todos", "operativo", "averiado", "mantenimiento", "baja"];
-const columnasTabla = 10 + (verClase ? 1 : 0);
+const columnasTabla = 11 + (verClase ? 1 : 0) + (verCustodia ? 1 : 0);
 ---
 
 <Layout title={area ? `${AREAS[area].inventoryLabel} · ${AREAS[area].label}` : "Inventario"}>
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <p class="text-sm font-semibold text-brand-700">{area ? AREAS[area].label : "Todas las áreas"}</p>
-      <h1 class="text-2xl font-bold">{area ? AREAS[area].inventoryLabel : "Inventario de activos"}</h1>
+      <p class="text-sm font-semibold text-brand-700">{area ? AREAS[area].label : esTecnologiaLista ? "Tecnología" : "Todas las áreas"}</p>
+      <h1 class="text-2xl font-bold">{area ? AREAS[area].inventoryLabel : esTecnologiaLista ? "Inventario de hardware" : "Inventario de activos"}</h1>
       <p class="text-sm text-slate-500">{rows.length} registros · mostrando <span id="visibleCount">{filtered.length}</span></p>
     </div>
     <div class="flex flex-wrap gap-2">
-      {gestiona && <a href={areaHref("/activos/clasificar", area)} class="btn-secondary text-sm">Clasificar</a>}
+      {gestiona && !esTecnologiaLista && <a href={areaHref("/activos/clasificar", esTecnologiaLista ? "tecnologia" : area)} class="btn-secondary text-sm">Clasificar</a>}
       {gestiona && <a href="/centros-costo" class="btn-secondary text-sm">Centros de costo</a>}
-      {ESCANEO_ACTIVOS_HABILITADO && <a href={areaHref("/activos/qr-print", area)} class="btn-secondary text-sm">Imprimir códigos</a>}
-      {gestiona && <a href={areaHref("/activos/importar", area)} class="btn-secondary text-sm">Carga masiva</a>}
+      {ESCANEO_ACTIVOS_HABILITADO && <a href={areaHref("/activos/qr-print", esTecnologiaLista ? "tecnologia" : area)} class="btn-secondary text-sm">Imprimir códigos</a>}
+      {gestiona && <a href={areaHref("/activos/importar", esTecnologiaLista ? "tecnologia" : area)} class="btn-secondary text-sm">Carga masiva</a>}
       {puedeDescargar && <a href={`/api/reportes/equipos?${consultaActual}`} class="btn-secondary text-sm" data-con-busqueda>Descargar CSV</a>}
       {puedeDescargar && <a href={`/activos/imprimir?${consultaActual}`} class="btn-secondary text-sm" data-con-busqueda>Imprimir</a>}
       {puedeDescargar && <a href={`/activos/imprimir?${consultaActual}&agrupar=centro`} class="btn-secondary text-sm" data-con-busqueda title="Inventario desglosado por centro de costo, con subtotal por centro">Imprimir por centro de costo</a>}
-      {canCreate && <a href={areaHref("/activos/nuevo", area)} class="btn-primary">+ {area ? AREAS[area].createLabel : "Registrar activo"}</a>}
+      {canCreate && <a href={areaHref("/activos/nuevo", esTecnologiaLista ? "tecnologia" : area)} class="btn-primary">+ {area ? AREAS[area].createLabel : "Registrar activo"}</a>}
     </div>
   </div>
   {puedeDescargar && <p class="mt-1 text-right text-xs text-slate-400">La descarga usa los filtros y la búsqueda.</p>}
@@ -175,10 +182,13 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
     />
   </div>
 
+  {verCustodia && <div class="mt-3 max-w-lg"><label class="label" for="custodiaFiltro">Persona asignada</label><select class="input" id="custodiaFiltro"><option value="">Todas las asignaciones</option><option value="__sin__">Sin persona asignada</option>{personasCustodia.map((nombre) => <option value={nombre}>{nombre}</option>)}</select><p class="mt-1 text-xs text-slate-500" id="custodiaFiltroNota" hidden>El filtro de persona se aplica a esta vista. Para imprimir o descargar este inventario, quita el filtro de persona.</p></div>}
+
   <!-- Filtros -->
   <div class="card mt-3 p-3">
     <form id="filterForm" class="flex flex-wrap items-end gap-3" method="get">
       {area && <input type="hidden" name="area" value={area} />}
+      <input type="hidden" name="espacio" value={espacio} />
       <input type="hidden" name="vista" value={vistaParam} />
       <div>
         <label class="label text-xs" for="fEstado">Estado</label>
@@ -273,6 +283,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
                 <th class="px-4 py-1.5">Marca / Modelo</th>
                 <th class="px-4 py-1.5">Sucursal</th>
                 <th class="px-4 py-1.5">Ubicación</th>
+                {verCustodia && <th class="px-4 py-1.5">Asignado a</th>}
                 <th class="px-4 py-1.5">Centro de costo</th>
                 <th class="px-4 py-1.5">Criticidad</th>
                 <th class="px-4 py-1.5">Estado</th>
@@ -280,7 +291,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
             </thead>
             <tbody class="divide-y divide-slate-100">
               {items.map((r) => (
-                <tr class="hover:bg-slate-50 row-search" data-search={textoBusqueda(r.fila)}>
+                <tr class="hover:bg-slate-50 row-search" data-search={textoBusqueda(r.fila)} data-custodio={r.custodia?.nombre ?? ""}>
                   <td class="px-4 py-1.5 font-mono text-xs">{r.a.codigo}{r.a.numeroActivo && <div class="text-[10px] text-slate-400">{r.a.numeroActivo}</div>}</td>
                   <td class="px-4 py-1.5">
                     <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
@@ -289,6 +300,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
                   <td class="px-4 py-1.5 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.ub?.nombre ?? (r.a.ubicacion ? `Pendiente de asignar · según inventario: ${r.a.ubicacion}` : "-")}</td>
+                  {verCustodia && <td class="px-4 py-1.5 text-xs text-slate-600">{r.custodia?.nombre || "Sin persona asignada"}{r.custodia?.departamento && <div class="text-slate-400">{r.custodia.departamento}</div>}</td>}
                   <td class="px-4 py-1.5 text-xs text-slate-600">{r.cc ? <span title={r.cc.nombre}>{r.cc.codigo}</span> : "—"}</td>
                   <td class="px-4 py-1.5"><span class={`badge ${CRITICIDAD_COLOR[r.a.criticidadOperacional ?? "media"]}`}>{CRITICIDAD_LABEL[r.a.criticidadOperacional ?? "media"]}</span></td>
                   <td class="px-4 py-1.5"><span class={`badge ${estadoColor(r.a.estado)}`}>{estadoLabel(r.a.estado)}</span></td>
@@ -310,6 +322,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
             <th class="px-4 py-2">Marca / Modelo</th>
             <th class="px-4 py-2">Sucursal</th>
             <th class="px-4 py-2">Ubicación</th>
+            {verCustodia && <th class="px-4 py-2">Asignado a</th>}
             <th class="px-4 py-2">Centro de costo</th>
             {verClase && <th class="px-4 py-2">Clase</th>}
             <th class="px-4 py-2">Criticidad</th>
@@ -322,7 +335,7 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
             <tr><td colspan={columnasTabla} class="px-4 py-6 text-center text-slate-500">No hay registros en esta área con esos filtros.</td></tr>
           )}
           {filtered.map((r) => (
-            <tr class="hover:bg-slate-50 row-search" data-search={textoBusqueda(r.fila)}>
+            <tr class="hover:bg-slate-50 row-search" data-search={textoBusqueda(r.fila)} data-custodio={r.custodia?.nombre ?? ""}>
               <td class="px-4 py-2 font-mono text-xs">{r.a.codigo}{r.a.numeroActivo && <div class="text-[10px] text-slate-400">{r.a.numeroActivo}</div>}</td>
               <td class="px-4 py-2">
                 <a href={areaHref(`/activos/${r.a.id}`, rubroDeActivo(r.a.rubro, r.a.tipo))} class="font-medium text-brand-700 hover:underline">{r.a.nombre}</a>
@@ -330,11 +343,12 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
               </td>
               <td class="px-4 py-2 text-xs">
                 <span class="badge bg-brand-50 text-brand-700">{AREAS[rubroDeActivo(r.a.rubro, r.a.tipo)].label}</span>
-                {r.a.categoria && <div class="mt-0.5 text-slate-500">{normalizarCategoria(r.a.categoria, r.a.tipo)}</div>}
+                {r.a.categoria && <div class="mt-0.5 text-slate-500">{normalizarCategoria(r.a.categoria, r.a.tipo, r.a.rubro)}</div>}
               </td>
               <td class="px-4 py-2 text-xs text-slate-600">{[r.a.marca, r.a.modelo].filter(Boolean).join(" / ") || "-"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.suc?.nombre ?? "-"}</td>
               <td class="px-4 py-2 text-xs text-slate-600">{r.ub?.nombre ?? (r.a.ubicacion ? `Pendiente de asignar · según inventario: ${r.a.ubicacion}` : "-")}</td>
+              {verCustodia && <td class="px-4 py-2 text-xs text-slate-600">{r.custodia?.nombre || "Sin persona asignada"}{r.custodia?.departamento && <div class="text-slate-400">{r.custodia.departamento}</div>}</td>}
               <td class="px-4 py-2 text-xs text-slate-600">{r.cc ? <span title={r.cc.nombre}>{r.cc.codigo}</span> : "—"}</td>
               {verClase && (
                 <td class="px-4 py-2 text-xs">
@@ -505,12 +519,16 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
     const visibleCount = document.getElementById("visibleCount");
     const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 
+    const custodioFiltro = document.getElementById("custodiaFiltro");
     function aplicarBusqueda() {
       const q = normalizar(searchBox.value);
+      const custodio = custodioFiltro?.value ?? "";
+      const nota = document.getElementById("custodiaFiltroNota"); if (nota) nota.hidden = !custodio;
+      document.querySelectorAll("[data-con-busqueda]").forEach((a) => { a.hidden = !!custodio; a.classList.toggle("!hidden", !!custodio); });
       let visibles = 0;
       document.querySelectorAll(".row-search").forEach((tr) => {
         const txt = tr.dataset.search ?? "";
-        const match = !q || txt.includes(q);
+        const match = (!q || txt.includes(q)) && (!custodio || (custodio === "__sin__" ? !tr.dataset.custodio : tr.dataset.custodio === custodio));
         tr.style.display = match ? "" : "none";
         if (match) visibles++;
       });
@@ -519,11 +537,12 @@ const columnasTabla = 10 + (verClase ? 1 : 0);
         const filasVisibles = Array.from(card.querySelectorAll(".row-search")).filter((tr) => tr.style.display !== "none").length;
         const countEl = card.querySelector(".grupo-count");
         if (countEl) countEl.textContent = filasVisibles;
-        card.style.display = filasVisibles > 0 || !q ? "" : "none";
+        card.style.display = filasVisibles > 0 || (!q && !custodio) ? "" : "none";
       });
       if (visibleCount) visibleCount.textContent = visibles;
     }
 
+    custodioFiltro?.addEventListener("change", aplicarBusqueda);
     searchBox?.addEventListener("input", aplicarBusqueda);
     if (searchBox && qInicial) { searchBox.value = qInicial; aplicarBusqueda(); }
 

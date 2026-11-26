@@ -1,12 +1,13 @@
 import { sql } from "drizzle-orm";
 import { activos } from "./schema";
 
-export const AREA_KEYS = ["aires", "infraestructura", "equipo_general", "biomedico"] as const;
+export const AREA_KEYS = ["aires", "infraestructura", "equipo_general", "biomedico", "tecnologia"] as const;
 export type AreaKey = (typeof AREA_KEYS)[number];
 export const AREAS = {
   aires: { label: "Aire acondicionado", description: "Unidades, climatización y sus servicios de mantenimiento.", inventoryLabel: "Unidades", createLabel: "Registrar unidad", icon: "wind" },
   infraestructura: { label: "Infraestructura", description: "Edificios, techos, redes eléctricas e instalaciones.", inventoryLabel: "Instalaciones", createLabel: "Registrar instalación", icon: "building" },
-  equipo_general: { label: "Equipos generales", description: "Equipos de apoyo, bombas, generadores e impresoras.", inventoryLabel: "Equipos", createLabel: "Registrar equipo", icon: "equipment" },
+  equipo_general: { label: "Equipos generales", description: "Equipos de apoyo, bombas y generadores.", inventoryLabel: "Equipos", createLabel: "Registrar equipo", icon: "equipment" },
+  tecnologia: { label: "Tecnología", description: "Computadoras, impresoras, switches y hardware del hospital.", inventoryLabel: "Equipos", createLabel: "Registrar hardware", icon: "equipment" },
   biomedico: { label: "Equipos biomédicos", description: "Equipos clínicos, verificaciones y calibraciones.", inventoryLabel: "Equipos", createLabel: "Registrar equipo", icon: "heart" },
 } as const;
 
@@ -23,5 +24,5 @@ export function areaHref(path: string, area: string | null | undefined): string 
 }
 
 /** The same fallback as rubroDeActivo, including unclassified legacy records. */
-export const activoAreaExpression = sql<string>`CASE WHEN ${activos.rubro} IN ('aires','infraestructura','equipo_general','biomedico') THEN ${activos.rubro} WHEN ${activos.tipo} = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END`;
+export const activoAreaExpression = sql<string>`CASE WHEN ${activos.rubro} IN ('aires','infraestructura','equipo_general','biomedico','tecnologia') THEN ${activos.rubro} WHEN ${activos.tipo} = 'biomedico' THEN 'biomedico' ELSE 'equipo_general' END`;
 export const activoAreaCondition = (area: AreaKey) => sql`${activoAreaExpression} = ${area}`;

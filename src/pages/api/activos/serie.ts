@@ -1,10 +1,11 @@
 import type { APIRoute } from "astro";
-import { isNotNull } from "drizzle-orm";
+import { and, or, isNotNull } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { rubroDeActivo } from "@/lib/rubros";
 import { normalizarSerie } from "@/lib/registro-activos";
+import { espaciosPermitidos, condicionActivoEspacio } from "@/lib/espacio";
 import { ROLES_BIO_REGISTRAR } from "@/lib/biomedico";
 
 export const prerender = false;
@@ -22,7 +23,7 @@ export const GET: APIRoute = async (ctx) => {
   const rows = await getDb(ctx)
     .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, estado: activos.estado, rubro: activos.rubro, tipo: activos.tipo, serial: activos.serial })
     .from(activos)
-    .where(isNotNull(activos.serial));
+    .where(and(isNotNull(activos.serial), or(...espaciosPermitidos(user).map(condicionActivoEspacio))));
   const coincidencias = rows
     .filter((r) => r.id !== excluir && normalizarSerie(r.serial) === serie)
     .slice(0, 5)

@@ -33,7 +33,7 @@ const E = await cargar(`
 }]);
 
 // ── ESPACIOS: etiqueta, rótulo, colores, tablero y áreas ─────────────────────
-es(E.ESPACIO_KEYS, ['general', 'biomedico'], 'dos espacios, General primero');
+es(E.ESPACIO_KEYS, ['general', 'biomedico', 'tecnologia'], 'tres espacios, General primero');
 es(E.COOKIE_ESPACIO, 'espacio', 'nombre de la cookie');
 es(E.PARAM_ESPACIO, 'espacio', 'nombre del parámetro');
 es([E.ESPACIOS.general.etiqueta, E.ESPACIOS.general.rotulo, E.ESPACIOS.general.colorBarra, E.ESPACIOS.general.colorFranja, E.ESPACIOS.general.tablero],
@@ -42,13 +42,13 @@ es([E.ESPACIOS.biomedico.etiqueta, E.ESPACIOS.biomedico.rotulo, E.ESPACIOS.biome
   ['Biomédico', 'Ingeniería biomédica', '#23417D', '#23417D', 'Tablero biomédico'], 'Biomédico: azul con franja');
 es(E.areasDeEspacio('general'), ['aires', 'infraestructura', 'equipo_general'], 'áreas de General');
 es(E.areasDeEspacio('biomedico'), ['biomedico'], 'áreas de Biomédico');
-es([...E.areasDeEspacio('general'), ...E.areasDeEspacio('biomedico')].sort(), [...E.AREA_KEYS].sort(), 'cada área está en un solo espacio');
+es([...E.areasDeEspacio('general'), ...E.areasDeEspacio('biomedico'), ...E.areasDeEspacio('tecnologia')].sort(), [...E.AREA_KEYS].sort(), 'cada área está en un solo espacio');
 {
   const copia = E.areasDeEspacio('general');
   copia.push('biomedico');
   es(E.areasDeEspacio('general').length, 3, 'areasDeEspacio devuelve una copia');
 }
-for (const area of E.AREA_KEYS) es(E.espacioDeArea(area), E.ESPACIOS.biomedico.areas.includes(area) ? 'biomedico' : 'general', `espacioDeArea(${area})`);
+for (const area of E.AREA_KEYS) es(E.espacioDeArea(area), area === 'tecnologia' ? 'tecnologia' : E.ESPACIOS.biomedico.areas.includes(area) ? 'biomedico' : 'general', `espacioDeArea(${area})`);
 es([E.espacioDeArea(null), E.espacioDeArea(undefined), E.espacioDeArea('otra')], ['general', 'general', 'general'], 'área vacía o desconocida: General');
 
 // ── parseEspacio ─────────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ es(['general', 'biomedico', 'Biomedico', 'biomédico', '', null, undefined, 1].m
 const ROLES = ['admin', 'jefe', 'tecnico', 'proveedor', 'solicitante', 'visualizador', 'motorista'];
 const ESPS = ['general', 'biomedico', 'ambos', null, undefined];
 for (const rol of ROLES) for (const especialidad of ESPS) {
-  const esperado = rol === 'admin' || rol === 'visualizador' ? ['general', 'biomedico']
+  const esperado = rol === 'admin' || rol === 'visualizador' ? ['general', 'biomedico', 'tecnologia']
     : especialidad === 'general' ? ['general'] : especialidad === 'biomedico' ? ['biomedico'] : ['general', 'biomedico'];
   es(E.espaciosPermitidos({ rol, especialidad }), esperado, `${rol} con especialidad ${especialidad}`);
   es(E.tieneInterruptor({ rol, especialidad }), esperado.length > 1 && rol !== 'solicitante', `${rol}/${especialidad}: interruptor (el solicitante no tiene)`);
@@ -75,7 +75,7 @@ es(E.espaciosPermitidos({ rol: 'jefe', especialidad: 'otra' }), ['general', 'bio
   }
   const a = E.espaciosPermitidos({ rol: 'admin' });
   a.pop();
-  es(E.espaciosPermitidos({ rol: 'admin' }).length, 2, 'devuelve una lista nueva cada vez');
+  es(E.espaciosPermitidos({ rol: 'admin' }).length, 3, 'devuelve una lista nueva cada vez');
 }
 
 // ── resolverEspacio: URL, cookie, primero permitido ──────────────────────────
@@ -187,17 +187,17 @@ es([E.espacioDeTrabajo('aires', { tipo: 'biomedico' }), E.espacioDeTrabajo(null,
   const bio = [1, 3, 4];
   for (const e of E.ESPACIO_KEYS) {
     const r = q(E.condicionOrdenEspacio(e));
-    es(r.ids, e === 'biomedico' ? bio : [2, 5, 6, 7, 8], `órdenes de ${e}: rubro y, sin rubro, el equipo`);
+    es(r.ids, e === 'biomedico' ? bio : e === 'tecnologia' ? [] : [2, 5, 6, 7, 8], `órdenes de ${e}: rubro y, sin rubro, el equipo`);
     es(r.params.length, 0, `condicionOrdenEspacio(${e}) sin parámetros`);
     es(q(E.condicionTicketEspacio(e), 'tickets').ids, r.ids, `solicitudes de ${e}: la misma regla`);
     es(filas.filter(([id]) => r.ids.includes(id)).every(([, rubro, act]) => E.espacioDeTrabajo(rubro, act ? db.prepare('select rubro, tipo from activos where id=?').get(act) : null) === e), true, `espacioDeTrabajo coincide (${e})`);
     const p = q(E.condicionActivoIdEspacio(E.sql.raw('activo_id'), e));
-    es(p.ids, e === 'biomedico' ? [2, 3, 4, 7] : [1, 5], `activo_id del espacio ${e} (sin equipo o inexistente: ninguno)`);
+    es(p.ids, e === 'biomedico' ? [2, 3, 4, 7] : e === 'tecnologia' ? [] : [1, 5], `activo_id del espacio ${e} (sin equipo o inexistente: ninguno)`);
     es(p.params.length, 0, 'sin parámetros');
   }
   for (const e of E.ESPACIO_KEYS) {
     const r = q(E.condicionProyectoEspacio(e), 'proyectos');
-    es(r.ids, e === 'biomedico' ? [1, 4] : [2, 3, 5], `proyectos de ${e}: el equipo manda sobre la solicitud`);
+    es(r.ids, e === 'biomedico' ? [1, 4] : e === 'tecnologia' ? [] : [2, 3, 5], `proyectos de ${e}: el equipo manda sobre la solicitud`);
     es(r.params.length, 0, 'sin parámetros');
   }
   es([...q(E.condicionOrdenEspacio('general')).ids, ...q(E.condicionOrdenEspacio('biomedico')).ids].sort(), filas.map(([id]) => id).sort(), 'cada orden en un solo espacio');
@@ -256,7 +256,7 @@ const pedir = async (ruta, { user = null, cookie = null } = {}) => {
   r = await pedir('/login?espacio=biomedico');
   es([r.siguio, r.ctx.locals.espacio, r.puestas], [true, undefined, []], 'página pública sin sesión: sin espacio ni cookie');
   r = await pedir('/login', { user: { id: 1, rol: 'visualizador', especialidad: 'biomedico' } });
-  es([r.ctx.locals.espacio, r.ctx.locals.espaciosPermitidos], ['general', ['general', 'biomedico']], 'con sesión también en páginas públicas');
+  es([r.ctx.locals.espacio, r.ctx.locals.espaciosPermitidos], ['general', ['general', 'biomedico', 'tecnologia']], 'con sesión también en páginas públicas');
   {
     // Un ctx sin cookies (como el de test-campo): resuelve igual, sin recordar nada.
     const ctx = { request: new Request('https://mantenimiento.local/planes?espacio=biomedico'), testUser: { id: 1, rol: 'jefe', especialidad: 'ambos' }, locals: {}, redirect: () => null };

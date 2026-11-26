@@ -500,7 +500,8 @@ export async function datosTablero(db: Db, filtros: FiltrosTablero, hoy = hoySV(
   }).from(usuarios).where(and(
     eq(usuarios.rol, "tecnico"), eq(usuarios.activo, true),
     // Solo los técnicos que ven ese espacio (especialidad vacía o «ambos»: los dos).
-    espacio ? sql`(${usuarios.especialidad} is null or ${usuarios.especialidad} in ('ambos', ${espacio}))` : undefined,
+    espacio === "tecnologia" ? eq(usuarios.especialidad, "tecnologia")
+      : espacio ? sql`(${usuarios.especialidad} is null or ${usuarios.especialidad} in ('ambos', ${espacio}))` : undefined,
   )).orderBy(asc(usuarios.nombre));
   // El bloque biomédico (calibraciones, pendientes de ubicación) solo en Biomédico;
   // el aviso del panel principal no lo necesita (sinBiomedico).

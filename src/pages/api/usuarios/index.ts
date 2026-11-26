@@ -31,7 +31,7 @@ const createSchema = z.object({
   nombre: z.string().min(2),
   password: z.string().min(6),
   rol: z.enum(ROLES),
-  especialidad: z.enum(["general", "biomedico", "ambos"]).nullable().optional(),
+  especialidad: z.enum(["general", "biomedico", "ambos", "tecnologia"]).nullable().optional(),
   tarifaHora: z.number().nonnegative().optional(),
   sucursalId: z.number().int().nullable().optional(),
 });

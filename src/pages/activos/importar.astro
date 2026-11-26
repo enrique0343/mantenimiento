@@ -3,9 +3,10 @@
 // grabación por tandas de 200 filas. Admin y jefe.
 import Layout from "@/layouts/Layout.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
+import { espacioDelContexto } from "@/lib/espacio";
 import { columnasPlantilla, MAX_FILAS_IMPORTACION, TANDA_FILAS_IMPORTACION } from "@/lib/importar-equipos";
 export const prerender = false;
-const area = parseArea(Astro.url.searchParams.get("area"));
+const area = parseArea(Astro.url.searchParams.get("area")) ?? (espacioDelContexto(Astro, Astro.locals.user) === "tecnologia" ? "tecnologia" : null);
 
 const user = Astro.locals.user!;
 if (user.rol !== "admin" && user.rol !== "jefe") return Astro.redirect(areaHref("/activos", area));

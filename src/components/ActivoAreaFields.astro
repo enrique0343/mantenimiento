@@ -1,5 +1,6 @@
 ---
 import { AREAS, AREA_KEYS, type AreaKey } from "@/lib/areas";
+import { areaEnEspacio, espacioDeArea } from "@/lib/espacio";
 import { leerDatosTecnicos } from "@/lib/activo-area";
 interface Props { area: AreaKey | null; datosTecnicos?: string | null; }
 const { area: requestedArea, datosTecnicos } = Astro.props;
@@ -9,7 +10,7 @@ const datos = leerDatosTecnicos(datosTecnicos);
 <div class="rounded-xl border border-brand-200 bg-brand-50 p-4">
   <label class="label" for="rubro">Área de mantenimiento</label>
   <select class="input" id="rubro">
-    {AREA_KEYS.map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}
+    {AREA_KEYS.filter((key) => areaEnEspacio(key, espacioDeArea(area))).map((key) => <option value={key} selected={area === key}>{AREAS[key].label}</option>)}
   </select>
   <p class="mt-2 text-sm text-slate-600">El registro, sus órdenes y sus planes se encontrarán en esta área.</p>
 </div>
@@ -22,6 +23,20 @@ const datos = leerDatosTecnicos(datosTecnicos);
   <div><label class="label" for="tipoInstalacion">Tipo de instalación</label><input class="input" id="tipoInstalacion" data-uppercase autocapitalize="characters" value={datos.tipoInstalacion ?? ""} maxlength="200" placeholder="Ej. Red hidráulica, cubierta" /></div>
   <div><label class="label" for="sector">Sector</label><input class="input" id="sector" data-uppercase autocapitalize="characters" value={datos.sector ?? ""} maxlength="200" placeholder="Ej. Edificio A · zona norte" /></div>
 </div>
-<div id="servicioFields" class:list={[area !== "equipo_general" && area !== "biomedico" && "hidden"]}>
+<div id="servicioFields" class:list={[area !== "equipo_general" && area !== "biomedico" && area !== "tecnologia" && "hidden"]}>
   <label class="label" for="servicio">Servicio / función</label><input class="input" id="servicio" data-uppercase autocapitalize="characters" value={datos.servicio ?? ""} maxlength="200" placeholder="Servicio al que está asignado el equipo" />
+</div>
+
+<div id="tecnologiaFields" class:list={["grid grid-cols-1 gap-4 sm:grid-cols-2", area !== "tecnologia" && "hidden"]}>
+  <div class="sm:col-span-2"><h2 class="font-semibold">Características del hardware</h2><p class="mt-1 text-sm text-slate-500">Completa los datos que tengas. La persona asignada y los traslados se registran en la ficha del equipo.</p></div>
+  {[
+    ["nombreRed", "Nombre del equipo en la red", datos.nombreRed, "Ej. PC-ADMISION-01"],
+    ["sistemaOperativo", "Sistema operativo", datos.sistemaOperativo, "Ej. WINDOWS 11 PRO"],
+    ["procesador", "Procesador", datos.procesador, "Ej. INTEL CORE I5"],
+    ["direccionIp", "Dirección IP", datos.direccionIp, "Ej. 192.168.1.20"],
+    ["direccionMac", "Dirección MAC", datos.direccionMac, "Ej. AA:BB:CC:DD:EE:FF"],
+  ].map(([id, label, value, placeholder]) => <div><label class="label" for={id}>{label}</label><input class="input" id={id} data-uppercase autocapitalize="characters" value={value ?? ""} maxlength="200" placeholder={placeholder} /></div>)}
+  <div><label class="label" for="memoriaRamGb">Memoria RAM (GB)</label><input class="input" id="memoriaRamGb" type="number" min="0.01" max="1000000" step="any" value={datos.memoriaRamGb ?? ""} /></div>
+  <div><label class="label" for="almacenamientoGb">Almacenamiento (GB)</label><input class="input" id="almacenamientoGb" type="number" min="0.01" max="1000000000" step="any" value={datos.almacenamientoGb ?? ""} /></div>
+  <div><label class="label" for="puertosRed">Cantidad de puertos de red</label><input class="input" id="puertosRed" type="number" min="1" max="100000" step="1" value={datos.puertosRed ?? ""} /></div>
 </div>

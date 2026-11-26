@@ -1,4 +1,5 @@
 ---
+import { esSolicitudPropia } from "@/lib/ticket-acceso";
 import { espacioDeTrabajo, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
 import { encodeInlineScriptVars } from "@/lib/inline-script-vars";
 import Layout from "@/layouts/Layout.astro";
@@ -36,7 +37,7 @@ const t = r.t;
 const area = parseArea(t.rubro);
 // Registro del otro espacio: el middleware muestra el aviso; sin él, 403 sin datos.
 const espacioTicket = espacioDeTrabajo(t.rubro, r.act);
-if (!puedeEntrar(user, espacioTicket)) return new Response(mensajeOtroEspacio(espacioTicket), { status: 403 });
+if (user.rol === "solicitante" ? !esSolicitudPropia(user, t) : !puedeEntrar(user, espacioTicket)) return new Response(mensajeOtroEspacio(espacioTicket), { status: 403 });
 const rawArea = Astro.url.searchParams.get("area");
 if (rawArea !== null && (!parseArea(rawArea) || parseArea(rawArea) !== area)) return new Response("El registro no pertenece al área seleccionada", { status: 400 });
 if (area && !rawArea) return Astro.redirect(areaHref(Astro.url.pathname, area));
@@ -45,16 +46,18 @@ const coms = await db
   .select({ c: ticketComentarios, u: usuarios })
   .from(ticketComentarios)
   .leftJoin(usuarios, eq(usuarios.id, ticketComentarios.usuarioId))
-  .where(eq(ticketComentarios.ticketId, id))
+  .where(and(eq(ticketComentarios.ticketId, id), user.rol === "solicitante" ? eq(ticketComentarios.publico, true) : undefined))
   .orderBy(asc(ticketComentarios.id));
 
 const adjs = await db.select().from(ticketAdjuntos).where(eq(ticketAdjuntos.ticketId, id));
 
-const tecnicos = await db
-  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol })
+const candidatosTecnicos = await db
+  .select({ id: usuarios.id, nombre: usuarios.nombre, rol: usuarios.rol, especialidad: usuarios.especialidad })
   .from(usuarios)
   .where(and(eq(usuarios.activo, true), inArray(usuarios.rol, ["tecnico", "jefe", "proveedor"])))
   .orderBy(asc(usuarios.nombre));
+
+const tecnicos = candidatosTecnicos.filter((u) => puedeEntrar(u, espacioTicket));
 
 const fmt = (s: string | null) => (s ? new Date(s).toLocaleString("es", { timeZone: "America/El_Salvador" }) : "-");
 const sla = slaStatus(t.vencimientoSla, t.estado as EstadoTicket);

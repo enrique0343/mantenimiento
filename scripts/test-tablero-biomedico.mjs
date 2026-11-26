@@ -108,7 +108,7 @@ try {
 
   // El técnico tiene que ser del espacio del preventivo.
   r = await asignar([pEquipo], 20);
-  igual(r.status, 400); ok(/general/.test(r.body.error) && /biomédico/.test(r.body.error), r.body.error);
+  igual(r.status, 400); ok(/general/i.test(r.body.error) && /no ve los preventivos biomédicos/.test(r.body.error), r.body.error);
   r = await asignar([pAire], 21);
   igual(r.status, 400, 'Uno de biomédico no recibe un aire');
   igual((await asignar([pAire], 22)).status, 200, '«Ambos» sirve para los dos');

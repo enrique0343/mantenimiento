@@ -1,3 +1,4 @@
+import { AREA_KEYS } from "@/lib/areas";
 import type { APIContext } from "astro";
 import { z } from "zod";
 import { eq, sql, type SQL } from "drizzle-orm";
@@ -26,7 +27,7 @@ import { asignadoFueraDeEspacio, espacioDeTrabajoGuardado, mensajeAsignadoFuera 
 // rastro. `momento` es la hora real capturada en el celular, ya validada por
 // quien llama; sin ella, manda el reloj del servidor.
 const updateSchema = z.object({
-  rubro: z.enum(["aires", "infraestructura", "equipo_general", "biomedico"]).optional(),
+  rubro: z.enum(AREA_KEYS).optional(),
   titulo: z.string().min(1).optional(),
   descripcion: z.string().nullable().optional(),
   tipo: z.enum(["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"]).optional(),

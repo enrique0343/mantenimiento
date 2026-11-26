@@ -1,0 +1,134 @@
+---
+import UppercaseFields from "./UppercaseFields.astro";
+interface Props { activoId: number; deBaja?: boolean; }
+const { activoId, deBaja = false } = Astro.props;
+---
+<section id="custodia" class="card mt-4 p-5" data-custodia data-activo={activoId} data-baja={String(deBaja)}>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div><h2 class="font-semibold">Asignación y movimientos</h2><p class="mt-1 text-sm text-slate-500">Persona que tiene el equipo, ubicación y registro de entregas, devoluciones y traslados.</p></div>
+    <button type="button" class="btn-secondary text-sm" data-custodia-refrescar>Actualizar</button>
+  </div>
+  <p class="mt-3 text-sm text-slate-600" role="status" aria-live="polite" data-custodia-mensaje>Cargando asignación…</p>
+  <dl class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2" data-custodia-resumen hidden></dl>
+  {deBaja && <p class="mt-3 text-sm text-amber-800">Equipo dado de baja. Se conserva el historial de asignaciones.</p>}
+  <details class="mt-4 rounded-lg border border-slate-200 p-4" data-custodia-editor hidden>
+    <summary class="cursor-pointer font-medium text-brand-700">Registrar asignación o movimiento</summary>
+    <form class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2" data-custodia-form>
+      <div><label class="label" for="custodiaAccion">Movimiento</label><select class="input" id="custodiaAccion" name="accion"><option value="asignar">Asignar a una persona</option><option value="reasignar">Reasignar a otra persona</option><option value="devolver">Registrar devolución</option><option value="trasladar">Trasladar de ubicación</option></select></div>
+      <div data-custodia-persona><label class="label" for="custodiaUsuario">Persona con usuario del sistema</label><select class="input" id="custodiaUsuario" name="usuarioId"><option value="">Colaborador sin usuario / nombre manual</option></select></div>
+      <div data-custodia-persona data-custodia-nombre><label class="label" for="custodiaNombre">Nombre de la persona *</label><input class="input" id="custodiaNombre" name="nombre" maxlength="180" data-uppercase autocapitalize="characters" autocomplete="off" /></div>
+      <div data-custodia-persona><label class="label" for="custodiaDepartamento">Departamento</label><input class="input" id="custodiaDepartamento" name="departamento" maxlength="180" data-uppercase autocapitalize="characters" /></div>
+      <div data-custodia-persona><label class="label" for="custodiaCargo">Cargo</label><input class="input" id="custodiaCargo" name="cargo" maxlength="180" data-uppercase autocapitalize="characters" /></div>
+      <div><label class="label" for="custodiaUbicacion">Ubicación de destino</label><select class="input" id="custodiaUbicacion" name="ubicacionId"><option value="">Conservar ubicación actual</option></select><p class="mt-1 text-xs text-slate-500">Obligatoria para un traslado. En los demás movimientos puede conservarse la actual.</p></div>
+      <label class="sm:col-span-2 flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" class="mt-1" name="limpiarCentro" /> Desvincular el centro de costo actual si el traslado lo requiere. Podrás elegir otro desde Editar.</label>
+      <div class="sm:col-span-2"><label class="label" for="custodiaMotivo">Motivo / constancia del movimiento *</label><textarea class="input" id="custodiaMotivo" name="motivo" rows="2" minlength="3" maxlength="2000" required data-uppercase autocapitalize="characters" placeholder="Ej. ENTREGA A ADMISIONES PARA SU USO DIARIO"></textarea></div>
+      <div class="sm:col-span-2"><button type="submit" class="btn-primary" data-custodia-guardar>Guardar movimiento</button></div>
+    </form>
+  </details>
+  <div class="mt-5"><h3 class="font-medium">Historial de asignaciones y ubicaciones</h3><p class="mt-1 text-xs text-slate-500">Fechas en hora de El Salvador. Cada movimiento conserva quién lo registró y su motivo.</p><ol class="mt-3 space-y-3" data-custodia-historial></ol><button type="button" class="btn-secondary mt-3 text-sm" data-custodia-anteriores hidden>Ver movimientos anteriores</button></div>
+</section>
+<UppercaseFields />
+<script>
+  const root = document.querySelector<HTMLElement>("[data-custodia]");
+  if (root) {
+    const endpoint = `/api/activos/${root.dataset.activo}/custodia?area=tecnologia&espacio=tecnologia`;
+    const mensaje = root.querySelector<HTMLElement>("[data-custodia-mensaje]")!;
+    const resumen = root.querySelector<HTMLElement>("[data-custodia-resumen]")!;
+    const historial = root.querySelector<HTMLOListElement>("[data-custodia-historial]")!;
+    const editor = root.querySelector<HTMLDetailsElement>("[data-custodia-editor]")!;
+    const form = root.querySelector<HTMLFormElement>("[data-custodia-form]")!;
+    const guardar = root.querySelector<HTMLButtonElement>("[data-custodia-guardar]")!;
+    const refrescar = root.querySelector<HTMLButtonElement>("[data-custodia-refrescar]")!;
+    const campo = (nombre: string) => form.elements.namedItem(nombre) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    const anteriores = root.querySelector<HTMLButtonElement>("[data-custodia-anteriores]")!;
+    let estado: any = null;
+    let nextCursor: number | null = null;
+    let pendiente: { firma: string; requestId: string } | null = null;
+    let conflicto = false;
+    let enviando = false;
+    const fecha = (value: unknown) => {
+      if (!value) return "—";
+      const raw = String(value);
+      const d = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : raw.replace(" ", "T") + "Z");
+      return Number.isNaN(d.getTime()) ? raw : new Intl.DateTimeFormat("es-SV", { dateStyle: "medium", timeStyle: "short", timeZone: "America/El_Salvador" }).format(d);
+    };
+    const aviso = (texto: string, error = false) => { mensaje.textContent = texto; mensaje.className = `mt-3 text-sm ${error ? "text-red-700" : "text-slate-600"}`; };
+    const opcion = (value: string, texto: string) => { const opt = document.createElement("option"); opt.value = value; opt.textContent = texto; return opt; };
+    function ajustarFormulario() {
+      const persona = ["asignar", "reasignar"].includes(campo("accion").value);
+      root!.querySelectorAll<HTMLElement>("[data-custodia-persona]").forEach((el) => { el.hidden = !persona; el.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select").forEach((input) => { input.disabled = !persona; }); });
+      const manual = persona && !campo("usuarioId").value;
+      root!.querySelector<HTMLElement>("[data-custodia-nombre]")!.hidden = !manual;
+      campo("nombre").required = manual; campo("nombre").disabled = !manual;
+      campo("ubicacionId").required = campo("accion").value === "trasladar";
+      campo("limpiarCentro").disabled = !campo("ubicacionId").value;
+      if (!campo("ubicacionId").value) (campo("limpiarCentro") as HTMLInputElement).checked = false;
+    }
+    function dibujar(data: any, agregar = false) {
+      const c = data.custodia;
+      if (!agregar) {
+        resumen.replaceChildren(); resumen.hidden = false;
+        const pares = [["Asignado a", c.nombre || "Sin persona asignada"], ["Departamento / cargo", [c.departamento, c.cargo].filter(Boolean).join(" · ") || "—"], ["Sede / ubicación", [c.sedeNombre, c.ubicacionNombre].filter(Boolean).join(" · ") || "Pendiente de asignar ubicación"], ["Asignado desde", fecha(c.asignadoEn)]];
+        for (const [etiqueta, valor] of pares) { const div = document.createElement("div"); const dt = document.createElement("dt"); dt.className = "text-xs uppercase text-slate-500"; dt.textContent = etiqueta; const dd = document.createElement("dd"); dd.className = "font-medium"; dd.textContent = valor; div.append(dt, dd); resumen.append(div); }
+      }
+      if (!agregar) historial.replaceChildren();
+      nextCursor = data.nextCursor ?? null; anteriores.hidden = !nextCursor;
+      const acciones: Record<string,string> = { asignar: "Asignación", reasignar: "Reasignación", devolver: "Devolución", trasladar: "Traslado" };
+      const describir = (s: any) => s ? [s.nombre || "Sin persona asignada", s.departamento, s.cargo, [s.sedeNombre, s.ubicacionNombre].filter(Boolean).join(" / ") || "Sin ubicación", s.ubicacionDetalle && s.ubicacionDetalle !== s.ubicacionNombre ? `Detalle: ${s.ubicacionDetalle}` : null].filter(Boolean).join(" · ") : "Sin registro previo";
+      for (const h of data.historial ?? []) {
+        const li = document.createElement("li"); li.className = "rounded-lg border border-slate-200 p-3 text-sm";
+        for (const [texto, cls] of [[`${acciones[h.accion] ?? h.accion} · ${fecha(h.fecha)}`, "font-medium"], [`Registró: ${h.actorNombre || "Usuario registrado"}`, "text-xs text-slate-500"], [`Antes: ${describir(h.antes)}`, "mt-2 text-slate-600"], [`Después: ${describir(h.despues)}`, "text-slate-600"], [`Motivo: ${h.motivo}`, "mt-2 whitespace-pre-wrap"]]) { const p = document.createElement("p"); p.className = cls; p.textContent = texto; li.append(p); }
+        historial.append(li);
+      }
+      if (!agregar && !(data.historial?.length)) { const li = document.createElement("li"); li.className = "text-sm text-slate-500"; li.textContent = "Todavía no se han registrado movimientos."; historial.append(li); }
+      if (agregar) return;
+      editor.hidden = !data.puedeEditar || root!.dataset.baja === "true";
+      const usuarioAnterior = campo("usuarioId").value; const ubicacionAnterior = campo("ubicacionId").value;
+      (campo("usuarioId") as HTMLSelectElement).replaceChildren(opcion("", "Colaborador sin usuario / nombre manual"), ...(data.usuarios ?? []).map((u: any) => opcion(String(u.id), u.nombre)));
+      (campo("ubicacionId") as HTMLSelectElement).replaceChildren(opcion("", "Conservar ubicación actual"), ...(data.ubicaciones ?? []).map((u: any) => opcion(String(u.id), [u.sucursalNombre, u.nombre].filter(Boolean).join(" · "))));
+      campo("usuarioId").value = usuarioAnterior; campo("ubicacionId").value = ubicacionAnterior;
+      const tienePersona = !!c.nombre;
+      for (const option of (campo("accion") as HTMLSelectElement).options) { option.disabled = option.value === "asignar" ? tienePersona : ["reasignar", "devolver"].includes(option.value) ? !tienePersona : false; }
+      const actual = (campo("accion") as HTMLSelectElement).selectedOptions[0];
+      if (!actual || actual.disabled) campo("accion").value = tienePersona ? "reasignar" : "asignar";
+      ajustarFormulario();
+    }
+    async function cargar(texto = "Asignación e historial actualizados.") {
+      refrescar.disabled = true; guardar.disabled = true;
+      try { const res = await fetch(endpoint, { cache: "no-store" }); const data = await res.json(); if (!res.ok || !data.custodia) throw new Error(data.error || "No se pudo consultar la asignación."); estado = data; dibujar(data); conflicto = false; aviso(texto); }
+      catch (error) { aviso(error instanceof Error ? error.message : "No se pudo consultar la asignación. Pulsa Actualizar para reintentar.", true); }
+      finally { refrescar.disabled = false; guardar.disabled = !estado || conflicto; }
+    }
+    campo("ubicacionId").addEventListener("change", ajustarFormulario);
+    anteriores.addEventListener("click", async () => {
+      if (!nextCursor) return;
+      anteriores.disabled = true;
+      try { const res = await fetch(`${endpoint}&before=${nextCursor}`, { cache: "no-store" }); const data = await res.json(); if (!res.ok) throw new Error(data.error || "No se pudo cargar el historial anterior."); dibujar(data, true); } catch (error) { aviso(error instanceof Error ? error.message : "No se pudo cargar el historial anterior.", true); } finally { anteriores.disabled = false; }
+    });
+    campo("accion").addEventListener("change", ajustarFormulario); campo("usuarioId").addEventListener("change", ajustarFormulario);
+    refrescar.addEventListener("click", () => { pendiente = null; void cargar(); });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); if (enviando || !estado || conflicto || !form.reportValidity()) return;
+      const payload: any = { accion: campo("accion").value, revision: estado.custodia.revision, ubicacionActualId: estado.custodia.ubicacionId ?? null, motivo: campo("motivo").value.trim().toUpperCase() };
+      if (["asignar", "reasignar"].includes(payload.accion)) { payload.usuarioId = campo("usuarioId").value ? Number(campo("usuarioId").value) : null; payload.nombre = campo("nombre").value.trim().toUpperCase(); payload.departamento = campo("departamento").value.trim().toUpperCase(); payload.cargo = campo("cargo").value.trim().toUpperCase(); }
+      if (campo("ubicacionId").value) payload.ubicacionId = Number(campo("ubicacionId").value);
+      if ((campo("limpiarCentro") as HTMLInputElement).checked) payload.centroCostoId = null;
+      const firma = JSON.stringify(payload); if (!pendiente || pendiente.firma !== firma) pendiente = { firma, requestId: crypto.randomUUID() }; payload.requestId = pendiente.requestId;
+      enviando = true; guardar.disabled = true; refrescar.disabled = true;
+      try {
+        const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok) { if (res.status === 409) conflicto = true; throw new Error((data.error || "No se pudo guardar el movimiento.") + (conflicto ? " Pulsa Actualizar y revisa la asignación antes de guardar otra vez." : "")); }
+        pendiente = null; form.reset(); editor.open = false;
+        estado = data; dibujar(data); conflicto = false;
+        aviso("Movimiento registrado. La asignación y el historial se actualizaron.");
+        if (payload.ubicacionId) window.location.reload();
+      } catch (error) { aviso(error instanceof Error ? error.message : "No se pudo confirmar el movimiento. Puedes reintentar sin duplicarlo.", true); }
+      finally { enviando = false; guardar.disabled = !estado || conflicto; refrescar.disabled = false; }
+    });
+    void cargar();
+  }
+</script>
+<style>
+  [data-custodia] [hidden] { display: none !important; }
+</style>

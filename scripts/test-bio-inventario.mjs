@@ -225,7 +225,7 @@ const evento = (p, el, tipo) => el.dispatchEvent(new p.w.Event(tipo, { cancelabl
       <select id="rubro"><option value="biomedico" selected>Equipos biomédicos</option><option value="equipo_general">Equipos generales</option></select>
       <input type="hidden" id="tipo" value="biomedico">
       <div id="aireFields" class="hidden"><input id="tipoUnidad"></div><div id="infraFields" class="hidden"><input id="sector"></div>
-      <div id="servicioFields"><input id="servicio"></div>
+      <div id="servicioFields"><input id="servicio"></div><div id="tecnologiaFields" class="hidden"><input id="nombreRed"></div>
       <input id="categoria"><datalist id="categoriasList"></datalist>
       <input id="codigo" value="BIO-1" data-original="BIO-1"><input id="nombre" value="MONITOR">
       <select id="sucursalSel"><option value="">—</option><option value="1" selected>Sede Central</option><option value="2">Sede Norte</option></select>

@@ -133,14 +133,14 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
         <>
           <div>
             <label class="label">Sucursal</label>
-            <select class="input" id="sucursalSel">
+            <select class="input" id="sucursalSel" disabled={area === "tecnologia"}>
               <option value="">— Seleccionar —</option>
               {sucRows.map((s) => <option value={s.id} selected={s.id === sucursalActualId}>{s.nombre}{s.activa ? "" : " · desactivada"}</option>)}
             </select>
           </div>
           <div>
             <label class="label">Ubicación</label>
-            <select class="input" id="ubicacionSel">
+            <select class="input" id="ubicacionSel" disabled={area === "tecnologia"}>
               <option value="">— Seleccionar —</option>
             </select>
           </div>
@@ -158,7 +158,8 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
 
       <div class="sm:col-span-2">
         <label class="label">Detalle de ubicación / texto libre</label>
-        <input class="input" id="ubicacion" data-uppercase autocapitalize="characters" value={a.ubicacion ?? ""} />
+        {area === "tecnologia" && <p class="mb-2 text-sm text-slate-600">Para cambiar la ubicación utiliza <a class="text-brand-700 underline" href={areaHref(`/activos/${a.id}#custodia`, area)}>Asignación y movimientos</a>. Cada traslado conserva su motivo y su historial.</p>}
+        <input class="input" id="ubicacion" disabled={area === "tecnologia"} data-uppercase autocapitalize="characters" value={a.ubicacion ?? ""} />
       </div>
 
       <div>
@@ -322,8 +323,8 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
   </form>
   <UppercaseFields />
 
-  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ubJson, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC, gestiona, deBaja, esPatron: a.esPatron }) }}>
-    const { id, ubJson, sucursalActualId, ubicacionActualId, categoriasPorArea, critDescJson, gestiona, deBaja, esPatron } = JSON.parse(decodeURIComponent(__encodedScriptVars));
+  <script define:vars={{ __encodedScriptVars: encodeInlineScriptVars({ id, ubJson, areaOriginal: area, centroCostoOriginal: a.centroCostoId, sucursalActualId, ubicacionActualId: a.ubicacionId, categoriasPorArea: CATEGORIAS_POR_AREA, critDescJson: CRITICIDAD_DESC, gestiona, deBaja, esPatron: a.esPatron }) }}>
+    const { id, ubJson, areaOriginal, centroCostoOriginal, sucursalActualId, ubicacionActualId, categoriasPorArea, critDescJson, gestiona, deBaja, esPatron } = JSON.parse(decodeURIComponent(__encodedScriptVars));
     const allUbs = JSON.parse(ubJson);
 
     // Descripción de criticidad operacional
@@ -341,8 +342,9 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
       document.getElementById("bioFields").classList.toggle("hidden", key !== "biomedico");
       document.getElementById("aireFields").classList.toggle("hidden", key !== "aires");
       document.getElementById("infraFields").classList.toggle("hidden", key !== "infraestructura");
-      document.getElementById("servicioFields").classList.toggle("hidden", !["equipo_general", "biomedico"].includes(key));
-      for (const el of document.querySelectorAll("#aireFields input, #infraFields input, #servicioFields input")) el.disabled = el.closest(".hidden") !== null;
+      document.getElementById("servicioFields").classList.toggle("hidden", !["equipo_general", "biomedico", "tecnologia"].includes(key));
+      document.getElementById("tecnologiaFields").classList.toggle("hidden", key !== "tecnologia");
+      for (const el of document.querySelectorAll("#aireFields input, #infraFields input, #servicioFields input, #tecnologiaFields input")) el.disabled = el.closest(".hidden") !== null;
       const list = document.getElementById("categoriasList");
       list.replaceChildren(...(categoriasPorArea[key] ?? []).map((c) => { const option = document.createElement("option"); option.value = c; return option; }));
     }
@@ -450,6 +452,7 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
         rubro: sv("rubro"),
         datosTecnicos: sv("rubro") === "aires" ? { tipoUnidad: v("tipoUnidad") || null, capacidadBtuH: v("capacidadBtuH") ? Number(v("capacidadBtuH")) : null, refrigerante: v("refrigerante") || null }
           : sv("rubro") === "infraestructura" ? { tipoInstalacion: v("tipoInstalacion") || null, sector: v("sector") || null }
+          : sv("rubro") === "tecnologia" ? { servicio: v("servicio") || null, nombreRed: v("nombreRed") || null, sistemaOperativo: v("sistemaOperativo") || null, procesador: v("procesador") || null, memoriaRamGb: v("memoriaRamGb") ? Number(v("memoriaRamGb")) : null, almacenamientoGb: v("almacenamientoGb") ? Number(v("almacenamientoGb")) : null, direccionIp: v("direccionIp") || null, direccionMac: v("direccionMac") || null, puertosRed: v("puertosRed") ? Number(v("puertosRed")) : null }
           : { servicio: v("servicio") || null },
         categoria: v("categoria") || null,
         numeroActivo: v("numeroActivo") || null,
@@ -470,6 +473,13 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
         responsableId: document.getElementById("responsableSel")?.value ? Number(document.getElementById("responsableSel").value) : null,
         criticidadOperacional: sv("criticidadOperacional") || "media",
       };
+      // Las ubicaciones TI cambian únicamente con un movimiento trazable.
+      // Guardar otra característica no reenvía datos de custodia que ya pudieron cambiar.
+      if (areaOriginal === "tecnologia") {
+        delete payload.ubicacion;
+        delete payload.ubicacionId;
+        if (payload.centroCostoId === centroCostoOriginal) delete payload.centroCostoId;
+      }
       // Un equipo patrón siempre requiere calibración: la casilla no se manda.
       if (!esPatron) payload.requiereCalibracion = document.getElementById("requiereCalibracion")?.checked ?? false;
       // Un equipo de baja no cambia de estado aquí: se revierte en su pantalla de baja.

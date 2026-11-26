@@ -13,8 +13,8 @@ const [u] = await db.select().from(usuarios).where(eq(usuarios.id, sessionUser.i
 const baseUrl = Astro.url.origin;
 // Con los dos espacios, el calendario es el del espacio en el que estás (uno a la vez).
 const espacio = espacioDelContexto(Astro, sessionUser);
-const conDos = espaciosPermitidos(sessionUser).length > 1;
-const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken}.ics${conDos ? `?espacio=${espacio}` : ""}` : null;
+const conVarios = espaciosPermitidos(sessionUser).length > 1;
+const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken}.ics${conVarios ? `?espacio=${espacio}` : ""}` : null;
 ---
 
 <Layout title="Mi perfil">
@@ -55,7 +55,7 @@ const calendarUrl = u.calendarToken ? `${baseUrl}/api/calendar/${u.calendarToken
   <!-- Calendario .ics -->
   <div class="card mt-6 p-5">
     <h2 class="font-semibold text-slate-900">Suscribir mi calendario</h2>
-    <p class="mt-1 text-sm text-slate-600">Sincroniza tus OTs, planes preventivos y actividades con Google Calendar, Outlook o Apple Calendar.{conDos && ` Este enlace es del espacio ${ESPACIOS[espacio].etiqueta}; cambia de espacio para ver el del otro.`}</p>
+    <p class="mt-1 text-sm text-slate-600">Sincroniza tus OTs, planes preventivos y actividades con Google Calendar, Outlook o Apple Calendar.{conVarios && ` Este enlace es del espacio ${ESPACIOS[espacio].etiqueta}; cambia de espacio para consultar otro calendario.`}</p>
 
     {calendarUrl ? (
       <div class="mt-4 space-y-3 rounded-lg border border-slate-200 p-4">

@@ -37,7 +37,7 @@ const usersBefore=JSON.stringify(sqlite.prepare('SELECT * FROM usuarios').all())
 function ctx(method,path,body,role='admin') {return {request:new Request('https://test.local'+path,{method,headers:{'content-type':'application/json',cookie:role ? 'mant_session='+tokens[role] : ''},...(body===undefined?{}:{body:JSON.stringify(body)})}),params:{id:path.split('/')[3]?.split('?')[0]},locals:{runtime:{env:{DB,JWT_SECRET:secret}},user:role?{id:users.indexOf(role)+1,rol:role}:null}};}
 let checks=0;
 async function expect(route, context, status) {const r=await route(context);assert.equal(r.status,status,await r.clone().text());checks++;return r.headers.get('content-type')?.includes('json')?r.json():null;}
-const fields={aires:{tipoUnidad:'Mini split',capacidadBtuH:12000,refrigerante:'R-410A'},infraestructura:{tipoInstalacion:'Cubierta',sector:'Edificio A'},equipo_general:{servicio:'Oficina'},biomedico:{servicio:'Consulta'}};
+const fields={aires:{tipoUnidad:'Mini split',capacidadBtuH:12000,refrigerante:'R-410A'},infraestructura:{tipoInstalacion:'Cubierta',sector:'Edificio A'},equipo_general:{servicio:'Oficina'},biomedico:{servicio:'Consulta'},tecnologia:{servicio:'Admisiones',nombreRed:'pc-admision',sistemaOperativo:'windows 11',procesador:'intel i5',memoriaRamGb:16,almacenamientoGb:512,direccionIp:'192.168.10.20',direccionMac:'aa:bb:cc:dd:ee:ff',puertosRed:2}};
 const ids={};
 for(const [idx,area] of AREA_KEYS.entries()){
  // Fase 59 · requisito 16: un biomédico se registra con su clase de riesgo.
@@ -50,6 +50,8 @@ await expect(collection.POST,ctx('POST','/api/activos',{codigo:'BAD1',nombre:'Ba
 await expect(collection.POST,ctx('POST','/api/activos',{codigo:'BAD2',nombre:'Bad',rubro:'infraestructura',datosTecnicos:{refrigerante:'R32'}}),400);
 await expect(collection.POST,ctx('POST','/api/activos',{codigo:'BAD3',nombre:'Bad',rubro:'aires',tipo:'biomedico'}),400);
 for(const criticidadOperacional of ['urgente','A',null]) await expect(collection.POST,ctx('POST','/api/activos',{codigo:'BAD4',nombre:'Bad',rubro:'aires',criticidadOperacional}),400);
+await expect(collection.POST,ctx('POST','/api/activos',{nombre:'Dato TI inválido',rubro:'tecnologia',datosTecnicos:{memoriaRamGb:0}}),400);
+await expect(collection.POST,ctx('POST','/api/activos',{nombre:'Dato fuera de área',rubro:'equipo_general',datosTecnicos:{nombreRed:'PC-01'}}),400);
 const edited=await expect(item.PATCH,ctx('PATCH','/api/activos/'+ids.aires,{datosTecnicos:{tipoUnidad:'Cassette',capacidadBtuH:24000,refrigerante:'R32'},criticidadOperacional:'baja'}),200);
 assert.equal(edited.activo.rubro,'aires');assert.equal(JSON.parse(edited.activo.datosTecnicos).capacidadBtuH,24000);
 await expect(item.PATCH,ctx('PATCH','/api/activos/'+ids.aires,{datosTecnicos:'{broken'}),400);
@@ -94,4 +96,4 @@ await expect(collection.GET,ctx('GET','/api/activos',undefined,null),401);
 await expect(collection.POST,ctx('POST','/api/activos',{codigo:'UNAUTHORIZED',nombre:'No'},'solicitante'),403);
 await expect(collection.POST,ctx('POST','/api/activos',{codigo:'JEFE',nombre:'No'},'jefe'),201);
 assert.equal(JSON.stringify(sqlite.prepare('SELECT * FROM usuarios').all()),usersBefore);
-console.log('PASS: '+checks+' comprobaciones API; cuatro áreas, JSON técnico, criticidad, cambio de área protegido con trabajo vinculado, legado, importación y permisos. Usuarios intactos.');
+console.log('PASS: '+checks+' comprobaciones API; cinco áreas, JSON técnico, criticidad, cambio de área protegido con trabajo vinculado, legado, importación y permisos. Usuarios intactos.');

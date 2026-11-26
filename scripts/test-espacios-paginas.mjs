@@ -103,7 +103,7 @@ try {
     if (sw) {
       es(sw.getAttribute('action'), '/api/espacio', 'el interruptor guarda en /api/espacio');
       es([...sw.querySelectorAll('button[name="espacio"]')].map((b) => [b.value, b.textContent.trim(), b.getAttribute('aria-pressed')]),
-        [['general', 'General', String(espacio === 'general')], ['biomedico', 'Biomédico', String(espacio === 'biomedico')]], `${quien}: General | Biomédico`);
+        [['general', 'General', String(espacio === 'general')], ['biomedico', 'Biomédico', String(espacio === 'biomedico')], ...(cuenta === 'admin' ? [['tecnologia', 'Tecnología', 'false']] : [])], `${quien}: espacios permitidos`);
       es(sw.querySelector('input[name="volver"]').value, ruta, 'vuelve a la misma dirección');
     }
     ok(texto.includes(espacio === 'general' ? 'Buscar en general' : 'Buscar en biomédico'), `${quien}: la búsqueda dice su espacio`);

@@ -1,12 +1,13 @@
 // ─── Dominios de mantenimiento ───────────────────────────────────────────────
 // Taxonomía institucional del "Sistema de Planificación de Mantenimiento
-// General" (GO-PRY-0XX-2026): cuatro dominios que agrupan equipos,
+// General" (GO-PRY-0XX-2026): cinco dominios que agrupan equipos,
 // actividades, presupuesto, gastos y el plan anual.
 
 export const RUBROS = {
   infraestructura: { label: "Infraestructura",       icono: "", orden: 1 },
   aires:           { label: "Aires acondicionados",  icono: "", orden: 2 },
   equipo_general:  { label: "Equipo general",        icono: "", orden: 3 },
+  tecnologia:      { label: "Tecnología",            icono: "", orden: 5 },
   biomedico:       { label: "Equipo biomédico",      icono: "", orden: 4 },
 } as const;
 

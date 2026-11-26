@@ -34,8 +34,8 @@ import { abrirEvento, ESTADOS_AOP_ABIERTOS } from "@/lib/aop";
 import { leerNumero, textoDeNumero } from "@/lib/numero";
 import { calcularVencimiento } from "@/lib/sla";
 import { pasoCambioEnLaFicha, PASO_DE_LA_FRASE, envioConPasosCambiados } from "@/lib/frases-campo";
-import { condicionActivoEspacio, espacioDeActivo, espaciosPermitidos, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
-import { espacioDeTrabajoGuardado } from "@/lib/espacio-db";
+import { ESPACIO_KEYS, espacioDeArea, condicionOrdenEspacio, condicionActivoEspacio, espacioDeActivo, espaciosPermitidos, mensajeOtroEspacio, puedeEntrar } from "@/lib/espacio";
+import { espacioDeOrdenId, espacioDeTrabajoGuardado } from "@/lib/espacio-db";
 
 type Db = ReturnType<typeof getDb>;
 type Usuario = { id: number; rol: any; nombre: string; especialidad?: string | null };
@@ -47,11 +47,11 @@ export const puedeUsarCampo = (rol: string) => ["admin", "jefe", "tecnico"].incl
 // especialidad) solo ve, abre y crea trabajo de los equipos de ese espacio. La
 // ronda de turno es de Mantenimiento general: el técnico biomédico no la recibe.
 const usuarioEspacio = (user: Usuario) => ({ rol: String(user.rol), especialidad: user.especialidad ?? null });
-/** Condición sobre activos para quien está atado a un espacio; undefined si ve los dos. */
+/** Condición sobre activos según todos los espacios autorizados. */
 function condicionEquiposDe(user?: Usuario | null): SQL | undefined {
   if (!user) return undefined;
   const permitidos = espaciosPermitidos(usuarioEspacio(user));
-  return permitidos.length === 1 ? condicionActivoEspacio(permitidos[0]) : undefined;
+  return permitidos.length === ESPACIO_KEYS.length ? undefined : or(...permitidos.map(condicionActivoEspacio));
 }
 /** 403 de campo si el equipo es de un espacio al que el usuario no entra. */
 function exigirEspacioDelEquipo(user: Usuario, a: { rubro?: string | null; tipo?: string | null }) {
@@ -357,12 +357,13 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
   const ubisFilas = await db.select({ id: ubicaciones.id, nombre: ubicaciones.nombre, sucursalId: ubicaciones.sucursalId }).from(ubicaciones);
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
 
+  const deSusEspacios = or(...espaciosPermitidos(usuarioEspacio(user)).map(condicionOrdenEspacio));
   const columnasActivo = { id: activos.id, codigo: activos.codigo, nombre: activos.nombre, marca: activos.marca, modelo: activos.modelo, ubicacionId: activos.ubicacionId, criticidad: activos.criticidadOperacional };
   const mias = (await db
     .select({ o: ordenes, a: columnasActivo })
     .from(ordenes)
     .leftJoin(activos, eq(activos.id, ordenes.activoId))
-    .where(and(eq(ordenes.asignadoA, user.id), inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"])))
+    .where(and(eq(ordenes.asignadoA, user.id), inArray(ordenes.estado, ["abierta", "en_proceso", "en_espera"]), deSusEspacios))
     .orderBy(asc(ordenes.vencimiento), asc(ordenes.id))
     .limit(60)) as FilaOrden[];
 
@@ -373,17 +374,15 @@ export async function paqueteHoy(db: Db, user: Usuario, sedePedida: number | nul
       .select({ o: ordenes, a: columnasActivo })
       .from(ordenes)
       .leftJoin(activos, eq(activos.id, ordenes.activoId))
-      .where(and(isNull(ordenes.asignadoA), eq(ordenes.estado, "abierta")))
+      .where(and(isNull(ordenes.asignadoA), eq(ordenes.estado, "abierta"), deSusEspacios))
       .orderBy(asc(ordenes.vencimiento), asc(ordenes.id))
       .limit(80)) as FilaOrden[];
-    const esp = user.especialidad;
     libres = candidatas
       .filter((f) => {
         const ubId = f.a?.ubicacionId ?? f.o.ubicacionId;
         const sede = (ubId ? ubis.get(ubId)?.sucursalId : null) ?? f.o.sucursalId;
         return sede === sedeId;
-      })
-      .filter((f) => (esp === "biomedico" ? f.o.rubro === "biomedico" : esp === "general" ? f.o.rubro !== "biomedico" : true));
+      });
   }
 
   // El último motivo de pausa o de devolución. Se lee del historial porque la
@@ -594,8 +593,10 @@ export async function fichaEquipo(db: Db, activoId: number, user: Usuario) {
 // ── Avisos a la jefatura ────────────────────────────────────────────────────
 async function avisarJefatura(ctx: APIContext, db: Db, titulo: string, mensaje: string | undefined, link: string) {
   try {
-    const jefes = await db.select({ id: usuarios.id }).from(usuarios).where(and(inArray(usuarios.rol, ["admin", "jefe"]), eq(usuarios.activo, true)));
-    for (const j of jefes) await crearNotificacion(ctx, { usuarioId: j.id, tipo: "campo", titulo, mensaje, link });
+    const ordenId = Number(link.match(/^\/ordenes\/(\d+)/)?.[1]);
+    const espacio = ordenId ? await espacioDeOrdenId(db, ordenId) : "general";
+    const jefes = await db.select({ id: usuarios.id, rol: usuarios.rol, especialidad: usuarios.especialidad }).from(usuarios).where(and(inArray(usuarios.rol, ["admin", "jefe"]), eq(usuarios.activo, true)));
+    for (const j of jefes.filter((j) => espacio && puedeEntrar(j, espacio))) await crearNotificacion(ctx, { usuarioId: j.id, tipo: "campo", titulo, mensaje, link });
   } catch {}
 }
 
@@ -695,7 +696,7 @@ export async function ordenCampoPorId(db: Db, id: number, user: Usuario) {
     .limit(1)) as FilaOrden[];
   if (!f) return null;
   if (user.rol === "tecnico" && f.o.asignadoA && f.o.asignadoA !== user.id) return null;
-  if (espaciosPermitidos(usuarioEspacio(user)).length === 1 && !puedeEntrar(usuarioEspacio(user), await espacioDeTrabajoGuardado(db, f.o.rubro, f.o.activoId))) return null;
+  if (!puedeEntrar(usuarioEspacio(user), await espacioDeTrabajoGuardado(db, f.o.rubro, f.o.activoId))) return null;
   const ultimas = f.o.planId ? await ultimasLecturasDelPlan(db, f.o.planId, f.o.id) : {};
   const ubis: MapaUbicaciones = new Map(ubisFilas.map((u) => [u.id, { nombre: u.nombre, sucursalId: u.sucursalId }]));
   const extras = await extrasDeCampo(db, [f], ubis);
@@ -729,11 +730,13 @@ async function cambiarOrden(ctx: APIContext, user: Usuario, id: number, cuerpo: 
   return j;
 }
 
-async function ordenDeOp(db: Db, op: OperacionCampo) {
+async function ordenDeOp(db: Db, op: OperacionCampo, user: Usuario) {
   const id = Number(op.ordenId);
   if (!Number.isInteger(id) || id <= 0) throw new RechazoCampo("Orden inválida.");
   const [o] = await db.select().from(ordenes).where(eq(ordenes.id, id)).limit(1);
   if (!o) throw new RechazoCampo("La orden ya no existe.", 404);
+  const espacio = await espacioDeTrabajoGuardado(db, o.rubro, o.activoId);
+  if (!puedeEntrar(usuarioEspacio(user), espacio)) throw new RechazoCampo(mensajeOtroEspacio(espacio), 403);
   return o;
 }
 
@@ -936,6 +939,8 @@ async function abrirOrdenDeFalla(ctx: APIContext, db: Db, user: Usuario, op: Ope
   const rubroPedido = typeof op.rubro === "string" ? op.rubro : eop ? SISTEMA_A_AREA[eop.sistema] ?? "infraestructura" : null;
   const area = await validarAreaTrabajo(db, { rubro: activoId ? undefined : rubroPedido, activoId, sucursalId, ubicacionId } as any);
   if ("error" in area) throw new RechazoCampo(area.error);
+  const espacio = espacioDeArea(area.rubro);
+  if (!puedeEntrar(usuarioEspacio(user), espacio)) throw new RechazoCampo(mensajeOtroEspacio(espacio), 403);
   const base = eop?.titulo ?? (nota.slice(0, 120) || "Falla reportada desde el celular");
   const titulo = `${emergencia ? "[Emergencia]" : "[Correctivo]"} ${base}${etiqueta ? ` - ${etiqueta}` : ""}`.slice(0, 200);
   const prioridad = emergencia ? "urgente" : "alta";
@@ -1124,10 +1129,10 @@ function conformarPasos(o: typeof ordenes.$inferSelect, user: Usuario, conformes
 
 async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCampo): Promise<{ datos?: unknown; ordenId?: number | null; m: Momento }> {
   // La ronda es de Mantenimiento general: quien solo entra a Biomédico no la registra.
-  if (typeof op.tipo === "string" && op.tipo.startsWith("ronda.") && !haceRonda(user)) throw new RechazoCampo(mensajeOtroEspacio("general"), 403);
+  if (typeof op.tipo === "string" && (op.tipo.startsWith("ronda.") || op.tipo.startsWith("aop.")) && !haceRonda(user)) throw new RechazoCampo(mensajeOtroEspacio("general"), 403);
   switch (op.tipo) {
     case "orden.iniciar": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at);
       if (o.estado !== "en_proceso") {
         exigirEjecutor(user, o, { tomarLibre: true });
@@ -1138,7 +1143,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "orden.pausar": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const motivo = String(op.motivo ?? "").trim();
       if (!motivo) throw new RechazoCampo("Escribe por qué se pausa.");
@@ -1146,13 +1151,13 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "orden.reanudar": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at, o.pausadaEn ?? o.iniciadaEn);
       if (o.estado !== "en_proceso") await cambiarOrden(ctx, user, o.id, { estado: "en_proceso" }, m.iso);
       return { ordenId: o.id, m };
     }
     case "orden.paso": {
-      let o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const idx = Number(op.idx);
       const estado = String(op.estado ?? "");
@@ -1163,7 +1168,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
         // K17c · Con «antes», otra escritura del checklist entre la lectura y el guardado: se lee la orden otra vez y
         // se arma de nuevo la marca con su base, una sola vez. Si vuelve a pasar, el paso cambió mientras tanto.
         if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conAntes(op.antes)) throw e;
-        o = await ordenDeOp(db, op);
+        o = await ordenDeOp(db, op, user);
         try {
           await aplicarMarcaDePaso(ctx, db, user, o, op, idx, estado, m);
         } catch (e2) {
@@ -1177,7 +1182,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
     // «orden.enviar» es el mismo envío, con el nombre que usa el celular del cierre en dos pasos. Un servidor de
     // antes no lo conoce y lo rechaza: no da por enviada una orden cuyos pasos no sabe dar por conformes.
     case "orden.enviar": {
-      let o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op, user);
       const [ultima] = await db.select({ en: ordenPasoMarcas.ocurridoEn }).from(ordenPasoMarcas).where(eq(ordenPasoMarcas.ordenId, o.id)).orderBy(desc(ordenPasoMarcas.ocurridoEn)).limit(1);
       // El envío no queda antes de lo que ya pasó en la orden: su última marca, su inicio o un toque de la emergencia.
       const m = momentoCapturado(op.at, laMasTardia([ultima?.en ?? o.iniciadaEn, o.horaLlegada, o.horaMitigacion, o.horaRestablecimiento]));
@@ -1232,7 +1237,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
         } catch (e) {
           // Otra escritura entre la lectura y el guardado: con pasos por marcar se lee la orden otra vez, una sola vez.
           if (!(e instanceof RechazoCampo) || e.motivo !== "otra-escritura" || !conformes.length) throw e;
-          o = await ordenDeOp(db, op);
+          o = await ordenDeOp(db, op, user);
           if (["completada", "verificada", "cerrada"].includes(o.estado)) return { ordenId: o.id, m };
           await enviar(o);
         }
@@ -1240,7 +1245,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "emergencia.hito": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       if (o.tipo !== "emergencia") throw new RechazoCampo("Esta orden no es una emergencia.");
       if (!esHitoEop(op.hito)) throw new RechazoCampo("Ese registro de la emergencia no existe.");
       const campo = HITOS_EOP[op.hito];
@@ -1254,7 +1259,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "mop.prerrequisito": {
-      let o = await ordenDeOp(db, op);
+      let o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at);
       const itemId = Number(op.prerrequisitoId);
       if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Prerrequisito inválido.");
@@ -1271,7 +1276,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m };
     }
     case "mop.liberacion": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const itemId = Number(op.liberacionId);
       if (!Number.isInteger(itemId) || itemId <= 0) throw new RechazoCampo("Lectura inválida.");
@@ -1281,7 +1286,7 @@ async function ejecutar(ctx: APIContext, db: Db, user: Usuario, op: OperacionCam
       return { ordenId: o.id, m, datos: { conforme: row.conforme ?? null } };
     }
     case "mop.reversa": {
-      const o = await ordenDeOp(db, op);
+      const o = await ordenDeOp(db, op, user);
       const m = momentoCapturado(op.at, o.iniciadaEn);
       const notas = typeof op.notas === "string" ? op.notas.trim().slice(0, 2000) : "";
       if (notas.length < 10) throw new RechazoCampo("Describe qué se revirtió y cómo quedó el sistema (mínimo 10 letras).");

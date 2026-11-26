@@ -7,6 +7,8 @@ import type { APIRoute } from "astro";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { activos } from "@/lib/schema";
+import { espacioDeActivo } from "@/lib/espacio";
+import { bloqueoEspacio } from "@/lib/espacio-db";
 import { csvResponse, toCsv } from "@/lib/csv";
 import {
   CLASE_PROTECCION_LABEL, ESTADO_ACTIVO_LABEL, ESTADO_SEG_ELEC_LABEL, METODO_FUGA_LABEL, PARTE_APLICADA_LABEL,
@@ -39,8 +41,10 @@ export const GET: APIRoute = async (ctx) => {
   // ── Pruebas de un equipo ──
   if (url.searchParams.has("activoId")) {
     const activoId = idPositivo(url.searchParams.get("activoId"));
-    const [equipo] = activoId ? await db.select({ id: activos.id, codigo: activos.codigo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
+    const [equipo] = activoId ? await db.select({ id: activos.id, codigo: activos.codigo, rubro: activos.rubro, tipo: activos.tipo }).from(activos).where(eq(activos.id, activoId)).limit(1) : [];
     if (!equipo) return errorJson(404, "Equipo no encontrado");
+    const fuera = bloqueoEspacio(user, espacioDeActivo(equipo));
+    if (fuera) return fuera;
     const pruebas = await pruebasDeActivo(db, equipo.id);
     const filas = pruebas.map((p) => ({
       fecha: p.fecha,

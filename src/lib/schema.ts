@@ -88,9 +88,9 @@ export const usuarios = sqliteTable("usuarios", {
   nombre: text("nombre").notNull(),
   passwordHash: text("password_hash").notNull(),
   rol: text("rol", { enum: ROLES }).notNull().default("solicitante"),
-  // general | biomedico | ambos | null. Controla qué OTs/tickets ve el jefe
+  // general | biomedico | ambos | tecnologia | null. Controla qué OTs/tickets ve el jefe
   // y dirige notificaciones de tickets nuevos al jefe correspondiente.
-  especialidad: text("especialidad", { enum: ["general", "biomedico", "ambos"] }),
+  especialidad: text("especialidad", { enum: ["general", "biomedico", "ambos", "tecnologia"] }),
   // Tarifa horaria para cálculo de costo de OT (mano de obra)
   tarifaHora: real("tarifa_hora").notNull().default(0),
   // Chat ID de Telegram para notificaciones (NULL = no enlazado)
@@ -157,7 +157,7 @@ export const activos = sqliteTable("activos", {
   qrCode: text("qr_code").unique(),
   // Tipo de equipo
   tipo: text("tipo", { enum: ["general", "biomedico"] }).notNull().default("general"),
-  // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico)
+  // Dominio de mantenimiento (taxonomía institucional: infraestructura/aires/equipo_general/biomedico/tecnologia)
   rubro: text("rubro"),
   datosTecnicos: text("datos_tecnicos"),
   // Origen inmutable: una ficha puede cambiar sin reescribir unidades registradas.
@@ -219,7 +219,7 @@ export const ordenes = sqliteTable("ordenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   // OT-MG0001 u OT-MB0001. Lo asigna un trigger al insertar (migración 0057): RETURNING no lo ve.
   codigo: text("codigo"),
-  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico", "tecnologia"] }),
   titulo: text("titulo").notNull(),
   descripcion: text("descripcion"),
   tipo: text("tipo", { enum: ["preventivo", "correctivo", "predictivo", "intervencion", "emergencia"] }).notNull().default("correctivo"),
@@ -434,7 +434,7 @@ export const requisicionItems = sqliteTable("requisicion_items", {
 
 // ─── Helpdesk ────────────────────────────────────────────────────────────────
 export const tickets = sqliteTable("tickets", {
-  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico", "tecnologia"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   trackingToken: text("tracking_token").notNull().unique(),
   solicitanteNombre: text("solicitante_nombre").notNull(),
@@ -749,7 +749,7 @@ export const actividadCategorias = sqliteTable("actividad_categorias", {
 });
 
 export const actividades = sqliteTable("actividades", {
-  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico", "tecnologia"] }),
   id: integer("id").primaryKey({ autoIncrement: true }),
   codigo: text("codigo").notNull().unique(),
   titulo: text("titulo").notNull(),
@@ -1823,7 +1823,7 @@ export const conjuntos = sqliteTable("conjuntos", {
   codigo: text("codigo").notNull().unique(),
   nombre: text("nombre").notNull(),
   descripcion: text("descripcion"),
-  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico"] }).notNull(),
+  rubro: text("rubro", { enum: ["aires", "infraestructura", "equipo_general", "biomedico", "tecnologia"] }).notNull(),
   criticidad: text("criticidad", { enum: ["alta", "media", "baja"] }).notNull(),
   ubicacionId: integer("ubicacion_id").references(() => ubicaciones.id, { onDelete: "restrict" }),
   activo: integer("activo", { mode: "boolean" }).notNull().default(true),
