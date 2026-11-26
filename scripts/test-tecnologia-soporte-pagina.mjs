@@ -34,7 +34,7 @@ try {
     return {w,el:id=>w.document.getElementById(id),payload:()=>payload};
   }
   const a=await render(501);
-  eq(a.el('rubro').value,'tecnologia');eq(a.el('sucursalId').value,'1');eq(a.el('ubicacionId').value,'1');eq(a.el('activoId').value,'501');
+  eq(a.el('tipoReporte').value,'tecnologia');eq(a.el('tipoReporte').disabled,false,'Origen TI preselecciona pero permite cambiar tipo');eq(a.el('rubro').value,'tecnologia');eq(a.el('sucursalId').value,'1');eq(a.el('ubicacionId').value,'1');eq(a.el('activoId').value,'501');
   eq(a.el('activoId').selectedOptions[0].textContent,'TEC-TEST · COMPUTADORA <PRUEBA>','Texto escapado, sin HTML ejecutable');
   for(const [id,v] of Object.entries({solicitanteNombre:'PERSONA',solicitanteEmail:'test@example.invalid',asunto:'FALLA DE PRUEBA',descripcion:'DESCRIPCION FICTICIA DE FALLA'})) a.el(id).value=v;
   a.el('form').dispatchEvent(new a.w.Event('submit',{cancelable:true,bubbles:true}));

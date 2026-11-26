@@ -80,6 +80,7 @@ const esAdmin = user.rol === "admin";
 ---
 
 <Layout title="Tickets de soporte">
+  {url.searchParams.get("derivado") === "1" && <p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800" role="status">Solicitud derivada al área correspondiente. Conserva su historial, fecha original y plazo. Esta bandeja sigue mostrando solo las solicitudes que puedes consultar.</p>}
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold">Solicitudes{area ? ` · ${AREAS[area].label}` : espacio === "tecnologia" ? " · Tecnología" : ""}</h1>
@@ -96,7 +97,7 @@ const esAdmin = user.rol === "admin";
           Eliminar seleccionados (<span id="selCount">0</span>)
         </button>
       )}
-      <a href={areaHref("/soporte", area ?? (espacio === "tecnologia" ? "tecnologia" : null))} target="_blank" class="btn-secondary">Ver formulario público →</a>
+      <a href="/soporte" target="_blank" rel="noopener" class="btn-secondary">Reportar un problema →</a>
     </div>
   </div>
 

@@ -1,11 +1,12 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
-import { getDb } from "@/lib/db";
+import { getDb, getEnv } from "@/lib/db";
 import {
-  ordenRepuestos, ordenes, items, stock, movimientosInventario, usuarios,
+  ordenRepuestos, items, stock, movimientosInventario, usuarios,
 } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
+import { ErrorAlcanceOrden, guardAlcanceD1, leerOrdenConAlcance } from "@/lib/orden-alcance";
 
 export const prerender = false;
 
@@ -47,8 +48,13 @@ export const POST: APIRoute = async (ctx) => {
 
   const db = getDb(ctx);
 
-  const [orden] = await db.select().from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
-  if (!orden) return Response.json({ error: "Orden no existe" }, { status: 404 });
+  let alcance;
+  try { alcance = await leerOrdenConAlcance(db, ordenId, user, { roles: ["admin", "jefe", "tecnico"] }); }
+  catch (error) {
+    if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+  const { orden } = alcance;
   if (orden.estado === "cerrada" || orden.estado === "cancelada") {
     return Response.json({ error: "No se pueden consumir repuestos en una orden cerrada/cancelada" }, { status: 400 });
   }
@@ -64,32 +70,25 @@ export const POST: APIRoute = async (ctx) => {
     );
   }
 
-  const [rep] = await db
-    .insert(ordenRepuestos)
-    .values({
-      ordenId,
-      itemId: parsed.data.itemId,
-      cantidad: parsed.data.cantidad,
-      precioUnitario: parsed.data.precioUnitario ?? null,
-      notas: parsed.data.notas ?? null,
-      registradoPor: user.id,
-    })
-    .returning();
-
-  await db.insert(movimientosInventario).values({
-    itemId: parsed.data.itemId,
-    tipo: "salida",
-    cantidad: parsed.data.cantidad,
-    motivo: "consumo_ot",
-    referencia: `orden:${ordenId}`,
-    ordenId,
-    usuarioId: user.id,
-  });
-
-  await db
-    .update(stock)
-    .set({ cantidad: disponible - parsed.data.cantidad, updatedAt: new Date().toISOString() })
-    .where(eq(stock.id, actual!.id));
+  // El alcance se vuelve a comprobar dentro de la misma transacción que consume
+  // stock. Una derivación o un consumo concurrente no deja descuentos huérfanos.
+  const DB = getEnv(ctx).DB;
+  const guard = guardAlcanceD1(db, alcance.guard);
+  const { itemId, cantidad } = parsed.data;
+  const result = await DB.batch([
+    DB.prepare(`UPDATE stock SET cantidad=cantidad-?,updated_at=?
+      WHERE id=? AND item_id=? AND cantidad>=? AND (${guard.sql})`)
+      .bind(cantidad, new Date().toISOString(), actual!.id, itemId, cantidad, ...guard.params),
+    DB.prepare(`INSERT INTO orden_repuestos(orden_id,item_id,cantidad,precio_unitario,notas,registrado_por)
+      SELECT ?,?,?,?,?,? WHERE changes()=1 RETURNING id`)
+      .bind(ordenId, itemId, cantidad, parsed.data.precioUnitario ?? null, parsed.data.notas ?? null, user.id),
+    DB.prepare(`INSERT INTO movimientos_inventario(item_id,tipo,cantidad,motivo,referencia,orden_id,usuario_id)
+      SELECT ?,'salida',?,'consumo_ot',?,?,? WHERE changes()=1`)
+      .bind(itemId, cantidad, `orden:${ordenId}`, ordenId, user.id),
+  ]);
+  if (!result[0].meta.changes) return Response.json({ error: "La orden o las existencias cambiaron. Actualiza la página antes de registrar el consumo." }, { status: 409 });
+  const repuestoId = Number((result[1].results[0] as { id: number }).id);
+  const [rep] = await db.select().from(ordenRepuestos).where(eq(ordenRepuestos.id, repuestoId)).limit(1);
 
   return Response.json({ repuesto: rep }, { status: 201 });
 };

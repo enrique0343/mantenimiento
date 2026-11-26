@@ -1,0 +1,119 @@
+---
+import UppercaseFields from "./UppercaseFields.astro";
+import { ESPACIOS, type Espacio } from "@/lib/espacio";
+import type { AreaKey } from "@/lib/areas";
+
+interface Props {
+  ticketId: number;
+  espacioOrigen: Espacio;
+  areaOrigen: AreaKey | null;
+  updatedAt: string;
+  estado: string;
+  proyectoId?: number | null;
+  ordenId?: number | null;
+  activo?: { codigo: string; nombre: string; espacio: Espacio; rubro: AreaKey } | null;
+}
+const { ticketId, espacioOrigen, areaOrigen, updatedAt, estado, proyectoId, ordenId, activo } = Astro.props;
+const terminal = ["resuelto", "cerrado", "descartado"].includes(estado);
+const volver = `/tickets?espacio=${espacioOrigen}${areaOrigen ? `&area=${areaOrigen}` : ""}&derivado=1`;
+---
+
+<section class="card mt-4 p-5" data-ticket-derivacion data-ticket={ticketId} data-origen={espacioOrigen}
+  data-area={areaOrigen ?? ""} data-version={updatedAt} data-activo-espacio={activo?.espacio ?? ""} data-activo-area={activo?.rubro ?? ""} data-volver={volver}>
+  <h2 class="font-semibold text-slate-900">Derivar a otra área</h2>
+  <p class="mt-1 text-sm text-slate-500">Si el reporte llegó al área equivocada, envíalo a General, Biomédico o Tecnología. Conserva la fecha original, el plazo y el historial, y llega sin técnico asignado.</p>
+  {terminal ? <p class="mt-3 text-sm text-slate-600">Esta solicitud ya está resuelta, cerrada o descartada. No admite derivación.</p>
+    : proyectoId ? <p class="mt-3 text-sm text-amber-800">Esta solicitud está vinculada a un proyecto. Revisa su atención con la jefatura antes de cambiar el área.</p>
+    : <form class="mt-4 space-y-3" data-derivacion-form>
+      <div>
+        <label class="label" for="derivacionDestino">Área que debe atender *</label>
+        <select class="input" id="derivacionDestino" name="espacioDestino" required>
+          <option value="">Selecciona el área de destino</option>
+          {(["general", "biomedico", "tecnologia"] as const).filter((e) => e !== espacioOrigen).map((e) => <option value={e}>{ESPACIOS[e].etiqueta}</option>)}
+        </select>
+      </div>
+      <div data-derivacion-general hidden>
+        <label class="label" for="derivacionRubro">Tipo de mantenimiento general</label>
+        <select class="input" id="derivacionRubro" name="rubroDestino" disabled>
+          <option value="equipo_general">Equipos generales / por clasificar</option>
+          <option value="aires">Aire acondicionado</option>
+          <option value="infraestructura">Infraestructura</option>
+        </select>
+      </div>
+      {activo && <label class="block rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-derivacion-desvincular hidden>
+        <span class="flex items-start gap-2"><input type="checkbox" name="desvincularEquipo" class="mt-1" disabled />
+          <span>Quitar de esta solicitud el vínculo con <strong>{activo.codigo} · {activo.nombre}</strong>, porque no corresponde al destino seleccionado. El equipo y su inventario no se modifican; el historial conservará el vínculo anterior.</span>
+        </span>
+      </label>}
+      {ordenId && <p class="text-xs text-slate-500">La orden vinculada se comprueba antes de confirmar. Una orden con trabajo registrado no se traslada a otra área.</p>}
+      <div>
+        <label class="label" for="derivacionMotivo">Motivo de la derivación *</label>
+        <textarea class="input" id="derivacionMotivo" name="motivo" rows="3" required minlength="3" maxlength="2000" data-uppercase autocapitalize="characters" placeholder="EXPLICA POR QUÉ CORRESPONDE A ESTA ÁREA"></textarea>
+      </div>
+      <p class="text-sm text-slate-500">Después volverás a tu bandeja. Derivar una solicitud no te da acceso a la interfaz de destino.</p>
+      <button type="submit" class="btn-primary" data-derivacion-guardar>Confirmar derivación</button>
+    </form>}
+  <p class="mt-3 text-sm" data-derivacion-mensaje role="status" aria-live="polite" hidden></p>
+  <a class="mt-2 inline-block text-sm text-brand-700 underline" href={volver} data-derivacion-volver hidden>Volver a mi bandeja</a>
+</section>
+<UppercaseFields />
+<script>
+  const root = document.querySelector<HTMLElement>("[data-ticket-derivacion]");
+  const form = root?.querySelector<HTMLFormElement>("[data-derivacion-form]");
+  if (root && form) {
+    const destino = form.elements.namedItem("espacioDestino") as HTMLSelectElement;
+    const rubro = form.elements.namedItem("rubroDestino") as HTMLSelectElement;
+    const motivo = form.elements.namedItem("motivo") as HTMLTextAreaElement;
+    const quitarEquipo = form.elements.namedItem("desvincularEquipo") as HTMLInputElement | null;
+    const general = root.querySelector<HTMLElement>("[data-derivacion-general]")!;
+    const desvincular = root.querySelector<HTMLElement>("[data-derivacion-desvincular]");
+    const guardar = root.querySelector<HTMLButtonElement>("[data-derivacion-guardar]")!;
+    const mensaje = root.querySelector<HTMLElement>("[data-derivacion-mensaje]")!;
+    const volver = root.querySelector<HTMLAnchorElement>("[data-derivacion-volver]")!;
+    let enviando = false;
+    let finalizado = false;
+    const aviso = (texto: string, error = false) => {
+      mensaje.textContent = texto; mensaje.hidden = false;
+      mensaje.className = `mt-3 text-sm ${error ? "text-red-700" : "text-emerald-700"}`;
+    };
+    function ajustarDestino() {
+      general.hidden = destino.value !== "general"; rubro.disabled = general.hidden;
+      if (quitarEquipo && desvincular) {
+        const areaDestino = destino.value === "general" ? rubro.value : destino.value;
+        const incompatible = !!destino.value && root!.dataset.activoArea !== areaDestino;
+        desvincular.hidden = !incompatible; quitarEquipo.disabled = !incompatible; quitarEquipo.required = incompatible;
+        if (!incompatible) quitarEquipo.checked = false;
+      }
+    }
+    destino.addEventListener("change", () => {
+      if (destino.value === "general" && ["aires", "infraestructura", "equipo_general"].includes(root.dataset.activoArea ?? "")) rubro.value = root.dataset.activoArea!;
+      if (quitarEquipo) quitarEquipo.checked = false;
+      ajustarDestino();
+    });
+    rubro.addEventListener("change", () => { if (quitarEquipo) quitarEquipo.checked = false; ajustarDestino(); });
+    ajustarDestino();
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (enviando || finalizado || !form.reportValidity()) return;
+      const payload = { espacioDestino: destino.value, rubroDestino: destino.value === "general" ? rubro.value : destino.value,
+        motivo: motivo.value.trim().toUpperCase(), desvincularEquipo: quitarEquipo?.checked ?? false, expectedUpdatedAt: root.dataset.version };
+      enviando = true; guardar.disabled = true;
+      aviso("Registrando derivación…");
+      try {
+        const url = `/api/tickets/${root.dataset.ticket}/derivar?espacio=${root.dataset.origen}${root.dataset.area ? `&area=${root.dataset.area}` : ""}`;
+        const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "No se pudo derivar la solicitud. Actualiza la ficha y vuelve a intentarlo.");
+        finalizado = true;
+        form.hidden = true; volver.hidden = false;
+        aviso("Solicitud derivada. Se conservaron su fecha original, plazo e historial. Volviendo a tu bandeja…");
+        window.location.href = volver.href;
+      } catch (error) {
+        aviso(error instanceof Error ? error.message : "No se pudo confirmar la derivación. Revisa tu bandeja antes de reintentar.", true);
+      } finally { enviando = false; guardar.disabled = finalizado; }
+    });
+  }
+</script>
+<style>
+  [data-ticket-derivacion] [hidden] { display: none !important; }
+</style>

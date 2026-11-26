@@ -7,6 +7,7 @@ import { eq, and, inArray, asc, or } from "drizzle-orm";
 import { CATEGORIAS_POR_AREA } from "@/lib/categorias-equipos";
 import { CRITICIDAD_LABEL, CRITICIDAD_DESC } from "@/lib/inventario-jci";
 import ActivoAreaFields from "@/components/ActivoAreaFields.astro";
+import TecnologiaCustodia from "@/components/TecnologiaCustodia.astro";
 import UppercaseFields from "@/components/UppercaseFields.astro";
 import { AREAS, areaHref, parseArea } from "@/lib/areas";
 import { rubroDeActivo, SUBCAT_KEYS, SUBCATS_BIOMEDICO } from "@/lib/rubros";
@@ -73,6 +74,8 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
   <h1 class="mt-2 text-2xl font-bold">Editar {area === "infraestructura" ? "instalación" : area === "aires" ? "unidad" : "equipo"}</h1>
   <p class="mt-1 text-sm font-medium text-brand-700">{AREAS[area].label}</p>
   <p class="text-sm text-slate-500 font-mono">{a.codigo}</p>
+
+  {area === "tecnologia" && <TecnologiaCustodia activoId={a.id} deBaja={deBaja} abierto /> }
 
   <form id="form" class="card mt-4 space-y-5 p-5">
     <ActivoAreaFields area={area} datosTecnicos={a.datosTecnicos} />
@@ -285,7 +288,7 @@ const entidadSel = entidadFija ? a.registroSanitarioEntidad! : a.registroSanitar
           <input class="input" id="valorAdquisicion" type="number" min="0" step="0.01" value={a.valorAdquisicion ?? ""} />
         </div>
         <div>
-          <label class="label">Responsable del equipo</label>
+          <label class="label" for="responsableSel">{area === "tecnologia" ? "Responsable de mantenimiento (opcional)" : "Responsable del equipo"}</label>
           <select class="input" id="responsableSel">
             <option value="">— Sin asignar —</option>
             {userRows.map((u) => <option value={u.id} selected={u.id === a.responsableId}>{u.nombre}</option>)}

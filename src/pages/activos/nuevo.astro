@@ -226,8 +226,13 @@ const PREFIJO: Record<string, string> = { biomedico: "BIO", equipo_general: "EQ"
           <label class="label">Valor de adquisición (USD)</label>
           <input class="input" id="valorAdquisicion" type="number" min="0" step="0.01" />
         </div>
+        {area === "tecnologia" && <div>
+          <label class="label" for="custodiaInicialNombre">Persona responsable del equipo</label>
+          <input class="input" id="custodiaInicialNombre" maxlength="180" data-uppercase autocapitalize="characters" autocomplete="off" placeholder="ESCRIBE EL NOMBRE COMPLETO" aria-describedby="custodiaInicialAyuda" />
+          <p class="mt-1 text-xs text-slate-500" id="custodiaInicialAyuda">Opcional. Puedes escribir a cualquier persona, aunque no tenga usuario en el sistema. La asignación quedará registrada en el historial.</p>
+        </div>}
         <div>
-          <label class="label">Responsable del equipo</label>
+          <label class="label" for="responsableSel">{area === "tecnologia" ? "Responsable de mantenimiento (opcional)" : "Responsable del equipo"}</label>
           <select class="input" id="responsableSel">
             <option value="">— Sin asignar —</option>
             {userRows.map((u) => <option value={u.id}>{u.nombre}</option>)}
@@ -465,6 +470,7 @@ const PREFIJO: Record<string, string> = { biomedico: "BIO", equipo_general: "EQ"
         criticidadOperacional: sv("criticidadOperacional") || "media",
         requiereCalibracion: document.getElementById("requiereCalibracion")?.checked ?? false,
       };
+      if (sv("rubro") === "tecnologia" && v("custodiaInicialNombre")) payload.custodiaInicial = { nombre: v("custodiaInicialNombre").toUpperCase() };
       if (sv("rubro") === "aires" && sv("modeloAireId")) {
         payload.modeloAireId = Number(sv("modeloAireId"));
         payload.modeloAireVersion = Number(sv("modeloAireVersion"));

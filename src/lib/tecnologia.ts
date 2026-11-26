@@ -15,6 +15,50 @@ export function puedeEditarCustodia(user: UsuarioEspacio) {
   return !!user && (ROLES_CUSTODIA_EDICION as readonly string[]).includes(user.rol) && puedeEntrar(user, 'tecnologia');
 }
 const texto = z.string().trim().toUpperCase();
+/** Datos opcionales al dar de alta; la persona no necesita una cuenta. */
+export const custodiaInicialSchema = z.object({
+  nombre: texto.max(180).default(''),
+  departamento: texto.max(180).nullable().optional(),
+  cargo: texto.max(180).nullable().optional(),
+}).strict().superRefine((v, ctx) => {
+  if (!v.nombre && (v.departamento || v.cargo)) ctx.addIssue({ code:'custom', path:['nombre'], message:'Escribe el nombre de la persona para registrar su departamento o cargo.' });
+});
+type CustodiaInicial = z.infer<typeof custodiaInicialSchema>;
+export const MOTIVO_CUSTODIA_INICIAL = 'ASIGNACIÓN INICIAL AL REGISTRAR EL EQUIPO';
+
+/** Se anexan al mismo batch que INSERT activo y plan. La sede/ubicación se leen dentro de esa transacción. */
+export function sentenciasCustodiaInicial(ctx: APIContext, user: Usuario, codigo: string, datos: CustodiaInicial, resumenAlta: string): D1PreparedStatement[] {
+  if (!puedeEditarCustodia(user)) throw new ErrorCustodia('No tienes permiso para gestionar la custodia de Tecnología.', 403);
+  const persona = custodiaInicialSchema.parse(datos);
+  if (!persona.nombre) throw new ErrorCustodia('Escribe el nombre de la persona.', 400);
+  const db = getEnv(ctx).DB, now = new Date().toISOString();
+  const requestId = crypto.randomUUID(), mutationToken = crypto.randomUUID();
+  const lugar = `'ubicacionId',a.ubicacion_id,'ubicacionNombre',COALESCE(l.nombre,a.ubicacion),'ubicacionDetalle',a.ubicacion,
+    'sedeId',l.sucursal_id,'sedeNombre',s.nombre,'centroCostoId',a.centro_costo_id`;
+  const antes = `json_object('revision',0,'usuarioId',NULL,'nombre',NULL,'departamento',NULL,'cargo',NULL,'asignadoEn',NULL,${lugar},'actualizadoEn',NULL)`;
+  const despues = `json_object('revision',c.revision,'usuarioId',c.usuario_id,'nombre',c.nombre,'departamento',c.departamento,'cargo',c.cargo,'asignadoEn',c.asignado_en,${lugar},'actualizadoEn',c.updated_at)`;
+  return [
+    db.prepare(`INSERT INTO tecnologia_custodia(activo_id,usuario_id,nombre,departamento,cargo,asignado_en,revision,mutation_token,updated_at)
+      SELECT id,NULL,?,?,?,?,1,?,? FROM activos WHERE codigo=? AND rubro='tecnologia'`)
+      .bind(persona.nombre,persona.departamento || null,persona.cargo || null,now,mutationToken,now,codigo),
+    db.prepare(`INSERT INTO tecnologia_custodia_eventos(activo_id,accion,request_id,mutation_token,request_json,revision,actor_id,actor_nombre,fecha,motivo,antes_json,despues_json)
+      SELECT a.id,'asignar',?,c.mutation_token,
+        json_object('accion','asignar','revision',0,'ubicacionActualId',a.ubicacion_id,'requestId',?,'motivo',?,'usuarioId',NULL,'nombre',c.nombre,'departamento',c.departamento,'cargo',c.cargo),
+        1,?,?,c.updated_at,?,${antes},${despues}
+      FROM activos a JOIN tecnologia_custodia c ON c.activo_id=a.id
+      LEFT JOIN ubicaciones l ON l.id=a.ubicacion_id LEFT JOIN sucursales s ON s.id=l.sucursal_id
+      WHERE a.codigo=? AND c.mutation_token=?`)
+      .bind(requestId,requestId,MOTIVO_CUSTODIA_INICIAL,user.id,user.nombre,MOTIVO_CUSTODIA_INICIAL,codigo,mutationToken),
+    db.prepare(`INSERT INTO audit_log(entidad,entidad_id,accion,usuario_id,resumen,created_at)
+      SELECT 'activo',activo_id,'create',?,?,fecha FROM tecnologia_custodia_eventos WHERE mutation_token=?`)
+      .bind(user.id,resumenAlta,mutationToken),
+    db.prepare(`INSERT INTO audit_log(entidad,entidad_id,accion,usuario_id,cambios,resumen,created_at)
+      SELECT 'activo',activo_id,'custodia',?,json_object('custodia',json_object('antes',json(antes_json),'despues',json(despues_json))),?,fecha
+      FROM tecnologia_custodia_eventos WHERE mutation_token=?`)
+      .bind(user.id,`CUSTODIA TI: ASIGNAR — ${MOTIVO_CUSTODIA_INICIAL}`,mutationToken),
+  ];
+}
+
 export const movimientoCustodiaSchema = z.object({
   accion: z.enum(['asignar', 'reasignar', 'devolver', 'trasladar']),
   revision: z.number().int().nonnegative(),

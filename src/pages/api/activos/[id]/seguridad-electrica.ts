@@ -3,11 +3,12 @@
 // mediciones, el analizador, el resultado confirmado y, si viene, el informe.
 // Nada se edita: una prueba mal registrada se anula y se registra otra.
 import type { APIRoute } from "astro";
-import { eq } from "drizzle-orm";
+import { eq, getTableColumns } from "drizzle-orm";
 import { getDb, getEnv } from "@/lib/db";
-import { activos, ordenes, pruebasSeguridadElectrica, usuarios } from "@/lib/schema";
+import { activos, pruebasSeguridadElectrica, usuarios } from "@/lib/schema";
 import { logAuditLote } from "@/lib/audit";
 import { rubroDeActivo } from "@/lib/rubros";
+import { ErrorAlcanceOrden, guardAlcanceD1, leerOrdenConAlcance } from "@/lib/orden-alcance";
 import {
   CLASES_PROTECCION, METODOS_FUGA, PARTES_APLICADAS, RESULTADO_SE_LABEL, ROLES_BIO_REGISTRAR, ROLES_BIO_VER,
   TIPOS_PRUEBA_ELECTRICA, TIPO_PRUEBA_ELECTRICA_LABEL, esFechaISO, evaluarPruebaIec62353, hoySV, leerFechaEntrada,
@@ -95,9 +96,16 @@ export const POST: APIRoute = async (ctx) => {
 
   // Orden (opcional): tiene que ser de este equipo.
   let ordenId: number | null = null;
+  let accesoOrden: Awaited<ReturnType<typeof leerOrdenConAlcance>> | null = null;
   if (campo("ordenId")) {
     const oid = idPositivo(campo("ordenId"));
-    const [orden] = oid ? await db.select({ id: ordenes.id, activoId: ordenes.activoId }).from(ordenes).where(eq(ordenes.id, oid)).limit(1) : [];
+    if (!oid) return errorJson(400, "La orden elegida no es de este equipo.");
+    try { accesoOrden = await leerOrdenConAlcance(db, oid, user); }
+    catch (error) {
+      if (error instanceof ErrorAlcanceOrden) return errorJson(error.status, error.message);
+      throw error;
+    }
+    const orden = accesoOrden.orden;
     if (!orden || orden.activoId !== equipo.id) return errorJson(400, "La orden elegida no es de este equipo.");
     ordenId = orden.id;
   }
@@ -221,7 +229,7 @@ export const POST: APIRoute = async (ctx) => {
   }
   let id: number;
   try {
-    const [fila] = await db.insert(pruebasSeguridadElectrica).values({
+    const datos = {
       activoId: equipo.id,
       fecha,
       tipo,
@@ -254,7 +262,19 @@ export const POST: APIRoute = async (ctx) => {
       informeTamano: informe?.tamano ?? null,
       notas: notas || null,
       registradoPor: user.id,
-    }).returning({ id: pruebasSeguridadElectrica.id });
+    } satisfies typeof pruebasSeguridadElectrica.$inferInsert;
+    const columnas = getTableColumns(pruebasSeguridadElectrica);
+    const claves = Object.keys(datos) as (keyof typeof datos)[];
+    const guard = accesoOrden ? guardAlcanceD1(db, accesoOrden.guard) : { sql: '1', params: [] };
+    // El informe puede tardar en subirse: el vínculo y el permiso deben seguir
+    // vigentes en el INSERT, aunque una derivación haya ocurrido durante R2.
+    const fila = await env.DB.prepare(`INSERT INTO pruebas_seguridad_electrica(${claves.map(k => columnas[k].name).join(',')})
+      SELECT ${claves.map(() => '?').join(',')} WHERE (${guard.sql}) RETURNING id`)
+      .bind(...claves.map(k => datos[k]), ...guard.params).first<{ id: number }>();
+    if (!fila) {
+      if (informe) await env.R2.delete(informe.r2Key).catch(() => {});
+      return errorJson(409, "La orden cambió mientras se guardaba la prueba. Actualiza la ficha.");
+    }
     id = fila.id;
   } catch {
     // Sin fila no hay prueba: el informe recién subido no queda huérfano en R2.

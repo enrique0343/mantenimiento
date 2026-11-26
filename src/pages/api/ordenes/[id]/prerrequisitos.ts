@@ -1,12 +1,13 @@
 import type { APIRoute } from "astro";
 import { z } from "zod";
 import { and, asc, eq } from "drizzle-orm";
-import { getDb } from "@/lib/db";
+import { getDb, getEnv } from "@/lib/db";
 import { ordenPrerrequisitos, ordenes, usuarios } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { PRERREQ_TIPOS } from "@/lib/ordenes";
 import { logAudit } from "@/lib/audit";
 import { cambiarPrerrequisito, RechazoMop } from "@/lib/mop";
+import { ErrorAlcanceOrden, guardAlcanceD1, leerOrdenConAlcance } from "@/lib/orden-alcance";
 
 export const prerender = false;
 
@@ -59,8 +60,13 @@ export const POST: APIRoute = async (ctx) => {
   if (!parsed.success) return Response.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const db = getDb(ctx);
-  const [orden] = await db.select({ id: ordenes.id, estado: ordenes.estado }).from(ordenes).where(eq(ordenes.id, ordenId)).limit(1);
-  if (!orden) return Response.json({ error: "La orden no existe" }, { status: 404 });
+  let alcance;
+  try { alcance = await leerOrdenConAlcance(db, ordenId, user, { roles: ["admin", "jefe"] }); }
+  catch (error) {
+    if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+  const { orden } = alcance;
   if (orden.estado === "cerrada" || orden.estado === "cancelada") {
     return Response.json({ error: "La orden ya está cerrada: no se pueden agregar prerrequisitos" }, { status: 400 });
   }
@@ -72,17 +78,15 @@ export const POST: APIRoute = async (ctx) => {
   const siguienteOrden =
     parsed.data.orden ?? existentes.reduce((m, r) => Math.max(m, r.orden ?? 0), 0) + 1;
 
-  const [row] = await db
-    .insert(ordenPrerrequisitos)
-    .values({
-      ordenId,
-      texto: parsed.data.texto.trim(),
-      tipo: parsed.data.tipo,
-      obligatorio: parsed.data.obligatorio,
-      cargoResponsable: parsed.data.cargoResponsable?.trim() || null,
-      orden: siguienteOrden,
-    })
-    .returning();
+  const DB = getEnv(ctx).DB;
+  const guard = guardAlcanceD1(db, alcance.guard);
+  const [insert] = await DB.batch([DB.prepare(`INSERT INTO orden_prerrequisitos(orden_id,texto,tipo,obligatorio,cargo_responsable,orden)
+    SELECT ?,?,?,?,?,? WHERE (${guard.sql}) RETURNING id`)
+    .bind(ordenId, parsed.data.texto.trim(), parsed.data.tipo, parsed.data.obligatorio ? 1 : 0,
+      parsed.data.cargoResponsable?.trim() || null, siguienteOrden, ...guard.params)]);
+  if (!insert.meta.changes) return Response.json({ error: "La orden cambió. Actualiza la página antes de agregar el prerrequisito." }, { status: 409 });
+  const itemId = Number((insert.results[0] as { id: number }).id);
+  const [row] = await db.select().from(ordenPrerrequisitos).where(eq(ordenPrerrequisitos.id, itemId)).limit(1);
 
   await logAudit(ctx, {
     entidad: "orden",

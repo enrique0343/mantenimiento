@@ -1,11 +1,12 @@
 import type { APIRoute } from "astro";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { ordenes, ordenIncidentes } from "@/lib/schema";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { validarContextoArea } from "@/lib/ordenes";
 import { ROLES_BIO_GESTIONAR, hoySV } from "@/lib/biomedico";
+import { ErrorAlcanceOrden, leerOrdenConAlcance } from "@/lib/orden-alcance";
 import {
   cambiosMarca, resumenMarca, validarMarcaIncidente, validarMotivoQuitar, type MarcaIncidente,
 } from "@/lib/incidentes";
@@ -38,15 +39,24 @@ export const PUT: APIRoute = async (ctx) => {
   if (!v.ok) return Response.json({ error: v.error }, { status: 400 });
 
   const db = getDb(ctx);
-  const [ot] = await db.select({ id: ordenes.id, rubro: ordenes.rubro }).from(ordenes).where(eq(ordenes.id, id)).limit(1);
-  if (!ot) return Response.json({ error: "La orden no existe" }, { status: 404 });
+  let acceso;
+  try { acceso = await leerOrdenConAlcance(db, id, user, { roles: ROLES_BIO_GESTIONAR }); }
+  catch (error) { if (error instanceof ErrorAlcanceOrden) return Response.json({ error: error.status === 404 ? "La orden no existe" : error.message }, { status: error.status }); throw error; }
+  const ot = acceso.orden;
   const contextError = validarContextoArea(ctx.request, ot.rubro);
   if (contextError) return contextError;
 
   const [actual] = await db.select().from(ordenIncidentes).where(eq(ordenIncidentes.ordenId, id)).limit(1);
   if (!actual) {
     try {
-      await db.insert(ordenIncidentes).values({ ordenId: id, ...v.valor, marcadoPor: user.id });
+      const inserted = await db.insert(ordenIncidentes).select(db.select({
+        id: sql<number>`null`.as("id"), ordenId: sql<number>`${id}`.as("orden_id"),
+        numeroReporte: sql<string | null>`${v.valor.numeroReporte}`.as("numero_reporte"),
+        fechaNotificacion: sql<string>`${v.valor.fechaNotificacion}`.as("fecha_notificacion"),
+        nota: sql<string | null>`${v.valor.nota}`.as("nota"), marcadoPor: sql<number>`${user.id}`.as("marcado_por"),
+        marcadoEn: sql<string>`CURRENT_TIMESTAMP`.as("marcado_en"),
+      }).from(ordenes).where(and(eq(ordenes.id, id), acceso.guard))).returning({ id: ordenIncidentes.id });
+      if (!inserted.length) return Response.json({ error: "La orden cambió mientras se registraba el incidente. Actualiza la página." }, { status: 409 });
     } catch {
       // orden_id es UNIQUE: si ahora hay marca, otra persona la puso entre la lectura y el alta.
       const [otra] = await db.select({ id: ordenIncidentes.id }).from(ordenIncidentes).where(eq(ordenIncidentes.ordenId, id)).limit(1);
@@ -63,7 +73,7 @@ export const PUT: APIRoute = async (ctx) => {
   const cambios = cambiosMarca(marcaDe(actual), v.valor);
   if (Object.keys(cambios).length === 0) return Response.json({ ok: true, sinCambios: true });
   const editadas = await db.update(ordenIncidentes).set(v.valor)
-    .where(eq(ordenIncidentes.id, actual.id)).returning({ id: ordenIncidentes.id });
+    .where(and(eq(ordenIncidentes.id, actual.id), acceso.guard)).returning({ id: ordenIncidentes.id });
   if (!editadas.length) {
     return Response.json({ error: "Otra persona acaba de quitar la marca. Recarga la página." }, { status: 409 });
   }

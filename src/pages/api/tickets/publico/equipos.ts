@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { activos, ubicaciones } from "@/lib/schema";
 import { activoAreaCondition, parseArea } from "@/lib/areas";
 import { rubroDeActivo } from "@/lib/rubros";
+import { parseEspacio, espacioDeArea, condicionActivoEspacio } from "@/lib/espacio";
 
 export const prerender = false;
 
@@ -27,6 +28,11 @@ export const GET: APIRoute = async (ctx) => {
     return Response.json({ error: "Área de mantenimiento inválida" }, { status: 400 });
   }
 
+  const espacioCrudo = url.searchParams.get("espacio");
+  const espacio = parseEspacio(espacioCrudo);
+  if (espacioCrudo !== null && !espacio) return Response.json({ error: "Tipo de mantenimiento inválido" }, { status: 400 });
+  if (area && espacio && espacioDeArea(area) !== espacio) return Response.json({ error: "El área no corresponde al tipo de mantenimiento" }, { status: 400 });
+
   const db = getDb(ctx);
   const [ubicacion] = await db
     .select({ id: ubicaciones.id })
@@ -37,6 +43,7 @@ export const GET: APIRoute = async (ctx) => {
 
   const condiciones: SQL[] = [eq(activos.ubicacionId, ubicacionId), ne(activos.estado, "baja")];
   if (area) condiciones.push(activoAreaCondition(area));
+  if (espacio) condiciones.push(condicionActivoEspacio(espacio));
   const filas = await db
     .select({ id: activos.id, codigo: activos.codigo, nombre: activos.nombre, rubro: activos.rubro, tipo: activos.tipo })
     .from(activos)

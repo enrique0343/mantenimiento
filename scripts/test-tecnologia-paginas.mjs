@@ -71,6 +71,8 @@ try {
   ok([...nd.querySelectorAll('#tecnologiaFields input')].every((input) => !input.required && !input.disabled), 'Todos los campos nuevos de hardware opcionales');
   ok(nd.querySelector('#codigoPrefijo').textContent === 'TEC', 'Código automático TEC');
   ok([...nd.querySelector('#categoriasList').children].some((o) => o.value === 'SWITCHES'), 'Categorías de red disponibles');
+  ok(nd.querySelector('#custodiaInicialNombre')?.tagName === 'INPUT' && !nd.querySelector('#custodiaInicialNombre').required, 'Alta ofrece persona libre y opcional');
+  ok(nd.querySelector('label[for="responsableSel"]').textContent.includes('Responsable de mantenimiento'), 'Selector técnico se distingue de la persona que usa el equipo');
   let nuevoPayload;
   nuevo.dom.window.fetch = async (_url, options) => { nuevoPayload = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'VALIDACIÓN DE PRUEBA' }) }; };
   nd.querySelector('#nombreRed').value = 'PC-PRUEBA'; nd.querySelector('#memoriaRamGb').value = '8';
@@ -80,6 +82,11 @@ try {
   es(nuevoPayload.datosTecnicos.memoriaRamGb, 8, 'Registro conserva valores numéricos');
   es(nuevoPayload.codigo, null, 'Código vacío se delega al generador automático');
   ok(!('tipoUnidad' in nuevoPayload.datosTecnicos), 'Registro no mezcla campos de aire');
+  ok(!('custodiaInicial' in nuevoPayload), 'Sin nombre libre no se exige asignación inicial');
+  nd.querySelector('#custodiaInicialNombre').value = 'persona sin cuenta';
+  nd.querySelector('#form').dispatchEvent(new nuevo.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
+  es(nuevoPayload.custodiaInicial.nombre, 'PERSONA SIN CUENTA', 'Alta envía nombre libre en mayúsculas a custodia');
+  es(nuevoPayload.responsableId, null, 'No confunde nombre libre con identificador del técnico');
   const importar = await render('activos/importar.astro.mjs', '/activos/importar?espacio=tecnologia');
   es(importar.dom.window.document.querySelector('#file').dataset.area, 'tecnologia', 'Carga masiva en TI no cae en General');
   const editar = await render('activos/_id_/editar.astro.mjs', '/activos/801/editar?area=tecnologia&espacio=tecnologia', 'admin', 801);
@@ -87,6 +94,8 @@ try {
   ok(editar.dom.window.document.querySelector('#ubicacion').disabled, 'Texto de ubicación también protegido');
   es(editar.dom.window.document.querySelector('#nombreRed').value, 'PC-ADMISION', 'Ficha editada conserva hardware registrado');
   const ed = editar.dom.window.document;
+  ok(ed.querySelector('[data-custodia-editor]')?.open, 'Editar muestra directamente el formulario de persona libre');
+  ok(ed.querySelector('#custodiaNombre') && !ed.querySelector('#custodiaUsuario'), 'Editar permite escribir sin listado de usuarios');
   for (const script of ed.querySelectorAll('script:not([src])')) if (script.textContent.includes('function actualizarArea')) editar.dom.window.eval(script.textContent);
   let editarPayload;
   editar.dom.window.fetch = async (_url, options) => { editarPayload = JSON.parse(options.body); return { ok: false, json: async () => ({ error: 'VALIDACIÓN DE PRUEBA' }) }; };
@@ -122,6 +131,8 @@ try {
   };
   ficha.dom.window.eval(widget); await tick();
   ok(!fd.querySelector('[data-custodia-editor]').hidden, 'Usuario operativo puede registrar movimientos');
+  ok(!fd.querySelector('#custodiaUsuario') && !fd.querySelector('[data-custodia-nombre]').hidden, 'Nombre libre visible sin selector de cuentas');
+  ok(fd.querySelector('#custodiaNombre').required && !fd.querySelector('#custodiaNombre').disabled, 'Asignar una persona exige un nombre libre');
   es(fd.querySelector('#custodiaAccion').value, 'reasignar', 'Equipo asignado propone reasignar');
   ok(fd.querySelector('[data-custodia-historial]').textContent.includes('<img src=x'), 'Motivo conserva texto literal');
   ok(!fd.querySelector('[data-custodia-historial] img'), 'Historial no ejecuta HTML registrado');
@@ -134,6 +145,7 @@ try {
   cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
   es(posts.length, 1, 'Formulario envía movimiento');
   es(posts[0].nombre, 'NUEVA PERSONA', 'Custodio escrito en minúsculas se envía en mayúsculas');
+  es(posts[0].usuarioId, null, 'Nombre libre no crea ni necesita una cuenta de usuario');
   es(posts[0].revision, 1, 'Envía revisión observada');
   es(posts[0].ubicacionActualId, 1, 'Envía ubicación observada para detectar conflictos');
   cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick();
@@ -146,6 +158,11 @@ try {
   mode = 'ok'; cf.dispatchEvent(new ficha.dom.window.Event('submit', { bubbles: true, cancelable: true })); await tick(); await tick();
   ok(fd.querySelector('[data-custodia-resumen]').textContent.includes('NUEVA PERSONA'), 'Asignación actualizada después de guardar');
   ok(!fd.querySelector('[data-custodia-editor]').open, 'Editor cerrado tras confirmación');
+  state = { ...state, custodia: { ...state.custodia, nombre: null, usuarioId: null }, usuarios: [] };
+  fd.querySelector('[data-custodia-refrescar]').click(); await tick();
+  ok(fd.querySelector('[data-custodia-editor]').open && !fd.querySelector('#custodiaNombre').disabled, 'Sin asignar abre el campo libre aunque no exista directorio de personas');
+  fd.querySelector('#custodiaAccion').value = 'trasladar'; fd.querySelector('#custodiaAccion').dispatchEvent(new ficha.dom.window.Event('change'));
+  ok(fd.querySelector('#custodiaNombre').disabled && !fd.querySelector('#custodiaNombre').required, 'Trasladar conserva persona y no exige escribir otra');
   state = { ...state, puedeEditar: false, usuarios: [], ubicaciones: [] };
   fd.querySelector('[data-custodia-refrescar]').click(); await tick();
   ok(fd.querySelector('[data-custodia-editor]').hidden, 'Lector conserva historial sin formulario editable');
